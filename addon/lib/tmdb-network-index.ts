@@ -232,6 +232,53 @@ export async function resolveTmdbNetworkByName(name: string): Promise<ResolvedTm
   return null;
 }
 
+export async function searchTmdbNetworks(query: string, limit: number = 25): Promise<ResolvedTmdbNetwork[]> {
+  const normalized = normalizeNetworkName(query);
+  if (!normalized) return [];
+
+  if (!initialized) {
+    await initializeTmdbNetworkIndex();
+  }
+
+  const seen = new Set<number>();
+  const results: ResolvedTmdbNetwork[] = [];
+  const push = (entry: ResolvedTmdbNetwork) => {
+    if (seen.has(entry.id)) return;
+    seen.add(entry.id);
+    results.push(entry);
+  };
+
+  const alias = NETWORK_ALIASES[normalized];
+  if (alias) push(alias);
+
+  for (const entry of (entriesByName.get(normalized) || []).slice().sort((a, b) => a.id - b.id)) {
+    push(entry);
+  }
+
+  const prefixMatches: ResolvedTmdbNetwork[] = [];
+  const substringMatches: ResolvedTmdbNetwork[] = [];
+  for (const [name, entries] of entriesByName) {
+    if (name === normalized) continue;
+    if (name.startsWith(normalized)) {
+      prefixMatches.push(...entries);
+    } else if (name.includes(normalized)) {
+      substringMatches.push(...entries);
+    }
+  }
+  prefixMatches.sort((a, b) => a.label.length - b.label.length || a.id - b.id);
+  substringMatches.sort((a, b) => a.label.length - b.label.length || a.id - b.id);
+  for (const entry of prefixMatches) {
+    if (results.length >= limit) break;
+    push(entry);
+  }
+  for (const entry of substringMatches) {
+    if (results.length >= limit) break;
+    push(entry);
+  }
+
+  return results.slice(0, limit);
+}
+
 export function getTmdbNetworkIndexStats() {
   return {
     initialized,

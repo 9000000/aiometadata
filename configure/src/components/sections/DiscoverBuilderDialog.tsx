@@ -30,7 +30,7 @@ type CatalogMediaType = 'movie' | 'series';
 type TmdbMediaType = 'movie' | 'tv';
 type DiscoverSource = 'tmdb' | 'tvdb' | 'anilist' | 'simkl' | 'mal' | 'mdblist';
 type SimklDiscoverMediaType = 'movies' | 'shows' | 'anime';
-type SearchEntity = 'person' | 'company' | 'keyword';
+type SearchEntity = 'person' | 'company' | 'keyword' | 'network';
 type JoinMode = 'or' | 'and';
 type DatePresetKey =
   | 'today'
@@ -783,6 +783,11 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
   const [companyJoinMode, setCompanyJoinMode] = useState<JoinMode>('or');
   const [isSearchingCompanies, setIsSearchingCompanies] = useState(false);
 
+  const [networkQuery, setNetworkQuery] = useState('');
+  const [networkResults, setNetworkResults] = useState<TmdbEntityResult[]>([]);
+  const [withNetworks, setWithNetworks] = useState<SelectionItem[]>([]);
+  const [isSearchingNetworks, setIsSearchingNetworks] = useState(false);
+
   const [keywordQuery, setKeywordQuery] = useState('');
   const [keywordResults, setKeywordResults] = useState<TmdbEntityResult[]>([]);
   const [withKeywords, setWithKeywords] = useState<SelectionItem[]>([]);
@@ -794,6 +799,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
 
   const peopleSearchRef = useRef<HTMLDivElement | null>(null);
   const companySearchRef = useRef<HTMLDivElement | null>(null);
+  const networkSearchRef = useRef<HTMLDivElement | null>(null);
   const keywordSearchRef = useRef<HTMLDivElement | null>(null);
 
   const [voteAverageRange, setVoteAverageRange] = useState<[number, number]>([0, 10]);
@@ -1034,6 +1040,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     withCompanies,
     withoutCompanies,
     companyJoinMode,
+    withNetworks,
     withKeywords,
     withoutKeywords,
     keywordJoinMode,
@@ -1166,6 +1173,10 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     setWithoutCompanies([]);
     setCompanyJoinMode('or');
 
+    setNetworkQuery('');
+    setNetworkResults([]);
+    setWithNetworks([]);
+
     setKeywordQuery('');
     setKeywordResults([]);
     setSelectedKeywordIds(new Set());
@@ -1286,6 +1297,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     if (fs.withCompanies) setWithCompanies(fs.withCompanies);
     if (fs.withoutCompanies) setWithoutCompanies(fs.withoutCompanies);
     if (fs.companyJoinMode) setCompanyJoinMode(fs.companyJoinMode);
+    if (fs.withNetworks) setWithNetworks(fs.withNetworks);
     if (fs.withKeywords) setWithKeywords(fs.withKeywords);
     if (fs.withoutKeywords) setWithoutKeywords(fs.withoutKeywords);
     if (fs.keywordJoinMode) setKeywordJoinMode(fs.keywordJoinMode);
@@ -1518,6 +1530,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
       const clickedInsideSearch =
         peopleSearchRef.current?.contains(target) ||
         companySearchRef.current?.contains(target) ||
+        networkSearchRef.current?.contains(target) ||
         keywordSearchRef.current?.contains(target);
 
       if (!clickedInsideSearch) {
@@ -2216,6 +2229,10 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
       params.without_companies = joinSelectionValues(withoutCompanies, companyJoinMode);
     }
 
+    if (catalogType === 'series' && withNetworks.length > 0) {
+      params.with_networks = joinSelectionValues(withNetworks, 'or');
+    }
+
     if (withKeywords.length > 0) {
       params.with_keywords = joinSelectionValues(withKeywords, keywordJoinMode);
     }
@@ -2311,6 +2328,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
         withCompanies,
         withoutCompanies,
         companyJoinMode,
+        withNetworks,
         withKeywords,
         withoutKeywords,
         keywordJoinMode,
@@ -3925,14 +3943,14 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
               <CardHeader>
                 <CardTitle className="text-base">
                   {discoverSource === 'tmdb'
-                    ? (catalogType === 'movie' ? 'People, Companies, and Keywords' : 'Companies and Keywords')
+                    ? (catalogType === 'movie' ? 'People, Companies, and Keywords' : 'Companies, Networks, and Keywords')
                     : 'Production Company'}
                 </CardTitle>
                 <CardDescription>
                   {discoverSource === 'tmdb'
                     ? (catalogType === 'movie'
                         ? 'Search TMDB and add IDs for cast/crew, studios, and keyword filters.'
-                        : 'Search TMDB and add IDs for studios and keyword filters.')
+                        : 'Search TMDB and add IDs for studios, networks, and keyword filters.')
                     : 'Search TVDB companies and add a production company filter.'}
                 </CardDescription>
               </CardHeader>
@@ -4175,6 +4193,82 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
                     )}
                   </div>
                 </div>
+
+                {discoverSource === 'tmdb' && catalogType === 'series' && (
+                  <div className="space-y-2" ref={networkSearchRef}>
+                    <Label>Networks ({withNetworks.length} selected)</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="Search network (e.g. HBO)"
+                        value={networkQuery}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setNetworkQuery(value);
+                          setActiveSearchDropdown(prev => (prev === 'network' ? null : prev));
+                          if (!value.trim()) {
+                            setNetworkResults([]);
+                          }
+                        }}
+                        onFocus={() => {
+                          if (networkResults.length > 0) {
+                            setActiveSearchDropdown('network');
+                          }
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            searchEntity('network', networkQuery, setIsSearchingNetworks, setNetworkResults);
+                          } else if (event.key === 'Escape') {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setActiveSearchDropdown(null);
+                          }
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => searchEntity('network', networkQuery, setIsSearchingNetworks, setNetworkResults)}
+                        disabled={isSearchingNetworks || !networkQuery.trim()}
+                      >
+                        {isSearchingNetworks ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                    {activeSearchDropdown === 'network' && networkResults.length > 0 && (
+                      <div className="max-h-32 overflow-y-auto border rounded-md p-2 space-y-1">
+                        <div className="flex items-center justify-between pb-1 border-b">
+                          <p className="text-xs text-muted-foreground">{networkResults.length} results</p>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => setActiveSearchDropdown(null)}
+                          >
+                            Close
+                          </Button>
+                        </div>
+                        {networkResults.map(network => (
+                          <div key={network.id} className="flex items-center justify-between gap-2 text-sm">
+                            <span className="truncate">{network.name || `ID ${network.id}`}</span>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setWithNetworks(prev => addUniqueItem(prev, toSelectionItem(network)));
+                                setActiveSearchDropdown(null);
+                              }}
+                            >
+                              Add
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {renderSelectedItems(withNetworks, (id) => setWithNetworks(prev => removeItemById(prev, id)), 'No networks selected')}
+                  </div>
+                )}
 
                 {discoverSource === 'tmdb' && (
                 <div className="space-y-2" ref={keywordSearchRef}>

@@ -1583,6 +1583,13 @@ addon.get("/api/tmdb/discover/search/:entity", async (req, res) => {
       return res.status(400).json({ error: "query is required" });
     }
 
+    // TMDB has no /search/network endpoint; resolve from the daily export index instead
+    if (entity === 'network') {
+      const { searchTmdbNetworks } = require('./lib/tmdb-network-index');
+      const networks = await searchTmdbNetworks(String(query).trim(), 25);
+      return res.json({ entity, results: networks.map(n => ({ id: n.id, name: n.label })) });
+    }
+
     const endpointMap = {
       person: '/search/person',
       company: '/search/company',
@@ -1591,7 +1598,7 @@ addon.get("/api/tmdb/discover/search/:entity", async (req, res) => {
 
     const endpoint = endpointMap[entity];
     if (!endpoint) {
-      return res.status(400).json({ error: "entity must be one of: person, company, keyword" });
+      return res.status(400).json({ error: "entity must be one of: person, company, keyword, network" });
     }
 
     const config = { apiKeys: { tmdb: tmdbApiKey } };

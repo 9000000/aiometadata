@@ -3420,10 +3420,12 @@ function CatalogsSettingsContent({
       } : undefined,
     };
 
-    setConfig(prev => ({
-      ...prev,
-      catalogs: [...prev.catalogs, newCatalog],
-    }));
+    setConfig(prev => {
+      const idx = prev.catalogs.findIndex(c => c.id === catalog.id && c.type === catalog.type);
+      const catalogs = [...prev.catalogs];
+      catalogs.splice(idx === -1 ? catalogs.length : idx + 1, 0, newCatalog);
+      return { ...prev, catalogs };
+    });
     toast.success('Catalog duplicated', {
       description: `${newCatalog.name} added to your catalog list`
     });

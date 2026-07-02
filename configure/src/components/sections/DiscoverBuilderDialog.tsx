@@ -2575,6 +2575,8 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
         ...(editingCatalog?.randomizePerPage !== undefined && {
           randomizePerPage: editingCatalog.randomizePerPage
         }),
+        ...(editingCatalog?.tags?.length && { tags: editingCatalog.tags }),
+        ...(editingCatalog?.mergedInto && { mergedInto: editingCatalog.mergedInto }),
         ...(displayType && { displayType }),
         metadata: {
           description: `${sourceLabel} Discover (${discoverMediaType})`,

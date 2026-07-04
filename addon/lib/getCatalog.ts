@@ -984,6 +984,24 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
       type as 'movie' | 'series'
     );
 
+    // TMDB's discover/tv runtime filter matches only on episode_run_time, which is
+    // empty for many shows, so it silently drops them. Filter locally instead,
+    // falling back to last/next episode runtime (same chain getMeta uses for display).
+    let runtimeGte: number | null = null;
+    let runtimeLte: number | null = null;
+    if (mediaType === 'tv') {
+      const gte = Number(parameters['with_runtime.gte']);
+      const lte = Number(parameters['with_runtime.lte']);
+      if (parameters['with_runtime.gte'] !== undefined) {
+        delete parameters['with_runtime.gte'];
+        if (Number.isFinite(gte)) runtimeGte = gte;
+      }
+      if (parameters['with_runtime.lte'] !== undefined) {
+        delete parameters['with_runtime.lte'];
+        if (Number.isFinite(lte)) runtimeLte = lte;
+      }
+    }
+
     try {
       const response = mediaType === 'movie'
         ? await moviedb.discoverMovie(parameters, config)
@@ -994,8 +1012,33 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
         return [];
       }
 
+      let results = response.results;
+      if (runtimeGte !== null || runtimeLte !== null) {
+        const checked = await mapWithLimit(results, async (item: any) => {
+          try {
+            const details = await moviedb.tvInfo({ id: item.id, language }, config);
+            const runtime = [
+              details?.episode_run_time?.[0],
+              details?.last_episode_to_air?.runtime,
+              details?.next_episode_to_air?.runtime,
+            ].find((r: any) => typeof r === 'number' && r > 0);
+            if (runtime === undefined) return item; // runtime unknown → keep
+            if (runtimeGte !== null && runtime < runtimeGte) return null;
+            if (runtimeLte !== null && runtime > runtimeLte) return null;
+            return item;
+          } catch {
+            return item;
+          }
+        });
+        results = checked.filter((item: any) => item !== null);
+        if (results.length < response.results.length) {
+          logger.info(`[TMDB Discover] Runtime filter kept ${results.length}/${response.results.length} items for ${id} at page ${discoverPage}`);
+        }
+        if (results.length === 0) return [];
+      }
+
       const metaType = mediaType === 'movie' ? 'movie' : 'series';
-      const metas = await mapWithLimit(response.results, async (item: any) => {
+      const metas = await mapWithLimit(results, async (item: any) => {
         const stremioId = `tmdb:${item.id}`;
 
         try {

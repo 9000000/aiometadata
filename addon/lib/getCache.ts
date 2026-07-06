@@ -1694,7 +1694,8 @@ async function writeMetaComponentsWithConfig({ config, metaId, result, ttl = MET
       _hasLandscapePoster: !!meta.landscapePoster,
       _hasLogo: !!meta.logo,
       _hasVideos: !!(meta.videos && Array.isArray(meta.videos) && meta.videos.length > 0),
-      _hasLinks: !!(meta.links && Array.isArray(meta.links) && meta.links.length > 0)
+      _hasLinks: !!(meta.links && Array.isArray(meta.links) && meta.links.length > 0),
+      _metaProvider: meta._metaProvider
    };
 
    queueComponentCache(componentsToCache, componentCacheKeys.basic, basicMeta);
@@ -1734,7 +1735,7 @@ async function writeMetaComponentsWithConfig({ config, metaId, result, ttl = MET
    }
 
    if (meta.videos && Array.isArray(meta.videos) && meta.videos.length > 0) {
-     queueComponentCache(componentsToCache, componentCacheKeys.videos, { videos: canonicalizeVideosForCache(meta.videos) });
+     queueComponentCache(componentsToCache, componentCacheKeys.videos, { videos: canonicalizeVideosForCache(meta.videos), _metaProvider: meta._metaProvider });
    }
 
    if (meta.app_extras?.cast?.length) {
@@ -1942,6 +1943,13 @@ async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = 
             updateCacheHealth(`meta:reconstructed:${metaId}`, 'miss', true);
             return { errorReason: 'corrupted: missing links' };
         }
+    }
+
+    const videosComponentForStamp = availableComponents.find((c: any) => c.componentName === 'videos');
+    if (videosComponentForStamp && bd._metaProvider && videosComponentForStamp.data._metaProvider && bd._metaProvider !== videosComponentForStamp.data._metaProvider) {
+        cacheLogger.warn(`[Reconstruct] Provider mismatch for ${metaId}: basic=${bd._metaProvider}, videos=${videosComponentForStamp.data._metaProvider}.`);
+        updateCacheHealth(`meta:reconstructed:${metaId}`, 'miss', true);
+        return { errorReason: 'provider mismatch between basic and videos' };
     }
   }
 

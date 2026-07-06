@@ -3359,8 +3359,8 @@ addon.post("/api/aiomanager/reinstall", async (req, res) => {
       timeout: 15000
     });
     if (typeof response.data === 'string') {
-      consola.error(`[AIOManager Proxy] Non-JSON response from ${target} (status ${response.status}); reinstall was likely not processed`);
-      return res.status(502).json({ error: "AIOManager returned an unexpected non-JSON response; the sync was likely not processed" });
+      consola.warn(`[AIOManager Proxy] Non-JSON response from ${target} (status ${response.status}); this AIOManager instance does not expose the Hydra API, reinstall was not processed`);
+      return res.status(502).json({ error: "Your AIOManager instance does not support the Hydra API yet (it requires a newer AIOManager release), so the sync was not processed" });
     }
     res.json(response.data ?? { success: true });
   } catch (error) {

@@ -39,6 +39,8 @@ services:
       - "3232:3232"  # Remove this if using Traefik
     # expose:  # Uncomment if using Traefik
     #   - 3232
+    #   - 8888 # built in poster cache
+    init: true
     env_file:
       - .env
     # labels:  # Optional: Remove if not using Traefik
@@ -48,8 +50,15 @@ services:
     #   - "traefik.http.routers.aiometadata.tls.certresolver=letsencrypt"
     #   - "traefik.http.routers.aiometadata.middlewares=authelia@docker"
     #   - "traefik.http.services.aiometadata.loadbalancer.server.port=3232"
+    #   - "traefik.http.services.aiometadata.loadbalancer.server.port=3232"
+    #   - "traefik.http.routers.postercache.rule=Host(`poster-cache.cedya.top`)"
+    #   - "traefik.http.routers.postercache.entrypoints=websecure"
+    #   - "traefik.http.routers.postercache.tls.certresolver=letsencrypt"
+    #   - "traefik.http.routers.postercache.service=postercache"
+    #   - "traefik.http.services.postercache.loadbalancer.server.port=8888"
     volumes:
       - ${DOCKER_DATA_DIR}/aiometadata/data:/app/addon/data
+    # - ${DOCKER_DATA_DIR}/poster-cache:/var/cache/nginx # built in poster cache
     depends_on:
       aiometadata_redis:
         condition: service_healthy

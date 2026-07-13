@@ -4398,7 +4398,15 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
                 userAgent,
               });
               if (resolved) {
-                video.thumbnail = resolved;
+                if (config.usePosterProxy) {
+                  const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
+                  // Episode thumbnails share the show's proxyId; the per-episode url param keeps the proxy cache/etag distinct.
+                  video.thumbnail = proxyId
+                    ? `${host}/background/${metaType}/${proxyId}?fallback=${encodeURIComponent(originalThumb || '')}&url=${encodeURIComponent(resolved)}`
+                    : resolved;
+                } else {
+                  video.thumbnail = resolved;
+                }
               }
             }
           }

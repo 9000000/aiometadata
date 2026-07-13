@@ -9,7 +9,10 @@ FROM node:24-alpine AS runner
 WORKDIR /app
 # nginx backs the optional built-in poster cache (ENABLE_BUILTIN_POSTER_CACHE);
 # busybox nc (with -e support) is already present for the purge handler.
-RUN apk add --no-cache ca-certificates wget nginx
+RUN apk add --no-cache ca-certificates wget nginx \
+    # Ensure runtime dirs are writable by any UID (rootless support)
+    && mkdir -p /var/log/nginx /run/nginx /var/cache/nginx/posters /var/lib/nginx/tmp \
+    && chmod 777 /var/log/nginx /run/nginx /var/cache/nginx /var/lib/nginx
 COPY package*.json package-lock.json* ./
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 COPY --from=builder /app/addon ./addon

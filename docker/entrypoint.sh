@@ -15,6 +15,11 @@ if is_true "$ENABLE_BUILTIN_POSTER_CACHE"; then
   mkdir -p "$CACHE_DIR" /run/nginx
   chown -R nginx:nginx /var/cache/nginx 2>/dev/null || true
 
+  # When not running as root, nginx can't switch users — strip the directive
+  if [ "$(id -u)" != "0" ]; then
+    sed -i 's/^user nginx;/# user nginx;  # disabled (rootless)/' "$CONF_DIR/nginx.conf"
+  fi
+
   if [ -z "${POSTER_WARMUP_URL:-}" ]; then
     export POSTER_WARMUP_URL="http://127.0.0.1:8888"
     echo "[entrypoint] POSTER_WARMUP_URL defaulted to http://127.0.0.1:8888"

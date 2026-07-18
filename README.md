@@ -457,8 +457,8 @@ MICROCACHING_EXPIRE=60
 Save the MongoDB init script as `apps/jikan-rest/mongo-init.js`:
 
 ```js
-const userToCreate = fs.readFileSync('/run/secrets/jikan_db_username', 'utf8');
-const userPassword = fs.readFileSync('/run/secrets/jikan_db_password', 'utf8');
+const userToCreate = fs.readFileSync('/run/secrets/jikan_db_username', 'utf8').trim();
+const userPassword = fs.readFileSync('/run/secrets/jikan_db_password', 'utf8').trim();
 db = db.getSiblingDB("admin");
 db.createUser({ user: userToCreate, pwd: userPassword, roles: [{ role: "readWrite", db: "jikan" }] });
 db = db.getSiblingDB("jikan");
@@ -471,10 +471,10 @@ Generate the secret files (note the `chmod 644` — Mongo and the app run as non
 cd apps/jikan-rest && mkdir -p secrets
 echo -n "jikan"        > secrets/db_username.txt
 echo -n "jikanadmin"   > secrets/db_admin_username.txt
-openssl rand -hex 24   > secrets/db_password.txt
-openssl rand -hex 24   > secrets/db_admin_password.txt
-openssl rand -hex 24   > secrets/redis_password.txt
-openssl rand -hex 24   > secrets/typesense_api_key.txt
+openssl rand -hex 24 | tr -d '\n' > secrets/db_password.txt
+openssl rand -hex 24 | tr -d '\n' > secrets/db_admin_password.txt
+openssl rand -hex 24 | tr -d '\n' > secrets/redis_password.txt
+openssl rand -hex 24 | tr -d '\n' > secrets/typesense_api_key.txt
 chmod 644 secrets/*.txt
 ```
 

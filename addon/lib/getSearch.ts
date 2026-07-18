@@ -134,6 +134,7 @@ async function parseTvdbSearchResult(type: string, extendedRecord: any, language
 
   let certification: string | null = null;
   let certificationLocal: string | null = null;
+  let movieReleaseDates: any = null;
   if (config.displayAgeRating) {
     try {
       const langParts = language.split('-');
@@ -144,6 +145,7 @@ async function parseTvdbSearchResult(type: string, extendedRecord: any, language
         if (type === 'movie') {
           const releaseDatesData = await moviedb.movieReleaseDates(String(tmdbId), config);
           if (releaseDatesData) {
+            movieReleaseDates = releaseDatesData;
             certification = Utils.getTmdbMovieCertificationForCountry(releaseDatesData);
             certificationLocal = userCountry && userCountry.toUpperCase() !== 'US'
               ? (Utils.getTmdbMovieCertificationForCountry(releaseDatesData, userCountry) || certification)
@@ -171,6 +173,24 @@ async function parseTvdbSearchResult(type: string, extendedRecord: any, language
     }
   }
 
+  const firstReleaseDate = extendedRecord.first_release?.Date || extendedRecord.first_release?.date;
+  const released = extendedRecord.firstAired
+    ? new Date(extendedRecord.firstAired)
+    : (firstReleaseDate ? new Date(firstReleaseDate) : undefined);
+
+  // isReleasedDigitally only consults TMDB release data for movies newer than a year
+  if (type === 'movie' && tmdbId && config.hideUnreleasedDigitalSearch && !movieReleaseDates) {
+    const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
+    const releasedOverAYearAgo = released && !isNaN(released.getTime()) && Date.now() - released.getTime() >= ONE_YEAR_MS;
+    if (!releasedOverAYearAgo) {
+      try {
+        movieReleaseDates = await moviedb.movieReleaseDates(String(tmdbId), config);
+      } catch (error: any) {
+        logger.debug(`Failed to get TMDB release dates for movie ${tmdbId}: ${error.message}`);
+      }
+    }
+  }
+
   let stremioId: string = `tvdb:${extendedRecord.id}`;
   if(imdbId) stremioId = imdbId;
   const logoUrl = findArtwork(extendedRecord.artworks, type === 'movie' ? 25 : 23, langCode3, config);
@@ -183,10 +203,12 @@ async function parseTvdbSearchResult(type: string, extendedRecord: any, language
     poster: Utils.isPosterRatingEnabled(config) ? posterProxyUrl : validPosterUrl,
     _rawPosterUrl: rawPosterUrl,
     year: extendedRecord.year,
-    released: extendedRecord.firstAired ? new Date(extendedRecord.firstAired) : undefined,
+    released: released,
     description: Utils.addMetaProviderAttribution(overview, 'TVDB', config),
     certification: certification,
-    app_extras: { certification, certificationLocal },
+    app_extras: movieReleaseDates
+      ? { certification, certificationLocal, releaseDates: movieReleaseDates }
+      : { certification, certificationLocal },
     logo: validLogoUrl,
     runtime: type === 'movie' ? Utils.parseRunTime(extendedRecord.runtime) : Utils.parseRunTime(extendedRecord.averageRuntime),
     genres: extendedRecord.genres?.map((g: any) => g.name) || [],

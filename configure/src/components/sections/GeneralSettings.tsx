@@ -1,8 +1,17 @@
+import { useState } from 'react';
+import { Settings2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { WatchTrackingOptionsDialog } from '@/components/WatchTrackingOptionsDialog';
 import { useConfig } from '@/contexts/ConfigContext';
+import type { WatchTrackingService } from '@/contexts/config';
+import {
+  getWatchTrackingMediaTypeSummary,
+  WATCH_TRACKING_SERVICE_DEFINITIONS,
+} from '@/lib/watchTracking';
 
 // Define the options for the language select dropdown for clarity
 const languageOptions = [
@@ -258,6 +267,7 @@ const timezoneOptions = [
 export function GeneralSettings() {
   // Use our custom hook to get the current config and the function to update it
   const { config, setConfig } = useConfig();
+  const [watchTrackingService, setWatchTrackingService] = useState<WatchTrackingService | null>(null);
 
   // --- Handler Functions ---
   // These functions update the single state object, preserving the other values.
@@ -326,6 +336,28 @@ export function GeneralSettings() {
   const handleTimezoneChange = (value: string) => {
     setConfig(prevConfig => ({ ...prevConfig, timezone: value }));
   };
+
+  const renderWatchTrackingControls = (
+    service: WatchTrackingService,
+    switchId: string,
+    checked: boolean,
+    onCheckedChange: (checked: boolean) => void,
+  ) => (
+    <div className="flex items-center gap-1 shrink-0">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="h-9 w-9"
+        aria-label={`Configure ${WATCH_TRACKING_SERVICE_DEFINITIONS[service].label} watch tracking types`}
+        title="Configure media types"
+        onClick={() => setWatchTrackingService(service)}
+      >
+        <Settings2 className="h-4 w-4 text-muted-foreground" />
+      </Button>
+      <Switch id={switchId} checked={checked} onCheckedChange={onCheckedChange} />
+    </div>
+  );
 
   return (
     <div className="space-y-8 animate-fade-in">
@@ -469,53 +501,61 @@ export function GeneralSettings() {
             <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
               <div className="mr-4">
                 <Label htmlFor="trakt-watch-tracking" className="font-medium">Trakt Checkin</Label>
-                <p className="text-sm text-muted-foreground">Sync watch progress to Trakt.</p>
+                <p className="text-sm text-muted-foreground">{getWatchTrackingMediaTypeSummary(config, 'trakt')}</p>
               </div>
-              <Switch id="trakt-watch-tracking" checked={!!config.traktWatchTracking} onCheckedChange={handleTraktTrackingChange} />
+              {renderWatchTrackingControls('trakt', 'trakt-watch-tracking', !!config.traktWatchTracking, handleTraktTrackingChange)}
             </div>
 
             <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
               <div className="mr-4">
                 <Label htmlFor="simkl-watch-tracking" className="font-medium">Simkl Checkin</Label>
-                <p className="text-sm text-muted-foreground">Sync watch progress to Simkl.</p>
+                <p className="text-sm text-muted-foreground">{getWatchTrackingMediaTypeSummary(config, 'simkl')}</p>
               </div>
-              <Switch id="simkl-watch-tracking" checked={!!config.simklWatchTracking} onCheckedChange={handleSimklTrackingChange} />
+              {renderWatchTrackingControls('simkl', 'simkl-watch-tracking', !!config.simklWatchTracking, handleSimklTrackingChange)}
             </div>
 
             <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
               <div className="mr-4">
                 <Label htmlFor="anilist-watch-tracking" className="font-medium">AniList Tracking</Label>
-                <p className="text-sm text-muted-foreground">Sync anime watch progress to AniList.</p>
+                <p className="text-sm text-muted-foreground">{getWatchTrackingMediaTypeSummary(config, 'anilist')}</p>
               </div>
-              <Switch id="anilist-watch-tracking" checked={!!config.anilistWatchTracking} onCheckedChange={handleAniListTrackingChange} />
+              {renderWatchTrackingControls('anilist', 'anilist-watch-tracking', !!config.anilistWatchTracking, handleAniListTrackingChange)}
             </div>
 
             <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
               <div className="mr-4">
                 <Label htmlFor="mal-watch-tracking" className="font-medium">MyAnimeList Tracking</Label>
-                <p className="text-sm text-muted-foreground">Sync anime watch progress to MyAnimeList.</p>
+                <p className="text-sm text-muted-foreground">{getWatchTrackingMediaTypeSummary(config, 'mal')}</p>
               </div>
-              <Switch id="mal-watch-tracking" checked={!!config.malWatchTracking} onCheckedChange={handleMalTrackingChange} />
+              {renderWatchTrackingControls('mal', 'mal-watch-tracking', !!config.malWatchTracking, handleMalTrackingChange)}
             </div>
 
             <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
               <div className="mr-4">
                 <Label htmlFor="mdblist-watch-tracking" className="font-medium">MDBList Tracking</Label>
-                <p className="text-sm text-muted-foreground">Sync watched status to MDBList.</p>
+                <p className="text-sm text-muted-foreground">{getWatchTrackingMediaTypeSummary(config, 'mdblist')}</p>
               </div>
-              <Switch id="mdblist-watch-tracking" checked={!!config.mdblistWatchTracking} onCheckedChange={handleMDBListTrackingChange} />
+              {renderWatchTrackingControls('mdblist', 'mdblist-watch-tracking', !!config.mdblistWatchTracking, handleMDBListTrackingChange)}
             </div>
 
             <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
               <div className="mr-4">
                 <Label htmlFor="publicmetadb-watch-tracking" className="font-medium">PublicMetaDB Tracking</Label>
-                <p className="text-sm text-muted-foreground">Log plays to PublicMetaDB.</p>
+                <p className="text-sm text-muted-foreground">{getWatchTrackingMediaTypeSummary(config, 'publicmetadb')}</p>
               </div>
-              <Switch id="publicmetadb-watch-tracking" checked={!!config.publicmetadbWatchTracking} onCheckedChange={handlePublicMetaDBTrackingChange} />
+              {renderWatchTrackingControls('publicmetadb', 'publicmetadb-watch-tracking', !!config.publicmetadbWatchTracking, handlePublicMetaDBTrackingChange)}
             </div>
           </div>
         </CardContent>
       </Card>
+
+      <WatchTrackingOptionsDialog
+        service={watchTrackingService}
+        open={watchTrackingService !== null}
+        onOpenChange={(open) => {
+          if (!open) setWatchTrackingService(null);
+        }}
+      />
     </div>
   );
 }

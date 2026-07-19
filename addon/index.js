@@ -66,6 +66,7 @@ const {
   verifyTraktOAuthState,
 } = require('./lib/oauthState');
 const { renderOAuthPage } = require('./lib/oauthPage');
+const { hasAnyWatchTrackingEnabled } = require('./lib/watchTracking');
 const { SimklClient } = require('./lib/simkl');
 const axios = require('axios');
 const getCountryISO3 = require('country-iso-2-to-3');
@@ -4332,28 +4333,8 @@ addon.get("/stremio/:userUUID/subtitles/:type/:id{/:extra}.json", async function
       return respond(req, res, { subtitles: [] }, { cacheMaxAge: 0 });
     }
     
-    // Check if any watch tracking is enabled (MDBList, AniList, Simkl, Trakt, or PublicMetaDB)
-    const hasMdblistKey = config?.apiKeys?.mdblist;
-    const mdblistEnabled = !!config?.mdblistWatchTracking;
-    const hasAnilistToken = config?.apiKeys?.anilistTokenId;
-    const anilistEnabled = !!config?.anilistWatchTracking;
-    const hasMalToken = config?.apiKeys?.malTokenId;
-    const malEnabled = !!config?.malWatchTracking;
-    const hasSimklToken = config?.apiKeys?.simklTokenId;
-    const simklEnabled = !!config?.simklWatchTracking;
-    const hasTraktToken = config?.apiKeys?.traktTokenId;
-    const traktEnabled = !!config?.traktWatchTracking;
-    const hasPublicMetaDBKey = config?.apiKeys?.publicmetadb;
-    const publicMetaDBEnabled = !!config?.publicmetadbWatchTracking;
-
-    const shouldTrackMdblist = hasMdblistKey && mdblistEnabled;
-    const shouldTrackAnilist = hasAnilistToken && anilistEnabled;
-    const shouldTrackMal = hasMalToken && malEnabled;
-    const shouldTrackSimkl = hasSimklToken && simklEnabled;
-    const shouldTrackTrakt = hasTraktToken && traktEnabled;
-    const shouldTrackPublicMetaDB = hasPublicMetaDBKey && publicMetaDBEnabled;
-
-    if (shouldTrackMdblist || shouldTrackAnilist || shouldTrackMal || shouldTrackSimkl || shouldTrackTrakt || shouldTrackPublicMetaDB) {      // Import and call subtitle handler
+    if (hasAnyWatchTrackingEnabled(config)) {
+      // Import and call subtitle handler
       const { handleSubtitleRequest } = require('./lib/subtitleHandler');
       
       // Call handler synchronously (no await)
@@ -4363,7 +4344,7 @@ addon.get("/stremio/:userUUID/subtitles/:type/:id{/:extra}.json", async function
       return respond(req, res, result, { cacheMaxAge: 0 });
     } else {
       // Watch tracking disabled or no credentials - return empty subtitles
-      consola.debug(`[Watch Tracking] Skipped for user ${userUUID} - mdblist: ${shouldTrackMdblist}, anilist: ${shouldTrackAnilist}, mal: ${shouldTrackMal}, simkl: ${shouldTrackSimkl}, trakt: ${shouldTrackTrakt}, publicmetadb: ${shouldTrackPublicMetaDB}`);
+      consola.debug(`[Watch Tracking] Skipped for user ${userUUID} - no service has an enabled media type and valid credentials`);
       return respond(req, res, { subtitles: [] }, { cacheMaxAge: 0 });
     }
   } catch (error) {

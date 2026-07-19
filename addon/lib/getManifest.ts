@@ -13,6 +13,7 @@ const DEFAULT_LANGUAGE = "en-US";
 import { cacheWrapJikanApi, cacheWrapGlobal, cacheWrapStremThruGenres } from './getCache';
 import { mergeGenreOptions } from '../utils/mergedCatalog';
 import consola from 'consola';
+import { hasAnyWatchTrackingEnabled } from './watchTracking';
 const logger = consola.withTag('Manifest');
 
 
@@ -1472,13 +1473,7 @@ async function getManifest(config: any, opts: { tag?: string } = {}): Promise<an
   if (!config.catalogModeOnly) {
     resources.push("meta");
   }
-  const watchTrackingEnabled =
-    (config.apiKeys?.mdblist && config.mdblistWatchTracking) ||
-    (config.apiKeys?.anilistTokenId && config.anilistWatchTracking) ||
-    (config.apiKeys?.malTokenId && config.malWatchTracking) ||
-    (config.apiKeys?.simklTokenId && config.simklWatchTracking) ||
-    (config.apiKeys?.traktTokenId && config.traktWatchTracking) ||
-    (config.apiKeys?.publicmetadb && config.publicmetadbWatchTracking);
+  const watchTrackingEnabled = hasAnyWatchTrackingEnabled(config);
   if (watchTrackingEnabled) {
     resources.push("subtitles");
   }

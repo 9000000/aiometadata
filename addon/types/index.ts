@@ -30,11 +30,19 @@ export interface UserConfig {
     malTokenId?: string;
     publicmetadb?: string;
   };
-  /** Enable/disable AniList watch tracking (default: true when connected) */
+  mdblistWatchTracking?: boolean;
+  traktWatchTracking?: boolean;
+  simklWatchTracking?: boolean;
+  /** Enable/disable AniList watch tracking */
   anilistWatchTracking?: boolean;
-  /** Enable/disable MyAnimeList watch tracking (default: true when connected) */
+  /** Enable/disable MyAnimeList watch tracking */
   malWatchTracking?: boolean;
   publicmetadbWatchTracking?: boolean;
+  /** Optional per-service media filters. Missing flags preserve legacy behavior and are treated as enabled. */
+  watchTracking?: Partial<Record<
+    'trakt' | 'simkl' | 'anilist' | 'mal' | 'mdblist' | 'publicmetadb',
+    { movie?: boolean; series?: boolean }
+  >>;
   /** Poster rating provider: 'rpdb' for RatingPosterDB, 'top' for Top Poster API, or 'custom' for custom URL patterns */
   posterRatingProvider?: 'rpdb' | 'top' | 'custom';
   catalogs?: Catalog[];

@@ -56,9 +56,13 @@ const { resolveDynamicTmdbDiscoverParams } = require('./lib/tmdbDiscoverDateToke
 const { blurImage, convertBannerToBackground } = require('./utils/imageProcessor');
 const { TraktClient } = require('./lib/trakt');
 const {
+  createAniListOAuthState,
   createMalOAuthTransaction,
+  createSimklOAuthState,
   createTraktOAuthState,
+  verifyAniListOAuthState,
   verifyMalOAuthState,
+  verifySimklOAuthState,
   verifyTraktOAuthState,
 } = require('./lib/oauthState');
 const { SimklClient } = require('./lib/simkl');
@@ -86,6 +90,8 @@ const normalizeRedirectUri = (uri) => {
 const usedTraktCodes = new Set();
 const TRAKT_OAUTH_STATE_TTL_MS = parseInt(process.env.TRAKT_OAUTH_STATE_TTL_MS || String(10 * 60 * 1000), 10);
 const usedAnilistCodes = new Set();
+const ANILIST_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const SIMKL_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 const usedMalCodes = new Set();
 const MAL_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -190,7 +196,12 @@ const noStoreOAuthHeaders = (req, res, next) => {
   next();
 };
 addon.use(
-  ['/api/auth/trakt/authorize', '/api/auth/trakt/callback'],
+  [
+    '/api/auth/trakt/authorize',
+    '/api/auth/trakt/callback',
+    '/api/auth/simkl/authorize',
+    '/api/auth/simkl/callback',
+  ],
   noStoreOAuthHeaders
 );
 
@@ -835,8 +846,8 @@ addon.get("/api/auth/simkl/authorize", async (req, res) => {
     
     const simklClient = new SimklClient(clientId, clientSecret, redirectUri);
     
-    // Get authorization URL
-    const authUrl = simklClient.getAuthorizationUrl();
+    const state = createSimklOAuthState(clientSecret, SIMKL_OAUTH_STATE_TTL_MS);
+    const authUrl = simklClient.getAuthorizationUrl(state);
     
     res.redirect(authUrl);
   } catch (error) {
@@ -847,7 +858,10 @@ addon.get("/api/auth/simkl/authorize", async (req, res) => {
 
 addon.get("/api/auth/simkl/callback", async (req, res) => {
   try {
-    const { code } = req.query;
+    const codeParam = Array.isArray(req.query.code) ? req.query.code[0] : req.query.code;
+    const stateParam = Array.isArray(req.query.state) ? req.query.state[0] : req.query.state;
+    const code = typeof codeParam === 'string' ? codeParam : '';
+    const state = typeof stateParam === 'string' ? stateParam : '';
     
     if (!code) {
       return res.status(400).send(`
@@ -874,6 +888,19 @@ addon.get("/api/auth/simkl/callback", async (req, res) => {
         <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
           <h1>⚠️ Configuration Error</h1>
           <p>Simkl OAuth is not configured on this server.</p>
+        </body>
+        </html>
+      `);
+    }
+
+    if (!verifySimklOAuthState(state, clientSecret)) {
+      return res.status(400).send(`
+        <!DOCTYPE html>
+        <html>
+        <head><title>Simkl OAuth Error</title></head>
+        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+          <h1>❌ OAuth Error</h1>
+          <p>Invalid or expired state parameter. Please try authenticating again.</p>
         </body>
         </html>
       `);
@@ -2610,11 +2637,7 @@ addon.get("/anilist/auth", async (req, res) => {
       return res.status(500).json({ error: "AniList OAuth not configured. Please set ANILIST_CLIENT_ID and ANILIST_CLIENT_SECRET environment variables." });
     }
     
-    // Generate state parameter for CSRF protection
-    const state = crypto.randomBytes(32).toString('hex');
-    
-    // Store state in a short-lived way (we'll validate it in callback)
-    // For simplicity, we encode it in the URL - in production you might use a session store
+    const state = createAniListOAuthState(clientSecret, ANILIST_OAUTH_STATE_TTL_MS);
     const authUrl = anilistTracker.getAuthorizationUrl(redirectUri, state);
     
     res.redirect(authUrl);
@@ -2627,7 +2650,10 @@ addon.get("/anilist/auth", async (req, res) => {
 // GET /anilist/callback - Handle AniList OAuth callback
 addon.get("/anilist/callback", async (req, res) => {
   try {
-    const { code } = req.query;
+    const codeParam = Array.isArray(req.query.code) ? req.query.code[0] : req.query.code;
+    const stateParam = Array.isArray(req.query.state) ? req.query.state[0] : req.query.state;
+    const code = typeof codeParam === 'string' ? codeParam : '';
+    const state = typeof stateParam === 'string' ? stateParam : '';
     
     if (!code) {
       return res.status(400).send(`
@@ -2641,20 +2667,6 @@ addon.get("/anilist/callback", async (req, res) => {
         </html>
       `);
     }
-    if (usedAnilistCodes.has(code)) {
-      return res.status(400).send(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>Anilist OAuth Error</title></head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-          <h1>⚠️ Code Already Used</h1>
-          <p>This authorization code has already been exchanged. Please try authenticating again.</p>
-        </body>
-        </html>
-      `);
-    }
-    usedAnilistCodes.add(code);
-    setTimeout(() => usedAnilistCodes.delete(code), 120000);
     
     const clientId = process.env.ANILIST_CLIENT_ID;
     const clientSecret = process.env.ANILIST_CLIENT_SECRET;
@@ -2672,6 +2684,34 @@ addon.get("/anilist/callback", async (req, res) => {
         </html>
       `);
     }
+
+    if (!verifyAniListOAuthState(state, clientSecret)) {
+      return res.status(400).send(`
+        <!DOCTYPE html>
+        <html>
+        <head><title>AniList OAuth Error</title></head>
+        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+          <h1>❌ OAuth Error</h1>
+          <p>Invalid or expired state parameter. Please try authenticating again.</p>
+        </body>
+        </html>
+      `);
+    }
+
+    if (usedAnilistCodes.has(code)) {
+      return res.status(400).send(`
+        <!DOCTYPE html>
+        <html>
+        <head><title>Anilist OAuth Error</title></head>
+        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+          <h1>⚠️ Code Already Used</h1>
+          <p>This authorization code has already been exchanged. Please try authenticating again.</p>
+        </body>
+        </html>
+      `);
+    }
+    usedAnilistCodes.add(code);
+    setTimeout(() => usedAnilistCodes.delete(code), 120000);
     
     // Exchange code for tokens
     const tokens = await anilistTracker.exchangeCodeForTokens(code, redirectUri);

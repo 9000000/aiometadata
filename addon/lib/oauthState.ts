@@ -10,6 +10,8 @@ const STATE_LENGTH = UNSIGNED_STATE_LENGTH + MAC_HEX_LENGTH;
 const STATE_PATTERN = new RegExp(`^[0-9a-f]{${STATE_LENGTH}}$`);
 const TRAKT_STATE_HMAC_DOMAIN = 'aiometadata:trakt-oauth-state:v1';
 const MAL_STATE_HMAC_DOMAIN = 'aiometadata:mal-oauth-state:v1';
+const ANILIST_STATE_HMAC_DOMAIN = 'aiometadata:anilist-oauth-state:v1';
+const SIMKL_STATE_HMAC_DOMAIN = 'aiometadata:simkl-oauth-state:v1';
 const MAL_PKCE_VERIFIER_DOMAIN = 'aiometadata:mal-pkce-verifier:v1';
 
 function validateSigningInputs(
@@ -135,6 +137,50 @@ export function verifyTraktOAuthState(
   now: number = Date.now()
 ): boolean {
   return verifySignedOAuthState(state, secret, TRAKT_STATE_HMAC_DOMAIN, now) !== null;
+}
+
+export function createAniListOAuthState(
+  secret: string,
+  ttlMs: number,
+  now: number = Date.now()
+): string {
+  return createSignedOAuthState(
+    'AniList',
+    secret,
+    ttlMs,
+    ANILIST_STATE_HMAC_DOMAIN,
+    now
+  );
+}
+
+export function verifyAniListOAuthState(
+  state: unknown,
+  secret: string,
+  now: number = Date.now()
+): boolean {
+  return verifySignedOAuthState(state, secret, ANILIST_STATE_HMAC_DOMAIN, now) !== null;
+}
+
+export function createSimklOAuthState(
+  secret: string,
+  ttlMs: number,
+  now: number = Date.now()
+): string {
+  return createSignedOAuthState(
+    'Simkl',
+    secret,
+    ttlMs,
+    SIMKL_STATE_HMAC_DOMAIN,
+    now
+  );
+}
+
+export function verifySimklOAuthState(
+  state: unknown,
+  secret: string,
+  now: number = Date.now()
+): boolean {
+  return verifySignedOAuthState(state, secret, SIMKL_STATE_HMAC_DOMAIN, now) !== null;
 }
 
 export interface MalOAuthTransaction {

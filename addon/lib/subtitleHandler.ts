@@ -5,6 +5,11 @@ const { resolveTvdbEpisodeFromAnidbEpisode, resolveAnidbEpisodeFromTvdbEpisode }
 const anilistTracker: any = require('./anilistTracker');
 const malTracker: any = require('./malTracker');
 const simklUtils: any = require('../utils/simklUtils');
+import {
+  isWatchTrackingServiceEnabled,
+  normalizeWatchTrackingMediaType,
+  shouldTrackServiceMediaType,
+} from './watchTracking';
 
 const logger: any = consola.withTag('SubtitleHandler');
 
@@ -153,58 +158,7 @@ function shouldTrackMdblistWatch(config: any): boolean {
 }
 
 function shouldTrackAniList(config: any): boolean {
-  if (!config?.apiKeys?.anilistTokenId) {
-    logger.debug('[Watch Tracking] AniList skipped - No AniList account connected');
-    return false;
-  }
-
-  if (!config.anilistWatchTracking) {
-    logger.debug('[Watch Tracking] AniList skipped - Feature disabled in user config');
-    return false;
-  }
-
-  logger.debug('[Watch Tracking] AniList enabled - Account connected and tracking enabled');
-  return true;
-}
-
-function shouldTrackSimkl(config: any): boolean {
-  if (!config?.apiKeys?.simklTokenId) {
-    logger.debug('[Watch Tracking] Simkl skipped - No Simkl account connected');
-    return false;
-  }
-
-  if (!config.simklWatchTracking) {
-    logger.debug('[Watch Tracking] Simkl skipped - Feature disabled in user config');
-    return false;
-  }
-
-  logger.debug('[Watch Tracking] Simkl enabled - Account connected and tracking enabled');
-  return true;
-}
-
-function shouldTrackPublicMetaDB(config: any): boolean {
-  if (!config?.apiKeys?.publicmetadb) {
-    return false;
-  }
-  if (!config.publicmetadbWatchTracking) {
-    return false;
-  }
-  return true;
-}
-
-function shouldTrackTrakt(config: any): boolean {
-  if (!config?.apiKeys?.traktTokenId) {
-    logger.debug('[Watch Tracking] Trakt skipped - No Trakt account connected');
-    return false;
-  }
-
-  if (!config.traktWatchTracking) {
-    logger.debug('[Watch Tracking] Trakt skipped - Feature disabled in user config');
-    return false;
-  }
-
-  logger.debug('[Watch Tracking] Trakt enabled - Account connected and tracking enabled');
-  return true;
+  return isWatchTrackingServiceEnabled(config, 'anilist');
 }
 
 function handleSubtitleRequest(type: string, id: string, config: any, userUUID: string): { subtitles: any[] } {
@@ -217,7 +171,15 @@ function handleSubtitleRequest(type: string, id: string, config: any, userUUID: 
       return { subtitles: [] };
     }
 
-    if (shouldTrackMdblistWatch(config)) {
+    const mediaType = normalizeWatchTrackingMediaType(type, parsedId.type);
+    if (!mediaType) {
+      logger.warn(
+        `[Watch Tracking] Skipped ambiguous playback event - route type ${type} conflicts with parsed type ${parsedId.type}, id: ${id}`,
+      );
+      return { subtitles: [] };
+    }
+
+    if (shouldTrackServiceMediaType(config, 'mdblist', mediaType)) {
       trackMdblistWatchStatus(parsedId, config).catch((error: any) => {
         logger.error(`[Mdblist Watch Tracking] MDBList tracking failed for ${id}: ${error.message}`, {
           stack: error.stack,
@@ -226,7 +188,7 @@ function handleSubtitleRequest(type: string, id: string, config: any, userUUID: 
       });
     }
 
-    if (shouldTrackAniList(config)) {
+    if (shouldTrackServiceMediaType(config, 'anilist', mediaType)) {
       anilistTracker.trackAnimeProgress(parsedId, config, userUUID).catch((error: any) => {
         logger.error(`[Watch Tracking] AniList tracking failed for ${id}: ${error.message}`, {
           stack: error.stack,
@@ -235,7 +197,7 @@ function handleSubtitleRequest(type: string, id: string, config: any, userUUID: 
       });
     }
 
-    if (malTracker.shouldTrackMal(config)) {
+    if (shouldTrackServiceMediaType(config, 'mal', mediaType)) {
       malTracker.trackAnimeProgress(parsedId, config, userUUID).catch((error: any) => {
         logger.error(`[Watch Tracking] MAL tracking failed for ${id}: ${error.message}`, {
           stack: error.stack,
@@ -244,7 +206,7 @@ function handleSubtitleRequest(type: string, id: string, config: any, userUUID: 
       });
     }
 
-    if (shouldTrackSimkl(config)) {
+    if (shouldTrackServiceMediaType(config, 'simkl', mediaType)) {
       checkinSimkl(parsedId, config).catch((error: any) => {
         logger.error(`[Watch Tracking] Simkl tracking failed for ${id}: ${error.message}`, {
           stack: error.stack,
@@ -253,7 +215,7 @@ function handleSubtitleRequest(type: string, id: string, config: any, userUUID: 
       });
     }
 
-    if (shouldTrackTrakt(config)) {
+    if (shouldTrackServiceMediaType(config, 'trakt', mediaType)) {
       checkinTrakt(parsedId, config).catch((error: any) => {
         logger.error(`[Watch Tracking] Trakt tracking failed for ${id}: ${error.message}`, {
           stack: error.stack,
@@ -262,7 +224,7 @@ function handleSubtitleRequest(type: string, id: string, config: any, userUUID: 
       });
     }
 
-    if (shouldTrackPublicMetaDB(config)) {
+    if (shouldTrackServiceMediaType(config, 'publicmetadb', mediaType)) {
       checkinPublicMetaDB(parsedId, config).catch((error: any) => {
         logger.error(`[Watch Tracking] PublicMetaDB tracking failed for ${id}: ${error.message}`, {
           stack: error.stack,

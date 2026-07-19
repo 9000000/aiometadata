@@ -102,6 +102,23 @@ export interface SearchConfig {
     enabled: boolean;
 }
 
+export type WatchTrackingService =
+  | 'trakt'
+  | 'simkl'
+  | 'anilist'
+  | 'mal'
+  | 'mdblist'
+  | 'publicmetadb';
+
+export interface WatchTrackingMediaTypes {
+  movie?: boolean;
+  series?: boolean;
+}
+
+export type WatchTrackingConfig = Partial<
+  Record<WatchTrackingService, WatchTrackingMediaTypes>
+>;
+
 export interface AppConfig {
   language: string;
   addonName: string;
@@ -180,6 +197,8 @@ export interface AppConfig {
   simklWatchTracking: boolean;
   traktWatchTracking: boolean;
   publicmetadbWatchTracking: boolean;
+  /** Optional per-service filters. Missing media-type flags preserve legacy behavior and are treated as enabled. */
+  watchTracking?: WatchTrackingConfig;
   /** If true, keep RPDB posters for items in Continue Watching and Library (default: true). When disabled, RPDB posters are removed since catalog context is unavailable. */
   enableRatingPostersForLibrary?: boolean;
   /** If true, display a "⭐ Rate Me" genre button in meta pages that links to the rating page */

@@ -3,6 +3,7 @@ import { AppConfig, CatalogConfig, SearchConfig } from "./config";
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from 'lz-string';
 import { allCatalogDefinitions, allSearchProviders } from "@/data/catalogs";
 import { LoadingScreen } from "@/components/LoadingScreen"; 
+import { hasAnyWatchTrackingEnabled } from '@/lib/watchTracking';
 
 interface AuthState {
   authenticated: boolean;
@@ -227,14 +228,7 @@ function getManifestFingerprint(config: AppConfig): string {
     showInHome: c.showInHome,
   }));
 
-  const subtitlesResource = !!(
-    (config.apiKeys?.mdblist && config.mdblistWatchTracking) ||
-    (config.apiKeys?.anilistTokenId && config.anilistWatchTracking) ||
-    (config.apiKeys?.malTokenId && config.malWatchTracking) ||
-    (config.apiKeys?.simklTokenId && config.simklWatchTracking) ||
-    (config.apiKeys?.traktTokenId && config.traktWatchTracking) ||
-    (config.apiKeys?.publicmetadb && config.publicmetadbWatchTracking)
-  );
+  const subtitlesResource = hasAnyWatchTrackingEnabled(config);
 
   return JSON.stringify({
     catalogs: catalogFingerprint,

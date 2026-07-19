@@ -55,6 +55,17 @@ const { getFavorites, getWatchList } = require("./lib/getPersonalLists");
 const { resolveDynamicTmdbDiscoverParams } = require('./lib/tmdbDiscoverDateTokens');
 const { blurImage, convertBannerToBackground } = require('./utils/imageProcessor');
 const { TraktClient } = require('./lib/trakt');
+const {
+  createAniListOAuthState,
+  createMalOAuthTransaction,
+  createSimklOAuthState,
+  createTraktOAuthState,
+  verifyAniListOAuthState,
+  verifyMalOAuthState,
+  verifySimklOAuthState,
+  verifyTraktOAuthState,
+} = require('./lib/oauthState');
+const { renderOAuthPage } = require('./lib/oauthPage');
 const { SimklClient } = require('./lib/simkl');
 const axios = require('axios');
 const getCountryISO3 = require('country-iso-2-to-3');
@@ -75,13 +86,16 @@ const normalizeRedirectUri = (uri) => {
   }
   return `https://${trimmed.replace(/^\/+/, '')}`;
 };
+// Best-effort same-process duplicate handling. Trakt enforces authorization-code
+// single use; this set is not shared across replicas and does not consume state.
 const usedTraktCodes = new Set();
-const pendingTraktOAuthStates = new Map();
 const TRAKT_OAUTH_STATE_TTL_MS = parseInt(process.env.TRAKT_OAUTH_STATE_TTL_MS || String(10 * 60 * 1000), 10);
 const usedAnilistCodes = new Set();
+const ANILIST_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const SIMKL_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 const usedMalCodes = new Set();
-const malPkceStates = new Map();
+const MAL_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 function extractCanonicalIdFromDynamicUpNextId(type, stremioId) {
   if (type !== 'series' || typeof stremioId !== 'string') {
@@ -110,30 +124,6 @@ function extractCanonicalIdFromDynamicUpNextId(type, stremioId) {
     episodePart === 'unknown';
 
   return isSupportedCanonicalId && isSupportedEpisodePart ? canonicalId : null;
-}
-
-function createTraktOAuthState() {
-  const state = crypto.randomBytes(32).toString('hex');
-  const expiresAt = Date.now() + TRAKT_OAUTH_STATE_TTL_MS;
-  pendingTraktOAuthStates.set(state, expiresAt);
-
-  // Opportunistic cleanup to keep the in-memory map bounded.
-  const now = Date.now();
-  for (const [storedState, storedExpiresAt] of pendingTraktOAuthStates.entries()) {
-    if (storedExpiresAt <= now) {
-      pendingTraktOAuthStates.delete(storedState);
-    }
-  }
-
-  return state;
-}
-
-function consumeTraktOAuthState(state) {
-  if (!state || typeof state !== 'string') return false;
-  const expiresAt = pendingTraktOAuthStates.get(state);
-  if (!expiresAt) return false;
-  pendingTraktOAuthStates.delete(state);
-  return expiresAt > Date.now();
 }
 
 function shuffleMetas(metas = []) {
@@ -199,6 +189,22 @@ addon.use((req, res, next) => {
   if (m) return runWithRequestContext(m[1], () => next());
   next();
 });
+
+const noStoreOAuthHeaders = (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+};
+addon.use(
+  [
+    '/api/auth/trakt/authorize',
+    '/api/auth/trakt/callback',
+    '/api/auth/simkl/authorize',
+    '/api/auth/simkl/callback',
+  ],
+  noStoreOAuthHeaders
+);
 
 function TEST_KEYS_RATE_LIMIT_PER_MIN() { return parseInt(process.env.TEST_KEYS_RATE_LIMIT_PER_MIN || '60', 10); }
 
@@ -464,7 +470,7 @@ addon.get("/api/auth/trakt/authorize", async (req, res) => {
     
     const traktClient = new TraktClient(clientId, clientSecret, redirectUri);
     
-    const state = createTraktOAuthState();
+    const state = createTraktOAuthState(clientSecret, TRAKT_OAUTH_STATE_TTL_MS);
     const authUrl = traktClient.getAuthorizationUrl(state);
     
     res.redirect(authUrl);
@@ -474,6 +480,7 @@ addon.get("/api/auth/trakt/authorize", async (req, res) => {
   }
 });
 
+// Coalesce duplicate exchanges handled by this process only.
 const pendingTraktExchanges = new Map();
 
 // Helper: sleep with ms
@@ -530,44 +537,35 @@ addon.get("/api/auth/trakt/callback", async (req, res) => {
     const state = Array.isArray(req.query.state) ? req.query.state[0] : req.query.state;
 
     if (!code) {
-      return res.status(400).send(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>Trakt OAuth Error</title></head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-          <h1>❌ OAuth Error</h1>
-          <p>Invalid callback parameters - missing authorization code.</p>
-        </body>
-        </html>
-      `);
+      return res.status(400).send(renderOAuthPage({
+        provider: 'trakt',
+        status: 'error',
+        title: 'Authorization incomplete',
+        message: 'Trakt did not return an authorization code. Please start the connection again.',
+        retryHref: '/api/auth/trakt/authorize',
+      }));
     }
 
     if (usedTraktCodes.has(code)) {
-      return res.status(400).send(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>Trakt OAuth Error</title></head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-          <h1>⚠️ Code Already Used</h1>
-          <p>This authorization code has already been exchanged. Please try authenticating again.</p>
-          <a href="/api/auth/trakt/authorize" style="display:inline-block;margin-top:20px;padding:12px 30px;background:#ed1c24;color:white;text-decoration:none;border-radius:5px;">Reconnect Trakt</a>
-        </body>
-        </html>
-      `);
+      return res.status(400).send(renderOAuthPage({
+        provider: 'trakt',
+        status: 'warning',
+        title: 'Authorization already used',
+        message: 'This authorization has already been completed. Start a new connection if you need another token.',
+        retryHref: '/api/auth/trakt/authorize',
+        retryLabel: 'Reconnect Trakt',
+      }));
     }
 
-    if (!state || !consumeTraktOAuthState(state)) {
-      return res.status(400).send(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>Trakt OAuth Error</title></head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-          <h1>OAuth State Error</h1>
-          <p>The OAuth state is missing, expired, or invalid. Please try again.</p>
-          <a href="/api/auth/trakt/authorize" style="display:inline-block;margin-top:20px;padding:12px 30px;background:#ed1c24;color:white;text-decoration:none;border-radius:5px;">Reconnect Trakt</a>
-        </body>
-        </html>
-      `);
+    const clientSecret = process.env.TRAKT_CLIENT_SECRET;
+    if (!state || !verifyTraktOAuthState(state, clientSecret)) {
+      return res.status(400).send(renderOAuthPage({
+        provider: 'trakt',
+        status: 'error',
+        title: 'Connection expired',
+        message: 'The secure authorization state is missing, invalid, or expired. Please start again.',
+        retryHref: '/api/auth/trakt/authorize',
+      }));
     }
 
     if (pendingTraktExchanges.has(code)) {
@@ -575,48 +573,35 @@ addon.get("/api/auth/trakt/callback", async (req, res) => {
       try {
         await pendingTraktExchanges.get(code);
 
-        return res.send(`
-          <!DOCTYPE html>
-          <html>
-          <head><title>Trakt OAuth</title></head>
-          <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-            <h1>⏳ Processing</h1>
-            <p>Your Trakt authorization is already being processed. Please check your other tab/window.</p>
-          </body>
-          </html>
-        `);
+        return res.send(renderOAuthPage({
+          provider: 'trakt',
+          status: 'info',
+          title: 'Connection in progress',
+          message: 'Your Trakt authorization is already being processed. You can close this window and check the original tab.',
+        }));
       } catch {
-        return res.status(500).send(`
-          <!DOCTYPE html>
-          <html>
-          <head><title>Trakt OAuth Error</title></head>
-          <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-            <h1>❌ Exchange Failed</h1>
-            <p>The token exchange failed. Please try authenticating again.</p>
-            <a href="/api/auth/trakt/authorize" style="display:inline-block;margin-top:20px;padding:12px 30px;background:#ed1c24;color:white;text-decoration:none;border-radius:5px;">Reconnect Trakt</a>
-          </body>
-          </html>
-        `);
+        return res.status(500).send(renderOAuthPage({
+          provider: 'trakt',
+          status: 'error',
+          title: 'Connection failed',
+          message: 'Trakt could not complete the token exchange. Please start the connection again.',
+          retryHref: '/api/auth/trakt/authorize',
+        }));
       }
     }
 
     const clientId = process.env.TRAKT_CLIENT_ID;
-    const clientSecret = process.env.TRAKT_CLIENT_SECRET;
     const redirectUri = normalizeRedirectUri(
       process.env.TRAKT_REDIRECT_URI || `${process.env.HOST_NAME}/api/auth/trakt/callback`
     );
 
     if (!clientId || !clientSecret) {
-      return res.status(500).send(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>Trakt OAuth Error</title></head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-          <h1>⚠️ Configuration Error</h1>
-          <p>Trakt OAuth is not configured on this server.</p>
-        </body>
-        </html>
-      `);
+      return res.status(500).send(renderOAuthPage({
+        provider: 'trakt',
+        status: 'warning',
+        title: 'Trakt is not configured',
+        message: 'This server is missing the credentials required to connect a Trakt account.',
+      }));
     }
 
     const traktClient = new TraktClient(clientId, clientSecret, redirectUri);
@@ -636,33 +621,23 @@ addon.get("/api/auth/trakt/callback", async (req, res) => {
       if (tokenError.response?.status === 429) {
         const retryAfter = tokenError.response.headers?.['retry-after'] || 60;
         const waitSeconds = Math.min(Math.max(Number(retryAfter), 30), 300);
-        return res.status(429).send(`
-          <!DOCTYPE html>
-          <html>
-          <head><title>Trakt Rate Limited</title></head>
-          <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-            <h1>⏳ Rate Limited</h1>
-            <p>Trakt's API is temporarily rate-limited. Please wait and try again.</p>
-            <p>Estimated wait: <strong>${waitSeconds} seconds</strong></p>
-            <a href="/api/auth/trakt/authorize" style="display:inline-block;margin-top:20px;padding:12px 30px;background:#ed1c24;color:white;text-decoration:none;border-radius:5px;">Try Again</a>
-            <br><br>
-            <a href="/configure" style="color: #666; text-decoration: underline;">Return to configuration</a>
-          </body>
-          </html>
-        `);
+        return res.status(429).send(renderOAuthPage({
+          provider: 'trakt',
+          status: 'warning',
+          title: 'Trakt is temporarily busy',
+          message: 'The Trakt API is rate-limiting new connections. Wait a moment, then try again.',
+          detail: `Estimated wait: ${waitSeconds} seconds.`,
+          retryHref: '/api/auth/trakt/authorize',
+        }));
       }
 
-      return res.status(500).send(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>Trakt OAuth Error</title></head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-          <h1>❌ Exchange Failed</h1>
-          <p>Failed to exchange authorization code: ${tokenError.message}</p>
-          <a href="/api/auth/trakt/authorize" style="display:inline-block;margin-top:20px;padding:12px 30px;background:#ed1c24;color:white;text-decoration:none;border-radius:5px;">Try Again</a>
-        </body>
-        </html>
-      `);
+      return res.status(500).send(renderOAuthPage({
+        provider: 'trakt',
+        status: 'error',
+        title: 'Connection failed',
+        message: 'The authorization code could not be exchanged for a Trakt token. Please try again.',
+        retryHref: '/api/auth/trakt/authorize',
+      }));
     } finally {
       pendingTraktExchanges.delete(code);
     }
@@ -701,16 +676,13 @@ addon.get("/api/auth/trakt/callback", async (req, res) => {
     }
 
     if (!saved) {
-      return res.status(500).send(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>Trakt OAuth Error</title></head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-          <h1>❌ Database Error</h1>
-          <p>Failed to save OAuth token to database.</p>
-        </body>
-        </html>
-      `);
+      return res.status(500).send(renderOAuthPage({
+        provider: 'trakt',
+        status: 'error',
+        title: 'Token could not be saved',
+        message: 'Trakt authorized the connection, but this server could not store the token. Please try again.',
+        retryHref: '/api/auth/trakt/authorize',
+      }));
     }
 
     try {
@@ -729,70 +701,24 @@ addon.get("/api/auth/trakt/callback", async (req, res) => {
       consola.warn(`[Trakt OAuth] Warning: Could not auto-update user configs - ${configError.message}`);
     }
 
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Trakt OAuth Success</title>
-        <style>
-          body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
-          .container { max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-          h1 { color: #ed1c24; }
-          .token-box { background: #f9f9f9; border: 2px dashed #ed1c24; padding: 20px; margin: 20px 0; border-radius: 5px; word-break: break-all; }
-          .token { font-family: monospace; font-size: 14px; color: #333; }
-          button { background: #ed1c24; color: white; border: none; padding: 12px 30px; font-size: 16px; cursor: pointer; border-radius: 5px; margin: 10px; }
-          button:hover { background: #c41a20; }
-          .instructions { text-align: left; margin-top: 30px; padding: 20px; background: #f0f8ff; border-left: 4px solid #007acc; }
-          .instructions ol { padding-left: 20px; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <h1>✅ Trakt OAuth Successful</h1>
-          <p>Your Trakt account <strong>${user.username}</strong> has been authorized!</p>
-          <div class="token-box">
-            <div class="token" id="tokenId">${tokenId}</div>
-          </div>
-          <button onclick="copyToken()">📋 Copy Token ID</button>
-          <div class="instructions">
-            <h3>📝 Next Steps:</h3>
-            <ol>
-              <li>Copy the Token ID above</li>
-              <li>Go to your addon configuration page</li>
-              <li>Find the <strong>Trakt Integration</strong> section</li>
-              <li>Paste this Token ID in the <strong>Trakt Token ID</strong> field</li>
-              <li>Save your configuration</li>
-            </ol>
-            <p><strong>⚠️ Important:</strong> Keep this Token ID private. Anyone with this ID can access your Trakt account through this addon.</p>
-          </div>
-        </div>
-        <script>
-          function copyToken() {
-            const tokenText = document.getElementById('tokenId').textContent;
-            navigator.clipboard.writeText(tokenText).then(() => {
-              const btn = event.target;
-              btn.textContent = '✅ Copied!';
-              setTimeout(() => btn.textContent = '📋 Copy Token ID', 2000);
-            });
-          }
-        </script>
-      </body>
-      </html>
-    `);
+    res.send(renderOAuthPage({
+      provider: 'trakt',
+      status: 'success',
+      title: 'Trakt connected',
+      message: 'Authorization is complete. Copy the token ID and paste it into the Trakt integration settings.',
+      username: user.username,
+      tokenId,
+    }));
 
   } catch (error) {
     consola.error("[Trakt OAuth] Unexpected callback error:", error);
-    res.status(500).send(`
-      <!DOCTYPE html>
-      <html>
-      <head><title>Trakt OAuth Error</title></head>
-      <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-        <h1>❌ Unexpected Error</h1>
-        <p>${error.message || 'An unexpected error occurred during authorization.'}</p>
-        <a href="/api/auth/trakt/authorize" style="display:inline-block;margin-top:20px;padding:12px 30px;background:#ed1c24;color:white;text-decoration:none;border-radius:5px;">Try Again</a>
-      </body>
-      </html>
-    `);
+    res.status(500).send(renderOAuthPage({
+      provider: 'trakt',
+      status: 'error',
+      title: 'Something went wrong',
+      message: 'An unexpected error interrupted the Trakt connection. Please try again.',
+      retryHref: '/api/auth/trakt/authorize',
+    }));
   }
 });
 
@@ -840,8 +766,8 @@ addon.get("/api/auth/simkl/authorize", async (req, res) => {
     
     const simklClient = new SimklClient(clientId, clientSecret, redirectUri);
     
-    // Get authorization URL
-    const authUrl = simklClient.getAuthorizationUrl();
+    const state = createSimklOAuthState(clientSecret, SIMKL_OAUTH_STATE_TTL_MS);
+    const authUrl = simklClient.getAuthorizationUrl(state);
     
     res.redirect(authUrl);
   } catch (error) {
@@ -852,19 +778,19 @@ addon.get("/api/auth/simkl/authorize", async (req, res) => {
 
 addon.get("/api/auth/simkl/callback", async (req, res) => {
   try {
-    const { code } = req.query;
+    const codeParam = Array.isArray(req.query.code) ? req.query.code[0] : req.query.code;
+    const stateParam = Array.isArray(req.query.state) ? req.query.state[0] : req.query.state;
+    const code = typeof codeParam === 'string' ? codeParam : '';
+    const state = typeof stateParam === 'string' ? stateParam : '';
     
     if (!code) {
-      return res.status(400).send(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>Simkl OAuth Error</title></head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-          <h1>❌ OAuth Error</h1>
-          <p>Invalid callback parameters - missing authorization code.</p>
-        </body>
-        </html>
-      `);
+      return res.status(400).send(renderOAuthPage({
+        provider: 'simkl',
+        status: 'error',
+        title: 'Authorization incomplete',
+        message: 'Simkl did not return an authorization code. Please start the connection again.',
+        retryHref: '/api/auth/simkl/authorize',
+      }));
     }
     
     const clientId = process.env.SIMKL_CLIENT_ID;
@@ -872,16 +798,22 @@ addon.get("/api/auth/simkl/callback", async (req, res) => {
     const redirectUri = normalizeRedirectUri(process.env.SIMKL_REDIRECT_URI || `${process.env.HOST_NAME}/api/auth/simkl/callback`);
     
     if (!clientId || !clientSecret) {
-      return res.status(500).send(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>Simkl OAuth Error</title></head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-          <h1>⚠️ Configuration Error</h1>
-          <p>Simkl OAuth is not configured on this server.</p>
-        </body>
-        </html>
-      `);
+      return res.status(500).send(renderOAuthPage({
+        provider: 'simkl',
+        status: 'warning',
+        title: 'Simkl is not configured',
+        message: 'This server is missing the credentials required to connect a Simkl account.',
+      }));
+    }
+
+    if (!verifySimklOAuthState(state, clientSecret)) {
+      return res.status(400).send(renderOAuthPage({
+        provider: 'simkl',
+        status: 'error',
+        title: 'Connection expired',
+        message: 'The secure authorization state is missing, invalid, or expired. Please start again.',
+        retryHref: '/api/auth/simkl/authorize',
+      }));
     }
     
     const simklClient = new SimklClient(clientId, clientSecret, redirectUri);
@@ -928,16 +860,13 @@ addon.get("/api/auth/simkl/callback", async (req, res) => {
     }
     
     if (!saved) {
-      return res.status(500).send(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>Simkl OAuth Error</title></head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-          <h1>❌ Database Error</h1>
-          <p>Failed to save OAuth token to database.</p>
-        </body>
-        </html>
-      `);
+      return res.status(500).send(renderOAuthPage({
+        provider: 'simkl',
+        status: 'error',
+        title: 'Token could not be saved',
+        message: 'Simkl authorized the connection, but this server could not store the token. Please try again.',
+        retryHref: '/api/auth/simkl/authorize',
+      }));
     }
     
     try {
@@ -955,75 +884,24 @@ addon.get("/api/auth/simkl/callback", async (req, res) => {
     } catch (configError) {
       consola.warn(`[Simkl OAuth] Warning: Could not auto-update user configs - ${configError.message}`);
     }
-    
-    // Display success page with token ID
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Simkl OAuth Success</title>
-        <style>
-          body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
-          .container { max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-          h1 { color: #ff6b35; }
-          .token-box { background: #f9f9f9; border: 2px dashed #ff6b35; padding: 20px; margin: 20px 0; border-radius: 5px; word-break: break-all; }
-          .token { font-family: monospace; font-size: 14px; color: #333; }
-          button { background: #ff6b35; color: white; border: none; padding: 12px 30px; font-size: 16px; cursor: pointer; border-radius: 5px; margin: 10px; }
-          button:hover { background: #e55a2b; }
-          .instructions { text-align: left; margin-top: 30px; padding: 20px; background: #f0f8ff; border-left: 4px solid #007acc; }
-          .instructions ol { padding-left: 20px; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <h1>✅ Simkl OAuth Successful</h1>
-          <p>Your Simkl account <strong>${user.username}</strong> has been authorized!</p>
-          
-          <div class="token-box">
-            <div class="token" id="tokenId">${tokenId}</div>
-          </div>
-          
-          <button onclick="copyToken()">📋 Copy Token ID</button>
-          
-          <div class="instructions">
-            <h3>📝 Next Steps:</h3>
-            <ol>
-              <li>Copy the Token ID above</li>
-              <li>Go to your addon configuration page</li>
-              <li>Find the <strong>Simkl Integration</strong> section</li>
-              <li>Paste this Token ID in the <strong>Simkl Token ID</strong> field</li>
-              <li>Save your configuration</li>
-            </ol>
-            <p><strong>⚠️ Important:</strong> Keep this Token ID private. Anyone with this ID can access your Simkl account through this addon.</p>
-          </div>
-        </div>
-        
-        <script>
-          function copyToken() {
-            const tokenText = document.getElementById('tokenId').textContent;
-            navigator.clipboard.writeText(tokenText).then(() => {
-              alert('✅ Token ID copied to clipboard!');
-            }).catch(err => {
-              alert('❌ Failed to copy. Please select and copy manually.');
-            });
-          }
-        </script>
-      </body>
-      </html>
-    `);
+
+    res.send(renderOAuthPage({
+      provider: 'simkl',
+      status: 'success',
+      title: 'Simkl connected',
+      message: 'Authorization is complete. Copy the token ID and paste it into the Simkl integration settings.',
+      username: user.username,
+      tokenId,
+    }));
   } catch (error) {
     consola.error("[Simkl OAuth] Callback error:", error);
-    res.status(500).send(`
-      <!DOCTYPE html>
-      <html>
-      <head><title>Simkl OAuth Error</title></head>
-      <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-        <h1>❌ OAuth Error</h1>
-        <p>An error occurred during authentication: ${error.message}</p>
-        <p><a href="${process.env.HOST_NAME}/configure">← Back to Configuration</a></p>
-      </body>
-      </html>
-    `);
+    res.status(500).send(renderOAuthPage({
+      provider: 'simkl',
+      status: 'error',
+      title: 'Something went wrong',
+      message: 'An unexpected error interrupted the Simkl connection. Please try again.',
+      retryHref: '/api/auth/simkl/authorize',
+    }));
   }
 });
 
@@ -2600,12 +2478,6 @@ addon.post("/api/flixpatrol/probe", async (req, res) => {
 
 // --- AniList OAuth Routes ---
 const anilistTracker = require('./lib/anilistTracker');
-const noStoreOAuthHeaders = (req, res, next) => {
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private, max-age=0');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
-  next();
-};
 addon.use(['/anilist/auth', '/anilist/callback'], noStoreOAuthHeaders);
 
 // GET /anilist/auth - Initiate AniList OAuth flow
@@ -2621,11 +2493,7 @@ addon.get("/anilist/auth", async (req, res) => {
       return res.status(500).json({ error: "AniList OAuth not configured. Please set ANILIST_CLIENT_ID and ANILIST_CLIENT_SECRET environment variables." });
     }
     
-    // Generate state parameter for CSRF protection
-    const state = crypto.randomBytes(32).toString('hex');
-    
-    // Store state in a short-lived way (we'll validate it in callback)
-    // For simplicity, we encode it in the URL - in production you might use a session store
+    const state = createAniListOAuthState(clientSecret, ANILIST_OAUTH_STATE_TTL_MS);
     const authUrl = anilistTracker.getAuthorizationUrl(redirectUri, state);
     
     res.redirect(authUrl);
@@ -2638,82 +2506,81 @@ addon.get("/anilist/auth", async (req, res) => {
 // GET /anilist/callback - Handle AniList OAuth callback
 addon.get("/anilist/callback", async (req, res) => {
   try {
-    const { code } = req.query;
+    const codeParam = Array.isArray(req.query.code) ? req.query.code[0] : req.query.code;
+    const stateParam = Array.isArray(req.query.state) ? req.query.state[0] : req.query.state;
+    const code = typeof codeParam === 'string' ? codeParam : '';
+    const state = typeof stateParam === 'string' ? stateParam : '';
     
     if (!code) {
-      return res.status(400).send(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>AniList OAuth Error</title></head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-          <h1>❌ OAuth Error</h1>
-          <p>Invalid callback parameters - missing authorization code.</p>
-        </body>
-        </html>
-      `);
+      return res.status(400).send(renderOAuthPage({
+        provider: 'anilist',
+        status: 'error',
+        title: 'Authorization incomplete',
+        message: 'AniList did not return an authorization code. Please start the connection again.',
+        retryHref: '/anilist/auth',
+      }));
     }
-    if (usedAnilistCodes.has(code)) {
-      return res.status(400).send(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>Anilist OAuth Error</title></head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-          <h1>⚠️ Code Already Used</h1>
-          <p>This authorization code has already been exchanged. Please try authenticating again.</p>
-        </body>
-        </html>
-      `);
-    }
-    usedAnilistCodes.add(code);
-    setTimeout(() => usedAnilistCodes.delete(code), 120000);
     
     const clientId = process.env.ANILIST_CLIENT_ID;
     const clientSecret = process.env.ANILIST_CLIENT_SECRET;
     const redirectUri = normalizeRedirectUri(process.env.ANILIST_REDIRECT_URI || `${process.env.HOST_NAME}/anilist/callback`);
     
     if (!clientId || !clientSecret) {
-      return res.status(500).send(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>AniList OAuth Error</title></head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-          <h1>⚠️ Configuration Error</h1>
-          <p>AniList OAuth is not configured on this server.</p>
-        </body>
-        </html>
-      `);
+      return res.status(500).send(renderOAuthPage({
+        provider: 'anilist',
+        status: 'warning',
+        title: 'AniList is not configured',
+        message: 'This server is missing the credentials required to connect an AniList account.',
+      }));
     }
+
+    if (!verifyAniListOAuthState(state, clientSecret)) {
+      return res.status(400).send(renderOAuthPage({
+        provider: 'anilist',
+        status: 'error',
+        title: 'Connection expired',
+        message: 'The secure authorization state is missing, invalid, or expired. Please start again.',
+        retryHref: '/anilist/auth',
+      }));
+    }
+
+    if (usedAnilistCodes.has(code)) {
+      return res.status(400).send(renderOAuthPage({
+        provider: 'anilist',
+        status: 'warning',
+        title: 'Authorization already used',
+        message: 'This authorization has already been completed. Start a new connection if you need another token.',
+        retryHref: '/anilist/auth',
+        retryLabel: 'Reconnect AniList',
+      }));
+    }
+    usedAnilistCodes.add(code);
+    setTimeout(() => usedAnilistCodes.delete(code), 120000);
     
     // Exchange code for tokens
     const tokens = await anilistTracker.exchangeCodeForTokens(code, redirectUri);
     
     if (!tokens) {
-      return res.status(500).send(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>AniList OAuth Error</title></head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-          <h1>❌ Token Exchange Failed</h1>
-          <p>Failed to exchange authorization code for tokens.</p>
-        </body>
-        </html>
-      `);
+      return res.status(500).send(renderOAuthPage({
+        provider: 'anilist',
+        status: 'error',
+        title: 'Connection failed',
+        message: 'The authorization code could not be exchanged for an AniList token. Please try again.',
+        retryHref: '/anilist/auth',
+      }));
     }
     
     // Get user info from AniList
     const user = await anilistTracker.getAuthenticatedUser(tokens.access_token);
     
     if (!user) {
-      return res.status(500).send(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>AniList OAuth Error</title></head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-          <h1>❌ User Info Error</h1>
-          <p>Failed to retrieve AniList user information.</p>
-        </body>
-        </html>
-      `);
+      return res.status(500).send(renderOAuthPage({
+        provider: 'anilist',
+        status: 'error',
+        title: 'Profile unavailable',
+        message: 'AniList authorized the connection, but the account profile could not be loaded. Please try again.',
+        retryHref: '/anilist/auth',
+      }));
     }
     
     const existingTokens = await database.getOAuthTokensByProvider('anilist');
@@ -2744,86 +2611,32 @@ addon.get("/anilist/callback", async (req, res) => {
     }
     
     if (!saved) {
-      return res.status(500).send(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>AniList OAuth Error</title></head>
-        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-          <h1>❌ Database Error</h1>
-          <p>Failed to save OAuth token to database.</p>
-        </body>
-        </html>
-      `);
+      return res.status(500).send(renderOAuthPage({
+        provider: 'anilist',
+        status: 'error',
+        title: 'Token could not be saved',
+        message: 'AniList authorized the connection, but this server could not store the token. Please try again.',
+        retryHref: '/anilist/auth',
+      }));
     }
-    
-    // Display success page with token ID
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>AniList OAuth Success</title>
-        <style>
-          body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
-          .container { max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-          h1 { color: #02a9ff; }
-          .token-box { background: #f9f9f9; border: 2px dashed #02a9ff; padding: 20px; margin: 20px 0; border-radius: 5px; word-break: break-all; }
-          .token { font-family: monospace; font-size: 14px; color: #333; }
-          button { background: #02a9ff; color: white; border: none; padding: 12px 30px; font-size: 16px; cursor: pointer; border-radius: 5px; margin: 10px; }
-          button:hover { background: #0288d1; }
-          .instructions { text-align: left; margin-top: 30px; padding: 20px; background: #f0f8ff; border-left: 4px solid #02a9ff; }
-          .instructions ol { padding-left: 20px; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <h1>✅ AniList OAuth Successful</h1>
-          <p>Your AniList account <strong>${user.username}</strong> has been authorized!</p>
-          
-          <div class="token-box">
-            <div class="token" id="tokenId">${tokenId}</div>
-          </div>
-          
-          <button onclick="copyToken()">📋 Copy Token ID</button>
-          
-          <div class="instructions">
-            <h3>📝 Next Steps:</h3>
-            <ol>
-              <li>Copy the Token ID above</li>
-              <li>Go to your addon configuration page</li>
-              <li>Find the <strong>AniList Integration</strong> section</li>
-              <li>Paste this Token ID in the <strong>AniList Token ID</strong> field</li>
-              <li>Save your configuration</li>
-            </ol>
-            <p><strong>⚠️ Important:</strong> Keep this Token ID private. Anyone with this ID can access your AniList account through this addon.</p>
-          </div>
-        </div>
-        
-        <script>
-          function copyToken() {
-            const tokenText = document.getElementById('tokenId').textContent;
-            navigator.clipboard.writeText(tokenText).then(() => {
-              alert('✅ Token ID copied to clipboard!');
-            }).catch(err => {
-              alert('❌ Failed to copy. Please select and copy manually.');
-            });
-          }
-        </script>
-      </body>
-      </html>
-    `);
+
+    res.send(renderOAuthPage({
+      provider: 'anilist',
+      status: 'success',
+      title: 'AniList connected',
+      message: 'Authorization is complete. Copy the token ID and paste it into the AniList integration settings.',
+      username: user.username,
+      tokenId,
+    }));
   } catch (error) {
     consola.error("[AniList OAuth] Callback error:", error);
-    res.status(500).send(`
-      <!DOCTYPE html>
-      <html>
-      <head><title>AniList OAuth Error</title></head>
-      <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-        <h1>❌ OAuth Error</h1>
-        <p>An error occurred during authentication: ${error.message}</p>
-        <p><a href="${process.env.HOST_NAME}/configure">← Back to Configuration</a></p>
-      </body>
-      </html>
-    `);
+    res.status(500).send(renderOAuthPage({
+      provider: 'anilist',
+      status: 'error',
+      title: 'Something went wrong',
+      message: 'An unexpected error interrupted the AniList connection. Please try again.',
+      retryHref: '/anilist/auth',
+    }));
   }
 });
 
@@ -2937,10 +2750,10 @@ addon.get("/mal/auth", async (req, res) => {
 
     consola.info(`[MAL OAuth] Starting auth flow with redirect_uri=${redirectUri}`);
 
-    const state = crypto.randomBytes(32).toString('hex');
-    const codeVerifier = malTracker.generateCodeVerifier();
-    malPkceStates.set(state, codeVerifier);
-    setTimeout(() => malPkceStates.delete(state), 10 * 60 * 1000);
+    const { state, codeVerifier } = createMalOAuthTransaction(
+      clientSecret,
+      MAL_OAUTH_STATE_TTL_MS
+    );
 
     const authUrl = malTracker.getAuthorizationUrl(redirectUri, state, codeVerifier);
     res.redirect(authUrl);
@@ -2952,52 +2765,78 @@ addon.get("/mal/auth", async (req, res) => {
 
 // GET /mal/callback - Handle MyAnimeList OAuth callback
 addon.get("/mal/callback", async (req, res) => {
-  const oauthErrorPage = (title, message) => `
-    <!DOCTYPE html>
-    <html>
-    <head><title>MyAnimeList OAuth Error</title></head>
-    <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-      <h1>${title}</h1>
-      <p>${message}</p>
-    </body>
-    </html>
-  `;
-
   try {
     const { code, state } = req.query;
 
     if (!code) {
-      return res.status(400).send(oauthErrorPage('❌ OAuth Error', 'Invalid callback parameters - missing authorization code.'));
+      return res.status(400).send(renderOAuthPage({
+        provider: 'mal',
+        status: 'error',
+        title: 'Authorization incomplete',
+        message: 'MyAnimeList did not return an authorization code. Please start the connection again.',
+        retryHref: '/mal/auth',
+      }));
     }
 
-    const codeVerifier = state ? malPkceStates.get(state) : undefined;
+    const clientSecret = process.env.MAL_CLIENT_SECRET;
+    const codeVerifier = state
+      ? verifyMalOAuthState(state, clientSecret)
+      : null;
     if (!codeVerifier) {
-      return res.status(400).send(oauthErrorPage('❌ OAuth Error', 'Invalid or expired state parameter. Please try authenticating again.'));
+      return res.status(400).send(renderOAuthPage({
+        provider: 'mal',
+        status: 'error',
+        title: 'Connection expired',
+        message: 'The secure authorization state is missing, invalid, or expired. Please start again.',
+        retryHref: '/mal/auth',
+      }));
     }
-    malPkceStates.delete(state);
 
     if (usedMalCodes.has(code)) {
-      return res.status(400).send(oauthErrorPage('⚠️ Code Already Used', 'This authorization code has already been exchanged. Please try authenticating again.'));
+      return res.status(400).send(renderOAuthPage({
+        provider: 'mal',
+        status: 'warning',
+        title: 'Authorization already used',
+        message: 'This authorization has already been completed. Start a new connection if you need another token.',
+        retryHref: '/mal/auth',
+        retryLabel: 'Reconnect MyAnimeList',
+      }));
     }
     usedMalCodes.add(code);
     setTimeout(() => usedMalCodes.delete(code), 120000);
 
     const clientId = process.env.MAL_CLIENT_ID;
-    const clientSecret = process.env.MAL_CLIENT_SECRET;
     const redirectUri = normalizeRedirectUri(process.env.MAL_REDIRECT_URI || `${process.env.HOST_NAME}/mal/callback`);
 
     if (!clientId || !clientSecret) {
-      return res.status(500).send(oauthErrorPage('⚠️ Configuration Error', 'MyAnimeList OAuth is not configured on this server.'));
+      return res.status(500).send(renderOAuthPage({
+        provider: 'mal',
+        status: 'warning',
+        title: 'MyAnimeList is not configured',
+        message: 'This server is missing the credentials required to connect a MyAnimeList account.',
+      }));
     }
 
     const tokens = await malTracker.exchangeCodeForTokens(code, redirectUri, codeVerifier);
     if (!tokens) {
-      return res.status(500).send(oauthErrorPage('❌ Token Exchange Failed', 'Failed to exchange authorization code for tokens.'));
+      return res.status(500).send(renderOAuthPage({
+        provider: 'mal',
+        status: 'error',
+        title: 'Connection failed',
+        message: 'The authorization code could not be exchanged for a MyAnimeList token. Please try again.',
+        retryHref: '/mal/auth',
+      }));
     }
 
     const user = await malTracker.getAuthenticatedUser(tokens.access_token);
     if (!user) {
-      return res.status(500).send(oauthErrorPage('❌ User Info Error', 'Failed to retrieve MyAnimeList user information.'));
+      return res.status(500).send(renderOAuthPage({
+        provider: 'mal',
+        status: 'error',
+        title: 'Profile unavailable',
+        message: 'MyAnimeList authorized the connection, but the account profile could not be loaded. Please try again.',
+        retryHref: '/mal/auth',
+      }));
     }
 
     const existingTokens = await database.getOAuthTokensByProvider('mal');
@@ -3028,66 +2867,32 @@ addon.get("/mal/callback", async (req, res) => {
     }
 
     if (!saved) {
-      return res.status(500).send(oauthErrorPage('❌ Database Error', 'Failed to save OAuth token to database.'));
+      return res.status(500).send(renderOAuthPage({
+        provider: 'mal',
+        status: 'error',
+        title: 'Token could not be saved',
+        message: 'MyAnimeList authorized the connection, but this server could not store the token. Please try again.',
+        retryHref: '/mal/auth',
+      }));
     }
 
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>MyAnimeList OAuth Success</title>
-        <style>
-          body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
-          .container { max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-          h1 { color: #2e51a2; }
-          .token-box { background: #f9f9f9; border: 2px dashed #2e51a2; padding: 20px; margin: 20px 0; border-radius: 5px; word-break: break-all; }
-          .token { font-family: monospace; font-size: 14px; color: #333; }
-          button { background: #2e51a2; color: white; border: none; padding: 12px 30px; font-size: 16px; cursor: pointer; border-radius: 5px; margin: 10px; }
-          button:hover { background: #24417f; }
-          .instructions { text-align: left; margin-top: 30px; padding: 20px; background: #f0f4ff; border-left: 4px solid #2e51a2; }
-          .instructions ol { padding-left: 20px; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <h1>✅ MyAnimeList OAuth Successful</h1>
-          <p>Your MyAnimeList account <strong>${user.username}</strong> has been authorized!</p>
-
-          <div class="token-box">
-            <div class="token" id="tokenId">${tokenId}</div>
-          </div>
-
-          <button onclick="copyToken()">📋 Copy Token ID</button>
-
-          <div class="instructions">
-            <h3>📝 Next Steps:</h3>
-            <ol>
-              <li>Copy the Token ID above</li>
-              <li>Go to your addon configuration page</li>
-              <li>Find the <strong>MyAnimeList Integration</strong> section</li>
-              <li>Paste this Token ID in the <strong>MAL Token ID</strong> field</li>
-              <li>Save your configuration</li>
-            </ol>
-            <p><strong>⚠️ Important:</strong> Keep this Token ID private. Anyone with this ID can access your MyAnimeList account through this addon.</p>
-          </div>
-        </div>
-
-        <script>
-          function copyToken() {
-            const tokenText = document.getElementById('tokenId').textContent;
-            navigator.clipboard.writeText(tokenText).then(() => {
-              alert('✅ Token ID copied to clipboard!');
-            }).catch(err => {
-              alert('❌ Failed to copy. Please select and copy manually.');
-            });
-          }
-        </script>
-      </body>
-      </html>
-    `);
+    res.send(renderOAuthPage({
+      provider: 'mal',
+      status: 'success',
+      title: 'MyAnimeList connected',
+      message: 'Authorization is complete. Copy the token ID and paste it into the MyAnimeList integration settings.',
+      username: user.username,
+      tokenId,
+    }));
   } catch (error) {
     consola.error("[MAL OAuth] Callback error:", error);
-    res.status(500).send(oauthErrorPage('❌ OAuth Error', `An error occurred during authentication: ${error.message}`));
+    res.status(500).send(renderOAuthPage({
+      provider: 'mal',
+      status: 'error',
+      title: 'Something went wrong',
+      message: 'An unexpected error interrupted the MyAnimeList connection. Please try again.',
+      retryHref: '/mal/auth',
+    }));
   }
 });
 

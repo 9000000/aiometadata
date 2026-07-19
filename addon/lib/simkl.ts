@@ -59,8 +59,15 @@ export class SimklClient {
       });
 
       const data = response.data;
-      
-      logger.debug('Simkl token exchange response:', JSON.stringify(data, null, 2));
+
+      logger.debug('Simkl token exchange response:', JSON.stringify(
+        data,
+        (key, value) =>
+          (key === 'access_token' || key === 'refresh_token') && typeof value === 'string'
+            ? '[REDACTED]'
+            : value,
+        2
+      ));
 
       return {
         access_token: data.access_token,

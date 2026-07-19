@@ -130,8 +130,8 @@ function isTokenExpired(expiresAt: any): boolean {
 }
 
 /**
- * Generate a PKCE code verifier. MAL only supports the "plain" challenge
- * method, so the challenge equals the verifier.
+ * Generate a standalone PKCE verifier for callers outside the OAuth route.
+ * The route itself derives its verifier from stateless signed state.
  */
 function generateCodeVerifier(): string {
   return crypto.randomBytes(64).toString('base64url');

@@ -55,6 +55,12 @@ const { getFavorites, getWatchList } = require("./lib/getPersonalLists");
 const { resolveDynamicTmdbDiscoverParams } = require('./lib/tmdbDiscoverDateTokens');
 const { blurImage, convertBannerToBackground } = require('./utils/imageProcessor');
 const { TraktClient } = require('./lib/trakt');
+const {
+  createMalOAuthTransaction,
+  createTraktOAuthState,
+  verifyMalOAuthState,
+  verifyTraktOAuthState,
+} = require('./lib/oauthState');
 const { SimklClient } = require('./lib/simkl');
 const axios = require('axios');
 const getCountryISO3 = require('country-iso-2-to-3');
@@ -75,13 +81,14 @@ const normalizeRedirectUri = (uri) => {
   }
   return `https://${trimmed.replace(/^\/+/, '')}`;
 };
+// Best-effort same-process duplicate handling. Trakt enforces authorization-code
+// single use; this set is not shared across replicas and does not consume state.
 const usedTraktCodes = new Set();
-const pendingTraktOAuthStates = new Map();
 const TRAKT_OAUTH_STATE_TTL_MS = parseInt(process.env.TRAKT_OAUTH_STATE_TTL_MS || String(10 * 60 * 1000), 10);
 const usedAnilistCodes = new Set();
 
 const usedMalCodes = new Set();
-const malPkceStates = new Map();
+const MAL_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 function extractCanonicalIdFromDynamicUpNextId(type, stremioId) {
   if (type !== 'series' || typeof stremioId !== 'string') {
@@ -110,30 +117,6 @@ function extractCanonicalIdFromDynamicUpNextId(type, stremioId) {
     episodePart === 'unknown';
 
   return isSupportedCanonicalId && isSupportedEpisodePart ? canonicalId : null;
-}
-
-function createTraktOAuthState() {
-  const state = crypto.randomBytes(32).toString('hex');
-  const expiresAt = Date.now() + TRAKT_OAUTH_STATE_TTL_MS;
-  pendingTraktOAuthStates.set(state, expiresAt);
-
-  // Opportunistic cleanup to keep the in-memory map bounded.
-  const now = Date.now();
-  for (const [storedState, storedExpiresAt] of pendingTraktOAuthStates.entries()) {
-    if (storedExpiresAt <= now) {
-      pendingTraktOAuthStates.delete(storedState);
-    }
-  }
-
-  return state;
-}
-
-function consumeTraktOAuthState(state) {
-  if (!state || typeof state !== 'string') return false;
-  const expiresAt = pendingTraktOAuthStates.get(state);
-  if (!expiresAt) return false;
-  pendingTraktOAuthStates.delete(state);
-  return expiresAt > Date.now();
 }
 
 function shuffleMetas(metas = []) {
@@ -199,6 +182,17 @@ addon.use((req, res, next) => {
   if (m) return runWithRequestContext(m[1], () => next());
   next();
 });
+
+const noStoreOAuthHeaders = (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+};
+addon.use(
+  ['/api/auth/trakt/authorize', '/api/auth/trakt/callback'],
+  noStoreOAuthHeaders
+);
 
 function TEST_KEYS_RATE_LIMIT_PER_MIN() { return parseInt(process.env.TEST_KEYS_RATE_LIMIT_PER_MIN || '60', 10); }
 
@@ -464,7 +458,7 @@ addon.get("/api/auth/trakt/authorize", async (req, res) => {
     
     const traktClient = new TraktClient(clientId, clientSecret, redirectUri);
     
-    const state = createTraktOAuthState();
+    const state = createTraktOAuthState(clientSecret, TRAKT_OAUTH_STATE_TTL_MS);
     const authUrl = traktClient.getAuthorizationUrl(state);
     
     res.redirect(authUrl);
@@ -474,6 +468,7 @@ addon.get("/api/auth/trakt/authorize", async (req, res) => {
   }
 });
 
+// Coalesce duplicate exchanges handled by this process only.
 const pendingTraktExchanges = new Map();
 
 // Helper: sleep with ms
@@ -556,7 +551,8 @@ addon.get("/api/auth/trakt/callback", async (req, res) => {
       `);
     }
 
-    if (!state || !consumeTraktOAuthState(state)) {
+    const clientSecret = process.env.TRAKT_CLIENT_SECRET;
+    if (!state || !verifyTraktOAuthState(state, clientSecret)) {
       return res.status(400).send(`
         <!DOCTYPE html>
         <html>
@@ -601,7 +597,6 @@ addon.get("/api/auth/trakt/callback", async (req, res) => {
     }
 
     const clientId = process.env.TRAKT_CLIENT_ID;
-    const clientSecret = process.env.TRAKT_CLIENT_SECRET;
     const redirectUri = normalizeRedirectUri(
       process.env.TRAKT_REDIRECT_URI || `${process.env.HOST_NAME}/api/auth/trakt/callback`
     );
@@ -2600,12 +2595,6 @@ addon.post("/api/flixpatrol/probe", async (req, res) => {
 
 // --- AniList OAuth Routes ---
 const anilistTracker = require('./lib/anilistTracker');
-const noStoreOAuthHeaders = (req, res, next) => {
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private, max-age=0');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
-  next();
-};
 addon.use(['/anilist/auth', '/anilist/callback'], noStoreOAuthHeaders);
 
 // GET /anilist/auth - Initiate AniList OAuth flow
@@ -2937,10 +2926,10 @@ addon.get("/mal/auth", async (req, res) => {
 
     consola.info(`[MAL OAuth] Starting auth flow with redirect_uri=${redirectUri}`);
 
-    const state = crypto.randomBytes(32).toString('hex');
-    const codeVerifier = malTracker.generateCodeVerifier();
-    malPkceStates.set(state, codeVerifier);
-    setTimeout(() => malPkceStates.delete(state), 10 * 60 * 1000);
+    const { state, codeVerifier } = createMalOAuthTransaction(
+      clientSecret,
+      MAL_OAUTH_STATE_TTL_MS
+    );
 
     const authUrl = malTracker.getAuthorizationUrl(redirectUri, state, codeVerifier);
     res.redirect(authUrl);
@@ -2970,11 +2959,13 @@ addon.get("/mal/callback", async (req, res) => {
       return res.status(400).send(oauthErrorPage('❌ OAuth Error', 'Invalid callback parameters - missing authorization code.'));
     }
 
-    const codeVerifier = state ? malPkceStates.get(state) : undefined;
+    const clientSecret = process.env.MAL_CLIENT_SECRET;
+    const codeVerifier = state
+      ? verifyMalOAuthState(state, clientSecret)
+      : null;
     if (!codeVerifier) {
       return res.status(400).send(oauthErrorPage('❌ OAuth Error', 'Invalid or expired state parameter. Please try authenticating again.'));
     }
-    malPkceStates.delete(state);
 
     if (usedMalCodes.has(code)) {
       return res.status(400).send(oauthErrorPage('⚠️ Code Already Used', 'This authorization code has already been exchanged. Please try authenticating again.'));
@@ -2983,7 +2974,6 @@ addon.get("/mal/callback", async (req, res) => {
     setTimeout(() => usedMalCodes.delete(code), 120000);
 
     const clientId = process.env.MAL_CLIENT_ID;
-    const clientSecret = process.env.MAL_CLIENT_SECRET;
     const redirectUri = normalizeRedirectUri(process.env.MAL_REDIRECT_URI || `${process.env.HOST_NAME}/mal/callback`);
 
     if (!clientId || !clientSecret) {

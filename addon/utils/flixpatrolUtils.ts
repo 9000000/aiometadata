@@ -15,8 +15,7 @@ const logger = consola.withTag('FlixPatrol');
 const CATALOG_BASE_URL = process.env.FLIXPATROL_CATALOG_URL
   || 'https://raw.githubusercontent.com/0xConstant1/fp-crawler/main/catalogs';
 
-const AVAILABILITY_URL = process.env.FLIXPATROL_AVAILABILITY_URL
-  || `${CATALOG_BASE_URL}/availability.json`;
+const AVAILABILITY_URL = `${CATALOG_BASE_URL}/availability.json`;
 
 const CRAWLER_REFRESH_HOUR = 16;
 const CRAWLER_REFRESH_MINUTE = 0;

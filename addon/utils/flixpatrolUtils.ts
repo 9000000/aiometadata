@@ -2,6 +2,12 @@ import { httpGet } from "./httpClient.js";
 import { cacheWrapGlobal, cacheWrapMetaSmart } from "../lib/getCache.js";
 import { getMeta } from "../lib/getMeta.js";
 import { UserConfig } from "../types/index.js";
+import {
+  ChartVariant,
+  CrawlerData,
+  findChart,
+  collectVariants,
+} from "./flixpatrolChart.js";
 const consola = require('consola');
 
 const logger = consola.withTag('FlixPatrol');
@@ -9,8 +15,20 @@ const logger = consola.withTag('FlixPatrol');
 const CATALOG_BASE_URL = process.env.FLIXPATROL_CATALOG_URL
   || 'https://raw.githubusercontent.com/0xConstant1/fp-crawler/main/catalogs';
 
+const AVAILABILITY_URL = `${CATALOG_BASE_URL}/availability.json`;
+
 const CRAWLER_REFRESH_HOUR = 16;
 const CRAWLER_REFRESH_MINUTE = 0;
+
+// Timestamp (ms) of the most recent crawler-refresh boundary that has already passed.
+function lastCrawlerRefresh(): number {
+  const boundary = new Date();
+  boundary.setUTCHours(CRAWLER_REFRESH_HOUR, CRAWLER_REFRESH_MINUTE, 0, 0);
+  if (boundary.getTime() > Date.now()) {
+    boundary.setUTCDate(boundary.getUTCDate() - 1);
+  }
+  return boundary.getTime();
+}
 
 function getFlixPatrolTTL(): number {
   const override = process.env.FLIXPATROL_TTL;
@@ -24,35 +42,6 @@ function getFlixPatrolTTL(): number {
   }
   return Math.floor((next.getTime() - now.getTime()) / 1000);
 }
-
-interface CrawlerEntry {
-  rank: number;
-  title: string;
-  tmdb: {
-    id: number;
-    media_type: 'movie' | 'tv';
-    release_date: string;
-  } | null;
-}
-
-interface CrawlerChart {
-  catalog_id: string;
-  heading: string;
-  category: string;
-  platform: string;
-  date: string;
-  title_count: number;
-  entries: CrawlerEntry[];
-}
-
-interface CrawlerData {
-  source: string;
-  region: string;
-  date: string;
-  scraped_at_utc: string;
-  charts: CrawlerChart[];
-}
-
 
 const ISO_TO_SLUG: Record<string, string> = {
   al: 'albania', dz: 'algeria', ag: 'antigua-and-barbuda', ar: 'argentina',
@@ -98,40 +87,99 @@ async function fetchRegionData(regionSlug: string): Promise<CrawlerData> {
   }, getFlixPatrolTTL(), { skipVersion: true });
 }
 
-function findChart(data: CrawlerData, service: string, mediaType: string): CrawlerChart | null {
-
-  const categorySuffix = mediaType === 'series' ? 'series' : mediaType === 'all' ? 'overall' : 'movies';
-  const catalogId = `${service}.${categorySuffix}`;
-
-  let chart = data.charts.find(c => c.catalog_id === catalogId) || null;
-
-  if (!chart && mediaType === 'all') {
-    chart = data.charts.find(c => c.catalog_id === `${service}.overall-from-amazon-channels`) || null;
-  }
-
-  if (!chart && mediaType !== 'all') {
-    chart = data.charts.find(c => c.catalog_id === `${service}.overall`)
-      || data.charts.find(c => c.catalog_id === `${service}.overall-from-amazon-channels`)
-      || null;
-  }
-
-  return chart;
+export interface FlixPatrolSections {
+  hasMovies: boolean;
+  hasShows: boolean;
+  hasOverall: boolean;
+  movieVariants?: ChartVariant[];
+  seriesVariants?: ChartVariant[];
+  overallVariants?: ChartVariant[];
 }
 
-
-export async function probeFlixPatrolSections(service: string, countrySlug: string): Promise<{ hasMovies: boolean; hasShows: boolean; hasOverall: boolean }> {
+export async function probeFlixPatrolSections(service: string, countrySlug: string): Promise<FlixPatrolSections> {
   try {
     const data = await fetchRegionData(countrySlug);
-    const hasOverallChart = (id: string) =>
+    const hasChart = (id: string) =>
       data.charts.some(c => c.catalog_id === id && c.entries.length > 0);
+
+    const movieVariants = collectVariants(data, service, 'movies');
+    const seriesVariants = collectVariants(data, service, 'series');
+    const overallVariants = collectVariants(data, service, 'overall');
+
     return {
-      hasMovies: hasOverallChart(`${service}.movies`),
-      hasShows: hasOverallChart(`${service}.series`),
-      hasOverall: hasOverallChart(`${service}.overall`) || hasOverallChart(`${service}.overall-from-amazon-channels`),
+      hasMovies: hasChart(`${service}.movies`),
+      hasShows: hasChart(`${service}.series`),
+      hasOverall: hasChart(`${service}.overall`),
+      ...(movieVariants.length ? { movieVariants } : {}),
+      ...(seriesVariants.length ? { seriesVariants } : {}),
+      ...(overallVariants.length ? { overallVariants } : {}),
     };
   } catch {
     return { hasMovies: false, hasShows: false, hasOverall: false };
   }
+}
+
+// A small precomputed map of which (region, service) pairs exist, with section flags and variant ids
+export interface FlixPatrolAvailability {
+  schema_version?: number;
+  generated_at?: string;
+  variantLabels?: Record<string, string>;
+  regions: Record<string, Record<string, Record<string, string[]>>>;
+}
+
+let availabilityIndex: FlixPatrolAvailability | null = null;
+let availabilityFetchedAt = 0;
+let availabilityInFlight: Promise<void> | null = null;
+
+async function fetchAvailabilityIndex(): Promise<FlixPatrolAvailability | null> {
+  const response: any = await httpGet(AVAILABILITY_URL);
+  const data = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+  if (!data || typeof data !== 'object' || !data.regions) {
+    logger.warn(`Availability index at ${AVAILABILITY_URL} has no "regions" field — ignoring`);
+    return null;
+  }
+  return data as FlixPatrolAvailability;
+}
+
+
+export async function initializeFlixPatrolAvailability(): Promise<void> {
+  try {
+    const data = await fetchAvailabilityIndex();
+    if (data) {
+      availabilityIndex = data;
+      availabilityFetchedAt = Date.now();
+      logger.success(`Loaded FlixPatrol availability index (${Object.keys(data.regions).length} regions)`);
+    } else {
+      logger.info('FlixPatrol availability index unavailable — config UI will fall back to probing');
+    }
+  } catch (err: any) {
+    logger.info(`FlixPatrol availability index not loaded (${err?.message || err}) — config UI will fall back to probing`);
+  }
+}
+
+function refreshAvailabilityIfStale(): void {
+  // Refresh only if we haven't fetched since the last daily crawler boundary
+  const stale = !availabilityIndex || availabilityFetchedAt < lastCrawlerRefresh();
+  if (!stale || availabilityInFlight) return;
+  availabilityInFlight = (async () => {
+    try {
+      const data = await fetchAvailabilityIndex();
+      if (data) {
+        availabilityIndex = data;
+        availabilityFetchedAt = Date.now();
+      }
+    } catch {
+      // keep last-known-good
+    } finally {
+      availabilityInFlight = null;
+    }
+  })();
+}
+
+/** Returns the cached availability index, kicking off a background refresh if stale. */
+export function getFlixPatrolAvailability(): FlixPatrolAvailability | null {
+  refreshAvailabilityIfStale();
+  return availabilityIndex;
 }
 
 
@@ -141,13 +189,15 @@ export async function getFlixPatrolMetas(
   mediaType: string,
   language: string,
   config: UserConfig,
-  includeVideos: boolean = false
+  includeVideos: boolean = false,
+  variantId?: string
 ): Promise<any[]> {
   const data = await fetchRegionData(countrySlug);
-  const chart = findChart(data, service, mediaType);
+  const chart = findChart(data, service, mediaType, variantId);
 
   if (!chart || chart.entries.length === 0) {
-    logger.warn(`No chart found for ${service}.${mediaType} in ${countrySlug}`);
+    const label = variantId ? `${service}.${mediaType}.${variantId}` : `${service}.${mediaType}`;
+    logger.warn(`No chart found for ${label} in ${countrySlug}`);
     return [];
   }
 

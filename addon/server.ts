@@ -135,6 +135,15 @@ async function startServer(): Promise<void> {
         await runCacheCleanup();
       },
       critical: false
+    },
+    {
+      name: 'FlixPatrol Availability Index',
+      task: async () => {
+        consola.info('Initializing FlixPatrol Availability Index...');
+        const { initializeFlixPatrolAvailability } = require('./utils/flixpatrolUtils.js');
+        await initializeFlixPatrolAvailability();
+      },
+      critical: false
     }
   ];
   

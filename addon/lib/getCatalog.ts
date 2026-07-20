@@ -2927,13 +2927,14 @@ async function getFlixPatrolCatalog(
     const service = parts[1];
     const countryCode = parts[2];
     const mediaType = parts[3]; // 'movie', 'series', or 'all'
+    const variantId = parts[4]; // optional language/qualifier variant, e.g. 'hi'
 
     const catalogConfig = config.catalogs?.find((c: any) => c.id === catalogId);
     const countrySlug = catalogConfig?.metadata?.countrySlug || countryCode;
 
-    logger.info(`[FlixPatrol] Fetching top 10: service=${service}, country=${countrySlug}, type=${mediaType}`);
+    logger.info(`[FlixPatrol] Fetching top 10: service=${service}, country=${countrySlug}, type=${mediaType}${variantId ? `, variant=${variantId}` : ''}`);
 
-    let metas = await getFlixPatrolMetas(service, countrySlug, mediaType, language, config, includeVideos);
+    let metas = await getFlixPatrolMetas(service, countrySlug, mediaType, language, config, includeVideos, variantId);
 
     logger.success(`[FlixPatrol] Processed ${metas.length} items for catalog ${catalogId}`);
     return metas;

@@ -841,7 +841,7 @@ async function fetchTraktWatchedShows(accessToken: string): Promise<any[]> {
  * @returns array of watched shows with season data
  */
 async function fetchTraktWatchedShowsFull(accessToken: string): Promise<any[]> {
-  return fetchTraktWatchedPaginated(accessToken, 'shows', 'full');
+  return fetchTraktWatchedPaginated(accessToken, 'shows', 'progress');
 }
 
 /**

@@ -50,7 +50,7 @@ services:
     #   - "traefik.http.routers.aiometadata.tls.certresolver=letsencrypt"
     #   - "traefik.http.routers.aiometadata.middlewares=authelia@docker"
     #   - "traefik.http.services.aiometadata.loadbalancer.server.port=3232"
-    #   - "traefik.http.services.aiometadata.loadbalancer.server.port=3232"
+    #   - "traefik.http.routers.aiometadata.service=aiometadata"
     #   - "traefik.http.routers.postercache.rule=Host(`${POSTERCACHE_HOSTNAME?}`)"
     #   - "traefik.http.routers.postercache.entrypoints=websecure"
     #   - "traefik.http.routers.postercache.tls.certresolver=letsencrypt"

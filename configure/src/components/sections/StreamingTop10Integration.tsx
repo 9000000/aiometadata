@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { useConfig } from '@/contexts/ConfigContext';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
@@ -7,14 +7,11 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2 } from 'lucide-react';
 import { toast } from "sonner";
-import { createFlixPatrolCatalogs } from '@/utils/catalogUtils';
+import { createFlixPatrolCatalogs, type FlixPatrolSections } from '@/utils/catalogUtils';
 import { flixpatrolServices, flixpatrolCountries } from '@/data/flixpatrol';
+import { type AvailabilityIndex, deriveServices, deriveCountries, sectionsFor } from '@/utils/flixpatrolAvailability';
 
-interface Sections {
-  hasMovies: boolean;
-  hasShows: boolean;
-  hasOverall: boolean;
-}
+type Sections = FlixPatrolSections;
 
 interface StreamingTop10IntegrationProps {
   isOpen: boolean;
@@ -25,18 +22,66 @@ export function StreamingTop10Integration({ isOpen, onClose }: StreamingTop10Int
   const { config, setConfig } = useConfig();
   const [selectedService, setSelectedService] = useState<string>('');
   const [selectedCountry, setSelectedCountry] = useState<string>('');
-  const [sections, setSections] = useState<Sections | null>(null);
+  const [probedSections, setProbedSections] = useState<Sections | null>(null);
   const [isProbing, setIsProbing] = useState(false);
   const [probeError, setProbeError] = useState<string | null>(null);
+  // Availability index: null = not published by the feed (fall back to probing);
+  // an object = usable map for filtering. `loaded` gates the probe fallback until
+  // we know which mode we are in.
+  const [availability, setAvailability] = useState<AvailabilityIndex | null>(null);
+  const [availabilityLoaded, setAvailabilityLoaded] = useState(false);
 
-  const service = flixpatrolServices.find(s => s.id === selectedService);
-  const country = flixpatrolCountries.find(c => c.id === selectedCountry);
-
-  // Probe when both selections are made
+  // Load the availability index once per dialog open.
   useEffect(() => {
-    setSections(null);
+    if (!isOpen) return;
+    let cancelled = false;
+    fetch('/api/flixpatrol/availability')
+      .then(res => res.json())
+      .then(data => {
+        if (cancelled) return;
+        setAvailability(data?.available ? data.index : null);
+        setAvailabilityLoaded(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setAvailability(null);
+        setAvailabilityLoaded(true);
+      });
+    return () => { cancelled = true; };
+  }, [isOpen]);
+
+  // Dropdown options. With an index, only real combinations are offered (service
+  // picked first, then its valid countries). Without one, show everything.
+  const serviceOptions = useMemo(
+    () => (availability ? deriveServices(availability, flixpatrolServices) : flixpatrolServices),
+    [availability]
+  );
+  const countryOptions = useMemo(
+    () => (availability
+      ? (selectedService ? deriveCountries(availability, flixpatrolCountries, selectedService) : [])
+      : flixpatrolCountries),
+    [availability, selectedService]
+  );
+
+  const service = serviceOptions.find(s => s.id === selectedService);
+  const country = countryOptions.find(c => c.id === selectedCountry);
+  const countryDisabled = !!availability && !selectedService;
+
+  // In availability mode sections come from the index synchronously; otherwise
+  // they come from the runtime probe below.
+  const sections: Sections | null = availability
+    ? (service && country ? sectionsFor(availability, service.id, country.slug) : null)
+    : probedSections;
+
+  // Probe fallback — only when the feed does not publish an availability index.
+  useEffect(() => {
+    setProbedSections(null);
     setProbeError(null);
-    if (!service || !country) return;
+    if (availability || !availabilityLoaded) return;
+
+    const svc = flixpatrolServices.find(s => s.id === selectedService);
+    const ctry = flixpatrolCountries.find(c => c.id === selectedCountry);
+    if (!svc || !ctry) return;
 
     let cancelled = false;
     setIsProbing(true);
@@ -44,14 +89,14 @@ export function StreamingTop10Integration({ isOpen, onClose }: StreamingTop10Int
     fetch('/api/flixpatrol/probe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ service: service.id, countrySlug: country.slug }),
+      body: JSON.stringify({ service: svc.id, countrySlug: ctry.slug }),
     })
       .then(res => {
         if (!res.ok) throw new Error('Probe failed');
         return res.json();
       })
       .then(data => {
-        if (!cancelled) setSections(data);
+        if (!cancelled) setProbedSections(data);
       })
       .catch(err => {
         if (!cancelled) setProbeError(err.message);
@@ -61,33 +106,32 @@ export function StreamingTop10Integration({ isOpen, onClose }: StreamingTop10Int
       });
 
     return () => { cancelled = true; };
-  }, [service, country]);
+  }, [selectedService, selectedCountry, availability, availabilityLoaded]);
 
-  const catalogIds = service && country && sections
-    ? createFlixPatrolCatalogs({ service, country, sections, displayTypeOverrides: config.displayTypeOverrides }).map(c => c.id)
+  const previewCatalogs = service && country && sections
+    ? createFlixPatrolCatalogs({ service, country, sections, displayTypeOverrides: config.displayTypeOverrides })
     : [];
-  const alreadyExists = catalogIds.some(id => config.catalogs.some(c => c.id === id));
+  // Only the catalogs not already present. A partially-added service+country
+  // (e.g. the default already added, but not its language variants) should still
+  // let the user add the missing ones instead of blocking the whole batch.
+  const missingCatalogs = previewCatalogs.filter(
+    c => !config.catalogs.some(existing => existing.id === c.id)
+  );
+  const allAlreadyExist = previewCatalogs.length > 0 && missingCatalogs.length === 0;
 
   const handleAddCatalogs = useCallback(() => {
     if (!service || !country || !sections) return;
-
-    if (alreadyExists) {
-      toast.error("Already added", {
-        description: `Top 10 catalogs for ${service.name} (${country.name}) already exist`
-      });
-      return;
-    }
 
     const newCatalogs = createFlixPatrolCatalogs({
       service,
       country,
       sections,
       displayTypeOverrides: config.displayTypeOverrides,
-    });
+    }).filter(c => !config.catalogs.some(existing => existing.id === c.id));
 
     if (newCatalogs.length === 0) {
-      toast.error("No data available", {
-        description: `No top 10 data found for ${service.name} in ${country.name}`
+      toast.error("Already added", {
+        description: `Top 10 catalogs for ${service.name} (${country.name}) already exist`
       });
       return;
     }
@@ -102,14 +146,10 @@ export function StreamingTop10Integration({ isOpen, onClose }: StreamingTop10Int
 
     setSelectedService('');
     setSelectedCountry('');
-    setSections(null);
-  }, [service, country, sections, alreadyExists, config, setConfig]);
+    setProbedSections(null);
+  }, [service, country, sections, config, setConfig]);
 
   const existingCatalogs = config.catalogs.filter(c => c.source === 'flixpatrol');
-
-  const previewCatalogs = service && country && sections
-    ? createFlixPatrolCatalogs({ service, country, sections, displayTypeOverrides: config.displayTypeOverrides })
-    : [];
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -133,12 +173,15 @@ export function StreamingTop10Integration({ isOpen, onClose }: StreamingTop10Int
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Streaming Service</Label>
-                  <Select value={selectedService} onValueChange={setSelectedService}>
+                  <Select
+                    value={selectedService}
+                    onValueChange={(v) => { setSelectedService(v); setSelectedCountry(''); }}
+                  >
                     <SelectTrigger>
                       <SelectValue placeholder="Select service..." />
                     </SelectTrigger>
                     <SelectContent>
-                      {flixpatrolServices.map(s => (
+                      {serviceOptions.map(s => (
                         <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
                       ))}
                     </SelectContent>
@@ -146,12 +189,12 @@ export function StreamingTop10Integration({ isOpen, onClose }: StreamingTop10Int
                 </div>
                 <div className="space-y-2">
                   <Label>Country</Label>
-                  <Select value={selectedCountry} onValueChange={setSelectedCountry}>
+                  <Select value={selectedCountry} onValueChange={setSelectedCountry} disabled={countryDisabled}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select country..." />
+                      <SelectValue placeholder={countryDisabled ? "Select a service first" : "Select country..."} />
                     </SelectTrigger>
                     <SelectContent>
-                      {flixpatrolCountries.map(c => (
+                      {countryOptions.map(c => (
                         <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                       ))}
                     </SelectContent>
@@ -175,10 +218,15 @@ export function StreamingTop10Integration({ isOpen, onClose }: StreamingTop10Int
               {sections && previewCatalogs.length > 0 && (
                 <div className="p-3 bg-muted/50 rounded-lg text-sm space-y-1">
                   <p className="font-medium">Catalogs to add:</p>
-                  {previewCatalogs.map(c => (
-                    <p key={c.id}>{c.name}</p>
-                  ))}
-                  {alreadyExists && (
+                  {previewCatalogs.map(c => {
+                    const exists = config.catalogs.some(existing => existing.id === c.id);
+                    return (
+                      <p key={c.id} className={exists ? 'text-muted-foreground' : ''}>
+                        {c.name}{exists ? ' (already added)' : ''}
+                      </p>
+                    );
+                  })}
+                  {allAlreadyExist && (
                     <p className="text-destructive font-medium mt-2">
                       These catalogs already exist in your configuration.
                     </p>
@@ -194,7 +242,7 @@ export function StreamingTop10Integration({ isOpen, onClose }: StreamingTop10Int
 
               <Button
                 onClick={handleAddCatalogs}
-                disabled={!sections || previewCatalogs.length === 0 || alreadyExists || isProbing}
+                disabled={!sections || previewCatalogs.length === 0 || missingCatalogs.length === 0 || isProbing}
                 className="w-full"
               >
                 Add Catalogs

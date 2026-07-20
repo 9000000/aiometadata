@@ -369,10 +369,24 @@ export function createCustomManifestCatalog(options: CustomManifestCatalogOption
 // FlixPatrol (Streaming Top 10) Catalog Creation
 // ============================================================================
 
+export interface FlixPatrolVariant {
+  id: string;
+  label: string;
+}
+
+export interface FlixPatrolSections {
+  hasMovies: boolean;
+  hasShows: boolean;
+  hasOverall: boolean;
+  movieVariants?: FlixPatrolVariant[];
+  seriesVariants?: FlixPatrolVariant[];
+  overallVariants?: FlixPatrolVariant[];
+}
+
 export interface FlixPatrolCatalogOptions {
   service: { id: string; name: string };
   country: { id: string; name: string; slug: string };
-  sections: { hasMovies: boolean; hasShows: boolean; hasOverall: boolean };
+  sections: FlixPatrolSections;
   displayTypeOverrides?: { movie?: string; series?: string };
 }
 
@@ -414,6 +428,8 @@ export function createFlixPatrolCatalogs(options: FlixPatrolCatalogOptions): Cat
       });
     }
   } else if (sections.hasOverall) {
+    // Default (promoted) overall catalog. English is the bare default, so it is
+    // never present in overallVariants — no phantom English row to suppress.
     catalogs.push({
       id: `flixpatrol.${service.id}.${country.id}.all`,
       type: 'all',
@@ -424,6 +440,19 @@ export function createFlixPatrolCatalogs(options: FlixPatrolCatalogOptions): Cat
       enableRatingPosters: true,
       metadata: { countrySlug: country.slug },
     });
+
+    for (const variant of sections.overallVariants ?? []) {
+      catalogs.push({
+        id: `flixpatrol.${service.id}.${country.id}.all.${variant.id}`,
+        type: 'all',
+        name: `Top 10 on ${service.name} (${country.name}) — ${variant.label}`,
+        enabled: true,
+        showInHome: true,
+        source: 'flixpatrol' as const,
+        enableRatingPosters: true,
+        metadata: { countrySlug: country.slug },
+      });
+    }
   }
 
   return catalogs;

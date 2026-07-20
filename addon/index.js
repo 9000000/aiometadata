@@ -2478,6 +2478,20 @@ addon.post("/api/flixpatrol/probe", async (req, res) => {
   }
 });
 
+// GET /api/flixpatrol/availability - Precomputed map of valid (service, country)
+// combos so the config UI can filter its dropdowns without probing each pair.
+// Returns { available: false } when the feed does not publish the index.
+addon.get("/api/flixpatrol/availability", (req, res) => {
+  try {
+    const { getFlixPatrolAvailability } = require('./utils/flixpatrolUtils');
+    const index = getFlixPatrolAvailability();
+    res.json({ available: Boolean(index), index: index || null });
+  } catch (error) {
+    consola.error("[FlixPatrol] Availability error:", error.message);
+    res.json({ available: false, index: null });
+  }
+});
+
 // --- AniList OAuth Routes ---
 const anilistTracker = require('./lib/anilistTracker');
 addon.use(['/anilist/auth', '/anilist/callback'], noStoreOAuthHeaders);

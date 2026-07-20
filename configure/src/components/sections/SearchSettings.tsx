@@ -17,6 +17,10 @@ import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSo
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
+// Keep in sync with addon/utils/aiSearchTrigger.ts
+const MIN_AI_TRIGGER_KEYWORD_LENGTH = 2;
+const MAX_AI_TRIGGER_KEYWORD_LENGTH = 24;
+
 const DEFAULT_SEARCH_ORDER = [
   'movie',
   'series',
@@ -396,8 +400,24 @@ export function SearchSettings() {
     }));
   };
 
+  const handleAiTriggerKeywordChange = (keyword: string) => {
+    setConfig(prev => ({
+      ...prev,
+      search: {
+        ...prev.search,
+        ai_trigger_keyword: keyword,
+      },
+    }));
+  };
+
+  const aiTriggerKeyword = config.search.ai_trigger_keyword ?? '';
+  const aiTriggerKeywordTrimmed = aiTriggerKeyword.trim();
+  const aiTriggerKeywordTooShort =
+    aiTriggerKeywordTrimmed.length > 0 &&
+    aiTriggerKeywordTrimmed.length < MIN_AI_TRIGGER_KEYWORD_LENGTH;
+
   const handleProviderChange = (
-    type: 'movie' | 'series' | 'anime_movie' | 'anime_series' | 'people_search_movie' | 'people_search_series', 
+    type: 'movie' | 'series' | 'anime_movie' | 'anime_series' | 'people_search_movie' | 'people_search_series',
     value: string
   ) => {
     setConfig(prev => ({
@@ -835,6 +855,46 @@ export function SearchSettings() {
                                     </Select>
                                 )}
                             </div>
+
+                            {/* Trigger Keyword */}
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
+                                <div className="min-w-0">
+                                    <Label htmlFor="ai-trigger-keyword" className="text-sm font-medium">Trigger Keyword</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Only run AI search when the query starts with this word. Leave blank to run it on every query.
+                                        Your other search results are never affected.
+                                    </p>
+                                </div>
+                                <Input
+                                    id="ai-trigger-keyword"
+                                    value={aiTriggerKeyword}
+                                    onChange={(e) => handleAiTriggerKeywordChange(e.target.value)}
+                                    onBlur={(e) => handleAiTriggerKeywordChange(e.target.value.trim())}
+                                    placeholder="e.g. Gemini"
+                                    maxLength={MAX_AI_TRIGGER_KEYWORD_LENGTH}
+                                    aria-invalid={aiTriggerKeywordTooShort}
+                                    className={`w-full sm:w-[280px] ${aiTriggerKeywordTooShort ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                                />
+                            </div>
+
+                            {aiTriggerKeywordTooShort && (
+                                <p className="text-xs text-destructive">
+                                    Trigger keyword must be at least {MIN_AI_TRIGGER_KEYWORD_LENGTH} characters, or blank to run AI search on every query.
+                                </p>
+                            )}
+
+                            {!aiTriggerKeywordTooShort && !!aiTriggerKeywordTrimmed && (
+                                <div className="rounded-md bg-muted/40 border border-border p-3 space-y-2">
+                                    <div className="text-xs">
+                                        <span className="font-mono break-all">"{aiTriggerKeywordTrimmed} top horror movies of 2026"</span>
+                                        <p className="text-muted-foreground mt-0.5">AI search runs, on "top horror movies of 2026"</p>
+                                    </div>
+                                    <div className="text-xs">
+                                        <span className="font-mono break-all">"Avengers: Doomsday"</span>
+                                        <p className="text-muted-foreground mt-0.5">No AI call — no tokens used</p>
+                                    </div>
+                                </div>
+                            )}
 
                             {/* Web Search toggle (Gemini non-free-grounding models only) */}
                             {/* OpenRouter always uses :online — no toggle needed */}

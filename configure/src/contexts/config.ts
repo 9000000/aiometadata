@@ -243,6 +243,9 @@ export interface AppConfig {
     ai_model?: string;
     // Enable web search: Gemini = google_search grounding tool, OpenRouter = :online suffix
     ai_web_search?: boolean;
+    // Optional keyword that must prefix a query for AI search to run. Blank = always run.
+    // Only affects the AI catalog; regular search catalogs always see the original query.
+    ai_trigger_keyword?: string;
     // RPDB enable/disable per search engine
     engineRatingPosters?: {
       [engine: string]: boolean;

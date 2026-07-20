@@ -46,6 +46,11 @@ const consola = require('consola');
 const logger = consola.withTag('ConfigApi');
 // Import the config cache
 const configCache = require('./configCache');
+const {
+  sanitizeAiTriggerKeyword,
+  MIN_AI_TRIGGER_KEYWORD_LENGTH,
+  MAX_AI_TRIGGER_KEYWORD_LENGTH,
+} = require('../utils/aiSearchTrigger');
 const { deleteKeysByPattern } = require('./redisUtils');
 
 const MAX_TAG_NAME_LENGTH = 32;
@@ -114,22 +119,22 @@ class ConfigApi {
         if (typeof provider === 'string') {
           return provider === 'fanart';
         }
-        
+
         // Handle new nested object format
         if (typeof provider === 'object' && provider !== null) {
-          return provider.poster === 'fanart' || 
-                 provider.background === 'fanart' || 
+          return provider.poster === 'fanart' ||
+                 provider.background === 'fanart' ||
                  provider.logo === 'fanart';
         }
-        
+
         return false;
       });
     })();
-    
+
     if (isFanartSelected && !requiredKeys.includes('fanart')) {
       requiredKeys.push('fanart');
     }
-    
+
     const missingKeys = requiredKeys.filter(key => {
       if (key === 'tmdb') {
         // TMDB is required unless there's a built-in key
@@ -204,6 +209,35 @@ class ConfigApi {
     };
   }
 
+  validateAiTriggerKeyword(config) {
+    const raw = config?.search?.ai_trigger_keyword;
+    if (raw === undefined || raw === null || raw === '') return { valid: true };
+
+    if (typeof raw !== 'string') {
+      return {
+        valid: false,
+        min: MIN_AI_TRIGGER_KEYWORD_LENGTH,
+        max: MAX_AI_TRIGGER_KEYWORD_LENGTH,
+        message: 'AI search trigger keyword must be a string.',
+      };
+    }
+
+    const sanitized = sanitizeAiTriggerKeyword(raw);
+
+    if (!sanitized && raw.trim().length > 0) {
+      return {
+        valid: false,
+        min: MIN_AI_TRIGGER_KEYWORD_LENGTH,
+        max: MAX_AI_TRIGGER_KEYWORD_LENGTH,
+        message: `AI search trigger keyword must be ${MIN_AI_TRIGGER_KEYWORD_LENGTH}-${MAX_AI_TRIGGER_KEYWORD_LENGTH} characters.`,
+      };
+    }
+
+    // Store the normalized form so what is persisted is what will be matched.
+    config.search.ai_trigger_keyword = sanitized;
+    return { valid: true };
+  }
+
   // Save configuration with password
   async saveConfig(req, res) {
     logger.debug('saveConfig called - starting function');
@@ -256,6 +290,15 @@ class ConfigApi {
         return res.status(400).json({
           error: tagCheck.message,
           maxTagNameLength: tagCheck.max,
+        });
+      }
+
+      const aiKeywordCheck = this.validateAiTriggerKeyword(config);
+      if (!aiKeywordCheck.valid) {
+        return res.status(400).json({
+          error: aiKeywordCheck.message,
+          minAiTriggerKeywordLength: aiKeywordCheck.min,
+          maxAiTriggerKeywordLength: aiKeywordCheck.max,
         });
       }
 
@@ -601,6 +644,15 @@ class ConfigApi {
         return res.status(400).json({
           error: tagCheck.message,
           maxTagNameLength: tagCheck.max,
+        });
+      }
+
+      const aiKeywordCheck = this.validateAiTriggerKeyword(config);
+      if (!aiKeywordCheck.valid) {
+        return res.status(400).json({
+          error: aiKeywordCheck.message,
+          minAiTriggerKeywordLength: aiKeywordCheck.min,
+          maxAiTriggerKeywordLength: aiKeywordCheck.max,
         });
       }
 

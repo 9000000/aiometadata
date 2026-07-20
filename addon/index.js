@@ -54,6 +54,7 @@ const { getRpdbPoster, getRatingPosterUrl, parseAnimeCatalogMeta, parseAnimeCata
 const { getFavorites, getWatchList } = require("./lib/getPersonalLists");
 const { resolveDynamicTmdbDiscoverParams } = require('./lib/tmdbDiscoverDateTokens');
 const { blurImage, convertBannerToBackground } = require('./utils/imageProcessor');
+const { getAiTriggerKeyword, applyAiTrigger } = require('./utils/aiSearchTrigger');
 const { TraktClient } = require('./lib/trakt');
 const {
   createAniListOAuthState,
@@ -3841,13 +3842,31 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
       delete searchExtraArgs.skip;
       if (searchPage > 1) searchExtraArgs.page = searchPage;
 
-      // Use search-specific cache wrapper
-      const searchKey = `${cleanId}:${originalSearchId}:${searchType}:${stableStringify(searchExtraArgs)}`;
+      // Optional keyword gate for AI search.
+      const aiKeyword = getAiTriggerKeyword(config);
+      let aiGateBlocked = false;
 
-      responseData = await cacheWrapSearch(userUUID, searchKey, async () => {
-        const searchResult = await getSearch(cleanId, searchType, language, searchExtraArgs, config);
-        return { metas: searchResult.metas || [] };
-      }, searchEngine, cacheOptions);
+      if (searchEngine === 'gemini.search' && aiKeyword) {
+        const aiTrigger = applyAiTrigger(searchExtraArgs.search || '', aiKeyword);
+        if (aiTrigger.matched && aiTrigger.query) {
+          searchExtraArgs.search = aiTrigger.query;
+        } else {
+          // Query lacks the trigger keyword (or is only the keyword) — no AI call.
+          aiGateBlocked = true;
+        }
+      }
+
+      if (aiGateBlocked) {
+        responseData = { metas: [] };
+      } else {
+        // Use search-specific cache wrapper
+        const searchKey = `${cleanId}:${originalSearchId}:${searchType}:${stableStringify(searchExtraArgs)}`;
+
+        responseData = await cacheWrapSearch(userUUID, searchKey, async () => {
+          const searchResult = await getSearch(cleanId, searchType, language, searchExtraArgs, config);
+          return { metas: searchResult.metas || [] };
+        }, searchEngine, cacheOptions);
+      }
       } else if (cleanId.startsWith('custom.') || cleanId.startsWith('stremthru.')) {
       const { genre: genreName } = extraArgs;
       const skipValue = extraArgs.skip !== undefined ? parseInt(extraArgs.skip) : 0;

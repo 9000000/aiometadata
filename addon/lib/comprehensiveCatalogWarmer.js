@@ -754,9 +754,9 @@ class ComprehensiveCatalogWarmer {
 
           const posterWarmupUrl = (process.env.POSTER_WARMUP_URL || process.env.POSTER_PROXY_PREFIX_URL || '').replace(/\/+$/, '');
           if (posterWarmupUrl && rawMetaCount > 0) {
-            const { resolveCustomArtUrl, getDefaultPosterPattern, getPosterRatingApiKey, isRatingPostersEnabled } = require('../utils/parseProps');
+            const { resolveCustomArtUrl, resolvePosterPattern, getPosterRatingApiKey, isRatingPostersEnabled } = require('../utils/parseProps');
             const ratingPostersEnabled = isRatingPostersEnabled(config);
-            const posterPattern = ratingPostersEnabled ? (config.customPosterUrlPattern || (config.posterRatingProvider && config.posterRatingProvider !== 'custom' ? getDefaultPosterPattern(config.posterRatingProvider) : null)) : null;
+            const posterPattern = ratingPostersEnabled ? resolvePosterPattern(config) : null;
             const proxyApiKey = ratingPostersEnabled && config.usePosterProxy ? getPosterRatingApiKey(config) : null;
             const addonHost = process.env.HOST_NAME ? (process.env.HOST_NAME.startsWith('http') ? process.env.HOST_NAME : `https://${process.env.HOST_NAME}`) : '';
             const posterUrls = [];
@@ -839,9 +839,9 @@ class ComprehensiveCatalogWarmer {
 
         const posterWarmupUrl = (process.env.POSTER_WARMUP_URL || process.env.POSTER_PROXY_PREFIX_URL || '').replace(/\/+$/, '');
         if (posterWarmupUrl && rawMetaCount > 0) {
-          const { resolveCustomArtUrl, getDefaultPosterPattern, getPosterRatingApiKey, isRatingPostersEnabled } = require('../utils/parseProps');
+          const { resolveCustomArtUrl, resolvePosterPattern, getPosterRatingApiKey, isRatingPostersEnabled } = require('../utils/parseProps');
           const ratingPostersEnabled = isRatingPostersEnabled(config);
-          const posterPattern = ratingPostersEnabled ? (config.customPosterUrlPattern || (config.posterRatingProvider && config.posterRatingProvider !== 'custom' ? getDefaultPosterPattern(config.posterRatingProvider) : null)) : null;
+          const posterPattern = ratingPostersEnabled ? resolvePosterPattern(config) : null;
           const proxyApiKey = ratingPostersEnabled && config.usePosterProxy ? getPosterRatingApiKey(config) : null;
           const addonHost = process.env.HOST_NAME ? (process.env.HOST_NAME.startsWith('http') ? process.env.HOST_NAME : `https://${process.env.HOST_NAME}`) : '';
           const posterUrls = [];

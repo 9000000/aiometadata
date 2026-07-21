@@ -4000,7 +4000,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
     const posterPatternsEnabled = config._currentSearchCatalogId
       ? (config.search?.engineRatingPosters?.[config._currentSearchCatalogId] === true)
       : (catalogConfig?.enableRatingPosters !== false);
-    const posterPattern = posterPatternsEnabled ? (config.customPosterUrlPattern || (config.posterRatingProvider && config.posterRatingProvider !== 'custom' ? require('./utils/parseProps').getDefaultPosterPattern(config.posterRatingProvider) : null)) : null;
+    const posterPattern = posterPatternsEnabled ? require('./utils/parseProps').resolvePosterPattern(config) : null;
     if ((posterPattern || config.customBackgroundUrlPattern || config.customLogoUrlPattern) && responseData?.metas && Array.isArray(responseData.metas)) {
       const isUpNextCatalog = cleanId.includes('up_next') || cleanId.includes('upnext');
       const upNextUsesShowPoster = isUpNextCatalog && catalogConfig?.metadata?.useShowPosterForUpNext === true;
@@ -4157,12 +4157,12 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
     {
       const userAgent = req.headers['user-agent'] || '';
       const host = process.env.HOST_NAME.startsWith('http') ? process.env.HOST_NAME : `https://${process.env.HOST_NAME}`;
-      const { resolveCustomArtUrl, getDefaultPosterPattern, getDefaultThumbnailPattern, getPosterRatingApiKey } = require('./utils/parseProps');
+      const { resolveCustomArtUrl, resolvePosterPattern, resolveThumbnailPattern, getPosterRatingApiKey } = require('./utils/parseProps');
       const ids = extractIdsFromMeta(result.meta);
       const metaType = result.meta.type || type;
       // Apply poster pattern unless enableRatingPostersForLibrary is explicitly disabled
       if (config.enableRatingPostersForLibrary !== false) {
-        const metaPosterPattern = config.customPosterUrlPattern || (config.posterRatingProvider && config.posterRatingProvider !== 'custom' ? getDefaultPosterPattern(config.posterRatingProvider) : null);
+        const metaPosterPattern = resolvePosterPattern(config);
         if (metaPosterPattern) {
           const proxyApiKey = config.usePosterProxy ? getPosterRatingApiKey(config) : null;
           if (proxyApiKey) {
@@ -4216,7 +4216,7 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
         }
       }
       // Apply thumbnail pattern to episode videos
-      const thumbnailPattern = config.customThumbnailUrlPattern || (config.posterRatingProvider && config.posterRatingProvider !== 'custom' ? getDefaultThumbnailPattern(config.posterRatingProvider) : null);
+      const thumbnailPattern = resolveThumbnailPattern(config);
       if (thumbnailPattern && result.meta.videos && Array.isArray(result.meta.videos)) {
         for (const video of result.meta.videos) {
           const idParts = video.id?.split(':');

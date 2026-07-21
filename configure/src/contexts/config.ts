@@ -188,8 +188,8 @@ export interface AppConfig {
     instanceUrl?: string;
     apiKey?: string;
   }>;
-  /** Poster rating provider: 'rpdb' for RatingPosterDB, 'top' for Top Poster API, or 'custom' for custom URL patterns */
-  posterRatingProvider?: 'rpdb' | 'top' | 'custom';
+  /** Poster rating provider: 'none' to disable rating posters, 'rpdb' for RatingPosterDB, 'top' for Top Poster API, or 'custom' for custom URL patterns */
+  posterRatingProvider?: 'none' | 'rpdb' | 'top' | 'custom';
   usePosterProxy: boolean;
   mdblistWatchTracking: boolean;
   anilistWatchTracking: boolean;

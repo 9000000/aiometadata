@@ -214,10 +214,35 @@ function getDefaultThumbnailPattern(provider) {
 }
 
 /**
+ * Resolve the poster pattern for a config: the user's custom pattern, otherwise the
+ * selected provider's default. Returns null when the provider is 'none'.
+ */
+function resolvePosterPattern(config) {
+  const provider = config?.posterRatingProvider;
+  if (provider === 'none') return null;
+  return config?.customPosterUrlPattern
+    || (provider && provider !== 'custom' ? getDefaultPosterPattern(provider) : null);
+}
+
+/**
+ * Episode thumbnail equivalent of resolvePosterPattern.
+ */
+function resolveThumbnailPattern(config) {
+  const provider = config?.posterRatingProvider;
+  if (provider === 'none') return null;
+  return config?.customThumbnailUrlPattern
+    || (provider && provider !== 'custom' ? getDefaultThumbnailPattern(provider) : null);
+}
+
+/**
  * Get poster URL from the selected rating provider (RPDB or Top Poster)
  */
 function getRatingPosterUrl(type, ids, language, config, fallbackUrl = null) {
-  const provider = config.posterRatingProvider || 'rpdb';
+  const provider = config.posterRatingProvider || 'none';
+
+  if (provider === 'none') {
+    return null;
+  }
 
   if (provider === 'custom') {
     return null; // Custom uses URL patterns, not rating poster APIs
@@ -239,7 +264,11 @@ function getRatingPosterUrl(type, ids, language, config, fallbackUrl = null) {
  * Get the API key for the selected poster rating provider
  */
 function getPosterRatingApiKey(config) {
-  const provider = config.posterRatingProvider || 'rpdb'; // Default to RPDB for backward compatibility
+  const provider = config.posterRatingProvider || 'none';
+
+  if (provider === 'none') {
+    return null;
+  }
 
   if (provider === 'custom') {
     return null; // Custom uses URL patterns, not rating poster APIs
@@ -261,7 +290,7 @@ function getPosterRatingApiKey(config) {
  * Top Poster API returns proper codes that Stremio can handle.
  */
 function buildPosterProxyUrl(host, type, proxyId, fallback, language, config) {
-  const provider = config.posterRatingProvider || 'rpdb'; // Default to RPDB for backward compatibility
+  const provider = config.posterRatingProvider || 'none';
   const apiKey = getPosterRatingApiKey(config);
   
   if (!apiKey || !isPosterRatingEnabled(config)) {
@@ -3427,6 +3456,8 @@ module.exports = {
   isPosterRatingEnabled,
   getDefaultPosterPattern,
   getDefaultThumbnailPattern,
+  resolvePosterPattern,
+  resolveThumbnailPattern,
   parsePosterWithProvider,
   checkIfExists,
   sortSearchResults,

@@ -146,7 +146,7 @@ const initialConfig: AppConfig = {
     openrouter: "",
     publicmetadb: "",
   },
-  posterRatingProvider: 'rpdb' as 'rpdb' | 'top',
+  posterRatingProvider: 'none' as 'none' | 'rpdb' | 'top' | 'custom',
   usePosterProxy: true,
   mdblistWatchTracking: false,
   anilistWatchTracking: false,

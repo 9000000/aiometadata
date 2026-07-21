@@ -479,11 +479,18 @@ export function ArtProviderSettings() {
                   </p>
                 </div>
                 <Select
-                  value={config.posterRatingProvider || 'rpdb'}
+                  value={config.posterRatingProvider || 'none'}
                   onValueChange={(value) => {
-                    const provider = value as 'rpdb' | 'top' | 'custom';
+                    const provider = value as 'none' | 'rpdb' | 'top' | 'custom';
 
-                    if (provider === 'custom') {
+                    if (provider === 'none') {
+                      setConfig(prev => ({
+                        ...prev,
+                        posterRatingProvider: provider,
+                        customPosterUrlPattern: '',
+                        customThumbnailUrlPattern: ''
+                      }));
+                    } else if (provider === 'custom') {
                       setConfig(prev => ({ ...prev, posterRatingProvider: provider }));
                     } else if (provider === 'rpdb') {
                       setConfig(prev => ({
@@ -510,6 +517,7 @@ export function ArtProviderSettings() {
                     <SelectValue placeholder="Select provider" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="none">None (no rating posters)</SelectItem>
                     <SelectItem value="rpdb">RatingPosterDB (RPDB)</SelectItem>
                     <SelectItem value="top">TOP Posters API</SelectItem>
                     <SelectItem value="custom">Custom Art URLs</SelectItem>

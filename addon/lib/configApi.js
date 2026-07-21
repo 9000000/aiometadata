@@ -1029,9 +1029,17 @@ class ConfigApi {
           });
         }
 
-        // Default posterRatingProvider for configs that predate the field
-        if (!config.posterRatingProvider && (config.apiKeys?.rpdb || config.apiKeys?.topPoster)) {
-          config.posterRatingProvider = config.apiKeys?.topPoster ? 'top' : 'rpdb';
+        if (!config.posterRatingProvider) {
+          const pattern = (config.customPosterUrlPattern || '').trim();
+          if (pattern.includes('ratingposterdb.com')) {
+            config.posterRatingProvider = 'rpdb';
+          } else if (pattern.includes('top-posters.com')) {
+            config.posterRatingProvider = 'top';
+          } else if (pattern) {
+            config.posterRatingProvider = 'custom';
+          } else {
+            config.posterRatingProvider = 'none';
+          }
         }
 
         // Strip instance-specific fields that shouldn't be returned from saved config

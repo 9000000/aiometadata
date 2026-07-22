@@ -82,7 +82,7 @@ const CATEGORY_DESCRIPTIONS: Record<string, string> = {
 };
 
 const CATEGORY_ORDER = [
-  "API Keys", "OAuth", "Cache", "Features",
+  "API Keys", "OAuth", "MovieLens", "Cache", "Features",
   "Essential Warming", "Comprehensive Warming", "MAL Warming",
   "Rate Limiting", "Data Updates", "Proxy", "Diagnostics", "Server",
 ];

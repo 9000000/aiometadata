@@ -134,7 +134,6 @@ function createCatalog(id: string, type: string, catalogDef: any, options: strin
   };
 }
 
-// Genre vocabulary served by MovieLens /api/movies/genres
 const MOVIELENS_GENRES = [
   'Action', 'Adventure', 'Animation', 'Comedy', 'Crime', 'Documentary',
   'Drama', 'Family', 'Fantasy', 'History', 'Horror', 'Music', 'Mystery',

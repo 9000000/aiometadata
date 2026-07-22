@@ -129,6 +129,14 @@ async function getLists(credId: string): Promise<any[]> {
   return json?.data || [];
 }
 
+async function getMovieGroupTags(credId: string): Promise<string[]> {
+  const res = await apiFetch(credId, 'users/me');
+  if (res.status !== 200) return [];
+  const json: any = await res.json();
+  const tags = json?.data?.preferences?.movieGroupTags;
+  return Array.isArray(tags) ? tags : [];
+}
+
 async function getGenres(credId: string): Promise<any> {
   const res = await apiFetch(credId, 'movies/genres');
   if (res.status !== 200) throw new Error(`MovieLens genres failed with status ${res.status}`);
@@ -177,6 +185,7 @@ export {
   wishlist,
   getLists,
   getGenres,
+  getMovieGroupTags,
   importImdbCsv,
   imdbIdFromMovie,
 };
@@ -192,6 +201,7 @@ module.exports = {
   wishlist,
   getLists,
   getGenres,
+  getMovieGroupTags,
   importImdbCsv,
   imdbIdFromMovie,
 };

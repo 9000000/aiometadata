@@ -2660,24 +2660,28 @@ async function getMovieLensCatalog(
     const ttl = catalogConfig?.cacheTTL !== undefined
       ? catalogConfig.cacheTTL
       : parseInt(process.env.MOVIELENS_CATALOG_TTL_SECONDS || '3600', 10);
-    // MovieLens genre matching is lowercase-sensitive ("horror" matches, "Horror" doesn't)
     const genreName = genre && genre.toLowerCase() !== 'none' ? genre.toLowerCase() : undefined;
 
-    // Optional per-catalog explore settings (sortBy: prediction|popularity|avgRating|
-    // releaseDate|dateAdded|imdbRating|title; avgRating needs a popularity floor)
     const metadata: any = catalogConfig?.metadata || {};
     const sortBy = metadata.sortBy || 'prediction';
     const minYear = metadata.minYear;
     const maxYear = metadata.maxYear;
     const minPop = metadata.minPop ?? (sortBy === 'avgRating' ? 100 : sortBy === 'releaseDate' ? 20 : undefined);
-    // releaseDate sorts descending into unreleased/future titles unless capped
     const maxFutureDays = metadata.maxFutureDays ?? (sortBy === 'releaseDate' ? 0 : undefined);
     const maxDaysAgo = metadata.maxDaysAgo;
     const sortDirection = metadata.sortDirection;
-    const tag = String(metadata.tags || '')
+    let tag = String(metadata.tags || '')
       .split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean).join(',') || undefined;
 
-    // explore honors pageSize directly, so request exactly one catalog page
+    if (!tag && sortBy !== 'prediction' && catalogId !== 'movielens.watchlist') {
+      const tagsTtl = parseInt(process.env.MOVIELENS_GROUPTAGS_TTL_SECONDS || '86400', 10);
+      const groupTags = await cacheWrapGlobal(`movielens-grouptags:${credId}`,
+        () => movielens.getMovieGroupTags(credId), tagsTtl);
+      if (Array.isArray(groupTags) && groupTags.length) {
+        tag = groupTags.map((t: string) => t.trim().toLowerCase()).filter(Boolean).join(',');
+      }
+    }
+
     const filterKey = `${sortBy}:${sortDirection || ''}:${tag || ''}:${minYear || ''}:${maxYear || ''}:${minPop || ''}:${maxFutureDays ?? ''}:${maxDaysAgo || ''}`;
     const cacheKey = `movielens-catalog:${credId}:${catalogId}:${genreName || 'all'}:${filterKey}:${page}:${pageSize}`;
     const items = await cacheWrapGlobal(cacheKey, async () => {
@@ -2690,7 +2694,6 @@ async function getMovieLensCatalog(
     }, ttl);
     const windowItems = Array.isArray(items) ? items : [];
 
-    // parseMDBListItems resolves items as tmdb:{id}, so only items with a tmdb id qualify
     const mdblistShaped = windowItems
       .map((r: any) => {
         const m = r?.movie || {};

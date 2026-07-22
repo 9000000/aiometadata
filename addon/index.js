@@ -271,7 +271,7 @@ if (ENABLE_CACHE_WARMING) {
   consola.info('[Cache Warming] Cache warming disabled or cache disabled');
 }
 
-// Scheduled MovieLens rating re-sync (env-governed cadence; incremental per user)
+// Scheduled MovieLens rating re-sync
 const ENABLE_MOVIELENS_SYNC = process.env.ENABLE_MOVIELENS_SYNC !== 'false';
 if (ENABLE_MOVIELENS_SYNC && process.env.MOVIELENS_CRED_KEY) {
   const MOVIELENS_SYNC_INTERVAL_HOURS = Math.max(1, parseInt(process.env.MOVIELENS_SYNC_INTERVAL_HOURS || '24', 10));
@@ -770,7 +770,7 @@ addon.post("/api/oauth/token/info", async (req, res) => {
   }
 });
 
-// --- MovieLens Connect (username/password; MovieLens has no OAuth) ---
+// --- MovieLens Connect ---
 addon.post("/api/auth/movielens/connect", async (req, res) => {
   try {
     const { userName, password } = req.body || {};
@@ -792,7 +792,7 @@ addon.post("/api/auth/movielens/connect", async (req, res) => {
   }
 });
 
-// --- MovieLens Sync / Bootstrap (imports ratings from connected sources into MovieLens) ---
+// --- MovieLens Sync / Bootstrap ---
 addon.post("/api/movielens/sync/:userUUID", async (req, res) => {
   try {
     const { userUUID } = req.params;
@@ -804,8 +804,6 @@ addon.post("/api/movielens/sync/:userUUID", async (req, res) => {
     if (!config) {
       return res.status(401).json({ error: "Invalid UUID or password" });
     }
-    // A freshly-connected credId may not be in the saved config yet; accept it
-    // from the request body only when the saved config has none.
     if (!config.apiKeys?.movieLensCredId && bodyCredId) {
       const credRow = await database.getOAuthToken(bodyCredId);
       if (credRow && credRow.provider === 'movielens') {
@@ -3755,7 +3753,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
   else if (cleanId.startsWith('mal.userlist.')) {
     if (catalogConfig?.sort) extraArgs.sort = catalogConfig.sort;
   }
-  // MovieLens uses metadata: sortBy, sortDirection, tags, minYear, maxYear, minPop, maxDaysAgo, maxFutureDays
+  // MovieLens uses: sortBy, sortDirection, tags, minYear, maxYear, minPop, maxDaysAgo, maxFutureDays
   else if (cleanId.startsWith('movielens.')) {
     const mlMeta = catalogConfig?.metadata || {};
     if (mlMeta.sortBy) extraArgs.sort = mlMeta.sortBy;

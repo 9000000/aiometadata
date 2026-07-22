@@ -112,9 +112,7 @@ async function metahubImageExists(imdbId: string, type: 'logo' | 'poster' | 'bac
     if (!url) {
         return false;
     }
-    // Cached as a non-empty array ([1]/[0]) — a bare boolean is classified as an
-    // EMPTY_RESULT by the cache strategy and only kept 60s, causing re-HEADs on
-    // the meta hot path every minute.
+    // array sentinel, not a bare boolean: bare booleans cache as EMPTY_RESULT (60s)
     const cached = await cacheWrapGlobal(`metahub-image-exists:${type}:${imdbId}`, async () => {
         try {
             const res = await httpHead(url, { timeout: METAHUB_IMAGE_HEAD_TIMEOUT });

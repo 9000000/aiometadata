@@ -26,8 +26,6 @@ function validRating(r: any): boolean {
   return typeof r === 'number' && r >= 1 && r <= 10;
 }
 
-// Shared shape for Trakt `/users/me/ratings/movies` AND MDBList `/sync/ratings` movies[]:
-// each item is { rated_at, rating, movie: { title, year, ids: { imdb } } }.
 function fromMovieRatingItems(items: any[]): NormalizedRating[] {
   const out: NormalizedRating[] = [];
   for (const it of items || []) {
@@ -45,10 +43,6 @@ function fromMovieRatingItems(items: any[]): NormalizedRating[] {
   return out;
 }
 
-// Simkl `/sync/ratings/movies` returns the whole movie collection with `user_rating`
-// null on unrated items — the validRating filter keeps only truly-rated movies.
-// Rating is `user_rating`; date is often only in `last_watched_at` (user_rated_at
-// is frequently null even for rated items).
 function fromSimklMovieRatings(sync: any): NormalizedRating[] {
   const items = sync?.movies || [];
   const out: NormalizedRating[] = [];
@@ -67,7 +61,6 @@ function fromSimklMovieRatings(sync: any): NormalizedRating[] {
   return out;
 }
 
-// Merge across sources; on the same imdb id, the most recent rated_at wins.
 function mergeRatings(...lists: NormalizedRating[][]): NormalizedRating[] {
   const byImdb = new Map<string, NormalizedRating>();
   for (const list of lists) {

@@ -22,9 +22,6 @@ async function setCursor(credId: string, cursor: any): Promise<void> {
   );
 }
 
-// Fetch personal movie ratings from every connected source. On a re-sync (`since`
-// set) sources are queried incrementally; Trakt has no `since` on /sync/ratings so
-// it's gated by /sync/last_activities (skipped entirely when nothing new was rated).
 async function gatherRatings(config: any, since?: string): Promise<{ merged: any[]; perSource: Record<string, number> }> {
   const lists: any[][] = [];
   const perSource: Record<string, number> = {};
@@ -82,9 +79,6 @@ async function syncMovieLensAccount(config: any, opts: { full?: boolean; cooldow
 
   const cursor = (await getCursor(credId)) || {};
 
-  // Manual syncs are throttled by an env-configured cooldown so users can't sync
-  // at will; the scheduled job passes no cooldown. The first sync (no cursor yet)
-  // is always allowed.
   if (opts.cooldownSeconds && cursor.lastSyncAt) {
     const elapsed = (Date.now() - new Date(cursor.lastSyncAt).getTime()) / 1000;
     if (elapsed < opts.cooldownSeconds) {
@@ -112,8 +106,6 @@ async function bootstrapMovieLensAccount(config: any): Promise<any> {
   return syncMovieLensAccount(config, { full: true });
 }
 
-// Entry point for the scheduled re-sync job: incremental sync for every user
-// that has a MovieLens account connected.
 async function syncAllMovieLensAccounts(): Promise<{ processed: number; synced: number }> {
   const uuids: string[] = await database.getAllUserUUIDs();
   let processed = 0;

@@ -101,9 +101,6 @@ function getLogoFromImdb(imdbId: string): string | null {
     return `https://images.metahub.space/logo/medium/${imdbId}/img`;
 }
 
-const METAHUB_IMAGE_EXISTS_TTL = parseInt(process.env.METAHUB_IMAGE_EXISTS_TTL_SECONDS || '86400', 10);
-const METAHUB_IMAGE_HEAD_TIMEOUT = parseInt(process.env.METAHUB_IMAGE_HEAD_TIMEOUT_MS || '4000', 10);
-
 async function metahubImageExists(imdbId: string, type: 'logo' | 'poster' | 'background' = 'logo'): Promise<boolean> {
     let url: string | null = null;
     if (type === 'logo') url = getLogoFromImdb(imdbId);
@@ -112,15 +109,17 @@ async function metahubImageExists(imdbId: string, type: 'logo' | 'poster' | 'bac
     if (!url) {
         return false;
     }
+    const ttl = parseInt(process.env.METAHUB_IMAGE_EXISTS_TTL_SECONDS || '86400', 10);
+    const timeout = parseInt(process.env.METAHUB_IMAGE_HEAD_TIMEOUT_MS || '4000', 10);
     // array sentinel, not a bare boolean: bare booleans cache as EMPTY_RESULT (60s)
     const cached = await cacheWrapGlobal(`metahub-image-exists:${type}:${imdbId}`, async () => {
         try {
-            const res = await httpHead(url, { timeout: METAHUB_IMAGE_HEAD_TIMEOUT });
+            const res = await httpHead(url, { timeout });
             return [res.status >= 200 && res.status < 300 ? 1 : 0];
         } catch (error: any) {
             return [0];
         }
-    }, METAHUB_IMAGE_EXISTS_TTL);
+    }, ttl);
     return Array.isArray(cached) ? cached[0] === 1 : !!cached;
 }
 

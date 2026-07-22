@@ -6,18 +6,18 @@ const consola: any = require('consola');
 
 const logger = consola.withTag('movielens');
 
-const ML_BASE = (process.env.MOVIELENS_API_BASE || 'https://movielens.org/api').replace(/\/+$/, '');
-const ML_LOGIN_REFERER = process.env.MOVIELENS_LOGIN_REFERER || 'https://movielens.org/login';
-const ML_IMPORT_REFERER = process.env.MOVIELENS_IMPORT_REFERER || 'https://movielens.org/profile/settings/import-export';
-const ML_TIMEOUT_MS = parseInt(process.env.MOVIELENS_REQUEST_TIMEOUT_MS || '25000', 10);
-const ML_USER_AGENT = process.env.MOVIELENS_USER_AGENT
+const mlBase = () => (process.env.MOVIELENS_API_BASE || 'https://movielens.org/api').replace(/\/+$/, '');
+const mlLoginReferer = () => process.env.MOVIELENS_LOGIN_REFERER || 'https://movielens.org/login';
+const mlImportReferer = () => process.env.MOVIELENS_IMPORT_REFERER || 'https://movielens.org/profile/settings/import-export';
+const mlTimeout = () => parseInt(process.env.MOVIELENS_REQUEST_TIMEOUT_MS || '25000', 10);
+const mlUserAgent = () => process.env.MOVIELENS_USER_AGENT
   || 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:127.0) Gecko/20100101 Firefox/127.0';
 
-const BASE_HEADERS = {
+const baseHeaders = () => ({
   Accept: 'application/json, text/plain, */*',
   'Accept-Language': 'en-US,en;q=0.5',
-  'User-Agent': ML_USER_AGENT,
-};
+  'User-Agent': mlUserAgent(),
+});
 
 class MovieLensAuthError extends Error {
   constructor(message?: string) {
@@ -49,11 +49,11 @@ function decryptSecret(blob: string): string {
 }
 
 async function login(userName: string, password: string): Promise<string> {
-  const res = await fetch(`${ML_BASE}/sessions`, {
+  const res = await fetch(`${mlBase()}/sessions`, {
     method: 'POST',
-    headers: { ...BASE_HEADERS, 'Content-Type': 'application/json;charset=utf-8', Referer: ML_LOGIN_REFERER },
+    headers: { ...baseHeaders(), 'Content-Type': 'application/json;charset=utf-8', Referer: mlLoginReferer() },
     body: JSON.stringify({ userName, password }),
-    signal: AbortSignal.timeout(ML_TIMEOUT_MS),
+    signal: AbortSignal.timeout(mlTimeout()),
   });
   if (res.status === 401 || res.status === 400) {
     throw new MovieLensAuthError('MovieLens rejected the username or password');
@@ -85,10 +85,10 @@ async function apiFetch(credId: string, path: string, opts: any = {}, retried = 
   const row = await database.getOAuthToken(credId);
   if (!row) throw new MovieLensAuthError(`No MovieLens credential for ${credId}`);
 
-  const res = await fetch(`${ML_BASE}/${path}`, {
+  const res = await fetch(`${mlBase()}/${path}`, {
     ...opts,
-    headers: { ...BASE_HEADERS, ...(opts.headers || {}), cookie: row.access_token },
-    signal: AbortSignal.timeout(ML_TIMEOUT_MS),
+    headers: { ...baseHeaders(), ...(opts.headers || {}), cookie: row.access_token },
+    signal: AbortSignal.timeout(mlTimeout()),
   });
 
   if (res.status === 401 && !retried) {
@@ -172,7 +172,7 @@ async function importImdbCsv(credId: string, csv: string): Promise<ImdbImportRes
   form.append('file', new Blob([csv], { type: 'text/csv' }), 'ratings.csv');
   const res = await apiFetch(credId, 'actions/imdb-import', {
     method: 'POST',
-    headers: { Referer: ML_IMPORT_REFERER },
+    headers: { Referer: mlImportReferer() },
     body: form,
   });
   const json: any = await res.json().catch(() => null);

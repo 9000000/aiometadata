@@ -112,14 +112,18 @@ async function metahubImageExists(imdbId: string, type: 'logo' | 'poster' | 'bac
     if (!url) {
         return false;
     }
-    return cacheWrapGlobal(`metahub-image-exists:${type}:${imdbId}`, async () => {
+    // Cached as a non-empty array ([1]/[0]) — a bare boolean is classified as an
+    // EMPTY_RESULT by the cache strategy and only kept 60s, causing re-HEADs on
+    // the meta hot path every minute.
+    const cached = await cacheWrapGlobal(`metahub-image-exists:${type}:${imdbId}`, async () => {
         try {
             const res = await httpHead(url, { timeout: METAHUB_IMAGE_HEAD_TIMEOUT });
-            return res.status >= 200 && res.status < 300;
+            return [res.status >= 200 && res.status < 300 ? 1 : 0];
         } catch (error: any) {
-            return false;
+            return [0];
         }
     }, METAHUB_IMAGE_EXISTS_TTL);
+    return Array.isArray(cached) ? cached[0] === 1 : !!cached;
 }
 
 function getBackgroundFromImdb(imdbId: string): string | null {

@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { MDBListIntegration } from './MDBListIntegration';
 import { TraktIntegration } from './TraktIntegration';
 import { SimklIntegration } from './SimklIntegration';
+import { MovieLensIntegration } from './MovieLensIntegration';
 import { PublicMetaDBIntegration } from './PublicMetaDBIntegration';
 import { TMDBIntegration } from './TMDBIntegration';
 import { DiscoverBuilderDialog } from './DiscoverBuilderDialog';
@@ -1023,6 +1024,131 @@ const SimklSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogCon
           <DialogClose asChild>
             <Button variant="ghost">Cancel</Button>
           </DialogClose>
+          <Button onClick={handleSave}>Save</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+const MOVIELENS_SORT_OPTIONS = [
+  { value: 'prediction', label: 'Prediction (personalized)' },
+  { value: 'popularity', label: 'Popularity' },
+  { value: 'avgRating', label: 'Average Rating' },
+  { value: 'releaseDate', label: 'Release Date' },
+  { value: 'dateAdded', label: 'Date Added' },
+  { value: 'imdbRating', label: 'IMDb Rating' },
+  { value: 'title', label: 'Title (A-Z)' },
+];
+
+const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogConfig, isOpen: boolean, onClose: () => void }) => {
+  const { setConfig, catalogTTL } = useConfig();
+  const [cacheTTL, setCacheTTL] = useState<number>(catalog.cacheTTL || catalogTTL);
+  const isWatchlist = catalog.id === 'movielens.watchlist';
+  const [sortBy, setSortBy] = useState<string>(catalog.metadata?.sortBy || 'prediction');
+  const [sortDirection, setSortDirection] = useState<string>(catalog.metadata?.sortDirection || 'default');
+  const [tags, setTags] = useState<string>(catalog.metadata?.tags || '');
+  const [minYear, setMinYear] = useState<string>(catalog.metadata?.minYear ? String(catalog.metadata.minYear) : '');
+  const [maxYear, setMaxYear] = useState<string>(catalog.metadata?.maxYear ? String(catalog.metadata.maxYear) : '');
+
+  const handleSave = () => {
+    const minYearNum = parseInt(minYear, 10);
+    const maxYearNum = parseInt(maxYear, 10);
+    setConfig(prev => ({
+      ...prev,
+      catalogs: prev.catalogs.map(c =>
+        c.id === catalog.id && c.type === catalog.type
+          ? {
+              ...c,
+              cacheTTL: Math.max(cacheTTL, 300),
+              metadata: {
+                ...c.metadata,
+                ...(!isWatchlist && {
+                  sortBy: sortBy !== 'prediction' ? sortBy : undefined,
+                  sortDirection: sortDirection !== 'default' ? sortDirection : undefined,
+                  tags: tags.trim() ? tags.trim() : undefined,
+                  minYear: Number.isFinite(minYearNum) ? minYearNum : undefined,
+                  maxYear: Number.isFinite(maxYearNum) ? maxYearNum : undefined,
+                }),
+              },
+            }
+          : c
+      ) as CatalogConfig[],
+    }));
+    onClose();
+  };
+
+  return (
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>MovieLens Settings</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-4">
+          {!isWatchlist && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label>Sort By</Label>
+                  <Select value={sortBy} onValueChange={setSortBy}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MOVIELENS_SORT_OPTIONS.map(o => (
+                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Direction</Label>
+                  <Select value={sortDirection} onValueChange={setSortDirection}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">Default (descending)</SelectItem>
+                      <SelectItem value="asc">Ascending</SelectItem>
+                      <SelectItem value="desc">Descending</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Tags</Label>
+                <Input placeholder="e.g. classic, dark humor, mythology" value={tags} onChange={(e) => setTags(e.target.value)} />
+                <p className="text-xs text-muted-foreground">
+                  Comma-separated MovieLens tags; results must match all of them
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label>Min Year</Label>
+                  <Input type="number" placeholder="e.g. 2010" value={minYear} onChange={(e) => setMinYear(e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Max Year</Label>
+                  <Input type="number" placeholder="e.g. 2026" value={maxYear} onChange={(e) => setMaxYear(e.target.value)} />
+                </div>
+              </div>
+            </>
+          )}
+          <div className="space-y-2">
+            <Label>Cache TTL (seconds)</Label>
+            <Input
+              type="number"
+              min={300}
+              value={cacheTTL}
+              onChange={(e) => setCacheTTL(Number(e.target.value) || 0)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Minimum 5 minutes ({Math.floor(cacheTTL / 3600)}h {Math.floor((cacheTTL % 3600) / 60)}m)
+            </p>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button onClick={handleSave}>Save</Button>
         </div>
       </DialogContent>
@@ -2506,7 +2632,7 @@ const SortableCatalogItem = ({ catalog, onEditDiscover, onCustomize, onDuplicate
   };
 
   const hasRatingPosters = config.posterRatingProvider !== 'none' && !!(config.apiKeys?.rpdb || config.apiKeys?.topPoster || config.customPosterUrlPattern);
-  const hasSettings = catalog.source === 'mdblist' || catalog.source === 'trakt' || (catalog.source === 'simkl' && !catalog.id.startsWith('simkl.watchlist.')) || catalog.source === 'letterboxd' || catalog.source === 'streaming' ||
+  const hasSettings = catalog.source === 'mdblist' || catalog.source === 'trakt' || (catalog.source === 'simkl' && !catalog.id.startsWith('simkl.watchlist.')) || catalog.source === 'movielens' || catalog.source === 'letterboxd' || catalog.source === 'streaming' ||
     (catalog.source === 'tmdb' && (catalog.id === 'tmdb.year' || catalog.id === 'tmdb.language')) ||
     !!(config.apiKeys?.traktTokenId || config.apiKeys?.anilistTokenId || config.apiKeys?.mdblist);
   const isDiscover = catalog.id.includes('.discover.') && !!catalog.metadata?.discover?.formState;
@@ -2826,7 +2952,7 @@ const SortableCatalogItem = ({ catalog, onEditDiscover, onCustomize, onDuplicate
 
 
           {/* Settings Gear - Now show for all catalogs if any tracking is connected */}
-          {(catalog.source === 'mdblist' || catalog.source === 'trakt' || (catalog.source === 'simkl' && !catalog.id.startsWith('simkl.watchlist.')) || catalog.source === 'letterboxd' || catalog.source === 'streaming' || catalog.source === 'publicmetadb' ||
+          {(catalog.source === 'mdblist' || catalog.source === 'trakt' || (catalog.source === 'simkl' && !catalog.id.startsWith('simkl.watchlist.')) || catalog.source === 'movielens' || catalog.source === 'letterboxd' || catalog.source === 'streaming' || catalog.source === 'publicmetadb' ||
             (catalog.source === 'tmdb' && (catalog.id === 'tmdb.year' || catalog.id === 'tmdb.language')) ||
             (config.apiKeys?.traktTokenId || config.apiKeys?.anilistTokenId || config.apiKeys?.mdblist)) && (
             <Tooltip>
@@ -3102,6 +3228,12 @@ const SortableCatalogItem = ({ catalog, onEditDiscover, onCustomize, onDuplicate
         onClose={() => setShowSettings(false)}
       />
 
+      <MovieLensSettingsDialog
+        catalog={catalog}
+        isOpen={showSettings && catalog.source === 'movielens'}
+        onClose={() => setShowSettings(false)}
+      />
+
       <LetterboxdSettingsDialog
         catalog={catalog}
         isOpen={showSettings && catalog.source === 'letterboxd'}
@@ -3145,6 +3277,7 @@ const SortableCatalogItem = ({ catalog, onEditDiscover, onCustomize, onDuplicate
           catalog.source !== 'mdblist' &&
           catalog.source !== 'trakt' &&
           catalog.source !== 'simkl' &&
+          catalog.source !== 'movielens' &&
           catalog.source !== 'letterboxd' &&
           catalog.source !== 'streaming' &&
           catalog.source !== 'custom' &&
@@ -3322,6 +3455,7 @@ function CatalogsSettingsContent({
   const [isMdbListOpen, setIsMdbListOpen] = useState(false);
   const [isTraktOpen, setIsTraktOpen] = useState(false);
   const [isSimklOpen, setIsSimklOpen] = useState(false);
+  const [isMovieLensOpen, setIsMovieLensOpen] = useState(false);
   const [isPublicMetaDBOpen, setIsPublicMetaDBOpen] = useState(false);
   const [isTmdbListOpen, setIsTmdbListOpen] = useState(false);
   const [isTmdbDiscoverBuilderOpen, setIsTmdbDiscoverBuilderOpen] = useState(false);
@@ -4480,6 +4614,25 @@ function CatalogsSettingsContent({
                     <Button
                       variant="ghost"
                       size="icon"
+                      onClick={() => setIsMovieLensOpen(true)}
+                      aria-label="MovieLens Integration"
+                      className="h-9 w-9"
+                    >
+                      <img
+                        src="https://movielens.org/favicon.ico"
+                        alt="MovieLens"
+                        className="h-5 w-5 rounded object-contain"
+                      />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>MovieLens Integration</TooltipContent>
+                </Tooltip>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() => setIsPublicMetaDBOpen(true)}
                       aria-label="PublicMetaDB Integration"
                       className="h-9 w-9"
@@ -4626,6 +4779,10 @@ function CatalogsSettingsContent({
           <SimklIntegration
             isOpen={isSimklOpen}
             onClose={() => setIsSimklOpen(false)}
+          />
+          <MovieLensIntegration
+            isOpen={isMovieLensOpen}
+            onClose={() => setIsMovieLensOpen(false)}
           />
           <PublicMetaDBIntegration
             isOpen={isPublicMetaDBOpen}
@@ -4779,6 +4936,10 @@ function CatalogsSettingsContent({
       <SimklIntegration
         isOpen={isSimklOpen}
         onClose={() => setIsSimklOpen(false)}
+      />
+      <MovieLensIntegration
+        isOpen={isMovieLensOpen}
+        onClose={() => setIsMovieLensOpen(false)}
       />
       <PublicMetaDBIntegration
         isOpen={isPublicMetaDBOpen}

@@ -28,6 +28,8 @@ export interface UserConfig {
     anilistTokenId?: string;
     /** MyAnimeList OAuth token ID stored in oauth_tokens table */
     malTokenId?: string;
+    /** MovieLens credential ID stored in oauth_tokens table (provider 'movielens') */
+    movieLensCredId?: string;
     publicmetadb?: string;
   };
   mdblistWatchTracking?: boolean;

@@ -206,6 +206,17 @@ async function makeAuthenticatedSimklRequest(
   }
 }
 
+async function getSimklMovieRatings(accessToken: string, dateFrom?: string): Promise<any> {
+  try {
+    let url = `${SIMKL_BASE_URL}/sync/ratings/movies`;
+    if (dateFrom) url += `?date_from=${encodeURIComponent(dateFrom)}`;
+    const response: any = await makeAuthenticatedSimklRequest(url, accessToken, 'Simkl Movie Ratings');
+    return response?.data && Array.isArray(response.data.movies) ? response.data : { movies: [] };
+  } catch (error) {
+    return { movies: [] };
+  }
+}
+
 async function makeRateLimitedSimklRequest(url: string, context: string = 'Simkl Proxy'): Promise<any> {
   const headers = {
     'Content-Type': 'application/json',
@@ -1308,6 +1319,7 @@ export {
   fetchSimklWatchlistItems,
   parseSimklItems,
   makeAuthenticatedSimklRequest,
+  getSimklMovieRatings,
   getSimklToken,
   getSimklActivityFingerprint,
   fetchSimklTrendingItems,

@@ -441,6 +441,42 @@ async function fetchMDBListItems(listId: string, apiKey: string, language: strin
 }
 
 
+/**
+ * Fetches the user's personal movie ratings from MDBList's `/sync/ratings` (beta).
+ * Paginates on the body's `pagination.has_more`. Returns the raw `movies[]` items
+ * (shape: { rated_at, rating, movie: { title, year, ids: { imdb } } }).
+ * @param {string} apiKey - MDBList API key
+ * @param {string} [since] - ISO timestamp; only ratings updated after it (incremental sync)
+ */
+async function getRatingsFromMDBList(apiKey: string, since?: string): Promise<any[]> {
+  if (!apiKey) {
+    logger.warn("Missing API key for getRatingsFromMDBList");
+    return [];
+  }
+  const pageSize = parseInt(process.env.MDBLIST_RATINGS_PAGE_SIZE || '1000', 10);
+  const maxPages = parseInt(process.env.MDBLIST_RATINGS_MAX_PAGES || '100', 10);
+  const movies: any[] = [];
+  let offset = 0;
+
+  for (let page = 0; page < maxPages; page++) {
+    let url = `https://api.mdblist.com/sync/ratings?apikey=${apiKey}&offset=${offset}&limit=${pageSize}`;
+    if (since) url += `&since=${encodeURIComponent(since)}`;
+
+    const response: any = await makeRateLimitedRequest(
+      () => httpGet(url, { dispatcher: mdblistDispatcher }),
+      apiKey,
+      `MDBList getRatingsFromMDBList (offset: ${offset})`
+    );
+
+    const data = response?.data || {};
+    if (Array.isArray(data.movies)) movies.push(...data.movies);
+    if (!data.pagination?.has_more) break;
+    offset += pageSize;
+  }
+
+  return movies;
+}
+
 // get media rating from MDBList
 /**
  * Fetches media rating from MDBList API for multiple IDs
@@ -1656,6 +1692,7 @@ export {
   getGenresFromMDBList,
   parseMDBListItems,
   getMediaRatingFromMDBList,
+  getRatingsFromMDBList,
   fetchMDBListGenres,
   convertGenreToSlug,
   makeRateLimitedMDBListRequest,

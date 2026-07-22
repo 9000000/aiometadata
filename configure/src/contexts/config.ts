@@ -180,6 +180,7 @@ export interface AppConfig {
     simklTokenId?: string;
     anilistTokenId?: string;
     malTokenId?: string;
+    movieLensCredId?: string;
     publicmetadb?: string;
     customDescriptionBlurb?: string;
   };

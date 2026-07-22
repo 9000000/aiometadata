@@ -429,8 +429,28 @@ async function fetchTraktHistory(
   }
 }
 
+async function getTraktRatings(accessToken: string): Promise<any[]> {
+  try {
+    const url = `${TRAKT_BASE_URL}/sync/ratings/movies`;
+    const response: any = await makeRateLimitedRequest(
+      () => httpGet(url, {
+        dispatcher: traktDispatcher,
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'trakt-api-version': '2',
+          'trakt-api-key': TRAKT_CLIENT_ID
+        }
+      }),
+      'Trakt Ratings Sync', 3, accessToken
+    );
+    return Array.isArray(response.data) ? response.data : [];
+  } catch (error) {
+    return [];
+  }
+}
+
 async function fetchTraktUpdatedShows(
-  accessToken: string, 
+  accessToken: string,
   startAt: string,
   page: number = 1,
   limit: number = 100
@@ -3264,4 +3284,6 @@ export {
   traktDispatcher,
   getTraktMemoryStats,
   isTokenInvalidated,
+  getTraktRatings,
+  fetchTraktLastActivity,
 };

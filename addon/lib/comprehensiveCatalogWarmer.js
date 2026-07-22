@@ -509,6 +509,7 @@ class ComprehensiveCatalogWarmer {
         catalogId.startsWith('custom.') ||
         catalogId.startsWith('streaming.') ||
         catalogId.startsWith('simkl.') ||
+        catalogId.startsWith('movielens.') ||
         catalogId.startsWith('publicmetadb.') ||
         catalogId.startsWith('tmdb.discover') ||
         catalogId.startsWith('tvdb.discover') ||
@@ -622,6 +623,17 @@ class ComprehensiveCatalogWarmer {
         }
         else if (catalogId.startsWith('mal.userlist.')) {
           if (catalogConfig?.sort) extraArgs.sort = catalogConfig.sort;
+        }
+        else if (catalogId.startsWith('movielens.')) {
+          const mlMeta = catalogConfig?.metadata || {};
+          if (mlMeta.sortBy) extraArgs.sort = mlMeta.sortBy;
+          if (mlMeta.sortDirection) extraArgs.sortDirection = mlMeta.sortDirection;
+          if (mlMeta.tags) extraArgs.tags = mlMeta.tags;
+          if (mlMeta.minYear) extraArgs.minYear = mlMeta.minYear;
+          if (mlMeta.maxYear) extraArgs.maxYear = mlMeta.maxYear;
+          if (mlMeta.minPop) extraArgs.minPop = mlMeta.minPop;
+          if (mlMeta.maxDaysAgo) extraArgs.maxDaysAgo = mlMeta.maxDaysAgo;
+          if (mlMeta.maxFutureDays !== undefined) extraArgs.maxFutureDays = mlMeta.maxFutureDays;
         }
         else if (catalogId.startsWith('tmdb.discover.') || catalogId.startsWith('tvdb.discover.') || catalogId.startsWith('simkl.discover.') || catalogId.startsWith('anilist.discover.') || catalogId.startsWith('mal.discover.')) {
           const discoverParams =

@@ -134,6 +134,13 @@ function createCatalog(id: string, type: string, catalogDef: any, options: strin
   };
 }
 
+// Genre vocabulary served by MovieLens /api/movies/genres
+const MOVIELENS_GENRES = [
+  'Action', 'Adventure', 'Animation', 'Comedy', 'Crime', 'Documentary',
+  'Drama', 'Family', 'Fantasy', 'History', 'Horror', 'Music', 'Mystery',
+  'Romance', 'Science Fiction', 'TV Movie', 'Thriller', 'War', 'Western'
+];
+
 function getCatalogDefinition(catalogId: string): any {
   const [provider, catalogType] = catalogId.split('.');
 
@@ -977,6 +984,9 @@ async function getManifest(config: any, opts: { tag?: string } = {}): Promise<an
       if (isSimkl(userCatalog.id)) {
         return true;
       }
+      if (userCatalog.id.startsWith('movielens.')) {
+        return !!config.apiKeys?.movieLensCredId;
+      }
       if (userCatalog.id.startsWith('tmdb.list.')) {
         return true;
       }
@@ -1036,6 +1046,25 @@ async function getManifest(config: any, opts: { tag?: string } = {}): Promise<an
           const result = await createSimklCatalog(userCatalog, showPrefix, prefixName);
           logger.debug(`Simkl catalog result:`, result ? 'success' : 'failed');
           return result;
+      }
+      if (userCatalog.id.startsWith('movielens.')) {
+          logger.debug(`Processing MovieLens catalog: ${userCatalog.id}`);
+          const catalogType = userCatalog.displayType || userCatalog.type;
+          const genreOptions = userCatalog.id.startsWith('movielens.toppicks') ? MOVIELENS_GENRES : [];
+          const options = userCatalog.showInHome ? genreOptions : ['None', ...genreOptions];
+          const extra: any[] = [];
+          if (options.length > 0) {
+            extra.push({ name: 'genre', options, isRequired: !userCatalog.showInHome });
+          }
+          extra.push({ name: 'skip' });
+          return {
+            id: userCatalog.id,
+            type: catalogType,
+            name: `${showPrefix ? `${prefixName} - ` : ""}${userCatalog.name}`,
+            pageSize: parseInt(process.env.CATALOG_LIST_ITEMS_SIZE as string) || 20,
+            extra,
+            showInHome: userCatalog.showInHome
+          };
       }
       if (isPublicMetaDB(userCatalog.id)) {
           logger.debug(`Processing PublicMetaDB catalog: ${userCatalog.id}`);

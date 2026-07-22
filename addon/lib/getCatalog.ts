@@ -17,13 +17,14 @@ import * as moviedb from "./getTmdb.js";
 import * as tvdb from './tvdb.js';
 import { to3LetterCode, to3LetterCountryCode } from './language-map.js';
 import { resolveAllIds } from './id-resolver.js';
-import { cacheWrapTvdbApi, cacheWrap, cacheWrapCatalog, cacheWrapAniListCatalog, cacheWrapJikanApi, stableStringify } from './getCache.js';
+import { cacheWrapTvdbApi, cacheWrap, cacheWrapCatalog, cacheWrapAniListCatalog, cacheWrapJikanApi, cacheWrapGlobal, stableStringify } from './getCache.js';
 import crypto from 'crypto';
 import { getTVDBContentRatingId } from '../utils/tvdbContentRating.js';
 import { getMeta } from './getMeta.js';
 import { resolveDynamicTmdbDiscoverParams } from './tmdbDiscoverDateTokens.js';
 import { roundRobinInterleaveTagged, mergedDedupKey, filterMetasByGenre, normalizeGenreKey } from '../utils/mergedCatalog.js';
 const { getTvmazeScheduleCatalog } = require('./tvmazeScheduleCatalog');
+const movielens = require('./movielens');
 
 const consola = require('consola');
 const database = require('./database.js');
@@ -116,6 +117,11 @@ async function getCatalog(type: string, language: string, page: number, id: stri
       logger.debug(`Routing to Simkl catalog handler for id: ${id}`);
       const simklResults = await getSimklCatalog(type, id, genre, page, language, config, userUUID, includeVideos, skip);
       return { metas: simklResults };
+    }
+    else if (id.startsWith('movielens.')) {
+      logger.debug(`Routing to MovieLens catalog handler for id: ${id}`);
+      const movieLensResults = await getMovieLensCatalog(type, id, genre, page, language, config, userUUID, includeVideos);
+      return { metas: movieLensResults };
     }
     else if (id.startsWith('flixpatrol.')) {
       logger.debug(`Routing to FlixPatrol catalog handler for id: ${id}`);
@@ -2631,6 +2637,77 @@ function sanitizeSimklDiscoverParams(
  * Get Simkl catalog items
  * Handles 'simkl.*' catalog IDs (e.g., simkl.trending.movies, simkl.trending.shows, simkl.trending.anime)
  */
+async function getMovieLensCatalog(
+  type: string,
+  catalogId: string,
+  genre: string,
+  page: number,
+  language: string,
+  config: UserConfig,
+  userUUID: string,
+  includeVideos: boolean = false
+): Promise<any[]> {
+  try {
+    if (type !== 'movie') return [];
+    const credId = config.apiKeys?.movieLensCredId;
+    if (!credId) {
+      logger.warn(`[MovieLens] Catalog ${catalogId} requested but no MovieLens account is connected`);
+      return [];
+    }
+
+    const catalogConfig = config.catalogs?.find(c => c.id === catalogId);
+    const pageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE || '20');
+    const ttl = catalogConfig?.cacheTTL !== undefined
+      ? catalogConfig.cacheTTL
+      : parseInt(process.env.MOVIELENS_CATALOG_TTL_SECONDS || '3600', 10);
+    // MovieLens genre matching is lowercase-sensitive ("horror" matches, "Horror" doesn't)
+    const genreName = genre && genre.toLowerCase() !== 'none' ? genre.toLowerCase() : undefined;
+
+    // Optional per-catalog explore settings (sortBy: prediction|popularity|avgRating|
+    // releaseDate|dateAdded|imdbRating|title; avgRating needs a popularity floor)
+    const metadata: any = catalogConfig?.metadata || {};
+    const sortBy = metadata.sortBy || 'prediction';
+    const minYear = metadata.minYear;
+    const maxYear = metadata.maxYear;
+    const minPop = metadata.minPop ?? (sortBy === 'avgRating' ? 100 : sortBy === 'releaseDate' ? 20 : undefined);
+    // releaseDate sorts descending into unreleased/future titles unless capped
+    const maxFutureDays = metadata.maxFutureDays ?? (sortBy === 'releaseDate' ? 0 : undefined);
+    const maxDaysAgo = metadata.maxDaysAgo;
+    const sortDirection = metadata.sortDirection;
+    const tag = String(metadata.tags || '')
+      .split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean).join(',') || undefined;
+
+    // explore honors pageSize directly, so request exactly one catalog page
+    const filterKey = `${sortBy}:${sortDirection || ''}:${tag || ''}:${minYear || ''}:${maxYear || ''}:${minPop || ''}:${maxFutureDays ?? ''}:${maxDaysAgo || ''}`;
+    const cacheKey = `movielens-catalog:${credId}:${catalogId}:${genreName || 'all'}:${filterKey}:${page}:${pageSize}`;
+    const items = await cacheWrapGlobal(cacheKey, async () => {
+      if (catalogId === 'movielens.watchlist') {
+        return movielens.wishlist(credId, { page, pageSize });
+      }
+      return movielens.explore(credId, {
+        hasRated: 'no', sortBy, sortDirection, tag, genre: genreName, minYear, maxYear, minPop, maxFutureDays, maxDaysAgo, page, pageSize,
+      });
+    }, ttl);
+    const windowItems = Array.isArray(items) ? items : [];
+
+    // parseMDBListItems resolves items as tmdb:{id}, so only items with a tmdb id qualify
+    const mdblistShaped = windowItems
+      .map((r: any) => {
+        const m = r?.movie || {};
+        if (!m.tmdbMovieId) return null;
+        return { mediatype: 'movie', id: m.tmdbMovieId, title: m.title };
+      })
+      .filter(Boolean);
+
+    const metas = await parseMDBListItems(mdblistShaped, 'movie', language, config, includeVideos);
+    logger.info(`[MovieLens] ${catalogId} page ${page} (genre: ${genreName || 'all'}): ${metas.length} metas`);
+    return metas;
+  } catch (error: any) {
+    logger.error(`[MovieLens] Catalog ${catalogId} failed: ${error.message}`);
+    return [];
+  }
+}
+
 async function getSimklCatalog(
   type: string,
   catalogId: string,

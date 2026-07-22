@@ -56,6 +56,7 @@ const { resolveDynamicTmdbDiscoverParams } = require('./lib/tmdbDiscoverDateToke
 const { blurImage, convertBannerToBackground } = require('./utils/imageProcessor');
 const { getAiTriggerKeyword, applyAiTrigger } = require('./utils/aiSearchTrigger');
 const { TraktClient } = require('./lib/trakt');
+const movielens = require('./lib/movielens');
 const {
   createAniListOAuthState,
   createMalOAuthTransaction,
@@ -204,6 +205,7 @@ addon.use(
     '/api/auth/trakt/callback',
     '/api/auth/simkl/authorize',
     '/api/auth/simkl/callback',
+    '/api/auth/movielens/connect',
   ],
   noStoreOAuthHeaders
 );
@@ -267,6 +269,19 @@ if (ENABLE_CACHE_WARMING) {
   }, POPULAR_WARM_CHECK_INTERVAL);
 } else {
   consola.info('[Cache Warming] Cache warming disabled or cache disabled');
+}
+
+// Scheduled MovieLens rating re-sync (env-governed cadence; incremental per user)
+const ENABLE_MOVIELENS_SYNC = process.env.ENABLE_MOVIELENS_SYNC !== 'false';
+if (ENABLE_MOVIELENS_SYNC && process.env.MOVIELENS_CRED_KEY) {
+  const MOVIELENS_SYNC_INTERVAL_HOURS = Math.max(1, parseInt(process.env.MOVIELENS_SYNC_INTERVAL_HOURS || '24', 10));
+  const intervalMs = MOVIELENS_SYNC_INTERVAL_HOURS * 60 * 60 * 1000;
+  consola.info(`[MovieLens] Scheduling rating re-sync every ${MOVIELENS_SYNC_INTERVAL_HOURS}h`);
+  setInterval(() => {
+    require('./lib/movielensSync').syncAllMovieLensAccounts().catch(error => {
+      consola.warn('[MovieLens] Scheduled re-sync failed:', error.message);
+    });
+  }, intervalMs);
 }
 
 
@@ -752,6 +767,74 @@ addon.post("/api/oauth/token/info", async (req, res) => {
   } catch (error) {
     consola.error("[OAuth] Token info fetch error:", error);
     res.status(500).json({ error: "Failed to fetch token info" });
+  }
+});
+
+// --- MovieLens Connect (username/password; MovieLens has no OAuth) ---
+addon.post("/api/auth/movielens/connect", async (req, res) => {
+  try {
+    const { userName, password } = req.body || {};
+    if (!userName || !password) {
+      return res.status(400).json({ error: "userName and password are required" });
+    }
+    if (!process.env.MOVIELENS_CRED_KEY) {
+      return res.status(500).json({ error: "MovieLens is not configured on this server (MOVIELENS_CRED_KEY is missing)." });
+    }
+    const credId = await movielens.connect(userName, password);
+    consola.info(`[MovieLens] Connected account ${userName} (cred ${credId})`);
+    res.json({ success: true, credId, userName });
+  } catch (error) {
+    if (error instanceof movielens.MovieLensAuthError) {
+      return res.status(401).json({ error: "MovieLens rejected the username or password." });
+    }
+    consola.error("[MovieLens] Connect error:", error);
+    res.status(500).json({ error: "Could not connect to MovieLens. Please try again." });
+  }
+});
+
+// --- MovieLens Sync / Bootstrap (imports ratings from connected sources into MovieLens) ---
+addon.post("/api/movielens/sync/:userUUID", async (req, res) => {
+  try {
+    const { userUUID } = req.params;
+    const { password, full, credId: bodyCredId } = req.body || {};
+    if (!password) {
+      return res.status(401).json({ error: "Password is required" });
+    }
+    const config = await database.verifyUserAndGetConfig(userUUID, password);
+    if (!config) {
+      return res.status(401).json({ error: "Invalid UUID or password" });
+    }
+    // A freshly-connected credId may not be in the saved config yet; accept it
+    // from the request body only when the saved config has none.
+    if (!config.apiKeys?.movieLensCredId && bodyCredId) {
+      const credRow = await database.getOAuthToken(bodyCredId);
+      if (credRow && credRow.provider === 'movielens') {
+        config.apiKeys = { ...config.apiKeys, movieLensCredId: bodyCredId };
+      }
+    }
+    if (!config.apiKeys?.movieLensCredId) {
+      return res.status(400).json({ error: "No MovieLens account is connected." });
+    }
+    const cooldownSeconds = parseInt(process.env.MOVIELENS_MANUAL_SYNC_COOLDOWN_SECONDS || '21600', 10);
+    const movielensSync = require('./lib/movielensSync');
+    const result = await movielensSync.syncMovieLensAccount(config, { full: !!full, cooldownSeconds });
+    if (!result.ok) {
+      if (result.reason === 'cooldown') {
+        return res.status(429).json({
+          error: "You've synced recently. Please try again later.",
+          nextAllowedInSeconds: result.nextAllowedInSeconds,
+        });
+      }
+      return res.status(400).json({ error: `MovieLens sync could not run (${result.reason || 'unknown'}).` });
+    }
+    consola.info(`[MovieLens] Sync for ${userUUID}: sent ${result.sent || 0}, ${result.successCount || 0} new`);
+    res.json(result);
+  } catch (error) {
+    if (error instanceof movielens.MovieLensAuthError) {
+      return res.status(401).json({ error: "Your MovieLens session could not be refreshed. Please reconnect your account." });
+    }
+    consola.error("[MovieLens] Sync error:", error);
+    res.status(500).json({ error: "MovieLens sync failed. Please try again." });
   }
 });
 
@@ -3672,6 +3755,18 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
   else if (cleanId.startsWith('mal.userlist.')) {
     if (catalogConfig?.sort) extraArgs.sort = catalogConfig.sort;
   }
+  // MovieLens uses metadata: sortBy, sortDirection, tags, minYear, maxYear, minPop, maxDaysAgo, maxFutureDays
+  else if (cleanId.startsWith('movielens.')) {
+    const mlMeta = catalogConfig?.metadata || {};
+    if (mlMeta.sortBy) extraArgs.sort = mlMeta.sortBy;
+    if (mlMeta.sortDirection) extraArgs.sortDirection = mlMeta.sortDirection;
+    if (mlMeta.tags) extraArgs.tags = mlMeta.tags;
+    if (mlMeta.minYear) extraArgs.minYear = mlMeta.minYear;
+    if (mlMeta.maxYear) extraArgs.maxYear = mlMeta.maxYear;
+    if (mlMeta.minPop) extraArgs.minPop = mlMeta.minPop;
+    if (mlMeta.maxDaysAgo) extraArgs.maxDaysAgo = mlMeta.maxDaysAgo;
+    if (mlMeta.maxFutureDays !== undefined) extraArgs.maxFutureDays = mlMeta.maxFutureDays;
+  }
   // Up next catalogs need poster preference and filter settings in cache key
   if (cleanId === 'trakt.upnext' || cleanId === 'mdblist.upnext') {
       extraArgs.useShowPoster = typeof catalogConfig?.metadata?.useShowPosterForUpNext === 'boolean'
@@ -3732,7 +3827,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
     catalogPageSize = parseInt(process.env.MAL_PAGE_SIZE || '25');
   } else if (cleanId === 'anilist.trending' || cleanId.startsWith('anilist.discover')) {
     catalogPageSize = 50;
-  } else if (cleanId.startsWith('simkl.watchlist.') || cleanId.startsWith('simkl.dvd.') || cleanId.startsWith('simkl.trending.') || cleanId.startsWith('simkl.recipe.') || cleanId.startsWith('stremthru.') || cleanId.startsWith('mdblist.') || cleanId.startsWith('custom.') || cleanId.startsWith('trakt.') || cleanId.startsWith('anilist.') || cleanId.startsWith('letterboxd.') || (cleanId.startsWith('tvdb.') && !cleanId.startsWith('tvdb.collection.'))) {
+  } else if (cleanId.startsWith('simkl.watchlist.') || cleanId.startsWith('simkl.dvd.') || cleanId.startsWith('simkl.trending.') || cleanId.startsWith('simkl.recipe.') || cleanId.startsWith('stremthru.') || cleanId.startsWith('mdblist.') || cleanId.startsWith('custom.') || cleanId.startsWith('trakt.') || cleanId.startsWith('anilist.') || cleanId.startsWith('letterboxd.') || cleanId.startsWith('movielens.') || (cleanId.startsWith('tvdb.') && !cleanId.startsWith('tvdb.collection.'))) {
     catalogPageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE || '20');
   } else {
     catalogPageSize = 20;

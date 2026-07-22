@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ExternalLink, CheckCircle2, Loader2, Plus, RefreshCw, Sparkles, Bookmark, CalendarClock, Star } from 'lucide-react';
+import { ExternalLink, CheckCircle2, Loader2, Plus, RefreshCw, Sparkles, Bookmark, CalendarClock, Star, ListVideo } from 'lucide-react';
 import { toast } from "sonner";
 
 interface MovieLensIntegrationProps {
@@ -22,6 +22,8 @@ export function MovieLensIntegration({ isOpen, onClose }: MovieLensIntegrationPr
   const [passwordInput, setPasswordInput] = useState('');
   const [connecting, setConnecting] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [lists, setLists] = useState<any[] | null>(null);
+  const [loadingLists, setLoadingLists] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -112,6 +114,32 @@ export function MovieLensIntegration({ isOpen, onClose }: MovieLensIntegrationPr
       toast.error("Could not reach the server");
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const handleLoadLists = async () => {
+    if (!auth.authenticated || !auth.userUUID || !auth.password) {
+      toast.error("Save your configuration first, then load your lists");
+      return;
+    }
+    setLoadingLists(true);
+    try {
+      const res = await fetch(`/api/movielens/lists/${auth.userUUID}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: auth.password }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setLists(data.lists || []);
+        if (!data.lists?.length) toast.info("No lists found on your MovieLens account");
+      } else {
+        toast.error(data.error || "Could not load lists");
+      }
+    } catch {
+      toast.error("Could not reach the server");
+    } finally {
+      setLoadingLists(false);
     }
   };
 
@@ -229,6 +257,32 @@ export function MovieLensIntegration({ isOpen, onClose }: MovieLensIntegrationPr
                   <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.toppicks.rated', 'Highest Rated for You', { sortBy: 'avgRating' })}>
                     <Star className="h-4 w-4 mr-2" /> Highest Rated for You <Plus className="h-4 w-4 ml-auto" />
                   </Button>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Your Lists</CardTitle>
+                  <CardDescription>Custom lists you've created on MovieLens.</CardDescription>
+                </CardHeader>
+                <CardContent className="grid grid-cols-1 gap-2">
+                  <Button variant="secondary" onClick={handleLoadLists} disabled={loadingLists}>
+                    {loadingLists ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+                    {lists === null ? 'Load my lists' : 'Refresh lists'}
+                  </Button>
+                  {lists?.map(list => (
+                    <Button
+                      key={list.listId}
+                      variant="outline"
+                      className="justify-start"
+                      onClick={() => addCatalog(`movielens.list.${list.listId}`, list.title, { listUserId: list.userId })}
+                    >
+                      <ListVideo className="h-4 w-4 mr-2" /> {list.title} <Plus className="h-4 w-4 ml-auto" />
+                    </Button>
+                  ))}
+                  {lists?.length === 0 && (
+                    <p className="text-xs text-muted-foreground">No lists on your MovieLens account yet.</p>
+                  )}
                 </CardContent>
               </Card>
             </>

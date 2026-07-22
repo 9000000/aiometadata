@@ -129,6 +129,21 @@ async function getLists(credId: string): Promise<any[]> {
   return json?.data || [];
 }
 
+async function getListItems(
+  credId: string,
+  userId: string | number,
+  listId: string | number,
+  { page, pageSize }: { page?: number; pageSize?: number } = {}
+): Promise<any[]> {
+  const qs = new URLSearchParams(
+    Object.entries({ page, pageSize }).filter(([, v]) => v !== undefined && v !== null) as any
+  ).toString();
+  const res = await apiFetch(credId, `users/${userId}/lists/${listId}${qs ? `?${qs}` : ''}`);
+  if (res.status !== 200) return [];
+  const json: any = await res.json();
+  return json?.data?.searchData?.searchResults || [];
+}
+
 async function getMovieGroupTags(credId: string): Promise<string[]> {
   const res = await apiFetch(credId, 'users/me');
   if (res.status !== 200) return [];
@@ -184,6 +199,7 @@ export {
   topPicks,
   wishlist,
   getLists,
+  getListItems,
   getGenres,
   getMovieGroupTags,
   importImdbCsv,
@@ -200,6 +216,7 @@ module.exports = {
   topPicks,
   wishlist,
   getLists,
+  getListItems,
   getGenres,
   getMovieGroupTags,
   importImdbCsv,

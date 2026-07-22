@@ -836,6 +836,32 @@ addon.post("/api/movielens/sync/:userUUID", async (req, res) => {
   }
 });
 
+addon.post("/api/movielens/lists/:userUUID", async (req, res) => {
+  try {
+    const { userUUID } = req.params;
+    const { password } = req.body || {};
+    if (!password) {
+      return res.status(401).json({ error: "Password is required" });
+    }
+    const config = await database.verifyUserAndGetConfig(userUUID, password);
+    if (!config) {
+      return res.status(401).json({ error: "Invalid UUID or password" });
+    }
+    const credId = config.apiKeys?.movieLensCredId;
+    if (!credId) {
+      return res.status(400).json({ error: "No MovieLens account is connected." });
+    }
+    const lists = await movielens.getLists(credId);
+    res.json({ lists: Array.isArray(lists) ? lists : [] });
+  } catch (error) {
+    if (error instanceof movielens.MovieLensAuthError) {
+      return res.status(401).json({ error: "Your MovieLens session could not be refreshed. Please reconnect your account." });
+    }
+    consola.error("[MovieLens] Lists error:", error);
+    res.status(500).json({ error: "Could not fetch MovieLens lists." });
+  }
+});
+
 // --- Simkl OAuth Routes ---
 addon.get("/api/auth/simkl/authorize", async (req, res) => {
   try {

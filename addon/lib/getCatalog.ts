@@ -2682,9 +2682,28 @@ async function getMovieLensCatalog(
       }
     }
 
+    const isList = catalogId.startsWith('movielens.list.');
     const filterKey = `${sortBy}:${sortDirection || ''}:${tag || ''}:${minYear || ''}:${maxYear || ''}:${minPop || ''}:${maxFutureDays ?? ''}:${maxDaysAgo || ''}`;
     const cacheKey = `movielens-catalog:${credId}:${catalogId}:${genreName || 'all'}:${filterKey}:${page}:${pageSize}`;
     const items = await cacheWrapGlobal(cacheKey, async () => {
+      if (isList) {
+        const listId = catalogId.slice('movielens.list.'.length);
+        const listUserId = catalogConfig?.metadata?.listUserId;
+        if (!listUserId) return [];
+        const offset = (page - 1) * pageSize;
+        const need = offset + pageSize;
+        const maxListPages = parseInt(process.env.MOVIELENS_LIST_MAX_PAGES || '50', 10);
+        const collected: any[] = [];
+        let serverPageSize: number | null = null;
+        for (let lp = 1; lp <= maxListPages; lp++) {
+          const lpItems = await movielens.getListItems(credId, listUserId, listId, { page: lp });
+          if (!Array.isArray(lpItems) || lpItems.length === 0) break;
+          if (serverPageSize === null) serverPageSize = lpItems.length;
+          collected.push(...lpItems);
+          if (collected.length >= need || lpItems.length < serverPageSize) break;
+        }
+        return collected.slice(offset, offset + pageSize);
+      }
       if (catalogId === 'movielens.watchlist') {
         return movielens.wishlist(credId, { page, pageSize });
       }

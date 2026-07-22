@@ -1044,7 +1044,7 @@ const MOVIELENS_SORT_OPTIONS = [
 const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogConfig, isOpen: boolean, onClose: () => void }) => {
   const { setConfig, catalogTTL } = useConfig();
   const [cacheTTL, setCacheTTL] = useState<number>(catalog.cacheTTL || catalogTTL);
-  const isWatchlist = catalog.id === 'movielens.watchlist';
+  const isWatchlist = catalog.id === 'movielens.watchlist' || catalog.id.startsWith('movielens.list.');
   const [sortBy, setSortBy] = useState<string>(catalog.metadata?.sortBy || 'prediction');
   const [sortDirection, setSortDirection] = useState<string>(catalog.metadata?.sortDirection || 'default');
   const [tags, setTags] = useState<string>(catalog.metadata?.tags || '');

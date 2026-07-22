@@ -1,6 +1,6 @@
 const axios: any = require('axios');
 const cheerio: any = require('cheerio');
-const { httpGet }: any = require('../utils/httpClient');
+const { httpGet, httpHead }: any = require('../utils/httpClient');
 const { cacheWrapGlobal }: any = require('./getCache');
 
 const imdbAxiosInstance = axios.create();
@@ -99,6 +99,27 @@ function getLogoFromImdb(imdbId: string): string | null {
         return null;
     }
     return `https://images.metahub.space/logo/medium/${imdbId}/img`;
+}
+
+const METAHUB_IMAGE_EXISTS_TTL = parseInt(process.env.METAHUB_IMAGE_EXISTS_TTL_SECONDS || '86400', 10);
+const METAHUB_IMAGE_HEAD_TIMEOUT = parseInt(process.env.METAHUB_IMAGE_HEAD_TIMEOUT_MS || '4000', 10);
+
+async function metahubImageExists(imdbId: string, type: 'logo' | 'poster' | 'background' = 'logo'): Promise<boolean> {
+    let url: string | null = null;
+    if (type === 'logo') url = getLogoFromImdb(imdbId);
+    else if (type === 'poster') url = getPosterFromImdb(imdbId);
+    else if (type === 'background') url = getBackgroundFromImdb(imdbId);
+    if (!url) {
+        return false;
+    }
+    return cacheWrapGlobal(`metahub-image-exists:${type}:${imdbId}`, async () => {
+        try {
+            const res = await httpHead(url, { timeout: METAHUB_IMAGE_HEAD_TIMEOUT });
+            return res.status >= 200 && res.status < 300;
+        } catch (error: any) {
+            return false;
+        }
+    }, METAHUB_IMAGE_EXISTS_TTL);
 }
 
 function getBackgroundFromImdb(imdbId: string): string | null {
@@ -481,6 +502,7 @@ export {
     scrapeSingleImdbResultByTitle,
     getMetaFromImdbIo,
     getLogoFromImdb,
+    metahubImageExists,
     getBackgroundFromImdb,
     getPosterFromImdb
 };
@@ -489,6 +511,7 @@ module.exports = {
     scrapeSingleImdbResultByTitle,
     getMetaFromImdbIo,
     getLogoFromImdb,
+    metahubImageExists,
     getBackgroundFromImdb,
     getPosterFromImdb
 };

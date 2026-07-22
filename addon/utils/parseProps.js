@@ -2857,7 +2857,11 @@ async function getMovieLogo({ tmdbId, tvdbId, imdbId, metaProvider, fallbackLogo
       }
     }
   }
-  
+
+  if (fallbackLogoUrl == null && imdbId && metaProvider != 'imdb' && await imdb.metahubImageExists(imdbId, 'logo')) {
+    return imdb.getLogoFromImdb(imdbId);
+  }
+
   return fallbackLogoUrl;
 }
 
@@ -3188,6 +3192,11 @@ async function getSeriesLogo({ tmdbId, tvdbId, imdbId, metaProvider, fallbackLog
       return imdb.getLogoFromImdb(imdbId);
     }
   }
+
+  if (fallbackLogoUrl == null && imdbId && metaProvider != 'imdb' && await imdb.metahubImageExists(imdbId, 'logo')) {
+    return imdb.getLogoFromImdb(imdbId);
+  }
+
   return fallbackLogoUrl;
 
 }

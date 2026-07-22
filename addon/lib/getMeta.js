@@ -1384,7 +1384,7 @@ async function buildTmdbMovieResponse(stremioId, movieData, language, config, us
   const tmdbLandscapePosterUrl = selectedLandscapePoster?.file_path ? `https://image.tmdb.org/t/p/original${selectedLandscapePoster?.file_path}` : null;
   const tmdbBackgroundUrl = selectedBg?.file_path ? `https://image.tmdb.org/t/p/original${selectedBg?.file_path}` : backdrop_path ? `https://image.tmdb.org/t/p/original${backdrop_path}` : null;
   const selectedLogo = Utils.selectTmdbImageByLang(images?.logos, config, 'iso_639_1', originalLanguage);
-  let tmdbLogoUrl = selectedLogo?.file_path ? `https://image.tmdb.org/t/p/original${selectedLogo?.file_path}` : imdbId ? imdb.getLogoFromImdb(imdbId) : null;
+  let tmdbLogoUrl = selectedLogo?.file_path ? `https://image.tmdb.org/t/p/original${selectedLogo?.file_path}` : null;
 
   let poster, background, logoUrl, imdbRatingValue, landscapePosterUrl;
 
@@ -1516,7 +1516,7 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
   const tmdbLandscapePosterUrl = selectedLandscapePoster?.file_path ? `https://image.tmdb.org/t/p/original${selectedLandscapePoster?.file_path}` : null;
   const tmdbBackgroundUrl = selectedBg?.file_path ? `https://image.tmdb.org/t/p/original${selectedBg?.file_path}` : backdrop_path ? `https://image.tmdb.org/t/p/original${backdrop_path}` : null;
   const selectedLogo = Utils.selectTmdbImageByLang(images?.logos, config, 'iso_639_1', originalLanguage);
-  let tmdbLogoUrl = selectedLogo?.file_path ? `https://image.tmdb.org/t/p/original${selectedLogo?.file_path}` : imdbId ? imdb.getLogoFromImdb(imdbId) : null;
+  let tmdbLogoUrl = selectedLogo?.file_path ? `https://image.tmdb.org/t/p/original${selectedLogo?.file_path}` : null;
   let poster, background, logoUrl, imdbRatingValue, landscapePosterUrl;
 
   const animeIdProviders = ['mal', 'anilist', 'kitsu', 'anidb'];
@@ -2035,7 +2035,7 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
   
   const { trailers } = Utils.parseTvdbTrailers(movieData.trailers, translatedName);
 
-  if(!logoUrl && imdbId){
+  if(!logoUrl && imdbId && await imdb.metahubImageExists(imdbId, 'logo')){
     logoUrl =  imdb.getLogoFromImdb(imdbId);
   }
 
@@ -2470,7 +2470,7 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
   }
   
   // Fallback to IMDB logo if logo is still missing (should work for both includeVideos=true and false)
-  if(!logoUrl && imdbId){
+  if(!logoUrl && imdbId && await imdb.metahubImageExists(imdbId, 'logo')){
     logoUrl =  imdb.getLogoFromImdb(imdbId);
   }
  
@@ -2765,7 +2765,7 @@ async function buildSeriesResponseFromTvmaze(stremioId, tvmazeShow, episodes, la
     }
   }
   videos = [... specialVideos, ... videos];
-  if(!logoUrl && imdbId){
+  if(!logoUrl && imdbId && await imdb.metahubImageExists(imdbId, 'logo')){
     logoUrl =  imdb.getLogoFromImdb(imdbId);
   }
 

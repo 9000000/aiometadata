@@ -18,6 +18,72 @@ const { getTvmazeScheduleCatalog } = require('./tvmazeScheduleCatalog');
 const buildInfo = require('./buildInfo');
 const crypto = require('crypto');
 const { runWithRequestContext } = require('./logBuffer.js');
+const posterCacheConfig = require('./posterCache/config.js');
+
+function collectWarmupTargets(metas, config, fallbackType, warmBase) {
+  const {
+    resolveCustomArtUrl,
+    resolvePosterPattern,
+    getPosterRatingApiKey,
+    isRatingPostersEnabled,
+  } = require('../utils/parseProps');
+
+  const ratingPostersEnabled = isRatingPostersEnabled(config);
+  const posterPattern = ratingPostersEnabled ? resolvePosterPattern(config) : null;
+  const proxyApiKey = ratingPostersEnabled && config.usePosterProxy ? getPosterRatingApiKey(config) : null;
+  const addonHost = process.env.HOST_NAME
+    ? (process.env.HOST_NAME.startsWith('http') ? process.env.HOST_NAME : `https://${process.env.HOST_NAME}`)
+    : '';
+  const selfOrigin = posterCacheConfig.getSelfOrigin();
+  const metaFieldClasses = posterCacheConfig.META_FIELD_CLASSES;
+  const cacheThumbnails = posterCacheConfig.isClassEnabled('thumbnail');
+  const cacheableFields = new Set(posterCacheConfig.getCacheableFields());
+  if (cacheThumbnails) cacheableFields.add('thumbnail');
+
+  const targets = [];
+  const addThirdParty = (url, imageClass, field) => {
+    if (!url || typeof url !== 'string' || !/^https?:\/\//i.test(url)) return;
+    if (selfOrigin && url.startsWith(selfOrigin)) return;
+    if (!cacheableFields.has(field || imageClass)) return;
+    targets.push(posterCacheConfig.buildCachedUrl(warmBase, imageClass, url));
+  };
+
+  for (const meta of metas) {
+    const ids = extractIdsFromWarmerMeta(meta);
+    const type = meta.type || fallbackType;
+    const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
+
+    if (posterPattern && proxyId) {
+      if (proxyApiKey) {
+        targets.push(`${addonHost}/poster/${type}/${proxyId}?fallback=${encodeURIComponent(meta.poster || '')}&lang=${config.language || 'en-US'}&key=${proxyApiKey}`);
+      } else {
+        const resolved = resolveCustomArtUrl(posterPattern, ids, type, config);
+        if (resolved) {
+          if (config.usePosterProxy) {
+            targets.push(`${addonHost}/poster/${type}/${proxyId}?fallback=${encodeURIComponent(meta.poster || '')}&url=${encodeURIComponent(resolved)}`);
+          } else {
+            addThirdParty(resolved, 'poster', 'poster');
+          }
+        }
+      }
+    } else if (meta.poster) {
+      addThirdParty(meta.poster, 'poster', 'poster');
+    }
+
+    for (const [field, imageClass] of Object.entries(metaFieldClasses)) {
+      if (field === 'poster') continue;
+      if (meta[field]) addThirdParty(meta[field], imageClass, field);
+    }
+
+    if (cacheThumbnails && Array.isArray(meta.videos)) {
+      for (const video of meta.videos) {
+        if (video?.thumbnail) addThirdParty(video.thumbnail, 'thumbnail', 'thumbnail');
+      }
+    }
+  }
+
+  return targets;
+}
 
 function extractIdsFromWarmerMeta(meta) {
   const ids = {};
@@ -193,6 +259,23 @@ class ComprehensiveCatalogWarmer {
 
   async delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /** HEADs each image URL in throttled batches so the cache fills without hammering upstreams. */
+  async warmImageTargets(targets, catalogId) {
+    const delayMs = parseInt(process.env.POSTER_WARMUP_DELAY_MS) || 50;
+    const concurrency = Math.max(1, parseInt(process.env.POSTER_WARMUP_CONCURRENCY) || 1);
+
+    let warmed = 0;
+    for (let i = 0; i < targets.length; i += concurrency) {
+      const batch = targets.slice(i, i + concurrency);
+      const results = await Promise.allSettled(
+        batch.map(url => fetch(url, { method: 'HEAD' }))
+      );
+      warmed += results.filter(r => r.status === 'fulfilled').length;
+      if (delayMs > 0) await this.delay(delayMs);
+    }
+    this.log('debug', `[Image Warming] Pre-warmed ${warmed}/${targets.length} images for catalog ${catalogId}`);
   }
 
   isQuietHours() {
@@ -764,54 +847,14 @@ class ComprehensiveCatalogWarmer {
 
           const rawMetaCount = result?.metas?.length || 0;
 
-          const posterWarmupUrl = (process.env.POSTER_WARMUP_URL || process.env.POSTER_PROXY_PREFIX_URL || '').replace(/\/+$/, '');
+          const posterWarmupUrl = posterCacheConfig.getPosterWarmupBase();
           if (posterWarmupUrl && rawMetaCount > 0) {
-            const { resolveCustomArtUrl, resolvePosterPattern, getPosterRatingApiKey, isRatingPostersEnabled } = require('../utils/parseProps');
-            const ratingPostersEnabled = isRatingPostersEnabled(config);
-            const posterPattern = ratingPostersEnabled ? resolvePosterPattern(config) : null;
-            const proxyApiKey = ratingPostersEnabled && config.usePosterProxy ? getPosterRatingApiKey(config) : null;
-            const addonHost = process.env.HOST_NAME ? (process.env.HOST_NAME.startsWith('http') ? process.env.HOST_NAME : `https://${process.env.HOST_NAME}`) : '';
-            const posterUrls = [];
-
-            for (const meta of result.metas) {
-              const ids = extractIdsFromWarmerMeta(meta);
-              const type = meta.type || catalog.type;
-              const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
-
-              if (posterPattern && proxyId) {
-                if (proxyApiKey) {
-                  posterUrls.push(`${addonHost}/poster/${type}/${proxyId}?fallback=${encodeURIComponent(meta.poster || '')}&lang=${config.language || 'en-US'}&key=${proxyApiKey}`);
-                } else {
-                  const resolved = resolveCustomArtUrl(posterPattern, ids, type, config);
-                  if (resolved) {
-                    if (config.usePosterProxy) {
-                      posterUrls.push(`${addonHost}/poster/${type}/${proxyId}?fallback=${encodeURIComponent(meta.poster || '')}&url=${encodeURIComponent(resolved)}`);
-                    } else {
-                      posterUrls.push(resolved);
-                    }
-                  }
-                }
-              } else if (meta.poster) {
-                posterUrls.push(meta.poster);
-              }
-            }
-
-            if (posterUrls.length > 0) {
-              const posterDelay = parseInt(process.env.POSTER_WARMUP_DELAY_MS) || 50;
-              const posterConcurrency = Math.max(1, parseInt(process.env.POSTER_WARMUP_CONCURRENCY) || 1);
+            const targets = collectWarmupTargets(result.metas, config, catalog.type, posterWarmupUrl);
+            if (targets.length > 0) {
               const pageCatalogId = catalogId;
-              posterWarmingChain = posterWarmingChain.then(async () => {
-                let warmed = 0;
-                for (let i = 0; i < posterUrls.length; i += posterConcurrency) {
-                  const batch = posterUrls.slice(i, i + posterConcurrency);
-                  const results = await Promise.allSettled(
-                    batch.map(url => fetch(`${posterWarmupUrl}/${url}`, { method: 'HEAD' }))
-                  );
-                  warmed += results.filter(r => r.status === 'fulfilled').length;
-                  if (posterDelay > 0) await new Promise(r => setTimeout(r, posterDelay));
-                }
-                this.log('debug', `[Poster Warming] Pre-warmed ${warmed} poster images for catalog ${pageCatalogId}`);
-              });
+              posterWarmingChain = posterWarmingChain.then(
+                () => this.warmImageTargets(targets, pageCatalogId)
+              );
             }
           }
 
@@ -849,53 +892,13 @@ class ComprehensiveCatalogWarmer {
 
         const rawMetaCount = result?.metas?.length || 0;
 
-        const posterWarmupUrl = (process.env.POSTER_WARMUP_URL || process.env.POSTER_PROXY_PREFIX_URL || '').replace(/\/+$/, '');
+        const posterWarmupUrl = posterCacheConfig.getPosterWarmupBase();
         if (posterWarmupUrl && rawMetaCount > 0) {
-          const { resolveCustomArtUrl, resolvePosterPattern, getPosterRatingApiKey, isRatingPostersEnabled } = require('../utils/parseProps');
-          const ratingPostersEnabled = isRatingPostersEnabled(config);
-          const posterPattern = ratingPostersEnabled ? resolvePosterPattern(config) : null;
-          const proxyApiKey = ratingPostersEnabled && config.usePosterProxy ? getPosterRatingApiKey(config) : null;
-          const addonHost = process.env.HOST_NAME ? (process.env.HOST_NAME.startsWith('http') ? process.env.HOST_NAME : `https://${process.env.HOST_NAME}`) : '';
-          const posterUrls = [];
-
-          for (const meta of result.metas) {
-            const ids = extractIdsFromWarmerMeta(meta);
-            const type = meta.type || catalog.type;
-            const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
-
-            if (posterPattern && proxyId) {
-              if (proxyApiKey) {
-                posterUrls.push(`${addonHost}/poster/${type}/${proxyId}?fallback=${encodeURIComponent(meta.poster || '')}&lang=${config.language || 'en-US'}&key=${proxyApiKey}`);
-              } else {
-                const resolved = resolveCustomArtUrl(posterPattern, ids, type, config);
-                if (resolved) {
-                  if (config.usePosterProxy) {
-                    posterUrls.push(`${addonHost}/poster/${type}/${proxyId}?fallback=${encodeURIComponent(meta.poster || '')}&url=${encodeURIComponent(resolved)}`);
-                  } else {
-                    posterUrls.push(resolved);
-                  }
-                }
-              }
-            } else if (meta.poster) {
-              posterUrls.push(meta.poster);
-            }
-          }
-
-          if (posterUrls.length > 0) {
-            const posterDelay = parseInt(process.env.POSTER_WARMUP_DELAY_MS) || 50;
-            const posterConcurrency = Math.max(1, parseInt(process.env.POSTER_WARMUP_CONCURRENCY) || 1);
-            posterWarmingChain = posterWarmingChain.then(async () => {
-              let warmed = 0;
-              for (let i = 0; i < posterUrls.length; i += posterConcurrency) {
-                const batch = posterUrls.slice(i, i + posterConcurrency);
-                const results = await Promise.allSettled(
-                  batch.map(url => fetch(`${posterWarmupUrl}/${url}`, { method: 'HEAD' }))
-                );
-                warmed += results.filter(r => r.status === 'fulfilled').length;
-                if (posterDelay > 0) await new Promise(r => setTimeout(r, posterDelay));
-              }
-              this.log('debug', `[Poster Warming] Pre-warmed ${warmed} poster images for catalog ${catalogId}`);
-            });
+          const targets = collectWarmupTargets(result.metas, config, catalog.type, posterWarmupUrl);
+          if (targets.length > 0) {
+            posterWarmingChain = posterWarmingChain.then(
+              () => this.warmImageTargets(targets, catalogId)
+            );
           }
         }
 
@@ -1346,4 +1349,3 @@ module.exports = {
   forceRestartWarmup,
   stopComprehensiveWarming
 };
-

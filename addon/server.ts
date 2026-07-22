@@ -17,17 +17,11 @@ import database from './lib/database.js';
 import consola from 'consola';
 import { installLogReporter } from './lib/logBuffer.js';
 import { initializeSettings } from './lib/settingsService.js';
+import { getPosterProxyPrefix, isBuiltinPosterCacheEnabled } from './lib/posterCache/config.js';
+import { runNginxImport } from './lib/posterCache/nginxImport.js';
+import * as posterCacheStore from './lib/posterCache/store.js';
 
 installLogReporter();
-
-if (/^(1|true|yes|on)$/i.test(process.env.ENABLE_BUILTIN_POSTER_CACHE || '')) {
-  try {
-    const { startPosterCacheLogReader } = require('./lib/posterCacheLogReader.js');
-    startPosterCacheLogReader();
-  } catch (e: any) {
-    consola.warn('[PosterCacheLogs] failed to start log reader:', e?.message);
-  }
-}
 
 const PORT: number = parseInt(process.env.PORT || '3232', 10);
  
@@ -54,6 +48,20 @@ async function startServer(): Promise<void> {
   consola.success('Database initialization complete.');
 
   await initializeSettings();
+
+  // After initializeSettings(), so a cache enabled from the dashboard (stored in
+  // the DB rather than the environment) is picked up on the next start.
+  if (isBuiltinPosterCacheEnabled()) {
+    await posterCacheStore.init();
+    if (!getPosterProxyPrefix()) {
+      consola.warn(
+        '[PosterCache] Enabled, but no public URL could be derived: set HOST_NAME (or POSTER_PROXY_PREFIX_URL). ' +
+        'Images will be served directly from upstream and nothing will be cached.'
+      );
+    }
+    // Background: importing a large nginx cache must not delay serving.
+    runNginxImport().catch((e: any) => consola.warn('[PosterCache] nginx import failed:', e?.message));
+  }
 
   const redisReady = await waitForRedisReady();
   if (redisReady) {

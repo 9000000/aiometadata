@@ -31,6 +31,7 @@ import {
   useClearErrorLogs,
   usePurgePosterCache,
   usePosterCacheStats,
+  useInvalidateCachedImage,
   type DashboardTab,
 } from "@/hooks/useDashboardQueries";
 import { AnimatedNumber } from "../AnimatedNumber";
@@ -38,6 +39,15 @@ import { AnimatedNumber } from "../AnimatedNumber";
 const formatBytes = (bytes: number): string => {
   if (!bytes || bytes === 0) return "0 MB";
   return Math.round(bytes / 1024 / 1024) + " MB";
+};
+
+const IMAGE_TYPE_LABELS: Record<string, string> = {
+  poster: "Posters",
+  background: "Backgrounds",
+  landscape: "Landscape Posters",
+  logo: "Logos",
+  thumbnail: "Episode Thumbnails",
+  processed: "Processed Images",
 };
 
 export function DashboardOperations({ data, loading, activeTab }: { data: any; loading: boolean; activeTab: DashboardTab }) {
@@ -49,6 +59,7 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
   const clearErrorsMutation = useClearErrorLogs();
   const purgePosterCacheMutation = usePurgePosterCache();
   const posterCacheStatsQuery = usePosterCacheStats({ activeTab });
+  const invalidateImageMutation = useInvalidateCachedImage();
 
   const [cacheStats, setCacheStats] = useState(() => {
     if (data?.cacheStats) {
@@ -171,15 +182,50 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
     });
   };
 
-  const handlePurgePosterCache = () => {
-    purgePosterCacheMutation.mutate(undefined, {
-      onSuccess: () => {
-        toast.success("Poster Cache Purge Scheduled", { description: "Cache will be cleared within 30 seconds." });
-        setTimeout(() => posterCacheStatsQuery.refetch(), 35000);
+  const [purgingType, setPurgingType] = useState<string | null>(null);
+  const [refreshUrl, setRefreshUrl] = useState("");
+
+  const handleRefreshImage = () => {
+    const url = refreshUrl.trim();
+    if (!url) return;
+    invalidateImageMutation.mutate(url, {
+      onSuccess: (result) => {
+        if (result?.removed?.length) {
+          toast.success("Image Refreshed", { description: result.message });
+          setRefreshUrl("");
+        } else {
+          // Not an error: the next request will fetch it fresh either way.
+          toast.info("Not Cached", { description: result?.message || "That image was not in the cache." });
+        }
       },
       onError: (error) => {
-        toast.error("Poster Cache Purge Failed", { description: error.message });
+        toast.error("Refresh Failed", { description: error.message });
       },
+    });
+  };
+
+  const handlePurgePosterCache = (type?: string) => {
+    if (type && !window.confirm(`Clear all cached ${IMAGE_TYPE_LABELS[type] || type} images? They will be re-fetched on demand.`)) {
+      return;
+    }
+    setPurgingType(type ?? "all");
+    purgePosterCacheMutation.mutate(type, {
+      onSuccess: (result) => {
+        const label = type ? (IMAGE_TYPE_LABELS[type] || type) : "All images";
+        if (typeof result?.freed_bytes === "number") {
+          // Built-in cache purges synchronously and reports what it reclaimed.
+          toast.success("Image Cache Cleared", { description: `${label}: ${formatBytes(result.freed_bytes)} freed.` });
+          posterCacheStatsQuery.refetch();
+        } else {
+          // Standalone nginx clears on its own polling interval.
+          toast.success("Poster Cache Purge Scheduled", { description: "Cache will be cleared within 30 seconds." });
+          setTimeout(() => posterCacheStatsQuery.refetch(), 35000);
+        }
+      },
+      onError: (error) => {
+        toast.error("Image Cache Purge Failed", { description: error.message });
+      },
+      onSettled: () => setPurgingType(null),
     });
   };
 
@@ -288,7 +334,7 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
           <CardHeader className="pb-3">
             <div className="flex items-center gap-2">
               <Image className="h-5 w-5" />
-              <CardTitle>Poster Cache</CardTitle>
+              <CardTitle>Image Cache</CardTitle>
             </div>
           </CardHeader>
           <CardContent className="pt-0">
@@ -308,27 +354,90 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
                     <p className="text-lg font-semibold">{posterCacheStatsQuery.data.max_size}</p>
                   </div>
                 </div>
+
+                {/* Per-type breakdown. Absent when an external proxy serves the
+                    cache, since it cannot report which class an image belongs to. */}
+                {posterCacheStatsQuery.data.by_type && Object.keys(posterCacheStatsQuery.data.by_type).length > 0 && (
+                  <div className="mt-4 pt-3 border-t space-y-1">
+                    {Object.entries(posterCacheStatsQuery.data.by_type as Record<string, any>).map(([type, stats]) => (
+                      <div key={type} className="flex items-center justify-between gap-3 text-sm py-1">
+                        <span className="font-medium">{IMAGE_TYPE_LABELS[type] || type}</span>
+                        <div className="flex items-center gap-3">
+                          <span className="text-muted-foreground tabular-nums">
+                            {stats.count.toLocaleString()} · {stats.human}
+                          </span>
+                          <Button
+                            onClick={() => handlePurgePosterCache(type)}
+                            variant="ghost"
+                            size="sm"
+                            disabled={purgePosterCacheMutation.isPending}
+                            className="h-7 px-2 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
+                          >
+                            {purgePosterCacheMutation.isPending && purgingType === type ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3.5 w-3.5" />
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Refresh one image — a stale URL should not require wiping a whole class. */}
+                {posterCacheStatsQuery.data.by_type && (
+                  <div className="mt-4 pt-3 border-t">
+                    <label htmlFor="refresh-image-url" className="text-xs text-muted-foreground">
+                      Refresh a single image
+                    </label>
+                    <div className="flex gap-2 mt-1.5">
+                      <input
+                        id="refresh-image-url"
+                        type="text"
+                        value={refreshUrl}
+                        onChange={(e) => setRefreshUrl(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleRefreshImage(); }}
+                        placeholder="Paste an image or /poster-cache/ URL"
+                        className="flex-1 min-w-0 rounded-md border bg-background px-2.5 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      />
+                      <Button
+                        onClick={handleRefreshImage}
+                        variant="outline"
+                        size="sm"
+                        disabled={!refreshUrl.trim() || invalidateImageMutation.isPending}
+                      >
+                        {invalidateImageMutation.isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          "Refresh"
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex justify-center mt-3 pt-3 border-t">
                   <Button
-                    onClick={handlePurgePosterCache}
+                    onClick={() => handlePurgePosterCache()}
                     variant="outline"
                     size="sm"
                     disabled={purgePosterCacheMutation.isPending}
                     className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
                   >
-                    {purgePosterCacheMutation.isPending ? (
+                    {purgePosterCacheMutation.isPending && purgingType === "all" ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
                       <>
                         <Trash2 className="h-4 w-4 mr-1.5" />
-                        Purge Poster Cache
+                        Clear All Images
                       </>
                     )}
                   </Button>
                 </div>
               </>
             ) : (
-              <p className="text-sm text-muted-foreground">Poster cache not configured or unreachable.</p>
+              <p className="text-sm text-muted-foreground">Image cache not configured or unreachable.</p>
             )}
           </CardContent>
         </Card>

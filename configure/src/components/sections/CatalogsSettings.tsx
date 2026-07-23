@@ -1056,6 +1056,10 @@ const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catalo
   const [maxDaysAgo, setMaxDaysAgo] = useState<string>(catalog.metadata?.maxDaysAgo ? String(catalog.metadata.maxDaysAgo) : '');
   const [displayName, setDisplayName] = useState<string>(catalog.name || '');
 
+  useEffect(() => {
+    if (isOpen) setDisplayName(catalog.name || '');
+  }, [isOpen, catalog.name]);
+
   const handleSave = () => {
     const minYearNum = parseInt(minYear, 10);
     const maxYearNum = parseInt(maxYear, 10);

@@ -2662,23 +2662,24 @@ async function getMovieLensCatalog(
       : parseInt(process.env.MOVIELENS_CATALOG_TTL_SECONDS || '3600', 10);
     const genreName = genre && genre.toLowerCase() !== 'none' ? genre.toLowerCase() : undefined;
 
+    const isList = catalogId.startsWith('movielens.list.');
+    const isExplore = !isList && catalogId !== 'movielens.watchlist';
+
     const metadata: any = catalogConfig?.metadata || {};
     const sortBy = metadata.sortBy || 'prediction';
     const minYear = metadata.minYear;
     const maxYear = metadata.maxYear;
     const minPop = metadata.minPop ?? (sortBy === 'avgRating' ? 100 : sortBy === 'releaseDate' ? 20 : undefined);
     const maxDaysAgo = metadata.maxDaysAgo;
-    // maxDaysAgo bounds only the past edge; pair it so future titles are excluded.
+    // always exclude unreleased titles from "explore" catalogs.
     const maxFutureDays = metadata.maxFutureDays
-      ?? ((maxDaysAgo || sortBy === 'releaseDate') ? 0 : undefined);
+      ?? (isExplore ? 0 : undefined);
     const sortDirection = metadata.sortDirection;
     const includeRated = metadata.includeRated === true;
     let tag = String(metadata.tags || '')
       .split(',').map((s: string) => s.trim()).filter(Boolean).join(',') || undefined;
 
-    const isList = catalogId.startsWith('movielens.list.');
-
-    if (!tag && !isList && catalogId !== 'movielens.watchlist') {
+    if (!tag && isExplore) {
       const metaTtl = parseInt(
         process.env.MOVIELENS_USERMETA_TTL_SECONDS || process.env.MOVIELENS_GROUPTAGS_TTL_SECONDS || '43200', 10);
       const userMeta: any = await cacheWrapGlobal(`movielens-usermeta:${credId}`,

@@ -405,7 +405,8 @@ function classifyResult(result: any, error: any = null, cacheKey: string | null 
     cacheKey.includes('mdblist_') ||
     cacheKey.includes('stremthru-') ||
     cacheKey.includes('cinemeta-') ||
-    cacheKey.includes('flixpatrol-')
+    cacheKey.includes('flixpatrol-') ||
+    cacheKey.includes('movielens-')
   );
 
   if (isExternalApi) {

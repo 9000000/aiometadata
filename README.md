@@ -181,15 +181,21 @@ On startup the addon detects the old cache and imports it in the background, so 
 
 Files it cannot parse are skipped, never imported as corrupt entries.
 
-**Let it finish before restarting.** The completion marker is only written at the end, so restarting mid-import starts it over — a large cache can take a while (a ~9 GB / 80k-image cache is tens of minutes). It is safe to remove the `/var/cache/nginx` mount once `.nginx-import.json` exists in the cache directory:
+**Let it finish before restarting.** The completion marker is only written at the end, so restarting mid-import starts it over. When it finishes the log tells you directly:
+
+```
+[PosterCacheImport] Imported 81133 images from the old nginx cache (2 skipped)
+in 257958ms. You can now remove the /var/cache/nginx/posters volume mount.
+```
+
+That is a real run: ~9 GB / 81k images took about 4 minutes. You can also check for the marker, which records the counts:
 
 ```bash
-docker exec <container> cat /app/addon/data/poster-cache/.nginx-import.json
+docker exec <container> cat /app/addon/data/poster-cache/.nginx-import-completed
 ```
 
 To skip the import entirely, set `POSTER_CACHE_IMPORT_NGINX_DIR=off`. To import from a non-standard path, set it to that path.
 
-> **Only posters are cached by default.** `ENABLE_BUILTIN_POSTER_CACHE` alone caches the `poster` class — everything else returns `X-Cache-Status: BYPASS` until you opt it in with `POSTER_CACHE_BACKGROUNDS`, `POSTER_CACHE_LOGOS`, `POSTER_CACHE_LANDSCAPE_POSTERS`, `POSTER_CACHE_THUMBNAILS`, or `POSTER_CACHE_PROCESSED_IMAGES`.
 
 #### Option B — Standalone nginx service
 

@@ -1,6 +1,6 @@
 const consola: any = require('consola');
 const redis: any = require('./redisClient');
-const lz: any = require('lz-string');
+const { encodeCachePayload, decodeCachePayload }: any = require('./cacheCodec');
 
 const logger: any = consola.withTag('ConfigCache');
 
@@ -11,6 +11,9 @@ function parsePositiveIntEnv(envValue: string | undefined, defaultValue: number,
 }
 
 function CONFIG_CACHE_TTL_SEC() { return parsePositiveIntEnv(process.env.CONFIG_CACHE_TTL_SEC, 300, 10); }
+function isConfigCacheCompressionEnabled(): boolean {
+  return process.env.CONFIG_CACHE_COMPRESSION_ENABLED !== 'false';
+}
 const KEY_PREFIX = 'user-config:';
 
 function redisKey(id: string): string {
@@ -23,8 +26,8 @@ class ConfigCache {
   async get(key: string): Promise<any> {
     if (!redis || redis.status !== 'ready') return null;
     try {
-      const raw = await redis.get(redisKey(key));
-      return raw ? JSON.parse(lz.decompressFromUTF16(raw)) : null;
+      const raw = await redis.getBuffer(redisKey(key));
+      return raw ? await decodeCachePayload(raw) : null;
     } catch (err: any) {
       logger.warn(`get failed for ${String(key).substring(0, 8)}...: ${err.message}`);
       return null;
@@ -34,8 +37,10 @@ class ConfigCache {
   async set(key: string, value: any): Promise<void> {
     if (!redis || redis.status !== 'ready' || value === undefined) return;
     try {
-      const compressed = lz.compressToUTF16(JSON.stringify(value));
-      await redis.set(redisKey(key), compressed, 'EX', CONFIG_CACHE_TTL_SEC());
+      const payload = await encodeCachePayload(value, {
+        compressionEnabled: isConfigCacheCompressionEnabled(),
+      });
+      await redis.set(redisKey(key), payload, 'EX', CONFIG_CACHE_TTL_SEC());
     } catch (err: any) {
       logger.warn(`set failed for ${String(key).substring(0, 8)}...: ${err.message}`);
     }

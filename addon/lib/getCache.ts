@@ -876,53 +876,39 @@ function buildMetaComponentCacheKeys({ config, metaId, type, useShowPoster = fal
     providerOptions: ctx.providerOptions,
   };
 
-  const basicProfile = {
-    ...commonProvider,
-  };
-  const posterProfile = {
+  const commonHash = hashProfile(commonProvider);
+  const posterHash = hashProfile({
     ...artCommon,
     artProvider: ctx.artProvider.poster,
     useShowPosterForUpNext: !!ctx.useShowPoster,
-  };
-  const backgroundProfile = {
+  });
+  const backgroundHash = hashProfile({
     ...artCommon,
     artProvider: ctx.artProvider.background,
-  };
-  const logoProfile = {
+  });
+  const logoHash = hashProfile({
     ...artCommon,
     artProvider: ctx.artProvider.logo,
-  };
-  const videosProfile = {
+  });
+  const videosHash = hashProfile({
     ...commonProvider,
     videoOptions: ctx.videoOptions,
-  };
-  const creditsProfile = {
-    ...commonProvider,
-  };
-  const linksProfile = {
-    ...commonProvider,
-  };
-  const trailersProfile = {
-    ...commonProvider,
-  };
-  const extrasProfile = {
-    ...commonProvider,
-  };
+  });
 
   return {
-    basic: `meta-basic:${hashProfile(basicProfile)}:${metaId}`,
-    poster: `meta-poster:${hashProfile(posterProfile)}:${metaId}`,
-    rawPoster: `meta-raw-poster:${hashProfile(posterProfile)}:${metaId}`,
-    background: `meta-background:${hashProfile(backgroundProfile)}:${metaId}`,
-    landscapePoster: `meta-landscape-poster:${hashProfile(backgroundProfile)}:${metaId}`,
-    logo: `meta-logo:${hashProfile(logoProfile)}:${metaId}`,
-    videos: `meta-videos:${hashProfile(videosProfile)}:${metaId}`,
-    cast: `meta-cast:${hashProfile(creditsProfile)}:${metaId}`,
-    director: `meta-director:${hashProfile(creditsProfile)}:${metaId}`,
-    writer: `meta-writer:${hashProfile(creditsProfile)}:${metaId}`,
-    links: `meta-links:${hashProfile(linksProfile)}:${metaId}`,
-    trailers: `meta-trailers:${hashProfile(trailersProfile)}:${metaId}`,
-    extras: `meta-extras:${hashProfile(extrasProfile)}:${metaId}`,
+    basic: `meta-basic:${commonHash}:${metaId}`,
+    poster: `meta-poster:${posterHash}:${metaId}`,
+    rawPoster: `meta-raw-poster:${posterHash}:${metaId}`,
+    background: `meta-background:${backgroundHash}:${metaId}`,
+    landscapePoster: `meta-landscape-poster:${backgroundHash}:${metaId}`,
+    logo: `meta-logo:${logoHash}:${metaId}`,
+    videos: `meta-videos:${videosHash}:${metaId}`,
+    cast: `meta-cast:${commonHash}:${metaId}`,
+    director: `meta-director:${commonHash}:${metaId}`,
+    writer: `meta-writer:${commonHash}:${metaId}`,
+    links: `meta-links:${commonHash}:${metaId}`,
+    trailers: `meta-trailers:${commonHash}:${metaId}`,
+    extras: `meta-extras:${commonHash}:${metaId}`,
   };
 }
 

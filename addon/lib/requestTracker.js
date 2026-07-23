@@ -106,6 +106,7 @@ class RequestTracker {
       "/api/config",
       "/api/test-keys",
       "/health",
+      "/poster-cache",
       "/favicon.ico",
       "/background.png",
       "/logo.png",

@@ -1740,7 +1740,11 @@ async function getAnimeLogo({ malId, imdbId, tvdbId, tmdbId, mediaType = 'series
 
   if (artProvider === 'imdb' && imdbId) {
     try {
-      return imdb.getLogoFromImdb(imdbId);
+      // Only serve a metahub logo we know exists, so anime titles without one
+      // fall through to the next provider instead of getting a 404 URL.
+      if (await imdb.metahubImageExists(imdbId, 'logo')) {
+        return imdb.getLogoFromImdb(imdbId);
+      }
     } catch (error) {
       logger.warn(`[getAnimeLogo] IMDB logo fetch failed for MAL ID ${malId}:`, error.message);
     }
@@ -2848,11 +2852,14 @@ async function getMovieLogo({ tmdbId, tvdbId, imdbId, metaProvider, fallbackLogo
     }
   }
   else if (artProvider === 'imdb' && metaProvider != 'imdb') {
+    // Same guard as the fallback below: only serve a metahub logo we know exists.
     if(imdbId) {
-      return imdb.getLogoFromImdb(imdbId);
+      if (await imdb.metahubImageExists(imdbId, 'logo')) {
+        return imdb.getLogoFromImdb(imdbId);
+      }
     } else if(tvdbId) {
       const mappedIds = await resolveAllIds(`tvdb:${tvdbId}`, 'movie', config);
-      if(mappedIds.imdbId) {
+      if(mappedIds.imdbId && await imdb.metahubImageExists(mappedIds.imdbId, 'logo')) {
         return imdb.getLogoFromImdb(mappedIds.imdbId);
       }
     }
@@ -3188,7 +3195,10 @@ async function getSeriesLogo({ tmdbId, tvdbId, imdbId, metaProvider, fallbackLog
     }
   }
   else if ((artProvider === 'imdb' || fallbackLogoUrl === null) && metaProvider != 'imdb') {
-    if(imdbId) {
+    // Must verify existence here too: this branch's condition is a superset of the
+    // check below, so returning unconditionally would shadow it and serve a URL
+    // that 404s whenever metahub has no logo for the title.
+    if(imdbId && await imdb.metahubImageExists(imdbId, 'logo')) {
       return imdb.getLogoFromImdb(imdbId);
     }
   }
@@ -3201,99 +3211,7 @@ async function getSeriesLogo({ tmdbId, tvdbId, imdbId, metaProvider, fallbackLog
 
 }
 
-/**
- * Convert banner image to background image using the image processing API
- * @param {string} bannerUrl - Original banner image URL
- * @param {Object} options - Processing options
- * @param {number} options.width - Target width (default: 1920)
- * @param {number} options.height - Target height (default: 1080)
- * @param {number} options.blur - Blur amount (default: 0)
- * @param {number} options.brightness - Brightness adjustment (default: 1)
- * @param {number} options.contrast - Contrast adjustment (default: 1)
- * @returns {string} Processed background image URL
- */
-function convertBannerToBackgroundUrl(bannerUrl, options = {}) {
-  if (!bannerUrl) return null;
-  
-  const {
-    width = 1920,
-    height = 1080,
-    blur = 0,
-    brightness = 1,
-    contrast = 1
-  } = options;
 
-  const host = process.env.HOST_NAME.startsWith('http')
-    ? process.env.HOST_NAME
-    : `https://${process.env.HOST_NAME}`;
-
-  // Build the query parameters
-  const params = new URLSearchParams({
-    url: bannerUrl,
-    width: width.toString(),
-    height: height.toString(),
-    blur: blur.toString(),
-    brightness: brightness.toString(),
-    contrast: contrast.toString()
-  });
-
-  return `${host}/api/image/banner-to-background?${params.toString()}`;
-}
-
-/**
- * Smart background image processor that automatically converts banners to backgrounds
- * @param {string} imageUrl - Original image URL
- * @param {string} imageType - Type of image: 'banner', 'poster', 'background'
- * @param {Object} options - Processing options
- * @returns {string} Processed image URL
- */
-function processBackgroundImage(imageUrl, imageType = 'background', options = {}) {
-  if (!imageUrl) return null;
-
-  // If it's already a background image, return as is
-  if (imageType === 'background') {
-    return imageUrl;
-  }
-
-  // If it's a banner, convert to background
-  if (imageType === 'banner') {
-    return convertBannerToBackgroundUrl(imageUrl, {
-      blur: 2, // Slight blur for better text readability
-      brightness: 0.9, // Slightly darker
-      ...options
-    });
-  }
-
-  // If it's a poster, convert to background with more processing
-  if (imageType === 'poster') {
-    return convertBannerToBackgroundUrl(imageUrl, {
-      blur: 3, // More blur for posters
-      brightness: 0.8, // Darker for better contrast
-      ...options
-    });
-  }
-
-  return imageUrl;
-}
-
-/**
- * Convert AniList banner image to background image
- * @param {string} bannerUrl - AniList banner image URL
- * @param {Object} options - Processing options
- * @returns {string} Processed background image URL
- */
-function convertAnilistBannerToBackground(bannerUrl, options = {}) {
-  if (!bannerUrl) return null;
-  
-  return convertBannerToBackgroundUrl(bannerUrl, {
-    width: 1920,
-    height: 1080,
-    blur: 0.5, // Minimal blur to preserve image quality
-    brightness: 0.98, // Keep original brightness
-    contrast: 1.05, // Very slight contrast boost
-    ...options
-  });
-}
 
 // Helper for language fallback selection from TMDB images
 function selectTmdbImageByLang(images, config, key = 'iso_639_1', originalLanguage = null) {
@@ -3490,8 +3408,6 @@ module.exports = {
   getSeriesLogo,
   getTmdbSeriesArtBatch,
   selectTmdbImageByLang,
-  processBackgroundImage,
-  convertAnilistBannerToBackground,
   getTmdbMovieCertificationForCountry,
   getTmdbTvCertificationForCountry,
   resolveArtProvider,

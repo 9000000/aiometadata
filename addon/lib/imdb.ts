@@ -110,6 +110,7 @@ async function metahubImageExists(imdbId: string, type: 'logo' | 'poster' | 'bac
         return false;
     }
     const ttl = parseInt(process.env.METAHUB_IMAGE_EXISTS_TTL_SECONDS || '86400', 10);
+    const errorTtl = parseInt(process.env.METAHUB_IMAGE_ERROR_TTL_SECONDS || '300', 10);
     const timeout = parseInt(process.env.METAHUB_IMAGE_HEAD_TIMEOUT_MS || '4000', 10);
     // array sentinel, not a bare boolean: bare booleans cache as EMPTY_RESULT (60s)
     const cached = await cacheWrapGlobal(`metahub-image-exists:${type}:${imdbId}`, async () => {
@@ -117,9 +118,15 @@ async function metahubImageExists(imdbId: string, type: 'logo' | 'poster' | 'bac
             const res = await httpHead(url, { timeout });
             return [res.status >= 200 && res.status < 300 ? 1 : 0];
         } catch (error: any) {
-            return [0];
+            const status = error?.response?.status;
+            return typeof status === 'number' ? [0] : [0, 'unknown'];
         }
-    }, ttl);
+    }, ttl, {
+        resultClassifier: (result: any) =>
+            Array.isArray(result) && result[1] === 'unknown'
+                ? { type: 'TEMPORARY_ERROR', ttl: errorTtl }
+                : { type: 'SUCCESS', ttl: null },
+    });
     return Array.isArray(cached) ? cached[0] === 1 : !!cached;
 }
 

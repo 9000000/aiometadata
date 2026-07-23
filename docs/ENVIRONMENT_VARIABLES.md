@@ -136,6 +136,12 @@ cp .env.example .env
 - **Description**: Redirect URI for Trakt OAuth. Must match the value set in your Trakt app settings.
 - **Example**: `TRAKT_REDIRECT_URI=https://your-domain.com/api/auth/trakt/callback`
 
+### `TRAKT_OAUTH_STATE_TTL_MS`
+- **Required**: No
+- **Default**: `600000` (10 minutes)
+- **Description**: Lifetime in milliseconds of the HMAC-signed Trakt OAuth state. The state is verified with `TRAKT_CLIENT_SECRET`, so authorize and callback requests can be handled by different replicas without shared state storage.
+- **Security note**: The stateless state provides integrity and expiration but is replayable until it expires. Trakt authorization codes remain one-time at the provider; strict one-time state consumption requires shared storage or browser-session binding.
+
 ### `SIMKL_CLIENT_ID`
 - **Required for SimKL integration**: Yes
 - **Description**: SimKL API client ID for enabling SimKL account integration (watchlists, trending catalogs, etc.)
@@ -636,6 +642,105 @@ Powers personalized recommendation catalogs backed by a user's own MovieLens acc
 - **Default**: `4000`
 - **Description**: Timeout for the metahub image existence HEAD request, in milliseconds. A miss falls through to the configured provider's artwork, so a low value trades fallback coverage for latency.
 - **Example**: `METAHUB_IMAGE_HEAD_TIMEOUT_MS=2000`
+
+---
+
+## Built-in Image Cache
+
+Caches artwork on disk and serves it from `/poster-cache` on the addon's own port — no extra container, port, or volume. Images live under `addon/data/poster-cache`, inside the data volume that is already mounted.
+
+### `ENABLE_BUILTIN_POSTER_CACHE`
+- **Default**: `false`
+- **Description**: Turns the image cache on. Requires a restart. Posters are cached immediately; every other image class is opt-in below, so enabling this never changes disk usage unexpectedly. Each replica in a multi-replica deployment keeps its own independent cache.
+- **Example**: `ENABLE_BUILTIN_POSTER_CACHE=true`
+
+### `POSTER_CACHE_BACKGROUNDS`
+- **Default**: `false`
+- **Description**: Also cache background artwork. These are the largest images the addon serves, so this is the largest bandwidth saving.
+- **Example**: `POSTER_CACHE_BACKGROUNDS=true`
+
+### `POSTER_CACHE_LANDSCAPE_POSTERS`
+- **Default**: `false`
+- **Description**: Also cache landscape poster artwork. Note that landscape *catalog* art travels in the ordinary poster field and is already covered by the default.
+- **Example**: `POSTER_CACHE_LANDSCAPE_POSTERS=true`
+
+### `POSTER_CACHE_LOGOS`
+- **Default**: `false`
+- **Description**: Also cache logo artwork. Many small files.
+- **Example**: `POSTER_CACHE_LOGOS=true`
+
+### `POSTER_CACHE_THUMBNAILS`
+- **Default**: `false`
+- **Description**: Also cache episode thumbnails. By far the most numerous class — one long-running series can contribute hundreds of images — so expect disk usage to grow quickly.
+- **Example**: `POSTER_CACHE_THUMBNAILS=true`
+
+### `POSTER_CACHE_PROCESSED_IMAGES`
+- **Default**: `false`
+- **Description**: Cache the rendered output of `/api/image/blur` and `/api/image/banner-to-background`, plus the `/poster`, `/logo` and `/background` proxy routes. Without this, every request re-runs the image transform. Most useful with blurred episode thumbnails or a rating-poster provider, which is what drives these routes.
+- **Example**: `POSTER_CACHE_PROCESSED_IMAGES=true`
+
+### `POSTER_CACHE_MAX_SIZE`
+- **Default**: `10g`
+- **Description**: Total **disk** budget. Once exceeded, least-recently-used images are evicted across all classes until usage drops to 90% of the limit. Accepts nginx-style sizes (`512m`, `10g`).
+- **Example**: `POSTER_CACHE_MAX_SIZE=25g`
+
+### `POSTER_CACHE_MEMORY_SIZE`
+- **Default**: `128m`
+- **Description**: **RAM** budget for the hottest images, layered in front of the disk cache. A memory hit skips both the disk read and the per-request buffer allocation that goes with it, which lowers GC pressure and resident memory even though the tier itself holds images. Evicts least-recently-used once the budget is reached, and only admits images below `POSTER_CACHE_STREAM_THRESHOLD` — caching large artwork in RAM would defeat the point of streaming it.
+
+  **Set to `0` to disable the tier and serve every hit from disk.** Do that on memory-constrained hosts; the cache keeps working exactly as before, just without the RAM layer.
+
+  This is *in addition to* the addon's own footprint, so budget roughly `baseline + POSTER_CACHE_MEMORY_SIZE`. The benefit is largest when the disk cache is too big for the OS page cache to absorb; if the whole cache already fits in free RAM, the operating system is effectively doing this for you.
+- **Example**: `POSTER_CACHE_MEMORY_SIZE=512m` or `POSTER_CACHE_MEMORY_SIZE=0`
+
+### `POSTER_CACHE_INACTIVE_DAYS`
+- **Default**: `30`
+- **Description**: Images not requested within this many days are swept hourly.
+- **Example**: `POSTER_CACHE_INACTIVE_DAYS=14`
+
+### `POSTER_CACHE_MAX_OBJECT_BYTES`
+- **Default**: `20m`
+- **Description**: Images larger than this are passed through to the client uncached (`X-Cache-Status: BYPASS`) rather than stored, so one oversized asset cannot consume the whole budget. Enforced from `Content-Length` where the upstream sends one, and while reading otherwise.
+- **Example**: `POSTER_CACHE_MAX_OBJECT_BYTES=50m`
+
+### `POSTER_CACHE_FETCH_CONCURRENCY`
+- **Default**: `128`
+- **Description**: Ceiling on simultaneous downloads of uncached images. Each in-flight fetch briefly holds a whole image in memory, so this is what bounds peak memory during a burst of cache misses — without it, memory would scale with concurrent requests. Requests for images already being fetched are coalesced and do not consume a slot. Lower it on memory-constrained hosts; raise it on a busy public instance with a cold cache.
+- **Example**: `POSTER_CACHE_FETCH_CONCURRENCY=32`
+
+### `POSTER_CACHE_STREAM_THRESHOLD`
+- **Default**: `256k`
+- **Description**: Cached images larger than this are streamed from disk rather than read into memory, so a burst of concurrent hits on large artwork cannot pile whole images onto the heap. Smaller images take a faster single-read path.
+- **Example**: `POSTER_CACHE_STREAM_THRESHOLD=512k`
+
+### `POSTER_CACHE_LOG_REQUESTS`
+- **Default**: `false`
+- **Description**: Logs every image request. Off by default: at a few thousand images per second it fills the shared log buffer within seconds and evicts everything else, exactly when you need those other logs. A one-line summary (`served N images (X% hit) …`) is written each minute regardless, and errors are always logged.
+- **Example**: `POSTER_CACHE_LOG_REQUESTS=true`
+
+### `POSTER_CACHE_DIR`
+- **Default**: `addon/data/poster-cache`
+- **Description**: Where cached images are stored. Requires a restart.
+- **Example**: `POSTER_CACHE_DIR=/mnt/fast-disk/image-cache`
+
+### `POSTER_CACHE_IMPORT_NGINX_DIR`
+- **Default**: empty (auto-detect)
+- **Description**: Source directory for the one-time import of a cache built by the old bundled nginx proxy, so upgrading does not discard a warm cache.
+
+  **You normally do not need to set this.** On startup the addon looks for the old cache at its known location (`/var/cache/nginx/posters`, then `/var/cache/nginx`) and imports it automatically if found — just leave that volume mounted for one start. A marker file in the cache directory records the result so it never runs twice, even if the old volume stays mounted or gains new files. Files that cannot be parsed are skipped, never imported as corrupt entries.
+
+  Set it to a path only if your old cache lived somewhere non-standard. Set it to `off` (or `false`/`none`/`0`) to skip the import entirely.
+- **Example**: `POSTER_CACHE_IMPORT_NGINX_DIR=off`
+
+### `POSTER_PROXY_PREFIX_URL`
+- **Default**: empty
+- **Description**: Public URL clients fetch images through. Leave empty when using the built-in cache — it derives `{HOST_NAME}/poster-cache` automatically. Set it only to point at an external caching proxy.
+- **Example**: `POSTER_PROXY_PREFIX_URL=https://poster-cache.example.com`
+
+### `POSTER_WARMUP_URL`
+- **Default**: the built-in cache on `127.0.0.1`, else `POSTER_PROXY_PREFIX_URL`
+- **Description**: Internal URL the catalog warmer issues HEAD requests against to pre-fill the cache.
+- **Example**: `POSTER_WARMUP_URL=http://poster-cache:8888`
 
 ---
 

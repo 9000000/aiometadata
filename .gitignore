@@ -110,3 +110,6 @@ dist
 *.save
 *.save.*
 temp/
+
+# Built-in image cache (POSTER_CACHE_DIR default)
+addon/data/poster-cache/

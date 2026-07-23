@@ -3,6 +3,7 @@ const favicon = require('serve-favicon');
 const fs = require('fs');
 const path = require("path");
 const crypto = require('crypto');
+const stream = require('stream');
 const v8 = require('v8');
 const addon = express();
 // Honor X-Forwarded-* headers from reverse proxies (e.g., Traefik) so req.protocol reflects HTTPS
@@ -76,7 +77,6 @@ const jikan = require('./lib/mal');
 const buildInfo = require('./lib/buildInfo');
 const { clientDistDir, clientIndexPath, publicDir } = require('./lib/runtimePaths');
 const ADDON_VERSION = buildInfo.version;
-const sharp = require('sharp');
 const idMapper = require('./lib/id-mapper');
 const wikiMappings = require('./lib/wiki-mapper.js');
 
@@ -239,7 +239,47 @@ async function testKeysRateLimitMiddleware(req, res, next) {
 }
 
 
-function POSTER_PROXY_PREFIX_URL() { return (process.env.POSTER_PROXY_PREFIX_URL || '').replace(/\/+$/, ''); }
+const posterCacheConfig = require('./lib/posterCache/config.js');
+
+function POSTER_PROXY_PREFIX_URL() { return posterCacheConfig.getPosterProxyPrefix(); }
+
+
+function applyImageCachePrefix(data) {
+  const prefix = POSTER_PROXY_PREFIX_URL();
+  if (!prefix || !data) return;
+
+  const selfOrigin = posterCacheConfig.getSelfOrigin();
+  const metaFieldClasses = posterCacheConfig.META_FIELD_CLASSES;
+  const cacheThumbnails = posterCacheConfig.isClassEnabled('thumbnail');
+
+  const enabledFields = posterCacheConfig.getCacheableFields();
+  if (enabledFields.length === 0 && !cacheThumbnails) return;
+
+  const prefixUrl = (url, imageClass) => {
+    if (!url || typeof url !== 'string') return url;
+    if (url.startsWith(prefix)) return url;
+    if (!/^https?:\/\//i.test(url)) return url;
+    if (selfOrigin && url.startsWith(selfOrigin)) return url;
+    return posterCacheConfig.buildCachedUrl(prefix, imageClass, url);
+  };
+
+  const applyToMeta = (meta) => {
+    if (!meta) return;
+    for (const field of enabledFields) {
+      if (meta[field]) meta[field] = prefixUrl(meta[field], metaFieldClasses[field]);
+    }
+    if (cacheThumbnails && Array.isArray(meta.videos)) {
+      for (const video of meta.videos) {
+        if (video?.thumbnail) video.thumbnail = prefixUrl(video.thumbnail, 'thumbnail');
+      }
+    }
+  };
+
+  applyToMeta(data.meta);
+  if (Array.isArray(data.metas)) {
+    for (const meta of data.metas) applyToMeta(meta);
+  }
+}
 
 // Initialize cache warming for public instances (enabled by default)
 const ENABLE_CACHE_WARMING = process.env.ENABLE_CACHE_WARMING !== 'false';
@@ -398,24 +438,9 @@ const respond = function (req, res, data, opts) {
   res.setHeader("Access-Control-Allow-Headers", "*");
   res.setHeader("Content-Type", "application/json");
 
-  // Prefix poster URLs with reverse proxy URL for local caching
-  const posterProxyUrl = POSTER_PROXY_PREFIX_URL();
-  if (posterProxyUrl && data) {
-    const prefixPoster = (url) => {
-      if (!url || url.startsWith(posterProxyUrl)) return url;
-      return `${posterProxyUrl}/${url}`;
-    };
-    if (data.meta?.poster) {
-      data.meta.poster = prefixPoster(data.meta.poster);
-    }
-    if (data.metas) {
-      for (const meta of data.metas) {
-        if (meta.poster) {
-          meta.poster = prefixPoster(meta.poster);
-        }
-      }
-    }
-  }
+  // Route artwork URLs through the image cache. Posters are always included;
+  // every other class is opt-in, so an existing deployment is unchanged on upgrade.
+  applyImageCachePrefix(data);
 
   stripReleaseAvailabilityForResponse(data);
   res.send(data);
@@ -4834,6 +4859,38 @@ function pipePosterImageResponse(res, imageResponse) {
   imageResponse.data.pipe(res);
 }
 
+function isProcessedImageCacheEnabled() {
+  return posterCacheConfig.isClassEnabled('processed');
+}
+
+async function sendCachedImage(res, result, fallbackContentType) {
+  const { entry } = result;
+  res.setHeader('X-Cache-Status', result.status);
+  res.setHeader('Content-Type', entry.contentType || fallbackContentType || 'image/jpeg');
+  res.setHeader('Content-Length', String(entry.size));
+  if (entry.body) {
+    res.end(entry.body);
+    return;
+  }
+  await stream.promises.pipeline(entry.openStream(), res);
+}
+
+async function cacheProcessedImage(cacheKey, contentType, produce) {
+  const posterCacheStore = require('./lib/posterCache/store.js');
+  return posterCacheStore.getOrFetch('processed', cacheKey, async () => {
+    const chunks = [];
+    const sink = new stream.PassThrough();
+    sink.on('data', (chunk) => chunks.push(chunk));
+    const drained = new Promise((resolve, reject) => {
+      sink.on('end', resolve);
+      sink.on('error', reject);
+    });
+    await produce(sink);
+    await drained;
+    return { body: Buffer.concat(chunks), contentType };
+  });
+}
+
 addon.get("/poster/:type/:id", async function (req, res) {
   const { type, id } = req.params;
   const { fallback, lang, key, url: customUrl } = req.query;
@@ -4869,6 +4926,14 @@ addon.get("/poster/:type/:id", async function (req, res) {
       return res.redirect(302, fallback);
     }
 
+    if (isProcessedImageCacheEnabled()) {
+      const posterCacheStore = require('./lib/posterCache/store.js');
+      const { fetchImage } = require('./lib/posterCache/upstream.js');
+      const result = await posterCacheStore.getOrFetch('processed', `rating-poster:${posterUrl}`, () => fetchImage(posterUrl));
+      res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+      return await sendCachedImage(res, result);
+    }
+
     const imageResponse = await fetchPosterImageStream(posterUrl);
     pipePosterImageResponse(res, imageResponse);
   } catch (error) {
@@ -4895,6 +4960,14 @@ function streamArtWithFallback(assetName) {
       return res.status(304).end();
     }
     try {
+      if (isProcessedImageCacheEnabled()) {
+        const posterCacheStore = require('./lib/posterCache/store.js');
+        const { fetchImage } = require('./lib/posterCache/upstream.js');
+        const result = await posterCacheStore.getOrFetch('processed', `${assetName}:${customUrl}`, () => fetchImage(customUrl));
+        res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+        return await sendCachedImage(res, result);
+      }
+
       const imageResponse = await axios({
         method: 'get',
         url: customUrl,
@@ -4920,6 +4993,19 @@ function streamArtWithFallback(assetName) {
 addon.get("/logo/:type/:id", streamArtWithFallback('logo'));
 addon.get("/background/:type/:id", streamArtWithFallback('background'));
 
+// --- Built-in image cache ---
+// Serves /poster-cache/[class/]<absolute-image-url>. Registered well before the
+// static middleware so it is never shadowed by a file lookup.
+//
+// Mounted unconditionally and gated per request: this module is required before
+// initializeSettings() runs, so at this point process.env does not yet reflect
+// settings stored in the database. Deciding here would permanently ignore the
+// toggle for anyone who enables the cache from the dashboard.
+{
+  const { posterCacheHandler } = require('./lib/posterCache/handler.js');
+  addon.use(posterCacheConfig.POSTER_CACHE_ROUTE, posterCacheHandler());
+}
+
 
 // --- Image Processing Routes ---
 addon.get("/api/image/blur", async function (req, res) {
@@ -4934,6 +5020,10 @@ addon.get("/api/image/blur", async function (req, res) {
   try {
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    if (isProcessedImageCacheEnabled()) {
+      const result = await cacheProcessedImage(`blur:${imageUrl}`, 'image/jpeg', (sink) => blurImage(imageUrl, sink));
+      return await sendCachedImage(res, result, 'image/jpeg');
+    }
     await blurImage(imageUrl, res);
   } catch (error) {
     consola.error('Error in blur route:', error);
@@ -4963,6 +5053,15 @@ addon.get("/api/image/banner-to-background", async function (req, res) {
     
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    if (isProcessedImageCacheEnabled()) {
+      const optionsKey = `${options.width}:${options.height}:${options.blur}:${options.brightness}:${options.contrast}:${options.position}`;
+      const result = await cacheProcessedImage(
+        `b2b:${imageUrl}:${optionsKey}`,
+        'image/jpeg',
+        (sink) => convertBannerToBackground(imageUrl, options, sink)
+      );
+      return await sendCachedImage(res, result, 'image/jpeg');
+    }
     await convertBannerToBackground(imageUrl, options, res);
   } catch (error) {
     consola.error(`Error converting banner to background for ${imageUrl}:`, error.message);
@@ -4973,61 +5072,6 @@ addon.get("/api/image/banner-to-background", async function (req, res) {
     res.status(500).send('Internal server error');
   }
 });
-
-// --- Image Resize Route ---
-addon.get('/resize-image', async function (req, res) {
-  const imageUrl = req.query.url;
-  const fit = req.query.fit || 'cover';
-  const output = req.query.output || 'jpg';
-  const quality = parseInt(req.query.q, 10) || 95;
-
-  if (!imageUrl) {
-    return res.status(400).send('Image URL not provided');
-  }
-
-  // Import the validation function
-  const { validateImageUrl } = require('./utils/imageProcessor');
-  
-  // Validate URL before processing
-  if (!validateImageUrl(imageUrl)) {
-    return res.status(400).send('Invalid or unauthorized image URL');
-  }
-
-  try {
-    const response = await axios.get(imageUrl, { 
-      responseType: 'arraybuffer',
-      timeout: 10000,
-      maxContentLength: 10 * 1024 * 1024, // 10MB limit
-      maxBodyLength: 10 * 1024 * 1024
-    });
-    let transformer = sharp(response.data).resize({
-      width: 1280, // You can adjust or make this configurable
-      height: 720,
-      fit: fit
-    });
-    if (output === 'jpg' || output === 'jpeg') {
-      transformer = transformer.jpeg({ quality });
-      res.setHeader('Content-Type', 'image/jpeg');
-    } else if (output === 'png') {
-      transformer = transformer.png({ quality });
-      res.setHeader('Content-Type', 'image/png');
-    } else if (output === 'webp') {
-      transformer = transformer.webp({ quality });
-      res.setHeader('Content-Type', 'image/webp');
-    } else {
-      return res.status(400).send('Unsupported output format');
-    }
-    const buffer = await transformer.toBuffer();
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-    res.send(buffer);
-  } catch (error) {
-    consola.error('Error in resize-image route:', error);
-    res.status(500).send('Error processing image');
-  }
-});
-
-
-
 
 // Support Stremio settings opening under /stremio/:uuid/:config/configure
   addon.get('/stremio/:userUUID/configure', function (req, res) {
@@ -6131,7 +6175,27 @@ addon.post("/api/dashboard/cache/clear", requireDashboardAdmin, (req, res) => {
 });
 
 addon.post("/api/dashboard/poster-cache/purge", requireDashboardAdmin, async (req, res) => {
-  const posterCacheUrl = (process.env.POSTER_WARMUP_URL || process.env.POSTER_PROXY_PREFIX_URL || '').replace(/\/+$/, '');
+  // Omitting `type` purges everything, which is the shape the dashboard has
+  // always sent — existing callers keep working unchanged.
+  const requestedType = req.body?.type;
+
+  if (posterCacheConfig.isBuiltinPosterCacheEnabled()) {
+    if (requestedType !== undefined && !posterCacheConfig.isValidImageClass(requestedType)) {
+      return res.status(400).json({ error: `Unknown image type: ${requestedType}` });
+    }
+    try {
+      const posterCacheStore = require('./lib/posterCache/store.js');
+      const result = await posterCacheStore.purge(requestedType);
+      consola.info(`[API] Poster cache purge requested via dashboard (${requestedType || 'all'})`);
+      return res.json(result);
+    } catch (error) {
+      consola.error('[API] Poster cache purge failed:', error.message);
+      return res.status(500).json({ error: 'Failed to purge poster cache', details: error.message });
+    }
+  }
+
+  // Standalone nginx proxy (README Option B) — purge over HTTP as before.
+  const posterCacheUrl = posterCacheConfig.getPosterWarmupBase();
   if (!posterCacheUrl) {
     return res.status(400).json({ error: 'No poster cache URL configured' });
   }
@@ -6147,8 +6211,68 @@ addon.post("/api/dashboard/poster-cache/purge", requireDashboardAdmin, async (re
   }
 });
 
+addon.post("/api/dashboard/poster-cache/invalidate", requireDashboardAdmin, async (req, res) => {
+  if (!posterCacheConfig.isBuiltinPosterCacheEnabled()) {
+    return res.status(400).json({ error: 'The built-in image cache is not enabled' });
+  }
+
+  const raw = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+  if (!raw) {
+    return res.status(400).json({ error: 'An image URL is required' });
+  }
+
+  const requestedType = req.body?.type;
+  if (requestedType !== undefined && !posterCacheConfig.isValidImageClass(requestedType)) {
+    return res.status(400).json({ error: `Unknown image type: ${requestedType}` });
+  }
+
+  // Accept a pasted /poster-cache/... URL as readily as the upstream URL itself —
+  // the cache URL is what an admin has in front of them when an image looks wrong.
+  let target = raw;
+  let parsedType = requestedType;
+  const marker = `${posterCacheConfig.POSTER_CACHE_ROUTE}/`;
+  const markerAt = raw.indexOf(marker);
+  if (markerAt >= 0) {
+    const { parsePosterCachePath } = require('./lib/posterCache/handler.js');
+    const parsed = parsePosterCachePath(raw.slice(markerAt + marker.length - 1));
+    if (!parsed) {
+      return res.status(400).json({ error: 'Could not read an image URL out of that cache URL' });
+    }
+    target = parsed.url;
+    if (!parsedType) parsedType = parsed.imageClass;
+  }
+
+  try {
+    const posterCacheStore = require('./lib/posterCache/store.js');
+    const result = await posterCacheStore.invalidate(target, parsedType);
+    consola.info(`[API] Image cache invalidation for ${target} (${result.removed.join(', ') || 'not cached'})`);
+    res.json({
+      success: true,
+      url: target,
+      removed: result.removed,
+      freed_bytes: result.freed_bytes,
+      message: result.removed.length
+        ? `Removed from ${result.removed.join(', ')}; it will be re-fetched on the next request`
+        : 'That image was not in the cache',
+    });
+  } catch (error) {
+    consola.error('[API] Image cache invalidation failed:', error.message);
+    res.status(500).json({ error: 'Failed to invalidate image', details: error.message });
+  }
+});
+
 addon.get("/api/dashboard/poster-cache/stats", requireDashboardAdmin, async (req, res) => {
-  const posterCacheUrl = (process.env.POSTER_WARMUP_URL || process.env.POSTER_PROXY_PREFIX_URL || '').replace(/\/+$/, '');
+  if (posterCacheConfig.isBuiltinPosterCacheEnabled()) {
+    const posterCacheStore = require('./lib/posterCache/store.js');
+    return res.json({
+      ...posterCacheStore.stats(),
+      enabled_types: posterCacheConfig.getEnabledClasses(),
+    });
+  }
+
+  // Standalone nginx cannot report a per-type breakdown, so `by_type` is absent
+  // here and the dashboard renders only the totals.
+  const posterCacheUrl = posterCacheConfig.getPosterWarmupBase();
   if (!posterCacheUrl) {
     return res.status(400).json({ error: 'No poster cache URL configured' });
   }
@@ -6732,4 +6856,4 @@ async function startServerWithCacheWarming() {
   return addon;
 }
 
-module.exports = { addon, startServerWithCacheWarming, getDashboardAPI };
+module.exports = { addon, startServerWithCacheWarming, getDashboardAPI, applyImageCachePrefix };

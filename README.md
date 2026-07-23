@@ -39,7 +39,6 @@ services:
       - "3232:3232"  # Remove this if using Traefik
     # expose:  # Uncomment if using Traefik
     #   - 3232
-    #   - 8888 # built in poster cache
     init: true
     env_file:
       - .env
@@ -51,14 +50,8 @@ services:
     #   - "traefik.http.routers.aiometadata.middlewares=authelia@docker"
     #   - "traefik.http.services.aiometadata.loadbalancer.server.port=3232"
     #   - "traefik.http.routers.aiometadata.service=aiometadata"
-    #   - "traefik.http.routers.postercache.rule=Host(`${POSTERCACHE_HOSTNAME?}`)"
-    #   - "traefik.http.routers.postercache.entrypoints=websecure"
-    #   - "traefik.http.routers.postercache.tls.certresolver=letsencrypt"
-    #   - "traefik.http.routers.postercache.service=postercache"
-    #   - "traefik.http.services.postercache.loadbalancer.server.port=8888"
     volumes:
       - ${DOCKER_DATA_DIR}/aiometadata/data:/app/addon/data
-    # - ${DOCKER_DATA_DIR}/poster-cache:/var/cache/nginx # built in poster cache
     depends_on:
       aiometadata_redis:
         condition: service_healthy
@@ -107,34 +100,81 @@ Then run:
 docker compose up -d
 ```
 
-### 3. Poster Reverse Proxy Cache (Optional)
+### 3. Image Cache (Optional)
 
-Cache poster images locally using an nginx reverse proxy. Eliminates upstream latency on repeated requests and, combined with comprehensive cache warming, serves posters instantly from disk. Includes a `/stats` endpoint for monitoring cache size and image count.
+Cache artwork on disk so repeated requests are served locally instead of re-fetched from upstream. Combined with comprehensive cache warming, images load instantly.
 
-#### Option A — Built-in (single container)
+#### Option A — Built-in (recommended)
 
-If you run a **single instance** and just want one container, enable the bundled proxy instead of running a separate service:
+The cache is part of the addon itself — no extra container, port, or volume. Set one variable:
 
 ```yaml
   aiometadata:
     # ...your existing service...
     environment:
       - ENABLE_BUILTIN_POSTER_CACHE=true
-      - POSTER_PROXY_PREFIX_URL=https://posters.example.com   # public address of port 8888
-    volumes:
-      - ${DOCKER_DATA_DIR}/poster-cache:/var/cache/nginx       # persist cache across restarts
-    init: true                                                 # reap the proxy's helper processes
-    expose:
-      - "8888"
 ```
 
-The same nginx config, `/stats`, and `/purge` apply. `POSTER_WARMUP_URL` defaults to `http://127.0.0.1:8888` automatically; you still set `POSTER_PROXY_PREFIX_URL` to the public address clients use to reach port 8888.
+Images are served from `https://your-addon-host/poster-cache/...` and stored under `addon/data/poster-cache`, which is already inside the `/app/addon/data` volume from the compose file above — so the cache survives restarts with no additional mount.
 
-> **Multi-replica / Kubernetes:** leave `ENABLE_BUILTIN_POSTER_CACHE` off and use Option B — each replica's in-container cache is independent and unshared.
+**What gets cached.** Posters are cached by default. Everything else is opt-in, so enabling the cache never changes disk usage unexpectedly:
 
-#### Option B — Standalone service
+| Variable | Default | Caches |
+|----------|---------|--------|
+| `POSTER_CACHE_BACKGROUNDS` | `false` | Background artwork — the largest images served, so the biggest bandwidth win |
+| `POSTER_CACHE_LANDSCAPE_POSTERS` | `false` | Landscape poster artwork |
+| `POSTER_CACHE_LOGOS` | `false` | Logo artwork |
+| `POSTER_CACHE_THUMBNAILS` | `false` | Episode thumbnails — by far the most numerous; a long-running series adds hundreds |
+| `POSTER_CACHE_PROCESSED_IMAGES` | `false` | Output of the blur/resize/banner-to-background routes, so each transform runs once |
 
-Add a `poster-cache` service alongside your aiometadata container:
+These are also toggles in the dashboard's **Settings** tab, and the **Operations** tab shows disk usage broken down by image type, with per-type clear buttons and a **Refresh** box for dropping a single image.
+
+**Staleness.** Cached images are validated by a hash of their bytes, so replacing the artwork at a URL your art pattern points to makes clients re-download it rather than keep the old copy. To force it immediately, paste the image URL (or the `/poster-cache/…` URL) into **Refresh** on the Operations tab — no need to clear a whole image type.
+
+**Sizing.** Two budgets, evicted least-recently-used once exceeded:
+
+| Variable | Default | Caps |
+|----------|---------|------|
+| `POSTER_CACHE_MAX_SIZE` | `10g` | **Disk** used by the cache |
+| `POSTER_CACHE_MEMORY_SIZE` | `128m` | **RAM** held for the hottest images, in front of the disk cache. Set to `0` for disk only. |
+
+The memory tier is on top of the addon's own footprint, so budget roughly `baseline + POSTER_CACHE_MEMORY_SIZE`. It skips both the disk read and the per-request allocation, which lowers GC pressure — set it to `0` on memory-constrained hosts.
+
+`POSTER_CACHE_INACTIVE_DAYS` (default `30`) drops images nobody has requested, and `POSTER_CACHE_DIR` moves the cache elsewhere.
+
+> **Multi-replica / Kubernetes:** each replica keeps its own local cache — independent and unshared, which costs N× storage and N× cold fetches but needs no coordination. Use Option B if you want a single shared cache.
+
+#### Migrating from the old nginx poster cache
+
+Earlier versions ran a bundled nginx proxy on port `8888`. It has been replaced by the built-in cache, so you can drop the `8888` expose/labels, the `/var/cache/nginx` volume, and `init: true`.
+
+> ### ⚠ Breaking change — `POSTER_PROXY_PREFIX_URL`
+>
+> It used to mean *"the public address of port 8888"*. It now means *"the public URL images are served through"*, which for the built-in cache includes the `/poster-cache` path.
+>
+> **If you set it explicitly, you must act.** Otherwise images break: requests land on the addon root instead of the cache.
+>
+> | Before | After |
+> |--------|-------|
+> | `POSTER_PROXY_PREFIX_URL=https://posters.example.com` | **Unset it** — the built-in cache derives `{HOST_NAME}/poster-cache` automatically |
+> | | *or* `POSTER_PROXY_PREFIX_URL=https://your-addon-host/poster-cache` |
+>
+> Running the standalone nginx proxy (Option B) instead? **Nothing changes** — keep pointing it at your proxy exactly as before.
+>
+> Image URLs already handed to Stremio clients also change shape, so clients re-fetch each image once. Your cached files are not lost: the disk cache is preserved by the automatic import below.
+
+**Your existing cache is imported automatically.** Leave the `/var/cache/nginx` volume mounted for one start:
+
+```yaml
+volumes:
+  - ${DOCKER_DATA_DIR}/poster-cache:/var/cache/nginx   # keep for one start, then remove
+```
+
+On startup the addon detects the old cache, imports it in the background, and records a marker so it never runs again — the log tells you when it is safe to drop the mount. Files it cannot parse are skipped, never imported as corrupt entries. To skip the import entirely, set `POSTER_CACHE_IMPORT_NGINX_DIR=off`.
+
+#### Option B — Standalone nginx service
+
+For multi-replica deployments that need a single shared cache. Add a `poster-cache` service alongside your aiometadata container and leave `ENABLE_BUILTIN_POSTER_CACHE` off:
 
 ```yaml
   poster-cache:

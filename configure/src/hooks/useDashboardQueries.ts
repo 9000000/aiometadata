@@ -685,10 +685,12 @@ export function useClearErrorLogs() {
  */
 export function usePurgePosterCache() {
   const { adminKey, logout } = useAdmin();
+  const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async () => {
-      const headers: Record<string, string> = {};
+    // Omitting `type` purges every class, which is what the "Clear all" button sends.
+    mutationFn: async (type?: string) => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (adminKey) {
         headers['x-admin-key'] = adminKey;
       }
@@ -696,6 +698,7 @@ export function usePurgePosterCache() {
       const response = await fetch('/api/dashboard/poster-cache/purge', {
         method: 'POST',
         headers,
+        body: JSON.stringify(type ? { type } : {}),
       });
 
       if (response.status === 401) {
@@ -709,6 +712,47 @@ export function usePurgePosterCache() {
       }
 
       return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['poster-cache-stats'] });
+    },
+  });
+}
+
+/**
+ * Drop a single image from the cache so it is re-fetched on the next request.
+ * Accepts either the upstream URL or a /poster-cache/... URL.
+ */
+export function useInvalidateCachedImage() {
+  const { adminKey, logout } = useAdmin();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (url: string) => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (adminKey) {
+        headers['x-admin-key'] = adminKey;
+      }
+
+      const response = await fetch('/api/dashboard/poster-cache/invalidate', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ url }),
+      });
+
+      if (response.status === 401) {
+        logout();
+        throw new Error('Session expired. Please log in again.');
+      }
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to refresh image');
+      }
+      return result;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['poster-cache-stats'] });
     },
   });
 }

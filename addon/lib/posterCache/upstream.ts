@@ -1,5 +1,7 @@
 import * as dns from 'node:dns/promises';
 import * as net from 'node:net';
+import * as http from 'node:http';
+import * as https from 'node:https';
 import axios from 'axios';
 import { getFetchConcurrency, getMaxObjectBytes, getUpstreamTimeoutMs } from './config.js';
 
@@ -52,8 +54,18 @@ export class UpstreamRejected extends Error {
   }
 }
 
-/** Resolves the host and rejects if any answer lands in private address space. */
-export async function assertPublicUrl(rawUrl: string): Promise<URL> {
+export interface ValidatedUpstream {
+  url: URL;
+  /** Addresses proven public, pinned for the connection so DNS cannot change under us. */
+  addresses: string[];
+}
+
+/**
+ * Resolves the host and rejects if any answer lands in private address space.
+ * Returns the validated addresses so the caller can pin them: re-resolving at
+ * connect time would reopen a DNS-rebinding window between check and fetch.
+ */
+export async function resolvePublicUrl(rawUrl: string): Promise<ValidatedUpstream> {
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
@@ -70,7 +82,7 @@ export async function assertPublicUrl(rawUrl: string): Promise<URL> {
     if (isPrivateAddress(host)) {
       throw new UpstreamRejected(`Refusing to proxy private address: ${host}`, 403);
     }
-    return parsed;
+    return { url: parsed, addresses: [host] };
   }
 
   let addresses: { address: string }[];
@@ -84,7 +96,33 @@ export async function assertPublicUrl(rawUrl: string): Promise<URL> {
     throw new UpstreamRejected(`Refusing to proxy host resolving to private address: ${host}`, 403);
   }
 
-  return parsed;
+  return { url: parsed, addresses: addresses.map((entry) => entry.address) };
+}
+
+export async function assertPublicUrl(rawUrl: string): Promise<URL> {
+  return (await resolvePublicUrl(rawUrl)).url;
+}
+
+/**
+ * Agents whose DNS resolution is fixed to already-validated addresses. The
+ * request still targets the hostname, so TLS certificate validation is
+ * unaffected — only the address it connects to is pinned.
+ */
+function pinnedAgents(addresses: string[]): { httpAgent: http.Agent; httpsAgent: https.Agent } {
+  const lookup = (_hostname: string, options: any, callback: any) => {
+    const cb = typeof options === 'function' ? options : callback;
+    const opts = typeof options === 'function' ? {} : (options || {});
+    if (opts.all) {
+      cb(null, addresses.map((address) => ({ address, family: net.isIP(address) })));
+      return;
+    }
+    const address = addresses[0];
+    cb(null, address, net.isIP(address));
+  };
+  return {
+    httpAgent: new http.Agent({ lookup } as any),
+    httpsAgent: new https.Agent({ lookup } as any),
+  };
 }
 
 export interface FetchedImage {
@@ -141,12 +179,14 @@ export async function openImageStream(rawUrl: string): Promise<{ response: any; 
   let current = rawUrl;
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const url = await assertPublicUrl(current);
+    const { url, addresses } = await resolvePublicUrl(current);
+    const agents = pinnedAgents(addresses);
 
     const response = await axios.get(url.toString(), {
       responseType: 'stream',
       timeout: getUpstreamTimeoutMs(),
       maxRedirects: 0,
+      ...agents,
       maxContentLength: Infinity,
       maxBodyLength: Infinity,
       decompress: true,

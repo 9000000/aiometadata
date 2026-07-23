@@ -2000,6 +2000,80 @@ class DashboardAPI {
   }
 
   // Clear cache by type
+  // Clear every cache entry whose key contains `token` — a meta id (tt0111161,
+  // mal:64019) or a catalog id (movielens.toppicks). Meta keys carry the id as a
+  // suffix and catalog keys carry it mid-key, so a substring match covers both
+  // without the caller needing to know the key layout.
+  async clearCacheByToken(token, { dryRun = false } = {}) {
+    try {
+      if (!this.cache) throw new Error('Cache not available');
+
+      const trimmed = String(token || '').trim();
+      if (!trimmed) return { success: false, message: 'A meta id or catalog id is required' };
+      if (trimmed.length < 3) {
+        return { success: false, message: 'Token must be at least 3 characters' };
+      }
+
+      // Escape glob metacharacters: an unescaped "*" would match the keyspace.
+      const escaped = trimmed.replace(/[\\*?[\]^]/g, (c) => `\\${c}`);
+
+      // Same exclusions "clear all" honours, so a broad token cannot take out
+      // the IMDb ratings dataset or warming state.
+      const preserve = [
+        'maintenance:', 'cache-warming:', 'catalog-warmup:',
+        'anime_list:last_update', 'addon:start_time', 'system:app_version',
+        'imdb:ratings', 'imdb-ratings-etag',
+      ];
+      const isPreserved = (key) => preserve.some((p) => (p.endsWith(':') ? key.startsWith(p) : key === p));
+
+      let cursor = '0';
+      let matched = 0;
+      let deletedCount = 0;
+      let skipped = 0;
+      const samples = [];
+
+      do {
+        const reply = await this.cache.scan(cursor, 'MATCH', `*${escaped}*`, 'COUNT', 1000);
+        cursor = reply[0];
+        const keys = reply[1] || [];
+        if (keys.length === 0) continue;
+
+        const deletable = [];
+        for (const key of keys) {
+          matched += 1;
+          if (isPreserved(key)) { skipped += 1; continue; }
+          if (samples.length < 10) samples.push(key);
+          deletable.push(key);
+        }
+
+        if (!dryRun && deletable.length > 0) {
+          for (let i = 0; i < deletable.length; i += 100) {
+            const batch = deletable.slice(i, i + 100);
+            await this.cache.del(...batch);
+            deletedCount += batch.length;
+          }
+        } else {
+          deletedCount += deletable.length;
+        }
+      } while (cursor !== '0');
+
+      const noun = dryRun ? 'would be cleared' : 'cleared';
+      const message = deletedCount === 0
+        ? `No cache entries match "${trimmed}"`
+        : `${deletedCount.toLocaleString()} entries ${noun} for "${trimmed}"`
+          + (skipped > 0 ? ` (${skipped} protected key${skipped === 1 ? '' : 's'} skipped)` : '');
+
+      if (!dryRun && deletedCount > 0) {
+        logger.info(`Cleared ${deletedCount} cache entries matching "${trimmed}"`);
+      }
+
+      return { success: true, dryRun, token: trimmed, matched, deletedCount, skipped, samples, message };
+    } catch (error) {
+      logger.error('Error clearing cache by token:', error);
+      return { success: false, message: error.message };
+    }
+  }
+
   async clearCache(type) {
     try {
       if (!this.cache) {

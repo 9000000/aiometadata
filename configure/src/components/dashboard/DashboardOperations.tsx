@@ -9,6 +9,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { Input } from "@/components/ui/input";
 import {
   Clock,
   Database,
@@ -32,6 +33,7 @@ import {
   usePurgePosterCache,
   usePosterCacheStats,
   useInvalidateCachedImage,
+  useClearCacheById,
   type DashboardTab,
 } from "@/hooks/useDashboardQueries";
 import { AnimatedNumber } from "../AnimatedNumber";
@@ -55,6 +57,9 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
   const memoryData = memoryQuery.data as any;
 
   const clearCacheMutation = useClearCache();
+  const clearByIdMutation = useClearCacheById();
+  const [clearToken, setClearToken] = useState("");
+  const [clearPreview, setClearPreview] = useState<{ count: number; samples: string[] } | null>(null);
   const executeTaskMutation = useExecuteMaintenanceTask();
   const clearErrorsMutation = useClearErrorLogs();
   const purgePosterCacheMutation = usePurgePosterCache();
@@ -120,6 +125,27 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
       },
       onError: (error) => {
         toast.error("Cache Clear Failed", { description: error.message });
+      },
+    });
+  };
+
+  const handleClearById = (dryRun: boolean) => {
+    const token = clearToken.trim();
+    if (!token) return;
+    clearByIdMutation.mutate({ token, dryRun }, {
+      onSuccess: (result) => {
+        if (result.dryRun) {
+          setClearPreview({ count: result.deletedCount, samples: result.samples });
+          toast.info("Preview", { description: result.message });
+        } else {
+          setClearPreview(null);
+          setClearToken("");
+          toast.success("Cache Cleared", { description: result.message });
+        }
+      },
+      onError: (error) => {
+        setClearPreview(null);
+        toast.error("Clear Failed", { description: error.message });
       },
     });
   };
@@ -325,6 +351,56 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
                 )}
               </Button>
             </div>
+          </div>
+
+          <div className="mt-3 pt-3 border-t space-y-2">
+            <div className="space-y-0.5">
+              <span className="text-sm font-medium">Clear by ID</span>
+              <p className="text-xs text-muted-foreground">
+                Removes every cached entry whose key contains this value — a meta id
+                (<code>tt0111161</code>, <code>mal:64019</code>) or a catalog id
+                (<code>movielens.toppicks</code>). Preview first to see what matches.
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <Input
+                placeholder="tt0111161 or movielens.toppicks"
+                value={clearToken}
+                onChange={(e) => { setClearToken(e.target.value); setClearPreview(null); }}
+                onKeyDown={(e) => { if (e.key === "Enter") handleClearById(true); }}
+                disabled={clearByIdMutation.isPending}
+              />
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => handleClearById(true)}
+                  variant="outline"
+                  size="sm"
+                  disabled={clearByIdMutation.isPending || clearToken.trim().length < 3}
+                >
+                  {clearByIdMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Preview"}
+                </Button>
+                <Button
+                  onClick={() => handleClearById(false)}
+                  variant="outline"
+                  size="sm"
+                  disabled={clearByIdMutation.isPending || clearToken.trim().length < 3}
+                  className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
+                >
+                  <Trash2 className="h-4 w-4 mr-1.5" />
+                  Clear
+                </Button>
+              </div>
+            </div>
+            {clearPreview && (
+              <div className="rounded-md border bg-muted/40 p-2 space-y-1">
+                <p className="text-xs font-medium">{clearPreview.count.toLocaleString()} matching entries</p>
+                {clearPreview.samples.length > 0 && (
+                  <ul className="text-[11px] font-mono text-muted-foreground space-y-0.5 overflow-x-auto">
+                    {clearPreview.samples.map((k) => <li key={k} className="whitespace-nowrap">{k}</li>)}
+                  </ul>
+                )}
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

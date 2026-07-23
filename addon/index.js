@@ -6174,6 +6174,17 @@ addon.post("/api/dashboard/cache/clear", requireDashboardAdmin, (req, res) => {
   }
 });
 
+addon.post("/api/dashboard/cache/clear-by-id", requireDashboardAdmin, async (req, res) => {
+  try {
+    const { token, dryRun } = req.body || {};
+    const result = await getDashboardAPI().clearCacheByToken(token, { dryRun: !!dryRun });
+    return res.status(result.success ? 200 : 400).json(result);
+  } catch (error) {
+    consola.error('[Dashboard API] Error:', error);
+    return res.status(500).json({ error: 'Failed to clear cache entries' });
+  }
+});
+
 addon.post("/api/dashboard/poster-cache/purge", requireDashboardAdmin, async (req, res) => {
   // Omitting `type` purges everything, which is the shape the dashboard has
   // always sent — existing callers keep working unchanged.

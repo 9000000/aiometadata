@@ -601,6 +601,57 @@ export function useClearCache() {
   });
 }
 
+export interface ClearCacheByIdResult {
+  success: boolean;
+  dryRun: boolean;
+  token: string;
+  matched: number;
+  deletedCount: number;
+  skipped: number;
+  samples: string[];
+  message: string;
+}
+
+/**
+ * Clear every cache entry whose key contains a meta id or catalog id.
+ */
+export function useClearCacheById() {
+  const { adminKey, logout } = useAdmin();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ token, dryRun }: { token: string; dryRun?: boolean }): Promise<ClearCacheByIdResult> => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (adminKey) {
+        headers['x-admin-key'] = adminKey;
+      }
+
+      const response = await fetch('/api/dashboard/cache/clear-by-id', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ token, dryRun: !!dryRun }),
+      });
+
+      if (response.status === 401) {
+        logout();
+        throw new Error('Session expired. Please log in again.');
+      }
+
+      const data = await response.json();
+      if (!response.ok || data.success === false) {
+        throw new Error(data.message || data.error || 'Failed to clear cache entries');
+      }
+      return data;
+    },
+    onSuccess: (data) => {
+      if (!data.dryRun) {
+        queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.operations });
+        queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.overview });
+      }
+    },
+  });
+}
+
 /**
  * Execute maintenance task mutation
  */

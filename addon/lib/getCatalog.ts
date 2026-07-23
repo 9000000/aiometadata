@@ -2667,8 +2667,10 @@ async function getMovieLensCatalog(
     const minYear = metadata.minYear;
     const maxYear = metadata.maxYear;
     const minPop = metadata.minPop ?? (sortBy === 'avgRating' ? 100 : sortBy === 'releaseDate' ? 20 : undefined);
-    const maxFutureDays = metadata.maxFutureDays ?? (sortBy === 'releaseDate' ? 0 : undefined);
     const maxDaysAgo = metadata.maxDaysAgo;
+    // maxDaysAgo bounds only the past edge; pair it so future titles are excluded.
+    const maxFutureDays = metadata.maxFutureDays
+      ?? ((maxDaysAgo || sortBy === 'releaseDate') ? 0 : undefined);
     const sortDirection = metadata.sortDirection;
     const includeRated = metadata.includeRated === true;
     let tag = String(metadata.tags || '')

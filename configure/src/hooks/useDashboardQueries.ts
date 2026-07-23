@@ -612,9 +612,6 @@ export interface ClearCacheByIdResult {
   message: string;
 }
 
-/**
- * Clear every cache entry whose key contains a meta id or catalog id.
- */
 export function useClearCacheById() {
   const { adminKey, logout } = useAdmin();
   const queryClient = useQueryClient();

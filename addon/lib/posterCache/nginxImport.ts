@@ -84,10 +84,7 @@ async function containsAnyFile(dir: string): Promise<boolean> {
     return false;
   }
   try {
-    // A hashed cache tree walks thousands of directories before the first file
-    // (nginx levels=1:2 is up to 4096), and the count grows with cache size — so
-    // a small entry cap reports "empty" for exactly the large caches this import
-    // exists to migrate. Bound the scan by time instead.
+    // A hashed cache tree yields thousands of dirs before the first file.
     const deadline = Date.now() + 5000;
     let inspected = 0;
     for await (const dirent of handle) {

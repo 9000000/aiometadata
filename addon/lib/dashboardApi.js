@@ -2000,10 +2000,7 @@ class DashboardAPI {
   }
 
   // Clear cache by type
-  // Clear every cache entry whose key contains `token` — a meta id (tt0111161,
-  // mal:64019) or a catalog id (movielens.toppicks). Meta keys carry the id as a
-  // suffix and catalog keys carry it mid-key, so a substring match covers both
-  // without the caller needing to know the key layout.
+  // Matches a meta id (suffix in the key) or catalog id (mid-key) by substring.
   async clearCacheByToken(token, { dryRun = false } = {}) {
     try {
       if (!this.cache) throw new Error('Cache not available');
@@ -2014,11 +2011,9 @@ class DashboardAPI {
         return { success: false, message: 'Token must be at least 3 characters' };
       }
 
-      // Escape glob metacharacters: an unescaped "*" would match the keyspace.
+      // Unescaped "*" would match the whole keyspace.
       const escaped = trimmed.replace(/[\\*?[\]^]/g, (c) => `\\${c}`);
 
-      // Same exclusions "clear all" honours, so a broad token cannot take out
-      // the IMDb ratings dataset or warming state.
       const preserve = [
         'maintenance:', 'cache-warming:', 'catalog-warmup:',
         'anime_list:last_update', 'addon:start_time', 'system:app_version',

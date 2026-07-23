@@ -255,7 +255,7 @@ export function MovieLensIntegration({ isOpen, onClose }: MovieLensIntegrationPr
                   <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.watchlist', 'MovieLens Watchlist')}>
                     <Bookmark className="h-4 w-4 mr-2" /> Your Watchlist <Plus className="h-4 w-4 ml-auto" />
                   </Button>
-                  <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.toppicks.recent', 'New Releases for You', { maxDaysAgo: 180, maxFutureDays: 0 })}>
+                  <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.toppicks.recent', 'New Releases for You', { maxDaysAgo: 180 })}>
                     <CalendarClock className="h-4 w-4 mr-2" /> New Releases for You <Plus className="h-4 w-4 ml-auto" />
                   </Button>
                   <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.toppicks.rated', 'Highest Rated by Users', { sortBy: 'avgRating' })}>

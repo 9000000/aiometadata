@@ -56,15 +56,10 @@ export class UpstreamRejected extends Error {
 
 export interface ValidatedUpstream {
   url: URL;
-  /** Addresses proven public, pinned for the connection so DNS cannot change under us. */
   addresses: string[];
 }
 
-/**
- * Resolves the host and rejects if any answer lands in private address space.
- * Returns the validated addresses so the caller can pin them: re-resolving at
- * connect time would reopen a DNS-rebinding window between check and fetch.
- */
+/** Resolves the host and rejects if any answer lands in private address space. */
 export async function resolvePublicUrl(rawUrl: string): Promise<ValidatedUpstream> {
   let parsed: URL;
   try {
@@ -103,11 +98,7 @@ export async function assertPublicUrl(rawUrl: string): Promise<URL> {
   return (await resolvePublicUrl(rawUrl)).url;
 }
 
-/**
- * Agents whose DNS resolution is fixed to already-validated addresses. The
- * request still targets the hostname, so TLS certificate validation is
- * unaffected — only the address it connects to is pinned.
- */
+/** Pins DNS to already-validated addresses; the request still targets the hostname. */
 function pinnedAgents(addresses: string[]): { httpAgent: http.Agent; httpsAgent: https.Agent } {
   const lookup = (_hostname: string, options: any, callback: any) => {
     const cb = typeof options === 'function' ? options : callback;

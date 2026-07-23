@@ -1054,11 +1054,6 @@ const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catalo
   const [maxYear, setMaxYear] = useState<string>(catalog.metadata?.maxYear ? String(catalog.metadata.maxYear) : '');
   const [includeRated, setIncludeRated] = useState<boolean>(catalog.metadata?.includeRated === true);
   const [maxDaysAgo, setMaxDaysAgo] = useState<string>(catalog.metadata?.maxDaysAgo ? String(catalog.metadata.maxDaysAgo) : '');
-  const [displayName, setDisplayName] = useState<string>(catalog.name || '');
-
-  useEffect(() => {
-    if (isOpen) setDisplayName(catalog.name || '');
-  }, [isOpen, catalog.name]);
 
   const handleSave = () => {
     const minYearNum = parseInt(minYear, 10);
@@ -1070,7 +1065,6 @@ const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catalo
         c.id === catalog.id && c.type === catalog.type
           ? {
               ...c,
-              name: displayName.trim() || c.name,
               cacheTTL: Math.max(cacheTTL, 300),
               metadata: {
                 ...c.metadata,
@@ -1098,11 +1092,6 @@ const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catalo
           <DialogTitle>MovieLens Settings</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 py-4">
-          <div className="space-y-2">
-            <Label>Catalog Name</Label>
-            <Input placeholder="e.g. Zombie Picks (Last 2 Years)" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-            <p className="text-xs text-muted-foreground">Shown as the row title in Stremio.</p>
-          </div>
           {!isWatchlist && (
             <>
               <div className="grid grid-cols-2 gap-3">

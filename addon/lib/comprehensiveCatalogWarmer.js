@@ -634,6 +634,7 @@ class ComprehensiveCatalogWarmer {
           if (mlMeta.minPop) extraArgs.minPop = mlMeta.minPop;
           if (mlMeta.maxDaysAgo) extraArgs.maxDaysAgo = mlMeta.maxDaysAgo;
           if (mlMeta.maxFutureDays !== undefined) extraArgs.maxFutureDays = mlMeta.maxFutureDays;
+          if (mlMeta.includeRated) extraArgs.includeRated = true;
         }
         else if (catalogId.startsWith('tmdb.discover.') || catalogId.startsWith('tvdb.discover.') || catalogId.startsWith('simkl.discover.') || catalogId.startsWith('anilist.discover.') || catalogId.startsWith('mal.discover.')) {
           const discoverParams =

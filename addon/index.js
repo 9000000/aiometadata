@@ -3790,6 +3790,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
     if (mlMeta.minPop) extraArgs.minPop = mlMeta.minPop;
     if (mlMeta.maxDaysAgo) extraArgs.maxDaysAgo = mlMeta.maxDaysAgo;
     if (mlMeta.maxFutureDays !== undefined) extraArgs.maxFutureDays = mlMeta.maxFutureDays;
+    if (mlMeta.includeRated) extraArgs.includeRated = true;
   }
   // Up next catalogs need poster preference and filter settings in cache key
   if (cleanId === 'trakt.upnext' || cleanId === 'mdblist.upnext') {

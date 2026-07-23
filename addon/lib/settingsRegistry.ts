@@ -1559,7 +1559,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     description: 'User-Agent header sent to MovieLens',
     category: 'MovieLens',
     type: 'string',
-    default: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:127.0) Gecko/20100101 Firefox/127.0',
+    default: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
   },
   {
     key: 'MOVIELENS_LOGIN_REFERER',
@@ -1589,13 +1589,14 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: 3600,
   },
   {
-    key: 'MOVIELENS_GROUPTAGS_TTL_SECONDS',
-    envVar: 'MOVIELENS_GROUPTAGS_TTL_SECONDS',
-    label: 'MovieLens Taste Tags TTL',
-    description: 'Time-to-live for cached MovieLens taste tags in seconds',
+    key: 'MOVIELENS_USERMETA_TTL_SECONDS',
+    envVar: 'MOVIELENS_USERMETA_TTL_SECONDS',
+    legacyEnvVar: 'MOVIELENS_GROUPTAGS_TTL_SECONDS',
+    label: 'MovieLens User Metadata TTL',
+    description: 'Time-to-live in seconds for cached MovieLens account metadata (recommendation engine and taste tags)',
     category: 'Cache',
     type: 'number',
-    default: 86400,
+    default: 43200,
   },
   {
     key: 'MOVIELENS_LIST_MAX_PAGES',

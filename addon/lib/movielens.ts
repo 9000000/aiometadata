@@ -11,7 +11,7 @@ const mlLoginReferer = () => process.env.MOVIELENS_LOGIN_REFERER || 'https://mov
 const mlImportReferer = () => process.env.MOVIELENS_IMPORT_REFERER || 'https://movielens.org/profile/settings/import-export';
 const mlTimeout = () => parseInt(process.env.MOVIELENS_REQUEST_TIMEOUT_MS || '25000', 10);
 const mlUserAgent = () => process.env.MOVIELENS_USER_AGENT
-  || 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:127.0) Gecko/20100101 Firefox/127.0';
+  || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 const baseHeaders = () => ({
   Accept: 'application/json, text/plain, */*',
@@ -144,12 +144,28 @@ async function getListItems(
   return json?.data?.searchData?.searchResults || [];
 }
 
-async function getMovieGroupTags(credId: string): Promise<string[]> {
+interface MovieLensUserMeta {
+  groupTags: string[];
+  engineId: string | null;
+  engineWeight: number | null;
+  popWeight: number | null;
+  numRatings: number | null;
+}
+
+async function getUserMeta(credId: string): Promise<MovieLensUserMeta> {
+  const empty: MovieLensUserMeta = { groupTags: [], engineId: null, engineWeight: null, popWeight: null, numRatings: null };
   const res = await apiFetch(credId, 'users/me');
-  if (res.status !== 200) return [];
+  if (res.status !== 200) return empty;
   const json: any = await res.json();
-  const tags = json?.data?.preferences?.movieGroupTags;
-  return Array.isArray(tags) ? tags : [];
+  const prefs = json?.data?.preferences || {};
+  const rec = prefs.recommender || {};
+  return {
+    groupTags: Array.isArray(prefs.movieGroupTags) ? prefs.movieGroupTags : [],
+    engineId: rec.engineId ?? null,
+    engineWeight: rec.engineWeight ?? null,
+    popWeight: rec.popWeight ?? null,
+    numRatings: json?.data?.numRatings ?? null,
+  };
 }
 
 async function getGenres(credId: string): Promise<any> {
@@ -201,7 +217,7 @@ export {
   getLists,
   getListItems,
   getGenres,
-  getMovieGroupTags,
+  getUserMeta,
   importImdbCsv,
   imdbIdFromMovie,
 };
@@ -218,7 +234,7 @@ module.exports = {
   getLists,
   getListItems,
   getGenres,
-  getMovieGroupTags,
+  getUserMeta,
   importImdbCsv,
   imdbIdFromMovie,
 };

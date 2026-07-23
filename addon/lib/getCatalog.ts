@@ -2670,20 +2670,23 @@ async function getMovieLensCatalog(
     const maxFutureDays = metadata.maxFutureDays ?? (sortBy === 'releaseDate' ? 0 : undefined);
     const maxDaysAgo = metadata.maxDaysAgo;
     const sortDirection = metadata.sortDirection;
+    const includeRated = metadata.includeRated === true;
     let tag = String(metadata.tags || '')
-      .split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean).join(',') || undefined;
+      .split(',').map((s: string) => s.trim()).filter(Boolean).join(',') || undefined;
 
-    if (!tag && sortBy !== 'prediction' && catalogId !== 'movielens.watchlist') {
-      const tagsTtl = parseInt(process.env.MOVIELENS_GROUPTAGS_TTL_SECONDS || '86400', 10);
-      const groupTags = await cacheWrapGlobal(`movielens-grouptags:${credId}`,
-        () => movielens.getMovieGroupTags(credId), tagsTtl);
-      if (Array.isArray(groupTags) && groupTags.length) {
-        tag = groupTags.map((t: string) => t.trim().toLowerCase()).filter(Boolean).join(',');
+    const isList = catalogId.startsWith('movielens.list.');
+
+    if (!tag && !isList && catalogId !== 'movielens.watchlist') {
+      const metaTtl = parseInt(
+        process.env.MOVIELENS_USERMETA_TTL_SECONDS || process.env.MOVIELENS_GROUPTAGS_TTL_SECONDS || '43200', 10);
+      const userMeta: any = await cacheWrapGlobal(`movielens-usermeta:${credId}`,
+        () => movielens.getUserMeta(credId), metaTtl);
+      if (userMeta?.engineId === 'bard' && Array.isArray(userMeta.groupTags) && userMeta.groupTags.length) {
+        tag = userMeta.groupTags.map((t: string) => t.trim()).filter(Boolean).join(',');
       }
     }
 
-    const isList = catalogId.startsWith('movielens.list.');
-    const filterKey = `${sortBy}:${sortDirection || ''}:${tag || ''}:${minYear || ''}:${maxYear || ''}:${minPop || ''}:${maxFutureDays ?? ''}:${maxDaysAgo || ''}`;
+    const filterKey = `${sortBy}:${sortDirection || ''}:${tag || ''}:${minYear || ''}:${maxYear || ''}:${minPop || ''}:${maxFutureDays ?? ''}:${maxDaysAgo || ''}:${includeRated ? 'r1' : 'r0'}`;
     const cacheKey = `movielens-catalog:${credId}:${catalogId}:${genreName || 'all'}:${filterKey}:${page}:${pageSize}`;
     const items = await cacheWrapGlobal(cacheKey, async () => {
       if (isList) {
@@ -2708,7 +2711,7 @@ async function getMovieLensCatalog(
         return movielens.wishlist(credId, { page, pageSize });
       }
       return movielens.explore(credId, {
-        hasRated: 'no', sortBy, sortDirection, tag, genre: genreName, minYear, maxYear, minPop, maxFutureDays, maxDaysAgo, page, pageSize,
+        hasRated: includeRated ? undefined : 'no', sortBy, sortDirection, tag, genre: genreName, minYear, maxYear, minPop, maxFutureDays, maxDaysAgo, page, pageSize,
       });
     }, ttl);
     const windowItems = Array.isArray(items) ? items : [];

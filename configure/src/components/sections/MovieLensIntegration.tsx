@@ -144,12 +144,14 @@ export function MovieLensIntegration({ isOpen, onClose }: MovieLensIntegrationPr
   };
 
   const addCatalog = (id: string, name: string, metadata?: Record<string, unknown>) => {
-    if (config.catalogs.some(c => c.id === id)) {
+    const isExplore = id.startsWith('movielens.toppicks');
+    if (!isExplore && config.catalogs.some(c => c.id === id)) {
       toast.info(`${name} is already added.`);
       return;
     }
+    const uniqueId = isExplore ? `${id}.${Date.now().toString(36)}` : id;
     const newCatalog: CatalogConfig = {
-      id,
+      id: uniqueId,
       type: 'movie',
       name,
       enabled: true,
@@ -163,7 +165,7 @@ export function MovieLensIntegration({ isOpen, onClose }: MovieLensIntegrationPr
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <img src="https://movielens.org/favicon.ico" alt="MovieLens" className="h-5 w-5 rounded" />
@@ -187,19 +189,21 @@ export function MovieLensIntegration({ isOpen, onClose }: MovieLensIntegrationPr
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
-                <div className="space-y-1">
-                  <Label htmlFor="ml-username">Username or email</Label>
-                  <Input id="ml-username" value={userNameInput} onChange={e => setUserNameInput(e.target.value)} autoComplete="off" />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="ml-password">Password</Label>
-                  <Input id="ml-password" type="password" value={passwordInput} onChange={e => setPasswordInput(e.target.value)} autoComplete="new-password" />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label htmlFor="ml-username">Username or email</Label>
+                    <Input id="ml-username" value={userNameInput} onChange={e => setUserNameInput(e.target.value)} autoComplete="off" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="ml-password">Password</Label>
+                    <Input id="ml-password" type="password" value={passwordInput} onChange={e => setPasswordInput(e.target.value)} autoComplete="new-password" />
+                  </div>
                 </div>
                 <p className="text-xs text-muted-foreground">
                   MovieLens has no app authorization, so this server stores your password (encrypted)
                   to keep the session alive. Please use a unique password for MovieLens.
                 </p>
-                <Button onClick={handleConnect} disabled={connecting} className="w-full">
+                <Button onClick={handleConnect} disabled={connecting} className="w-full sm:w-auto">
                   {connecting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
                   Connect
                 </Button>
@@ -226,7 +230,7 @@ export function MovieLensIntegration({ isOpen, onClose }: MovieLensIntegrationPr
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <Button onClick={handleSyncNow} disabled={syncing} variant="secondary" className="w-full">
+                  <Button onClick={handleSyncNow} disabled={syncing} variant="secondary" className="w-full sm:w-auto">
                     {syncing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
                     Import ratings now
                   </Button>
@@ -244,18 +248,18 @@ export function MovieLensIntegration({ isOpen, onClose }: MovieLensIntegrationPr
                   <CardTitle className="text-base">Add catalogs</CardTitle>
                   <CardDescription>Sort and year filters live in each catalog's gear settings.</CardDescription>
                 </CardHeader>
-                <CardContent className="grid grid-cols-1 gap-2">
+                <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.toppicks', 'MovieLens Top Picks')}>
                     <Sparkles className="h-4 w-4 mr-2" /> Top Picks for You <Plus className="h-4 w-4 ml-auto" />
                   </Button>
                   <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.watchlist', 'MovieLens Watchlist')}>
                     <Bookmark className="h-4 w-4 mr-2" /> Your Watchlist <Plus className="h-4 w-4 ml-auto" />
                   </Button>
-                  <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.toppicks.recent', 'New Releases for You', { sortBy: 'releaseDate' })}>
+                  <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.toppicks.recent', 'New Releases for You', { maxDaysAgo: 180, maxFutureDays: 0 })}>
                     <CalendarClock className="h-4 w-4 mr-2" /> New Releases for You <Plus className="h-4 w-4 ml-auto" />
                   </Button>
-                  <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.toppicks.rated', 'Highest Rated for You', { sortBy: 'avgRating' })}>
-                    <Star className="h-4 w-4 mr-2" /> Highest Rated for You <Plus className="h-4 w-4 ml-auto" />
+                  <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.toppicks.rated', 'Highest Rated by Users', { sortBy: 'avgRating' })}>
+                    <Star className="h-4 w-4 mr-2" /> Highest Rated by Users <Plus className="h-4 w-4 ml-auto" />
                   </Button>
                 </CardContent>
               </Card>
@@ -265,8 +269,8 @@ export function MovieLensIntegration({ isOpen, onClose }: MovieLensIntegrationPr
                   <CardTitle className="text-base">Your Lists</CardTitle>
                   <CardDescription>Custom lists you've created on MovieLens.</CardDescription>
                 </CardHeader>
-                <CardContent className="grid grid-cols-1 gap-2">
-                  <Button variant="secondary" onClick={handleLoadLists} disabled={loadingLists}>
+                <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <Button variant="secondary" className="sm:col-span-2 sm:justify-self-start" onClick={handleLoadLists} disabled={loadingLists}>
                     {loadingLists ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
                     {lists === null ? 'Load my lists' : 'Refresh lists'}
                   </Button>
@@ -281,7 +285,7 @@ export function MovieLensIntegration({ isOpen, onClose }: MovieLensIntegrationPr
                     </Button>
                   ))}
                   {lists?.length === 0 && (
-                    <p className="text-xs text-muted-foreground">No lists on your MovieLens account yet.</p>
+                    <p className="text-xs text-muted-foreground sm:col-span-2">No lists on your MovieLens account yet.</p>
                   )}
                 </CardContent>
               </Card>

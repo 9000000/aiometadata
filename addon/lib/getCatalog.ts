@@ -2683,7 +2683,7 @@ async function getMovieLensCatalog(
       const metaTtl = parseInt(
         process.env.MOVIELENS_USERMETA_TTL_SECONDS || process.env.MOVIELENS_GROUPTAGS_TTL_SECONDS || '43200', 10);
       const userMeta: any = await cacheWrapGlobal(`movielens-usermeta:${credId}`,
-        () => movielens.getUserMeta(credId), metaTtl);
+        async () => movielens.getUserMeta(credId), metaTtl);
       if (userMeta?.engineId === 'bard' && Array.isArray(userMeta.groupTags) && userMeta.groupTags.length) {
         tag = userMeta.groupTags.map((t: string) => t.trim()).filter(Boolean).join(',');
       }

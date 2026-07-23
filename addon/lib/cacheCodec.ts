@@ -22,11 +22,19 @@ function hasCompressionHeader(value: Buffer | string | null | undefined): boolea
     && value.subarray(0, HEADER.length).equals(HEADER);
 }
 
-async function encodeCachePayload(value: unknown): Promise<string | Buffer> {
+type EncodeCachePayloadOptions = {
+  compressionEnabled?: boolean;
+};
+
+async function encodeCachePayload(
+  value: unknown,
+  options?: EncodeCachePayloadOptions,
+): Promise<string | Buffer> {
   const json = JSON.stringify(value);
   const jsonBytes = Buffer.byteLength(json);
+  const compressionEnabled = options?.compressionEnabled ?? isCompressionEnabled();
 
-  if (!isCompressionEnabled() || jsonBytes < parseMinBytes()) {
+  if (!compressionEnabled || jsonBytes < parseMinBytes()) {
     return json;
   }
 

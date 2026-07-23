@@ -307,6 +307,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: 300,
   },
   {
+    key: 'CONFIG_CACHE_COMPRESSION_ENABLED',
+    envVar: 'CONFIG_CACHE_COMPRESSION_ENABLED',
+    label: 'Config Cache Compression',
+    description: 'Enable lz4 compression for user config cache entries in Redis',
+    category: 'Cache',
+    type: 'boolean',
+    default: true,
+  },
+  {
     key: 'CACHE_COMPRESSION_ENABLED',
     envVar: 'CACHE_COMPRESSION_ENABLED',
     label: 'Cache Compression',

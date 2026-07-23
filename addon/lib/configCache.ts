@@ -11,6 +11,9 @@ function parsePositiveIntEnv(envValue: string | undefined, defaultValue: number,
 }
 
 function CONFIG_CACHE_TTL_SEC() { return parsePositiveIntEnv(process.env.CONFIG_CACHE_TTL_SEC, 300, 10); }
+function isConfigCacheCompressionEnabled(): boolean {
+  return process.env.CONFIG_CACHE_COMPRESSION_ENABLED !== 'false';
+}
 const KEY_PREFIX = 'user-config:';
 
 function redisKey(id: string): string {
@@ -34,7 +37,9 @@ class ConfigCache {
   async set(key: string, value: any): Promise<void> {
     if (!redis || redis.status !== 'ready' || value === undefined) return;
     try {
-      const payload = await encodeCachePayload(value);
+      const payload = await encodeCachePayload(value, {
+        compressionEnabled: isConfigCacheCompressionEnabled(),
+      });
       await redis.set(redisKey(key), payload, 'EX', CONFIG_CACHE_TTL_SEC());
     } catch (err: any) {
       logger.warn(`set failed for ${String(key).substring(0, 8)}...: ${err.message}`);

@@ -559,6 +559,86 @@ These caps bound the per-process heap used by module-level caches. The defaults 
 
 ---
 
+## MovieLens Integration
+
+Powers personalized recommendation catalogs backed by a user's own MovieLens account, plus automatic syncing of their Trakt/Simkl/MDBList ratings into MovieLens.
+
+### `MOVIELENS_CRED_KEY`
+- **Default**: _(none — required to enable the integration)_
+- **Description**: AES-256-GCM key used to encrypt stored MovieLens passwords at rest. MovieLens has no OAuth, so the integration must retain a password to re-establish expired cookie sessions. This setting is **env-only** and is never editable from the dashboard. Rotating it orphans all stored credentials, forcing every user to reconnect.
+- **Example**: `MOVIELENS_CRED_KEY=a-long-random-secret`
+
+### `ENABLE_MOVIELENS_SYNC`
+- **Default**: `true`
+- **Description**: Enables the scheduled background job that re-syncs ratings into connected MovieLens accounts. Requires a restart to take effect.
+- **Example**: `ENABLE_MOVIELENS_SYNC=false`
+
+### `MOVIELENS_SYNC_INTERVAL_HOURS`
+- **Default**: `24`
+- **Description**: How often the scheduled job re-syncs ratings into MovieLens. Requires a restart to take effect.
+- **Example**: `MOVIELENS_SYNC_INTERVAL_HOURS=12`
+
+### `MOVIELENS_MANUAL_SYNC_COOLDOWN_SECONDS`
+- **Default**: `21600`
+- **Description**: Minimum time between user-triggered "Import ratings" runs, to keep users from hammering MovieLens on demand.
+- **Example**: `MOVIELENS_MANUAL_SYNC_COOLDOWN_SECONDS=3600`
+
+### `MOVIELENS_API_BASE`
+- **Default**: `https://movielens.org/api`
+- **Description**: Base URL for the MovieLens API.
+- **Example**: `MOVIELENS_API_BASE=https://movielens.org/api`
+
+### `MOVIELENS_REQUEST_TIMEOUT_MS`
+- **Default**: `25000`
+- **Description**: Timeout for requests to the MovieLens API, in milliseconds.
+- **Example**: `MOVIELENS_REQUEST_TIMEOUT_MS=30000`
+
+### `MOVIELENS_USER_AGENT`
+- **Default**: `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36`
+- **Description**: User-Agent header sent to MovieLens. MovieLens sits behind Cloudflare, which serves an HTML block page to requests lacking a browser-like User-Agent, so this must remain plausible.
+- **Example**: `MOVIELENS_USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...`
+
+### `MOVIELENS_LOGIN_REFERER`
+- **Default**: `https://movielens.org/login`
+- **Description**: Referer header used for the MovieLens login request.
+- **Example**: `MOVIELENS_LOGIN_REFERER=https://movielens.org/login`
+
+### `MOVIELENS_IMPORT_REFERER`
+- **Default**: `https://movielens.org/profile/settings/import-export`
+- **Description**: Referer header used for the MovieLens CSV ratings-import request.
+- **Example**: `MOVIELENS_IMPORT_REFERER=https://movielens.org/profile/settings/import-export`
+
+### `MOVIELENS_CATALOG_TTL_SECONDS`
+- **Default**: `3600`
+- **Description**: Time-to-live for MovieLens catalog cache entries, in seconds. A per-catalog `cacheTTL` configured in the UI takes precedence.
+- **Example**: `MOVIELENS_CATALOG_TTL_SECONDS=7200`
+
+### `MOVIELENS_USERMETA_TTL_SECONDS`
+- **Default**: `43200`
+- **Description**: Time-to-live for cached MovieLens account metadata — the selected recommendation engine and the onboarding taste tags. Taste tags are only injected into catalog queries while the account is on the `bard` engine, so lowering this makes the addon react faster when a user graduates to a personalized engine. Replaces `MOVIELENS_GROUPTAGS_TTL_SECONDS`, which is still honoured as a fallback.
+- **Example**: `MOVIELENS_USERMETA_TTL_SECONDS=21600`
+
+### `MOVIELENS_LIST_MAX_PAGES`
+- **Default**: `50`
+- **Description**: Safety cap on the number of pages fetched when paginating a MovieLens user list. The list endpoint ignores `pageSize` and returns fixed-size pages, so deep pagination requires accumulating pages server-side.
+- **Example**: `MOVIELENS_LIST_MAX_PAGES=100`
+
+---
+
+## Metahub Artwork Checks
+
+### `METAHUB_IMAGE_EXISTS_TTL_SECONDS`
+- **Default**: `86400`
+- **Description**: Time-to-live for cached metahub logo/image existence checks, in seconds. These checks gate the IMDb artwork fallback, so caching them avoids a HEAD request per item on every render.
+- **Example**: `METAHUB_IMAGE_EXISTS_TTL_SECONDS=43200`
+
+### `METAHUB_IMAGE_HEAD_TIMEOUT_MS`
+- **Default**: `4000`
+- **Description**: Timeout for the metahub image existence HEAD request, in milliseconds. A miss falls through to the configured provider's artwork, so a low value trades fallback coverage for latency.
+- **Example**: `METAHUB_IMAGE_HEAD_TIMEOUT_MS=2000`
+
+---
+
 ## Example Configurations
 
 ### Minimal Setup (.env)

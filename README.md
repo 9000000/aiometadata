@@ -146,7 +146,9 @@ The memory tier is on top of the addon's own footprint, so budget roughly `basel
 
 #### Migrating from the old nginx poster cache
 
-Earlier versions ran a bundled nginx proxy on port `8888`. It has been replaced by the built-in cache, so you can drop the `8888` expose/labels, the `/var/cache/nginx` volume, and `init: true`.
+Earlier versions ran a bundled nginx proxy on port `8888`. It has been replaced by the built-in cache, so you can drop the `8888` expose/labels and `init: true`, plus any reverse-proxy route pointing at port 8888 (that hostname stops resolving to anything).
+
+**Keep the `/var/cache/nginx` volume for now** — it holds the cache being imported. See the import step below for when it is safe to remove.
 
 > ### ⚠ Breaking change — `POSTER_PROXY_PREFIX_URL`
 >
@@ -170,7 +172,24 @@ volumes:
   - ${DOCKER_DATA_DIR}/poster-cache:/var/cache/nginx   # keep for one start, then remove
 ```
 
-On startup the addon detects the old cache, imports it in the background, and records a marker so it never runs again — the log tells you when it is safe to drop the mount. Files it cannot parse are skipped, never imported as corrupt entries. To skip the import entirely, set `POSTER_CACHE_IMPORT_NGINX_DIR=off`.
+On startup the addon detects the old cache and imports it in the background, so serving is never delayed. You will see:
+
+```
+[PosterCacheImport] Found a cache from the previous built-in nginx proxy at
+/var/cache/nginx/posters — importing it once so the upgrade does not start cold.
+```
+
+Files it cannot parse are skipped, never imported as corrupt entries.
+
+**Let it finish before restarting.** The completion marker is only written at the end, so restarting mid-import starts it over — a large cache can take a while (a ~9 GB / 80k-image cache is tens of minutes). It is safe to remove the `/var/cache/nginx` mount once `.nginx-import.json` exists in the cache directory:
+
+```bash
+docker exec <container> cat /app/addon/data/poster-cache/.nginx-import.json
+```
+
+To skip the import entirely, set `POSTER_CACHE_IMPORT_NGINX_DIR=off`. To import from a non-standard path, set it to that path.
+
+> **Only posters are cached by default.** `ENABLE_BUILTIN_POSTER_CACHE` alone caches the `poster` class — everything else returns `X-Cache-Status: BYPASS` until you opt it in with `POSTER_CACHE_BACKGROUNDS`, `POSTER_CACHE_LOGOS`, `POSTER_CACHE_LANDSCAPE_POSTERS`, `POSTER_CACHE_THUMBNAILS`, or `POSTER_CACHE_PROCESSED_IMAGES`.
 
 #### Option B — Standalone nginx service
 

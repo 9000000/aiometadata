@@ -854,7 +854,7 @@ async function getManifest(config: any, opts: { tag?: string } = {}): Promise<an
     const animeGenres = await cacheWrapJikanApi('anime-genres', async () => {
       logger.info('[Cache Miss] Fetching fresh anime genre list in manifest from Jikan...');
       return await jikan.getAnimeGenres();
-    }, null, { skipVersion: true });
+    }, null);
     animeGenreNames = animeGenres.filter(Boolean).map((genre: any) => genre.name).sort();
     logger.debug(`Anime genres fetched in ${Date.now() - animeStart}ms`);
 
@@ -864,7 +864,7 @@ async function getManifest(config: any, opts: { tag?: string } = {}): Promise<an
         const studioPromise = cacheWrapJikanApi('mal-studios', async () => {
           logger.debug('[Cache Miss] Fetching fresh anime studio list in manifest from Jikan...');
           return await jikan.getStudios();
-        }, 30 * 24 * 60 * 60, { skipVersion: true });
+        }, 30 * 24 * 60 * 60);
 
         const timeoutPromise = new Promise((_: any, reject: any) => {
           setTimeout(() => reject(new Error('Studio fetch timeout')), 2000);
@@ -889,7 +889,7 @@ async function getManifest(config: any, opts: { tag?: string } = {}): Promise<an
         const seasonsData = await cacheWrapJikanApi('mal-available-seasons', async () => {
           logger.debug('[Cache Miss] Fetching available seasons from Jikan...');
           return await jikan.getAvailableSeasons();
-        }, 7 * 24 * 60 * 60, { skipVersion: true });
+        }, 7 * 24 * 60 * 60);
 
         const seasonNames = ['Winter', 'Spring', 'Summer', 'Fall'];
         const seasonOrder: Record<string, number> = { winter: 0, spring: 1, summer: 2, fall: 3 };

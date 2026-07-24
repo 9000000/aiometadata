@@ -377,7 +377,7 @@ class ConfigApi {
             const mdblistChanged = config.apiKeys.mdblist !== oldConfig.apiKeys.mdblist;
             
             if (rpdbChanged || mdblistChanged) {
-              patterns.push(`v*:catalog:${userUUID}:*`);
+              patterns.push(`e*:catalog:${userUUID}:*`);
               logger.debug(`API keys changed - RPDB: ${rpdbChanged}, MDBList: ${mdblistChanged} - clearing user's catalog cache`);
             }
           }
@@ -443,7 +443,7 @@ class ConfigApi {
             );
             if (providersChanged) {
               logger.info('Providers changed - clearing user catalog cache to avoid stale meta provider data');
-              patterns.push(`v*:catalog:${userUUID}:*`);
+              patterns.push(`e*:catalog:${userUUID}:*`);
             }
           } else {
             logger.debug('No providers to compare - old:', oldConfig?.providers, 'new:', config.providers);
@@ -480,7 +480,7 @@ class ConfigApi {
             if (mdblistChanged) {
               // Clear cache for specific MDBList catalogs that changed
               for (const catalogId of changedCatalogs) {
-                const pattern = `v*:catalog:${userUUID}:*${catalogId}*`;
+                const pattern = `e*:catalog:${userUUID}:*${catalogId}*`;
                 patterns.push(pattern);
                 logger.debug(`Added cache invalidation pattern for MDBList catalog: ${pattern}`);
               }
@@ -731,7 +731,7 @@ class ConfigApi {
             const mdblistChanged = config.apiKeys.mdblist !== oldConfig.apiKeys.mdblist;
             
             if (rpdbChanged || mdblistChanged) {
-              patterns.push(`v*:catalog:${userUUID}:*`);
+              patterns.push(`e*:catalog:${userUUID}:*`);
               logger.debug(`API keys changed - RPDB: ${rpdbChanged}, MDBList: ${mdblistChanged} - clearing user's catalog cache`);
             }
           }
@@ -818,7 +818,7 @@ class ConfigApi {
             );
             if (providersChanged) {
               logger.info('Providers changed - clearing user catalog cache to avoid stale meta provider data');
-              patterns.push(`v*:catalog:${userUUID}:*`);
+              patterns.push(`e*:catalog:${userUUID}:*`);
             }
           }
 
@@ -848,7 +848,7 @@ class ConfigApi {
             if (mdblistChanged) {
               // Clear cache for specific MDBList catalogs that changed
               for (const catalogId of changedCatalogs) {
-                const pattern = `v*:catalog:${userUUID}:*${catalogId}*`;
+                const pattern = `e*:catalog:${userUUID}:*${catalogId}*`;
                 patterns.push(pattern);
                 logger.debug(`Added cache invalidation pattern for MDBList catalog: ${pattern}`);
               }

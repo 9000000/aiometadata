@@ -77,6 +77,7 @@ const jikan = require('./lib/mal');
 const buildInfo = require('./lib/buildInfo');
 const { clientDistDir, clientIndexPath, publicDir } = require('./lib/runtimePaths');
 const ADDON_VERSION = buildInfo.version;
+const { withGlobalEpoch } = require('./lib/cacheEpoch');
 const idMapper = require('./lib/id-mapper');
 const wikiMappings = require('./lib/wiki-mapper.js');
 
@@ -4097,7 +4098,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
             const mediaType = type_filter || 'series';
             const allAnimeGenres = await cacheWrapJikanApi('anime-genres', async () => {
               return await jikan.getAnimeGenres();
-            }, null, { skipVersion: true });
+            }, null);
             const genreNameToFetch = genreName || allAnimeGenres[0]?.name;
             if (genreNameToFetch) {
               const selectedGenre = allAnimeGenres.find(g => g.name === genreNameToFetch);
@@ -4105,7 +4106,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
                 const genreId = selectedGenre.mal_id;
                 const animeResults = await cacheWrapJikanApi(`mal-genre-${genreId}-${mediaType}-${page}-${config.sfw}`, async () => {
                   return await jikan.getAnimeByGenre(genreId, mediaType, page, config);
-                }, null, { skipVersion: true });
+                }, null);
                 metas = await parseAnimeCatalogMetaBatch(animeResults, config, language);
               }
             }
@@ -5661,13 +5662,16 @@ addon.get('/api/cache/test-essential', async (req, res) => {
   }
   
   try {
+    // Jikan and genre lists are raw upstream payloads cached with `upstream`, so
+    // they carry no prefix at all; only the language list is epoch-keyed. (This list
+    // previously prefixed every entry with the addon version and so never matched.)
     const essentialKeys = [
-      `global:${ADDON_VERSION}:jikan-api:anime-genres`,
-      `global:${ADDON_VERSION}:jikan-api:mal-studios`,
-      `global:${ADDON_VERSION}:genre:tmdb:en-US:movie`,
-      `global:${ADDON_VERSION}:genre:tmdb:en-US:series`,
-      `global:${ADDON_VERSION}:genre:tvdb:en-US:series`,
-      `global:${ADDON_VERSION}:languages:en-US`
+      `global:jikan-api:anime-genres`,
+      `global:jikan-api:mal-studios`,
+      `global:genre:tmdb:en-US:movie`,
+      `global:genre:tmdb:en-US:series`,
+      `global:genre:tvdb:en-US:series`,
+      withGlobalEpoch(`languages:en-US`)
     ];
     
     const results = {};

@@ -1,4 +1,3 @@
-const buildInfo: any = require('./buildInfo');
 const redis: any = require('./redisClient');
 const { loadConfigFromDatabase }: any = require('./configApi');
 const consola: any = require('consola');
@@ -37,7 +36,7 @@ function parsePositiveIntEnv(envValue: any, defaultValue: number, minValue: numb
 }
 
 
-const ADDON_VERSION = buildInfo.version;
+const { withEpoch, withGlobalEpoch }: any = require('./cacheEpoch');
 
 function META_TTL() { return parseInt(process.env.META_TTL || String(7 * 24 * 60 * 60), 10); }
 function CATALOG_TTL() { return parseInt(process.env.CATALOG_TTL || String(1 * 24 * 60 * 60), 10); }
@@ -453,8 +452,8 @@ async function cacheWrap(key: string, method: () => Promise<any>, ttl: number, o
     return method();
   }
 
-  const versionedKey = `v${ADDON_VERSION}:${key}`;
-  return singleFlight(versionedKey, () => cacheWrapInternal(key, method, ttl, options, versionedKey));
+  const epochKey = withEpoch(key);
+  return singleFlight(epochKey, () => cacheWrapInternal(key, method, ttl, options, epochKey));
 }
 
 async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: number, options: any, versionedKey: string): Promise<any> {
@@ -597,9 +596,9 @@ async function cacheWrapGlobal(key: string, method: () => Promise<any>, ttl: num
     return method();
   }
 
-  const { skipVersion = false } = options;
-  const versionedKey = skipVersion ? `global:${key}` : `global:${ADDON_VERSION}:${key}`;
-  return singleFlight(versionedKey, () => cacheWrapGlobalInternal(key, method, ttl, options, versionedKey));
+  const { upstream = false } = options;
+  const epochKey = upstream ? `global:${key}` : withGlobalEpoch(key);
+  return singleFlight(epochKey, () => cacheWrapGlobalInternal(key, method, ttl, options, epochKey));
 }
 
 async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, ttl: number, options: any, versionedKey: string): Promise<any> {
@@ -1845,7 +1844,7 @@ async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = 
     return includeVideos || componentName !== 'videos';
   });
   const componentNames = componentEntries.map(([componentName]) => componentName);
-  const cacheKeys = componentEntries.map(([, key]) => `v${ADDON_VERSION}:${key}`);
+  const cacheKeys = componentEntries.map(([, key]) => withEpoch(key));
 
   let componentResults: any[];
 
@@ -2108,7 +2107,7 @@ async function cacheWrapMetaSmart(userUUID: string, metaId: string, method: () =
   cacheLogger.debug(`[Meta] Component reconstruction failed for ${metaId}${failureReason}`);
 
   const lockContextHash = getMetaSmartLockContextHash(config, metaId, type, includeVideos, useShowPoster);
-  const lockKey = `meta-smart:v${ADDON_VERSION}:${userUUID || 'global'}:${type || 'unknown'}:${lockContextHash}:videos=${includeVideos ? 1 : 0}:showPoster=${useShowPoster ? 1 : 0}:${metaId}`;
+  const lockKey = withEpoch(`meta-smart:${userUUID || 'global'}:${type || 'unknown'}:${lockContextHash}:videos=${includeVideos ? 1 : 0}:showPoster=${useShowPoster ? 1 : 0}:${metaId}`);
 
   return singleFlight(lockKey, async () => {
     const reconstructedAfterWait = await reconstructMetaFromComponentsWithConfig({
@@ -2178,7 +2177,7 @@ async function cacheComponentsPipeline(components: any[], ttl: number, options: 
   const queuedCommands: string[] = [];
 
   for (const { cacheKey, componentData } of components) {
-    const versionedKey = `v${ADDON_VERSION}:${cacheKey}`;
+    const versionedKey = withEpoch(cacheKey);
 
     try {
       const payload = await encodeCachePayload(componentData);
@@ -2227,7 +2226,8 @@ function cacheWrapJikanApi(key: string, method: () => Promise<any>, customTTL: n
 
   return cacheWrapGlobal(`jikan-api:${subkey}`, method, ttl, {
     resultClassifier: jikanResultClassifier,
-    ...options
+    ...options,
+    upstream: true,
   });
 }
 
@@ -2238,7 +2238,7 @@ function cacheWrapMDBListGenres(genreType: string, method: () => Promise<any>): 
 
 function cacheWrapTraktGenres(genreType: string, method: () => Promise<any>): Promise<any> {
   cacheLogger.debug(`Caching Trakt genres for type: ${genreType}`);
-  return cacheWrapGlobal(`trakt-genres-${genreType}`, method, MDBLIST_GENRES_TTL, { skipVersion: true });
+  return cacheWrapGlobal(`trakt-genres-${genreType}`, method, MDBLIST_GENRES_TTL, { upstream: true });
 }
 
 function cacheWrapStremThruGenres(catalogUrl: string, method: () => Promise<any>): Promise<any> {
@@ -2304,7 +2304,7 @@ function cacheWrapTvdbApi(key: string, method: () => Promise<any>): Promise<any>
 
   return cacheWrapGlobal(`tvdb-api:${key}`, method, TVDB_API_TTL, {
     resultClassifier: tvdbResultClassifier,
-    skipVersion: true
+    upstream: true
   });
 }
 

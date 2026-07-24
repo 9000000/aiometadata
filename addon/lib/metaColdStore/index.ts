@@ -11,13 +11,12 @@ export function init(): void { store.init(); }
 export function classify(meta: any) { return classifyMetaStability(meta); }
 
 /**
- * Redis keys carry the addon version (`v2.8.0:meta-basic:<hash>:<id>`) so a release
- * flushes the 7-day hot tier. The cold store keeps data for 60–180 days and must
- * outlive releases, so it stores the bare key and tracks payload shape with the
- * cache epoch instead. Callers keep passing their versioned keys either way.
+ * Redis keys carry an invalidation prefix (`e12:meta-basic:<hash>:<id>`, or
+ * `v2.8.0:…` before the epoch existed). The cold store stores the bare key and
+ * tracks payload shape in its own `epoch` column, so it survives a hot-tier
+ * prefix change. Callers keep passing their prefixed keys either way.
  */
-const VERSION_PREFIX = /^v\d[^:]*:/;
-function stripVersion(key: string): string { return key.replace(VERSION_PREFIX, ''); }
+const { stripCachePrefix }: any = require('../cacheEpoch');
 
 export function writeThrough(
   meta: any,
@@ -48,7 +47,7 @@ export async function readThrough(missingKeys: string[]): Promise<Map<string, { 
   // re-warm writes back to the key the hot tier is actually being asked for.
   const callerKeys = new Map<string, string[]>();
   for (const key of missingKeys) {
-    const bare = stripVersion(key);
+    const bare = stripCachePrefix(key);
     const existing = callerKeys.get(bare);
     if (existing) existing.push(key);
     else callerKeys.set(bare, [key]);

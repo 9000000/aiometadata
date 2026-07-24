@@ -247,7 +247,7 @@ async function fetchSimklUserStats(tokenId: string): Promise<any> {
       return response.data;
     },
     statsTTL,
-    { skipVersion: true }
+    { upstream: true }
   );
 }
 
@@ -303,7 +303,7 @@ async function fetchSimklLastActivities(accessToken: string): Promise<any> {
       return response.data;
     },
     SIMKL_ACTIVITIES_TTL, 
-    { skipVersion: true }
+    { upstream: true }
   );
 }
 
@@ -1023,7 +1023,7 @@ async function fetchSimklTrendingItems(
         );
       },
       ttl,
-      { skipVersion: true }
+      { upstream: true }
     );
 
     const allItems: any[] = Array.isArray(response.data) ? response.data : [];
@@ -1227,7 +1227,7 @@ async function fetchSimklGenreItems(
         );
       },
       ttl,
-      { skipVersion: true }
+      { upstream: true }
     );
 
     const allItems: any[] = Array.isArray(response?.data) ? response.data : [];
@@ -1286,7 +1286,7 @@ async function fetchSimklDvdReleases(
         );
       },
       ttl,
-      { skipVersion: true }
+      { upstream: true }
     );
 
     const allItems: any[] = Array.isArray(response.data) ? response.data : [];
@@ -1350,7 +1350,7 @@ async function fetchSimklCalendar(
         return Array.isArray(response.data) ? response.data : [];
       },
       cacheTTL,
-      { skipVersion: true }
+      { upstream: true }
     );
   } catch (err: any) {
     logger.error(`Error fetching Simkl calendar ${type}:`, err.message);

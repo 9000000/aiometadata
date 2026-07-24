@@ -197,7 +197,7 @@ async function getMalDiscoverCatalog(
     if (genreName && genreName.toLowerCase() !== 'none') {
       const allAnimeGenres = await cacheWrapJikanApi('anime-genres', async () => {
         return await jikan.getAnimeGenres();
-      }, null, { skipVersion: true });
+      }, null);
 
       const selectedGenre = allAnimeGenres.find(
         (g: any) => g.name.toLowerCase() === genreName.toLowerCase()
@@ -260,44 +260,44 @@ async function getMalCatalog(
   if (catalogId === 'mal.airing') {
     animeResults = await cacheWrapJikanApi(`mal-airing-${page}-${config.sfw}`, async () => {
       return await jikan.getAiringNow(page, config);
-    }, 24 * 60 * 60, { skipVersion: true });
+    }, 24 * 60 * 60);
   } else if (catalogId === 'mal.upcoming') {
     animeResults = await cacheWrapJikanApi(`mal-upcoming-${page}-${config.sfw}`, async () => {
       return await jikan.getUpcoming(page, config);
-    }, 24 * 60 * 60, { skipVersion: true });
+    }, 24 * 60 * 60);
   } else if (catalogId === 'mal.top_movies') {
     animeResults = await cacheWrapJikanApi(`mal-top-movies-${page}-${config.sfw}`, async () => {
       return await jikan.getTopAnimeByType('movie', page, config);
-    }, null, { skipVersion: true });
+    }, null);
   } else if (catalogId === 'mal.top_series') {
     animeResults = await cacheWrapJikanApi(`mal-top-series-${page}-${config.sfw}`, async () => {
       return await jikan.getTopAnimeByType('tv', page, config);
-    }, null, { skipVersion: true });
+    }, null);
   } else if (catalogId === 'mal.most_popular') {
     animeResults = await cacheWrapJikanApi(`mal-most-popular-${page}-${config.sfw}`, async () => {
       return await jikan.getTopAnimeByFilter('bypopularity', page, config);
-    }, null, { skipVersion: true });
+    }, null);
   } else if (catalogId === 'mal.most_favorites') {
     animeResults = await cacheWrapJikanApi(`mal-most-favorites-${page}-${config.sfw}`, async () => {
       return await jikan.getTopAnimeByFilter('favorite', page, config);
-    }, null, { skipVersion: true });
+    }, null);
   } else if (catalogId === 'mal.top_anime') {
     animeResults = await cacheWrapJikanApi(`mal-top-anime-${page}-${config.sfw}`, async () => {
       return await jikan.getTopAnimeByType('anime', page, config);
-    }, null, { skipVersion: true });
+    }, null);
   } else if (catalogId === 'mal.season_top') {
     animeResults = await cacheWrapJikanApi(`mal-season-top-${page}-${config.sfw}`, async () => {
       return await jikan.getSeasonTopRated(page, config);
-    }, 24 * 60 * 60, { skipVersion: true });
+    }, 24 * 60 * 60);
   } else if (catalogId === 'mal.season_top_new') {
     animeResults = await cacheWrapJikanApi(`mal-season-top-new-${page}-${config.sfw}`, async () => {
       return await jikan.getSeasonTopNew(page, config);
-    }, 24 * 60 * 60, { skipVersion: true });
+    }, 24 * 60 * 60);
   } else if (decadeMap[catalogId]) {
     const [startDate, endDate] = decadeMap[catalogId];
     const allAnimeGenres = await cacheWrapJikanApi('anime-genres', async () => {
       return await jikan.getAnimeGenres();
-    }, null, { skipVersion: true });
+    }, null);
     const genreNameToFetch = genre && genre !== 'None' ? genre : allAnimeGenres[0]?.name;
     if (genreNameToFetch) {
       const selectedGenre = allAnimeGenres.find((g: any) => g.name === genreNameToFetch);
@@ -305,14 +305,14 @@ async function getMalCatalog(
         const genreId = selectedGenre.mal_id;
         animeResults = await cacheWrapJikanApi(`mal-${catalogId}-${page}-${genreId}-${config.sfw}`, async () => {
           return await jikan.getTopAnimeByDateRange(startDate, endDate, page, genreId, config);
-        }, null, { skipVersion: true });
+        }, null);
       }
     }
   } else if (catalogId === 'mal.genres') {
     const mediaType = 'series';
     const allAnimeGenres = await cacheWrapJikanApi('anime-genres', async () => {
       return await jikan.getAnimeGenres();
-    }, null, { skipVersion: true });
+    }, null);
     const genreNameToFetch = genre || allAnimeGenres[0]?.name;
     if (genreNameToFetch) {
       const selectedGenre = allAnimeGenres.find((g: any) => g.name === genreNameToFetch);
@@ -320,12 +320,12 @@ async function getMalCatalog(
         const genreId = selectedGenre.mal_id;
         animeResults = await cacheWrapJikanApi(`mal-genre-${genreId}-${mediaType}-${page}-${config.sfw}`, async () => {
           return await jikan.getAnimeByGenre(genreId, mediaType, page, config);
-        }, null, { skipVersion: true });
+        }, null);
       }
     }
   } else if (catalogId === 'mal.studios') {
     if (genre) {
-      const studios = await cacheWrapJikanApi('mal-studios', () => jikan.getStudios(100), null, { skipVersion: true });
+      const studios = await cacheWrapJikanApi('mal-studios', () => jikan.getStudios(100), null);
       const selectedStudio = studios.find((studio: any) => {
         const defaultTitle = studio.titles.find((t: any) => t.type === 'Default');
         return defaultTitle && defaultTitle.title === genre;
@@ -334,14 +334,14 @@ async function getMalCatalog(
         const studioId = selectedStudio.mal_id;
         animeResults = await cacheWrapJikanApi(`mal-studio-${studioId}-${page}-${config.sfw}`, async () => {
           return await jikan.getAnimeByStudio(studioId, page);
-        }, null, { skipVersion: true });
+        }, null);
       }
     }
   } else if (catalogId === 'mal.schedule') {
     const dayOfWeek = genre || 'Monday';
     animeResults = await cacheWrapJikanApi(`mal-schedule-${dayOfWeek}-${page}-${config.sfw}`, async () => {
       return await jikan.getAiringSchedule(dayOfWeek, page, config);
-    }, null, { skipVersion: true });
+    }, null);
   } else if (catalogId === 'mal.seasons') {
     let seasonString = genre ? decodeURIComponent(genre) : null;
     if (!seasonString) {
@@ -360,7 +360,7 @@ async function getMalCatalog(
     const year = parseInt(parts[1]);
     animeResults = await cacheWrapJikanApi(`mal-season-${year}-${season}-${page}-${config.sfw}`, async () => {
       return await jikan.getAnimeBySeason(year, season, page, config);
-    }, null, { skipVersion: true });
+    }, null);
   } else {
     logger.warn(`[MAL] Unknown catalog id: ${catalogId}`);
     return [];
@@ -3260,7 +3260,7 @@ async function getMergedCatalog(
     }
     if (srcId === 'mal.genres') {
       try {
-        const animeGenres = await cacheWrapJikanApi('anime-genres', async () => await jikan.getAnimeGenres(), 30 * 24 * 60 * 60, { skipVersion: true });
+        const animeGenres = await cacheWrapJikanApi('anime-genres', async () => await jikan.getAnimeGenres(), 30 * 24 * 60 * 60);
         const names = animeGenres.filter(Boolean).map((g: any) => g.name).sort();
         if (names.length > 0) return names[0];
       } catch {}

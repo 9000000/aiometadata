@@ -6,9 +6,13 @@ const logger = consola.withTag('DashboardAPI');
 const { getCacheHealth, getMemoryStats: getCacheMemoryStats } = require('./getCache');
 
 /** System keys that must survive any cache clear. */
+const { EPOCH_STATE_KEY } = require('./epochCleanup');
+
 const PRESERVED_CACHE_KEYS = [
   'maintenance:', 'cache-warming:', 'catalog-warmup:',
   'anime_list:last_update', 'addon:start_time', 'system:app_version',
+  // Clearing this would make the next boot re-sweep the whole keyspace.
+  EPOCH_STATE_KEY,
   'imdb:ratings', 'imdb-ratings-etag',
 ];
 
@@ -2175,6 +2179,7 @@ class DashboardAPI {
         'anime_list:last_update',  // Anime-list XML update timestamp
         'addon:start_time',        // Uptime tracking
         'system:app_version',      // Version tracking
+        EPOCH_STATE_KEY,           // Cache epoch the keyspace was last cleaned to
         'imdb:ratings',            // IMDb ratings hash (essential, large dataset)
         'imdb-ratings-etag',       // IMDb ratings ETag for update checking
       ];

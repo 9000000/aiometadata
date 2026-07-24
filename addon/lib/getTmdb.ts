@@ -604,7 +604,7 @@ export async function genreMovieList(params: any, config: UserConfig) {
     makeTmdbRequest('/genre/movie/list', getApiKey(config), params, 'GET', null, config)
       .then(normalizeTmdbGenreListForCache),
     30 * 24 * 60 * 60,
-    { skipVersion: true }
+    { upstream: true }
   );
 }
 
@@ -614,7 +614,7 @@ export async function genreTvList(params: any, config: UserConfig) {
     makeTmdbRequest('/genre/tv/list', getApiKey(config), params, 'GET', null, config)
       .then(normalizeTmdbGenreListForCache),
     30 * 24 * 60 * 60,
-    { skipVersion: true }
+    { upstream: true }
   );
 }
 

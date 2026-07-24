@@ -1049,7 +1049,7 @@ async function getManifest(config: any, opts: { tag?: string } = {}): Promise<an
       if (userCatalog.id.startsWith('movielens.')) {
           logger.debug(`Processing MovieLens catalog: ${userCatalog.id}`);
           const catalogType = userCatalog.displayType || userCatalog.type;
-          const supportsGenres = userCatalog.id.startsWith('movielens.explore');
+          const supportsGenres = userCatalog.id.startsWith('movielens.explore') || userCatalog.id.startsWith('movielens.watchlist');
           const genreOptions = supportsGenres ? MOVIELENS_GENRES : [];
           const options = userCatalog.showInHome ? genreOptions : ['None', ...genreOptions];
           const extra: any[] = [];

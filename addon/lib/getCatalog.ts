@@ -2713,7 +2713,7 @@ async function getMovieLensCatalog(
         return collected.slice(offset, offset + pageSize);
       }
       if (catalogId === 'movielens.watchlist') {
-        return movielens.wishlist(credId, { page, pageSize });
+        return movielens.wishlist(credId, { genre: genreName, page, pageSize });
       }
       return movielens.explore(credId, {
         // "yes" = only rated, "no" = exclude rated, undefined = include both (all).

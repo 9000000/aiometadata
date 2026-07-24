@@ -4994,12 +4994,16 @@ const handlePosterProxy = async function (req, res) {
       return res.redirect(302, fallback);
     }
 
-    if (isProcessedImageCacheEnabled()) {
+    const isRatingPoster = !customUrl;
+    if (isRatingPoster ? isProcessedImageCacheEnabled() : posterCacheConfig.isClassEnabled('poster')) {
       const posterCacheStore = require('./lib/posterCache/store.js');
       const { fetchImage } = require('./lib/posterCache/upstream.js');
       const { recordServe } = require('./lib/posterCache/handler.js');
       const allowPrivateHost = customUrl ? proxyArtUrlVouched(customUrl, sig) : true;
-      const result = await posterCacheStore.getOrFetch('processed', `rating-poster:${posterUrl}`, () => produceProcessedBytes(posterUrl, () => fetchImage(posterUrl, { allowPrivateHost })));
+      const fetchUpstream = () => fetchImage(posterUrl, { allowPrivateHost });
+      const result = isRatingPoster
+        ? await posterCacheStore.getOrFetch('processed', `rating-poster:${posterUrl}`, () => produceProcessedBytes(posterUrl, fetchUpstream))
+        : await posterCacheStore.getOrFetch('poster', posterUrl, fetchUpstream);
       recordServe('poster', result.status, result.entry.size, req.method, posterUrl);
       res.setHeader('Cache-Control', proxyImageCacheControl());
       return await sendCachedImage(res, result);
@@ -5008,7 +5012,7 @@ const handlePosterProxy = async function (req, res) {
     const imageResponse = await fetchPosterImageStream(posterUrl);
     pipePosterImageResponse(res, imageResponse);
   } catch (error) {
-    if (isProcessedImageCacheEnabled()) require('./lib/posterCache/handler.js').recordServeError();
+    if (posterCacheConfig.isBuiltinPosterCacheEnabled()) require('./lib/posterCache/handler.js').recordServeError();
     const isTimeout = error.code === 'ECONNABORTED' || /timeout/i.test(error.message || '');
     if (isTimeout) {
       consola.warn(`Poster proxy timed out for ${id}, serving fallback:`, error.message);
@@ -5033,12 +5037,12 @@ function streamArtWithFallback(assetName) {
       return res.status(304).end();
     }
     try {
-      if (isProcessedImageCacheEnabled()) {
+      if (posterCacheConfig.isClassEnabled(assetName)) {
         const posterCacheStore = require('./lib/posterCache/store.js');
         const { fetchImage } = require('./lib/posterCache/upstream.js');
         const { recordServe } = require('./lib/posterCache/handler.js');
         const allowPrivateHost = proxyArtUrlVouched(customUrl, sig);
-        const result = await posterCacheStore.getOrFetch('processed', `${assetName}:${customUrl}`, () => produceProcessedBytes(customUrl, () => fetchImage(customUrl, { allowPrivateHost })));
+        const result = await posterCacheStore.getOrFetch(assetName, customUrl, () => fetchImage(customUrl, { allowPrivateHost }));
         recordServe(assetName, result.status, result.entry.size, req.method, customUrl);
         res.setHeader('Cache-Control', proxyImageCacheControl());
         return await sendCachedImage(res, result);
@@ -5057,7 +5061,7 @@ function streamArtWithFallback(assetName) {
       res.setHeader('Cache-Control', proxyImageCacheControl());
       imageResponse.data.pipe(res);
     } catch (error) {
-      if (isProcessedImageCacheEnabled()) require('./lib/posterCache/handler.js').recordServeError();
+      if (posterCacheConfig.isBuiltinPosterCacheEnabled()) require('./lib/posterCache/handler.js').recordServeError();
       consola.debug(`Art proxy miss for ${assetName} ${id}: ${error.message}`);
       if (fallback) {
         return res.redirect(302, fallback);

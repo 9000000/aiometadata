@@ -117,7 +117,7 @@ The cache is part of the addon itself — no extra container, port, or volume. S
 
 Images are served from `https://your-addon-host/poster-cache/...` and stored under `addon/data/poster-cache`, which is already inside the `/app/addon/data` volume from the compose file above — so the cache survives restarts with no additional mount.
 
-**What gets cached.** Posters are cached by default. Everything else is opt-in, so enabling the cache never changes disk usage unexpectedly:
+**What gets cached.** Posters and the addon's own rendered images are cached by default. Every other image type is opt-in, so enabling the cache never changes disk usage unexpectedly:
 
 | Variable | Default | Caches |
 |----------|---------|--------|
@@ -125,9 +125,11 @@ Images are served from `https://your-addon-host/poster-cache/...` and stored und
 | `POSTER_CACHE_LANDSCAPE_POSTERS` | `false` | Landscape poster artwork |
 | `POSTER_CACHE_LOGOS` | `false` | Logo artwork |
 | `POSTER_CACHE_THUMBNAILS` | `false` | Episode thumbnails — by far the most numerous; a long-running series adds hundreds |
-| `POSTER_CACHE_PROCESSED_IMAGES` | `false` | Output of the blur/resize/banner-to-background routes, so each transform runs once |
+| `POSTER_CACHE_PROCESSED_IMAGES` | `true` | Images the addon renders itself: rating-overlaid posters and the blur/resize/banner-to-background transforms, so each one runs once |
 
 These are also toggles in the dashboard's **Settings** tab, and the **Operations** tab shows disk usage broken down by image type, with per-type clear buttons and a **Refresh** box for dropping a single image.
+
+Custom art URLs are passed through unchanged rather than rendered, so they count as the image type they are: a custom logo needs `POSTER_CACHE_LOGOS`, a custom background needs `POSTER_CACHE_BACKGROUNDS`, whether or not the art proxy is on.
 
 **Staleness.** Cached images are validated by a hash of their bytes, so replacing the artwork at a URL your art pattern points to makes clients re-download it rather than keep the old copy. To force it immediately, paste the image URL (or the `/poster-cache/…` URL) into **Refresh** on the Operations tab — no need to clear a whole image type.
 

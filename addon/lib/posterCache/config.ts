@@ -172,7 +172,7 @@ export function getMemoryBudget(): number {
   return parsed === null ? parseSize(DEFAULT_MEMORY_SIZE)! : parsed;
 }
 
-/** How long a stored image stays fresh before it is refetched. */
+/** Freshness window for stored images. */
 export const DEFAULT_TTL_DAYS = 30;
 
 export function getEntryTtlDays(): number {
@@ -183,7 +183,7 @@ export function getEntryTtlDays(): number {
   return parsed;
 }
 
-/** `Infinity` when the TTL is 0 — entries then live until evicted or swept. */
+/** `Infinity` when the TTL is 0. */
 export function getEntryTtlMs(): number {
   const days = getEntryTtlDays();
   return days > 0 ? days * 24 * 60 * 60 * 1000 : Infinity;
@@ -191,17 +191,14 @@ export function getEntryTtlMs(): number {
 
 const MAX_BROWSER_MAX_AGE = 365 * 24 * 60 * 60;
 
-/** Client-side lifetime, kept in step with the server's so clients cannot hold
- * a copy the cache has already refreshed. Revalidation is ETag-cheap either way. */
+/** Client-side lifetime, capped at one year. */
 export function getBrowserMaxAgeSeconds(): number {
   const ttl = getEntryTtlMs();
   if (!Number.isFinite(ttl)) return MAX_BROWSER_MAX_AGE;
   return Math.min(MAX_BROWSER_MAX_AGE, Math.max(60, Math.floor(ttl / 1000)));
 }
 
-/** Client lifetime for the /poster, /logo and /background proxy routes. Shorter
- * than the store's TTL by default: their ETag is derived from the request, not
- * the bytes, so a revalidation cannot pick up new art — only expiry can. */
+/** Client lifetime for the /poster, /logo and /background proxy routes. */
 export const DEFAULT_PROXY_MAX_AGE_DAYS = 1;
 
 export function getProxyMaxAgeSeconds(): number {
@@ -216,7 +213,6 @@ export function getProxyMaxAgeSeconds(): number {
     ? Math.min(MAX_BROWSER_MAX_AGE, Math.max(60, Math.floor(days * 24 * 60 * 60)))
     : MAX_BROWSER_MAX_AGE;
 
-  // Never outlive the copy the store itself holds — that is the real validity.
   return isClassEnabled('processed') ? Math.min(seconds, getBrowserMaxAgeSeconds()) : seconds;
 }
 

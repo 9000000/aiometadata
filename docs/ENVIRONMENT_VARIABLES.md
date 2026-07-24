@@ -662,7 +662,7 @@ Caches artwork on disk and serves it from `/poster-cache` on the addon's own por
 
 ### `POSTER_CACHE_BACKGROUNDS`
 - **Default**: `false`
-- **Description**: Also cache background artwork. These are the largest images the addon serves, so this is the largest bandwidth saving.
+- **Description**: Also cache background artwork. These are the largest images the addon serves, so this is the largest bandwidth saving. Applies to backgrounds from a custom art pattern too, whether or not they are proxied.
 - **Example**: `POSTER_CACHE_BACKGROUNDS=true`
 
 ### `POSTER_CACHE_LANDSCAPE_POSTERS`
@@ -672,7 +672,7 @@ Caches artwork on disk and serves it from `/poster-cache` on the addon's own por
 
 ### `POSTER_CACHE_LOGOS`
 - **Default**: `false`
-- **Description**: Also cache logo artwork. Many small files.
+- **Description**: Also cache logo artwork. Many small files. Applies to logos from a custom art pattern too, whether or not they are proxied.
 - **Example**: `POSTER_CACHE_LOGOS=true`
 
 ### `POSTER_CACHE_THUMBNAILS`
@@ -682,7 +682,9 @@ Caches artwork on disk and serves it from `/poster-cache` on the addon's own por
 
 ### `POSTER_CACHE_PROCESSED_IMAGES`
 - **Default**: `true` (when `ENABLE_BUILTIN_POSTER_CACHE` is on)
-- **Description**: Caches the addon-rendered images — the `/poster`, `/logo` and `/background` proxy routes (rating-overlaid and custom-art posters, active when **Proxy Rating & Custom Art** is on) plus the `/api/image/blur` and `/api/image/banner-to-background` transforms. This is where your posters land when the art proxy is on, so it is enabled by default with the cache; without it those requests re-fetch and re-render on every view. Set to `false` only to deliberately keep these out of the cache. Total volume is still bounded by `POSTER_CACHE_MAX_SIZE`.
+- **Description**: Caches the images the addon renders itself — rating-overlaid posters from the `/poster` route (active when **Proxy Rating & Custom Art** is on) plus the `/api/image/blur` and `/api/image/banner-to-background` transforms. Enabled by default with the cache; without it those requests re-render on every view. Total volume is still bounded by `POSTER_CACHE_MAX_SIZE`.
+
+  This covers *rendered* images only. Custom art URLs travel through the same `/poster`, `/logo` and `/background` proxy routes but are passed through byte-for-byte, so they are stored as the class they actually are and follow that class's toggle — a custom logo needs `POSTER_CACHE_LOGOS`, a custom background needs `POSTER_CACHE_BACKGROUNDS`.
 - **Example**: `POSTER_CACHE_PROCESSED_IMAGES=false`
 
 ### `POSTER_CACHE_ALLOWED_HOSTS`

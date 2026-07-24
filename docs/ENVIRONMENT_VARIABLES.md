@@ -90,6 +90,12 @@ cp .env.example .env
 - **Example**: `ADMIN_KEY=your-secure-random-key-here`
 - **Note**: Generate with: `openssl rand -hex 32`
 
+### `IMAGE_PROXY_SIGNING_SECRET`
+- **Default**: unset (falls back to `ADMIN_KEY`, then `MOVIELENS_CRED_KEY`)
+- **Description**: HMAC secret used to sign the `/poster`, `/logo` and `/background` proxy URLs, so the addon will only render artwork for URLs it issued itself. If none of the three variables is set, proxy URLs are served unsigned.
+- **Example**: `IMAGE_PROXY_SIGNING_SECRET=your-secure-random-key-here`
+- **Note**: Generate with `openssl rand -hex 32`. Rotating it invalidates every previously signed URL, so already-published artwork links stop resolving until clients refetch them.
+
 ---
 
 ## API Keys
@@ -741,6 +747,111 @@ Caches artwork on disk and serves it from `/poster-cache` on the addon's own por
 - **Default**: the built-in cache on `127.0.0.1`, else `POSTER_PROXY_PREFIX_URL`
 - **Description**: Internal URL the catalog warmer issues HEAD requests against to pre-fill the cache.
 - **Example**: `POSTER_WARMUP_URL=http://poster-cache:8888`
+
+---
+
+## Cache Epoch
+
+### `CACHE_EPOCH`
+- **Default**: `1` (compiled in as `DEFAULT_CACHE_EPOCH` in `addon/lib/cacheEpoch.ts`)
+- **Description**: The invalidation lever for caches that hold payloads the addon assembles itself. It is deliberately **not** the addon version. Releases ship every few days, but the *shape* of a cached payload changes far less often, so keying caches on the release version discards good data on every upgrade — fatal for the cold store, whose TTLs run 60–180 days.
+
+  The epoch is bumped by hand, in the same change that alters a payload shape. Anything stored under a lower epoch is dropped on the next start; anything stored under a *higher* one is left alone and simply not read, so rolling a release back and forward again costs nothing.
+
+  Set this variable to force a rebuild without waiting for a release — for example after a bad deploy has written malformed metadata to disk. Values below `1` or non-numeric values are ignored and the compiled-in default is used.
+- **Example**: `CACHE_EPOCH=2`
+
+**What it covers.** Both cache tiers:
+
+| Tier | Key shape | On an epoch bump |
+|---|---|---|
+| Redis (hot) | `e<N>:catalog:…`, `global:e<N>:…` | superseded keys swept at startup |
+| Cold store (disk) | bare key + `epoch` column | older-epoch rows deleted at startup |
+
+Provider-facing caches marked `upstream: true` — TMDB, Trakt, MDBList, Simkl, Jikan — carry no prefix at all and are never swept by an epoch bump. Most are verbatim provider responses whose shape is not ours to version. A minority (the Trakt and MDBList `{ items, totalItems, hasMore, totalPages }` pagination envelopes, and the TMDB genre lists) are shapes we assemble, and are exempted deliberately: their TTLs are short (6h–30d) and their shapes have been stable in production for over a year, so epoch coverage would cost refetches without buying much. If you change one of those shapes, purge the affected keys rather than relying on a `CACHE_EPOCH` bump to clear them.
+
+Startup cleanup short-circuits when the stored epoch matches, so an ordinary release does not scan the keyspace. Keys from a *newer* epoch are left alone rather than deleted, so rolling a release back and then forward again costs nothing.
+
+## Meta Cold Store
+
+A durable on-disk L2 tier for metadata that provably never changes — old films, ended
+or cancelled series, finished anime. Redis stays the hot L1; when a component is
+evicted from Redis, the addon reads it back from disk instead of re-fetching from TMDB,
+TVDB, TVMAZE, Kitsu, MAL or AniList.
+
+Only titles that pass a stability classifier are written: the title must be
+released/ended **and** have been so for longer than its settle window. Ongoing shows and
+recent releases are never stored. Disk TTLs are finite by design, so a revived or
+un-cancelled show eventually refreshes on its own.
+
+### `META_COLD_STORE_ENABLED`
+- **Default**: `false`
+- **Description**: Master switch for the cold store. When off, there is zero behavior change — no disk file is opened and neither cache path is touched. Requires a restart.
+- **Example**: `META_COLD_STORE_ENABLED=true`
+
+### `META_COLD_STORE_PATH`
+- **Default**: `addon/data/metacache.sqlite`
+- **Description**: File path for the dedicated SQLite database. Deliberately separate from the operational `db.sqlite` — the cold store is disposable and can be deleted at any time; it rebuilds naturally. Mount it on a persistent volume to survive container restarts.
+- **Example**: `META_COLD_STORE_PATH=/data/metacache.sqlite`
+
+### `META_COLD_STORE_MAX_BYTES`
+- **Default**: `2gb`
+- **Description**: Disk budget for stored payloads. Once exceeded, least-recently-accessed rows are evicted until usage drops to 90% of the limit. Accepts nginx-style sizes (`512m`, `2gb`).
+- **Example**: `META_COLD_STORE_MAX_BYTES=5gb`
+
+### `META_COLD_STORE_COMPRESSION`
+- **Default**: `true`
+- **Description**: lz4-compress stored payloads. Measured on a live store, this roughly **halves** disk usage (11.8 MB → 6.5 MB), with the saving concentrated almost entirely in the two large components — `meta-cast` and `meta-links`. Everything else falls below the compression threshold and is stored as plain JSON regardless. Decompression is microseconds, so there is no meaningful read-path cost; the benefit is that roughly twice as many titles fit under `META_COLD_STORE_MAX_BYTES` before LRU eviction.
+
+  **Safe to change at any time.** Entries are self-describing — each row records whether it is compressed — so toggling this needs no migration and no purge. Compressed and plain rows coexist in the same database and both decode correctly.
+
+  Independent of the Redis-side `CACHE_COMPRESSION_ENABLED`; setting that to `false` no longer silently disables disk compression. The size threshold is still shared (`CACHE_COMPRESSION_MIN_BYTES`, default 2 KB).
+- **Example**: `META_COLD_STORE_COMPRESSION=false`
+
+### `COLD_TTL_FROZEN`
+- **Default**: `180d`
+- **Description**: Disk TTL for the `frozen` tier — titles whose end/release date is older than `FROZEN_AGE`. A 1970s film is safe to hold far longer than a series that ended last year.
+- **Example**: `COLD_TTL_FROZEN=365d`
+
+### `COLD_TTL_STABLE`
+- **Default**: `60d`
+- **Description**: Disk TTL for the `stable` tier — titles that are finished but more recently so. Shorter than the frozen TTL because late data corrections are more likely.
+- **Example**: `COLD_TTL_STABLE=90d`
+
+### `SETTLE_MOVIE`
+- **Default**: `180d`
+- **Description**: Minimum age since release before a movie becomes disk-eligible. Guards against caching a film while its metadata is still being corrected post-release.
+- **Example**: `SETTLE_MOVIE=365d`
+
+### `SETTLE_SERIES`
+- **Default**: `90d`
+- **Description**: Minimum age since the last aired episode before a series or anime becomes disk-eligible. Applies to TMDB, TVDB, TVMAZE, Kitsu, MAL and AniList alike.
+- **Example**: `SETTLE_SERIES=180d`
+
+### `FROZEN_AGE`
+- **Default**: `2y`
+- **Description**: Age threshold separating the `stable` and `frozen` tiers. Anything whose end/release date is older than this gets the longer `COLD_TTL_FROZEN`.
+- **Example**: `FROZEN_AGE=5y`
+
+### `COLD_STORE_INACTIVE_DAYS`
+- **Default**: `30`
+- **Description**: Drop rows that have not been read for this many days. Runs on an hourly sweep alongside hard-expiry cleanup, so the store tracks what is actually being requested.
+- **Example**: `COLD_STORE_INACTIVE_DAYS=60`
+
+### Admin endpoints
+
+Both are guarded by `ADMIN_KEY` (via the `x-admin-key` header) when it is set:
+
+```bash
+curl -s http://localhost:3232/api/admin/cold-store/stats -H "x-admin-key: $ADMIN_KEY"
+```
+
+```bash
+curl -s -X POST "http://localhost:3232/api/admin/cold-store/purge?metaId=tt0903747" -H "x-admin-key: $ADMIN_KEY"
+```
+
+Omit `metaId` from the purge call to drop the entire store. Cold-store hit and miss
+counters are also reported by `getCacheHealth()` as `coldStoreHits` / `coldStoreMisses`.
 
 ---
 

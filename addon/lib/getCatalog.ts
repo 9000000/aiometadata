@@ -17,7 +17,7 @@ import * as moviedb from "./getTmdb.js";
 import * as tvdb from './tvdb.js';
 import { to3LetterCode, to3LetterCountryCode } from './language-map.js';
 import { resolveAllIds } from './id-resolver.js';
-import { cacheWrapTvdbApi, cacheWrap, cacheWrapCatalog, cacheWrapAniListCatalog, cacheWrapJikanApi, cacheWrapGlobal, stableStringify } from './getCache.js';
+import { cacheWrapTvdbApi, cacheWrap, cacheWrapCatalog, cacheWrapAniListCatalog, cacheWrapJikanApi, cacheWrapGlobal, classifyResultAllowEmpty, stableStringify } from './getCache.js';
 import crypto from 'crypto';
 import { getTVDBContentRatingId } from '../utils/tvdbContentRating.js';
 import { getMeta } from './getMeta.js';
@@ -2716,7 +2716,7 @@ async function getMovieLensCatalog(
       return movielens.explore(credId, {
         hasRated: includeRated ? undefined : 'no', sortBy, sortDirection, tag, genre: genreName, minYear, maxYear, minPop, maxFutureDays, maxDaysAgo, page, pageSize,
       });
-    }, ttl);
+    }, ttl, isList ? {} : { resultClassifier: classifyResultAllowEmpty });
     const windowItems = Array.isArray(items) ? items : [];
 
     const mdblistShaped = windowItems

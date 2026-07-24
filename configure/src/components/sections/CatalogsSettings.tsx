@@ -1038,6 +1038,8 @@ const MOVIELENS_SORT_OPTIONS = [
   { value: 'releaseDate', label: 'Release Date' },
   { value: 'dateAdded', label: 'Date Added' },
   { value: 'title', label: 'Title (A-Z)' },
+  { value: 'userRating', label: 'Your Rating' },
+  { value: 'userRatedDate', label: 'Your Rating Date' },
 ];
 
 const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogConfig, isOpen: boolean, onClose: () => void }) => {
@@ -2658,7 +2660,7 @@ const SortableCatalogItem = ({ catalog, onEditDiscover, onCustomize, onDuplicate
     (catalog.source === 'tmdb' && (catalog.id === 'tmdb.year' || catalog.id === 'tmdb.language')) ||
     !!(config.apiKeys?.traktTokenId || config.apiKeys?.anilistTokenId || config.apiKeys?.mdblist);
   const isDiscover = catalog.id.includes('.discover.') && !!catalog.metadata?.discover?.formState;
-  const isMovieLensExplore = catalog.source === 'movielens' && catalog.id.startsWith('movielens.toppicks');
+  const isMovieLensExplore = catalog.source === 'movielens' && catalog.id.startsWith('movielens.explore');
   const canDuplicate = isDiscover || isMovieLensExplore;
   const canDelete = true;
 
@@ -3567,7 +3569,7 @@ function CatalogsSettingsContent({
     const sourcePrefix = SOURCE_PREFIXES[source] ?? 'tmdb.discover';
     const catalogType = catalog.type || 'movie';
     const newId = catalog.source === 'movielens'
-      ? `movielens.toppicks.${sanitizedName}.${uniqueSuffix}`
+      ? `movielens.explore.${sanitizedName}.${uniqueSuffix}`
       : `${sourcePrefix}.${catalogType}.${sanitizedName}.${uniqueSuffix}`;
 
     const newCatalog: CatalogConfig = {

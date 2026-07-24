@@ -359,12 +359,12 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
               <p className="text-xs text-muted-foreground">
                 Removes every cached entry whose key contains this value — a meta id
                 (<code>tt0111161</code>, <code>mal:64019</code>) or a catalog id
-                (<code>movielens.toppicks</code>). Preview first to see what matches.
+                (<code>movielens.explore</code>). Preview first to see what matches.
               </p>
             </div>
             <div className="flex flex-col sm:flex-row gap-2">
               <Input
-                placeholder="tt0111161 or movielens.toppicks"
+                placeholder="tt0111161 or movielens.explore"
                 value={clearToken}
                 onChange={(e) => { setClearToken(e.target.value); setClearPreview(null); }}
                 onKeyDown={(e) => { if (e.key === "Enter") handleClearById(true); }}

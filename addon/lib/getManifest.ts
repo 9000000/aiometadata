@@ -1049,7 +1049,8 @@ async function getManifest(config: any, opts: { tag?: string } = {}): Promise<an
       if (userCatalog.id.startsWith('movielens.')) {
           logger.debug(`Processing MovieLens catalog: ${userCatalog.id}`);
           const catalogType = userCatalog.displayType || userCatalog.type;
-          const genreOptions = userCatalog.id.startsWith('movielens.toppicks') ? MOVIELENS_GENRES : [];
+          const supportsGenres = userCatalog.id.startsWith('movielens.explore');
+          const genreOptions = supportsGenres ? MOVIELENS_GENRES : [];
           const options = userCatalog.showInHome ? genreOptions : ['None', ...genreOptions];
           const extra: any[] = [];
           if (options.length > 0) {

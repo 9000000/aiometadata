@@ -144,7 +144,7 @@ export function MovieLensIntegration({ isOpen, onClose }: MovieLensIntegrationPr
   };
 
   const addCatalog = (id: string, name: string, metadata?: Record<string, unknown>) => {
-    const isExplore = id.startsWith('movielens.toppicks');
+    const isExplore = id.startsWith('movielens.explore');
     if (!isExplore && config.catalogs.some(c => c.id === id)) {
       toast.info(`${name} is already added.`);
       return;
@@ -249,17 +249,23 @@ export function MovieLensIntegration({ isOpen, onClose }: MovieLensIntegrationPr
                   <CardDescription>Sort and year filters live in each catalog's gear settings.</CardDescription>
                 </CardHeader>
                 <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.toppicks', 'MovieLens Top Picks')}>
+                  <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.explore.toppicks', 'MovieLens Top Picks')}>
                     <Sparkles className="h-4 w-4 mr-2" /> Top Picks for You <Plus className="h-4 w-4 ml-auto" />
                   </Button>
                   <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.watchlist', 'MovieLens Watchlist')}>
                     <Bookmark className="h-4 w-4 mr-2" /> Your Watchlist <Plus className="h-4 w-4 ml-auto" />
                   </Button>
-                  <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.toppicks.recent', 'New Releases for You', { maxDaysAgo: 180 })}>
+                  <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.explore.toppicks.recent', 'New Releases for You', { maxDaysAgo: 180 })}>
                     <CalendarClock className="h-4 w-4 mr-2" /> New Releases for You <Plus className="h-4 w-4 ml-auto" />
                   </Button>
-                  <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.toppicks.rated', 'Highest Rated by Users', { sortBy: 'avgRating' })}>
+                  <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.explore.highestrated', 'Highest Rated by Users', { sortBy: 'avgRating' })}>
                     <Star className="h-4 w-4 mr-2" /> Highest Rated by Users <Plus className="h-4 w-4 ml-auto" />
+                  </Button>
+                  <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.explore.myrated.score', 'Your Rated Collection', { sortBy: 'userRating', includeRated: true })}>
+                    <Star className="h-4 w-4 mr-2" /> Your Rated Collection <Plus className="h-4 w-4 ml-auto" />
+                  </Button>
+                  <Button variant="outline" className="justify-start" onClick={() => addCatalog('movielens.explore.myrated.date', 'Your Rated Collection by Date', { sortBy: 'userRatedDate', includeRated: true })}>
+                    <Star className="h-4 w-4 mr-2" /> Your Rated Collection by Date <Plus className="h-4 w-4 ml-auto" />
                   </Button>
                 </CardContent>
               </Card>

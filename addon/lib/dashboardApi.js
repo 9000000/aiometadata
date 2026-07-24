@@ -4,6 +4,33 @@ const consola = require('consola');
 const logger = consola.withTag('DashboardAPI');
 
 const { getCacheHealth, getMemoryStats: getCacheMemoryStats } = require('./getCache');
+
+/** System keys that must survive any cache clear. */
+const { EPOCH_STATE_KEY } = require('./epochCleanup');
+
+const PRESERVED_CACHE_KEYS = [
+  'maintenance:', 'cache-warming:', 'catalog-warmup:',
+  'anime_list:last_update', 'addon:start_time', 'system:app_version',
+  // Clearing this would make the next boot re-sweep the whole keyspace.
+  EPOCH_STATE_KEY,
+  'imdb:ratings', 'imdb-ratings-etag',
+];
+
+const isPreservedCacheKey = (key) =>
+  PRESERVED_CACHE_KEYS.some((p) => (p.endsWith(':') ? key.startsWith(p) : key === p));
+
+/** Escape glob metacharacters so operator input cannot widen a SCAN pattern. */
+const escapeRedisGlob = (value) => String(value).replace(/[\\*?[\]^]/g, (c) => `\\${c}`);
+
+const MEDIA_ID_PROVIDERS = ['tmdb', 'tvdb', 'tvdbc', 'kitsu', 'mal', 'anilist', 'anidb'];
+
+const MEDIA_ID_PATTERNS = [
+  /^tt\d{7,10}$/i,
+  new RegExp(`^(?:${MEDIA_ID_PROVIDERS.join('|')}):[A-Za-z0-9._-]+$`, 'i'),
+  /^tun_[A-Za-z0-9._:-]+$/i,
+];
+
+const isCompleteMediaId = (token) => MEDIA_ID_PATTERNS.some((re) => re.test(token));
 const { getCacheCleanupScheduler } = require('./cacheCleanupScheduler');
 const { getAnimeListXmlStats } = require('./anime-list-mapper');
 const { getIdMapperStats, getKitsuImdbStats, getMemoryStats: getIdMapperMemoryStats } = require('./id-mapper');
@@ -2001,7 +2028,7 @@ class DashboardAPI {
 
   // Clear cache by type
   // Matches a meta id (suffix in the key) or catalog id (mid-key) by substring.
-  async clearCacheByToken(token, { dryRun = false } = {}) {
+  async clearCacheByToken(token, { dryRun = false, includeColdStore = true } = {}) {
     try {
       if (!this.cache) throw new Error('Cache not available');
 
@@ -2011,15 +2038,13 @@ class DashboardAPI {
         return { success: false, message: 'Token must be at least 3 characters' };
       }
 
-      // Unescaped "*" would match the whole keyspace.
-      const escaped = trimmed.replace(/[\\*?[\]^]/g, (c) => `\\${c}`);
+      // A complete media id means one title, so match it exactly on both tiers.
+      // Anything else (catalog ids, partial ids, free text) keeps substring
+      // matching — catalog ids sit mid-key and would be missed by an exact match.
+      const matchMode = isCompleteMediaId(trimmed) ? 'exact' : 'substring';
 
-      const preserve = [
-        'maintenance:', 'cache-warming:', 'catalog-warmup:',
-        'anime_list:last_update', 'addon:start_time', 'system:app_version',
-        'imdb:ratings', 'imdb-ratings-etag',
-      ];
-      const isPreserved = (key) => preserve.some((p) => (p.endsWith(':') ? key.startsWith(p) : key === p));
+      const escaped = escapeRedisGlob(trimmed);
+      const isPreserved = isPreservedCacheKey;
 
       let cursor = '0';
       let matched = 0;
@@ -2027,46 +2052,117 @@ class DashboardAPI {
       let skipped = 0;
       const samples = [];
 
-      do {
-        const reply = await this.cache.scan(cursor, 'MATCH', `*${escaped}*`, 'COUNT', 1000);
-        cursor = reply[0];
-        const keys = reply[1] || [];
-        if (keys.length === 0) continue;
+      if (matchMode === 'exact') {
+        deletedCount = await this.clearCacheForMetaId(trimmed, { dryRun, samples });
+        matched = deletedCount;
+      } else {
+        do {
+          const reply = await this.cache.scan(cursor, 'MATCH', `*${escaped}*`, 'COUNT', 1000);
+          cursor = reply[0];
+          const keys = reply[1] || [];
+          if (keys.length === 0) continue;
 
-        const deletable = [];
-        for (const key of keys) {
-          matched += 1;
-          if (isPreserved(key)) { skipped += 1; continue; }
-          if (samples.length < 10) samples.push(key);
-          deletable.push(key);
-        }
-
-        if (!dryRun && deletable.length > 0) {
-          for (let i = 0; i < deletable.length; i += 100) {
-            const batch = deletable.slice(i, i + 100);
-            await this.cache.del(...batch);
-            deletedCount += batch.length;
+          const deletable = [];
+          for (const key of keys) {
+            matched += 1;
+            if (isPreserved(key)) { skipped += 1; continue; }
+            if (samples.length < 10) samples.push(key);
+            deletable.push(key);
           }
-        } else {
-          deletedCount += deletable.length;
-        }
-      } while (cursor !== '0');
 
-      const noun = dryRun ? 'would be cleared' : 'cleared';
-      const message = deletedCount === 0
-        ? `No cache entries match "${trimmed}"`
-        : `${deletedCount.toLocaleString()} entries ${noun} for "${trimmed}"`
-          + (skipped > 0 ? ` (${skipped} protected key${skipped === 1 ? '' : 's'} skipped)` : '');
-
-      if (!dryRun && deletedCount > 0) {
-        logger.info(`Cleared ${deletedCount} cache entries matching "${trimmed}"`);
+          if (!dryRun && deletable.length > 0) {
+            for (let i = 0; i < deletable.length; i += 100) {
+              const batch = deletable.slice(i, i + 100);
+              await this.cache.del(...batch);
+              deletedCount += batch.length;
+            }
+          } else {
+            deletedCount += deletable.length;
+          }
+        } while (cursor !== '0');
       }
 
-      return { success: true, dryRun, token: trimmed, matched, deletedCount, skipped, samples, message };
+      let coldStoreCount = 0;
+      try {
+        const metaColdStore = require('./metaColdStore');
+        if (includeColdStore && metaColdStore.isEnabled()) {
+          if (matchMode === 'exact') {
+            coldStoreCount = dryRun
+              ? metaColdStore.countByMetaId(trimmed)
+              : metaColdStore.invalidate(trimmed);
+          } else {
+            coldStoreCount = dryRun
+              ? metaColdStore.countByToken(trimmed)
+              : metaColdStore.invalidateByToken(trimmed);
+          }
+          // `deletedCount` stays Redis-only here; `total` below sums the tiers.
+          matched += coldStoreCount;
+        }
+      } catch (error) {
+        logger.warn(`[ColdStore] token purge failed for "${trimmed}": ${error.message}`);
+      }
+
+      const total = deletedCount + coldStoreCount;
+      const noun = dryRun ? 'would be cleared' : 'cleared';
+      const coldNote = coldStoreCount > 0
+        ? ` (includes ${coldStoreCount.toLocaleString()} cold-store row${coldStoreCount === 1 ? '' : 's'})`
+        : '';
+      const modeNote = matchMode === 'exact'
+        ? 'this title only'
+        : 'any key containing this text';
+      const message = total === 0
+        ? `No cache entries match "${trimmed}" (${modeNote})`
+        : `${total.toLocaleString()} entries ${noun} for "${trimmed}" — ${modeNote}${coldNote}`
+          + (skipped > 0 ? ` (${skipped} protected key${skipped === 1 ? '' : 's'} skipped)` : '');
+
+      if (!dryRun && total > 0) {
+        logger.info(`Cleared ${total} cache entries for "${trimmed}" [${matchMode}]${coldNote}`);
+      }
+
+      return {
+        success: true, dryRun, token: trimmed, matchMode,
+        matched, deletedCount: total, redisCount: deletedCount,
+        skipped, coldStoreCount, samples, message,
+      };
     } catch (error) {
       logger.error('Error clearing cache by token:', error);
       return { success: false, message: error.message };
     }
+  }
+
+  /**
+   * Delete the Redis entries belonging to exactly one title.
+   * Component keys are `v<version>:<component>:<hash>:<metaId>`, so the metaId
+   * is the trailing segment and the pattern is anchored to the end.
+   */
+  async clearCacheForMetaId(metaId, { dryRun = false, samples = null } = {}) {
+    if (!this.cache) throw new Error('Cache not available');
+    const trimmed = String(metaId || '').trim();
+    if (!trimmed) return 0;
+
+    const pattern = `*:${escapeRedisGlob(trimmed)}`;
+    let cursor = '0';
+    let deleted = 0;
+
+    do {
+      const reply = await this.cache.scan(cursor, 'MATCH', pattern, 'COUNT', 1000);
+      cursor = reply[0];
+      const keys = (reply[1] || []).filter((k) => !isPreservedCacheKey(k));
+      if (samples) {
+        for (const k of keys) if (samples.length < 10) samples.push(k);
+      }
+      if (dryRun) {
+        deleted += keys.length;
+        continue;
+      }
+      for (let i = 0; i < keys.length; i += 100) {
+        const batch = keys.slice(i, i + 100);
+        await this.cache.del(...batch);
+        deleted += batch.length;
+      }
+    } while (cursor !== '0');
+
+    return deleted;
   }
 
   async clearCache(type) {
@@ -2083,6 +2179,7 @@ class DashboardAPI {
         'anime_list:last_update',  // Anime-list XML update timestamp
         'addon:start_time',        // Uptime tracking
         'system:app_version',      // Version tracking
+        EPOCH_STATE_KEY,           // Cache epoch the keyspace was last cleaned to
         'imdb:ratings',            // IMDb ratings hash (essential, large dataset)
         'imdb-ratings-etag',       // IMDb ratings ETag for update checking
       ];

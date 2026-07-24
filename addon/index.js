@@ -77,6 +77,7 @@ const jikan = require('./lib/mal');
 const buildInfo = require('./lib/buildInfo');
 const { clientDistDir, clientIndexPath, publicDir } = require('./lib/runtimePaths');
 const ADDON_VERSION = buildInfo.version;
+const { withGlobalEpoch } = require('./lib/cacheEpoch');
 const idMapper = require('./lib/id-mapper');
 const wikiMappings = require('./lib/wiki-mapper.js');
 
@@ -3352,6 +3353,34 @@ addon.get("/api/config/stats", (req, res) => {
   configApi.getStats(req, res);
 });
 
+addon.get("/api/admin/cold-store/stats", (req, res) => {
+  const adminKey = process.env.ADMIN_KEY;
+  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const metaColdStore = require('./lib/metaColdStore');
+    res.json(metaColdStore.stats());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+addon.post("/api/admin/cold-store/purge", (req, res) => {
+  const adminKey = process.env.ADMIN_KEY;
+  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const metaColdStore = require('./lib/metaColdStore');
+    const metaId = req.query.metaId;
+    const removed = metaId ? metaColdStore.invalidate(String(metaId)) : metaColdStore.purge();
+    res.json({ success: true, removed });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // --- Cache Warming Endpoints (Admin only) ---
 addon.post("/api/cache/warm", async (req, res) => {
   // Simple admin check - you might want to implement proper authentication
@@ -4069,7 +4098,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
             const mediaType = type_filter || 'series';
             const allAnimeGenres = await cacheWrapJikanApi('anime-genres', async () => {
               return await jikan.getAnimeGenres();
-            }, null, { skipVersion: true });
+            }, null);
             const genreNameToFetch = genreName || allAnimeGenres[0]?.name;
             if (genreNameToFetch) {
               const selectedGenre = allAnimeGenres.find(g => g.name === genreNameToFetch);
@@ -4077,7 +4106,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
                 const genreId = selectedGenre.mal_id;
                 const animeResults = await cacheWrapJikanApi(`mal-genre-${genreId}-${mediaType}-${page}-${config.sfw}`, async () => {
                   return await jikan.getAnimeByGenre(genreId, mediaType, page, config);
-                }, null, { skipVersion: true });
+                }, null);
                 metas = await parseAnimeCatalogMetaBatch(animeResults, config, language);
               }
             }
@@ -5680,13 +5709,16 @@ addon.get('/api/cache/test-essential', async (req, res) => {
   }
   
   try {
+    // Jikan and genre lists are raw upstream payloads cached with `upstream`, so
+    // they carry no prefix at all; only the language list is epoch-keyed. (This list
+    // previously prefixed every entry with the addon version and so never matched.)
     const essentialKeys = [
-      `global:${ADDON_VERSION}:jikan-api:anime-genres`,
-      `global:${ADDON_VERSION}:jikan-api:mal-studios`,
-      `global:${ADDON_VERSION}:genre:tmdb:en-US:movie`,
-      `global:${ADDON_VERSION}:genre:tmdb:en-US:series`,
-      `global:${ADDON_VERSION}:genre:tvdb:en-US:series`,
-      `global:${ADDON_VERSION}:languages:en-US`
+      `global:jikan-api:anime-genres`,
+      `global:jikan-api:mal-studios`,
+      `global:genre:tmdb:en-US:movie`,
+      `global:genre:tmdb:en-US:series`,
+      `global:genre:tvdb:en-US:series`,
+      withGlobalEpoch(`languages:en-US`)
     ];
     
     const results = {};
@@ -6223,8 +6255,12 @@ addon.post("/api/dashboard/cache/clear", requireDashboardAdmin, (req, res) => {
 
 addon.post("/api/dashboard/cache/clear-by-id", requireDashboardAdmin, async (req, res) => {
   try {
-    const { token, dryRun } = req.body || {};
-    const result = await getDashboardAPI().clearCacheByToken(token, { dryRun: !!dryRun });
+    const { token, dryRun, includeColdStore } = req.body || {};
+    const result = await getDashboardAPI().clearCacheByToken(token, {
+      dryRun: !!dryRun,
+      // Default on, so existing callers keep the combined behavior.
+      includeColdStore: includeColdStore !== false,
+    });
     return res.status(result.success ? 200 : 400).json(result);
   } catch (error) {
     consola.error('[Dashboard API] Error:', error);
@@ -6341,6 +6377,65 @@ addon.get("/api/dashboard/poster-cache/stats", requireDashboardAdmin, async (req
     res.json(stats);
   } catch (error) {
     res.status(502).json({ error: 'Failed to reach poster cache', details: error.message });
+  }
+});
+
+// --- Meta Cold Store (disk L2 for stable metadata) ---
+// Returns `enabled: false` rather than an error when the feature is off, so the
+// dashboard can render a single explanatory panel instead of an error state.
+addon.get("/api/dashboard/cold-store/stats", requireDashboardAdmin, (req, res) => {
+  try {
+    const metaColdStore = require('./lib/metaColdStore');
+    const stats = metaColdStore.stats();
+    const health = getCacheHealth();
+    res.json({
+      ...stats,
+      configured: metaColdStore.isEnabled(),
+      hits: health.coldStoreHits || 0,
+      misses: health.coldStoreMisses || 0,
+      componentsServed: health.coldStoreComponents || 0,
+    });
+  } catch (error) {
+    consola.error('[API] Cold store stats failed:', error.message);
+    res.status(500).json({ error: 'Failed to read cold store stats', details: error.message });
+  }
+});
+
+addon.post("/api/dashboard/cold-store/purge", requireDashboardAdmin, async (req, res) => {
+  // Omitting `metaId` drops the whole store; passing one drops just that title.
+  const metaId = typeof req.body?.metaId === 'string' ? req.body.metaId.trim() : '';
+  const includeRedis = metaId ? req.body?.includeRedis !== false : false;
+  try {
+    const metaColdStore = require('./lib/metaColdStore');
+    const removed = metaId ? metaColdStore.invalidate(metaId) : metaColdStore.purge();
+
+    let redisRemoved = 0;
+    if (includeRedis) {
+      try {
+        redisRemoved = await getDashboardAPI().clearCacheForMetaId(metaId);
+      } catch (redisErr) {
+        consola.warn(`[API] Cold store purge: Redis clear failed for ${metaId}: ${redisErr.message}`);
+      }
+    }
+
+    consola.info(`[API] Cold store purge via dashboard (${metaId || 'all'}): ${removed} row(s)`
+      + (includeRedis ? `, ${redisRemoved} Redis key(s)` : ''));
+    res.json({ success: true, removed, redisRemoved, metaId: metaId || null });
+  } catch (error) {
+    consola.error('[API] Cold store purge failed:', error.message);
+    res.status(500).json({ error: 'Failed to purge cold store', details: error.message });
+  }
+});
+
+addon.post("/api/dashboard/cold-store/sweep", requireDashboardAdmin, (req, res) => {
+  try {
+    const metaColdStore = require('./lib/metaColdStore');
+    const removed = metaColdStore.sweep();
+    consola.info(`[API] Cold store sweep via dashboard: ${removed} row(s)`);
+    res.json({ success: true, removed });
+  } catch (error) {
+    consola.error('[API] Cold store sweep failed:', error.message);
+    res.status(500).json({ error: 'Failed to sweep cold store', details: error.message });
   }
 });
 

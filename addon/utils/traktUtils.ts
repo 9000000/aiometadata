@@ -625,7 +625,7 @@ async function fetchTraktUpNextEpisodes(
           return resp.data;
         },
         86400, // 1 day TTL
-        { skipVersion: true }
+        { upstream: true }
       );
       showDataMap.set(showId, data);
     } catch(e) {}
@@ -1111,7 +1111,7 @@ async function fetchTraktUnwatchedEpisodes(
               return Array.isArray(showSeasonsResp.data) ? showSeasonsResp.data : [];
             },
             43200, // 12 hour TTL
-            { skipVersion: true }
+            { upstream: true }
           );
           const airedMap = new Map<string, string>();
           for (const season of seasonsData) {
@@ -1341,7 +1341,7 @@ async function fetchTraktWatchlistItems(
       logger.error(`Error fetching Trakt watchlist, page ${page}:`, err.message);
       throw err;
     }
-  }, ttl, { skipVersion: true });
+  }, ttl, { upstream: true });
 }
 
 /**
@@ -1428,7 +1428,7 @@ async function fetchTraktFavoritesItems(
       logger.error(`Error fetching Trakt favorites for type ${type}, page ${page}:`, err.message);
       throw err;
     }
-  }, ttl, { skipVersion: true });
+  }, ttl, { upstream: true });
 }
 
 /**
@@ -1516,7 +1516,7 @@ async function fetchTraktRecommendationsItems(
       logger.error(`Error fetching Trakt recommendations for type ${type}, page ${page}:`, err.message);
       throw err;
     }
-  }, ttl, { skipVersion: true });
+  }, ttl, { upstream: true });
 }
 
 /**
@@ -1611,7 +1611,7 @@ async function fetchTraktListItems(
       logger.error(`Error fetching Trakt list ${username}/${listSlug}, page ${page}:`, err.message);
       throw err;
     }
-  }, ttl, { skipVersion: true });
+  }, ttl, { upstream: true });
 }
 
 /**
@@ -1705,7 +1705,7 @@ async function fetchTraktListItemsById(
       logger.error(`Error fetching Trakt list by id ${listId}, page ${page}:`, err.message);
       throw err;
     }
-  }, ttl, { skipVersion: true });
+  }, ttl, { upstream: true });
 }
 
 
@@ -2666,7 +2666,7 @@ async function fetchTraktMostFavoritedItems(
       logger.error(`Error fetching Trakt most favorited ${type} for period ${period}, page ${page}:`, err.message);
       return { items: [], hasMore: false };
     }
-  }, ttl, { skipVersion: true });
+  }, ttl, { upstream: true });
 }
 
 /**
@@ -2723,7 +2723,7 @@ async function fetchTraktTrendingItems(
       logger.error(`Error fetching Trakt trending ${type}, page ${page}:`, err.message);
       throw err;
     }
-  }, ttl, { skipVersion: true });
+  }, ttl, { upstream: true });
 }
 
 /**
@@ -2779,7 +2779,7 @@ async function fetchTraktPopularItems(
       logger.error(`Error fetching Trakt popular ${type}, page ${page}:`, err.message);
       throw err;
     }
-  }, ttl, { skipVersion: true });
+  }, ttl, { upstream: true });
 }
 
 /**
@@ -2835,7 +2835,7 @@ async function fetchTraktAnticipatedItems(
       logger.error(`Error fetching Trakt anticipated ${type}, page ${page}:`, err.message);
       throw err;
     }
-  }, ttl, { skipVersion: true });
+  }, ttl, { upstream: true });
 }
 
 const refreshLocks = new Map<string, Promise<string | null>>();

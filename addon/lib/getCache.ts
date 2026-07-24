@@ -1,4 +1,3 @@
-const buildInfo: any = require('./buildInfo');
 const redis: any = require('./redisClient');
 const { loadConfigFromDatabase }: any = require('./configApi');
 const consola: any = require('consola');
@@ -37,7 +36,7 @@ function parsePositiveIntEnv(envValue: any, defaultValue: number, minValue: numb
 }
 
 
-const ADDON_VERSION = buildInfo.version;
+const { withEpoch, withGlobalEpoch }: any = require('./cacheEpoch');
 
 function META_TTL() { return parseInt(process.env.META_TTL || String(7 * 24 * 60 * 60), 10); }
 function CATALOG_TTL() { return parseInt(process.env.CATALOG_TTL || String(1 * 24 * 60 * 60), 10); }
@@ -66,6 +65,9 @@ const cacheHealth: any = {
   errors: 0,
   cachedErrors: 0,
   corruptedEntries: 0,
+  coldStoreHits: 0,
+  coldStoreMisses: 0,
+  coldStoreComponents: 0,
   lastHealthCheck: Date.now(),
   errorCounts: {},
   keyAccessCounts: new Map(),
@@ -456,8 +458,8 @@ async function cacheWrap(key: string, method: () => Promise<any>, ttl: number, o
     return method();
   }
 
-  const versionedKey = `v${ADDON_VERSION}:${key}`;
-  return singleFlight(versionedKey, () => cacheWrapInternal(key, method, ttl, options, versionedKey));
+  const epochKey = withEpoch(key);
+  return singleFlight(epochKey, () => cacheWrapInternal(key, method, ttl, options, epochKey));
 }
 
 async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: number, options: any, versionedKey: string): Promise<any> {
@@ -600,9 +602,9 @@ async function cacheWrapGlobal(key: string, method: () => Promise<any>, ttl: num
     return method();
   }
 
-  const { skipVersion = false } = options;
-  const versionedKey = skipVersion ? `global:${key}` : `global:${ADDON_VERSION}:${key}`;
-  return singleFlight(versionedKey, () => cacheWrapGlobalInternal(key, method, ttl, options, versionedKey));
+  const { upstream = false } = options;
+  const epochKey = upstream ? `global:${key}` : withGlobalEpoch(key);
+  return singleFlight(epochKey, () => cacheWrapGlobalInternal(key, method, ttl, options, epochKey));
 }
 
 async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, ttl: number, options: any, versionedKey: string): Promise<any> {
@@ -1759,6 +1761,16 @@ async function writeMetaComponentsWithConfig({ config, metaId, result, ttl = MET
    }
 
   await cacheComponentsPipeline(componentsToCache, ttl, { overwrite });
+
+  try {
+    const coldStore = require('./metaColdStore');
+    if (coldStore.isEnabled()) {
+      coldStore.writeThrough(meta, componentsToCache);
+    }
+  } catch (coldErr: any) {
+    cacheLogger.warn(`[ColdStore] write-through failed for ${metaId}: ${coldErr?.message}`);
+  }
+
    return { meta: projectMetaForUser(meta, config) };
 }
 
@@ -1824,7 +1836,7 @@ async function reconstructMetaFromComponents(userUUID: string, metaId: string, t
   });
 }
 
-async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = null, includeVideos = true, useShowPoster = false }: { config: any; metaId: string; type?: string | null; includeVideos?: boolean; useShowPoster?: boolean }): Promise<any> {
+async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = null, includeVideos = true, useShowPoster = false, countColdStoreMiss = true }: { config: any; metaId: string; type?: string | null; includeVideos?: boolean; useShowPoster?: boolean; countColdStoreMiss?: boolean }): Promise<any> {
   if (!metaId || typeof metaId !== 'string') {
     cacheLogger.warn(`Invalid metaId provided: ${metaId}`);
     return { errorReason: 'invalid metaId' };
@@ -1841,7 +1853,7 @@ async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = 
     return includeVideos || componentName !== 'videos';
   });
   const componentNames = componentEntries.map(([componentName]) => componentName);
-  const cacheKeys = componentEntries.map(([, key]) => `v${ADDON_VERSION}:${key}`);
+  const cacheKeys = componentEntries.map(([, key]) => withEpoch(key));
 
   let componentResults: any[];
 
@@ -1868,6 +1880,35 @@ async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = 
       cacheLogger.warn(`Error fetching components with MGET:`, error);
       componentResults = componentNames.map(componentName => ({ componentName, data: null }));
     }
+  }
+
+  try {
+    const coldStore = require('./metaColdStore');
+    if (coldStore.isEnabled()) {
+      const missing: Array<{ idx: number; key: string }> = [];
+      componentResults.forEach((result: any, idx: number) => {
+        if (result.data === null && cacheKeys[idx]) missing.push({ idx, key: cacheKeys[idx] });
+      });
+      if (missing.length > 0) {
+        const found = await coldStore.readThrough(missing.map(m => m.key));
+        if (found.size > 0) {
+          const rewarm = redis.pipeline();
+          for (const { idx, key } of missing) {
+            const hit = found.get(key);
+            if (!hit) continue;
+            componentResults[idx].data = hit.data;
+            rewarm.set(key, hit.buffer, 'EX', META_TTL());
+          }
+          rewarm.exec().catch(() => {});
+          cacheHealth.coldStoreHits += 1;
+          cacheHealth.coldStoreComponents += found.size;
+        } else if (countColdStoreMiss) {
+          cacheHealth.coldStoreMisses += 1;
+        }
+      }
+    }
+  } catch (coldErr: any) {
+    cacheLogger.warn(`[ColdStore] read-through failed for ${metaId}: ${coldErr?.message}`);
   }
 
   const availableComponents = componentResults.filter((result: any) => result.data !== null);
@@ -2075,7 +2116,7 @@ async function cacheWrapMetaSmart(userUUID: string, metaId: string, method: () =
   cacheLogger.debug(`[Meta] Component reconstruction failed for ${metaId}${failureReason}`);
 
   const lockContextHash = getMetaSmartLockContextHash(config, metaId, type, includeVideos, useShowPoster);
-  const lockKey = `meta-smart:v${ADDON_VERSION}:${userUUID || 'global'}:${type || 'unknown'}:${lockContextHash}:videos=${includeVideos ? 1 : 0}:showPoster=${useShowPoster ? 1 : 0}:${metaId}`;
+  const lockKey = withEpoch(`meta-smart:${userUUID || 'global'}:${type || 'unknown'}:${lockContextHash}:videos=${includeVideos ? 1 : 0}:showPoster=${useShowPoster ? 1 : 0}:${metaId}`);
 
   return singleFlight(lockKey, async () => {
     const reconstructedAfterWait = await reconstructMetaFromComponentsWithConfig({
@@ -2084,6 +2125,7 @@ async function cacheWrapMetaSmart(userUUID: string, metaId: string, method: () =
       type,
       includeVideos,
       useShowPoster,
+      countColdStoreMiss: false,
     });
 
     if (reconstructedAfterWait && reconstructedAfterWait.meta) {
@@ -2144,7 +2186,7 @@ async function cacheComponentsPipeline(components: any[], ttl: number, options: 
   const queuedCommands: string[] = [];
 
   for (const { cacheKey, componentData } of components) {
-    const versionedKey = `v${ADDON_VERSION}:${cacheKey}`;
+    const versionedKey = withEpoch(cacheKey);
 
     try {
       const payload = await encodeCachePayload(componentData);
@@ -2193,7 +2235,8 @@ function cacheWrapJikanApi(key: string, method: () => Promise<any>, customTTL: n
 
   return cacheWrapGlobal(`jikan-api:${subkey}`, method, ttl, {
     resultClassifier: jikanResultClassifier,
-    ...options
+    ...options,
+    upstream: true,
   });
 }
 
@@ -2204,7 +2247,7 @@ function cacheWrapMDBListGenres(genreType: string, method: () => Promise<any>): 
 
 function cacheWrapTraktGenres(genreType: string, method: () => Promise<any>): Promise<any> {
   cacheLogger.debug(`Caching Trakt genres for type: ${genreType}`);
-  return cacheWrapGlobal(`trakt-genres-${genreType}`, method, MDBLIST_GENRES_TTL, { skipVersion: true });
+  return cacheWrapGlobal(`trakt-genres-${genreType}`, method, MDBLIST_GENRES_TTL, { upstream: true });
 }
 
 function cacheWrapStremThruGenres(catalogUrl: string, method: () => Promise<any>): Promise<any> {
@@ -2270,7 +2313,7 @@ function cacheWrapTvdbApi(key: string, method: () => Promise<any>): Promise<any>
 
   return cacheWrapGlobal(`tvdb-api:${key}`, method, TVDB_API_TTL, {
     resultClassifier: tvdbResultClassifier,
-    skipVersion: true
+    upstream: true
   });
 }
 
@@ -2303,6 +2346,9 @@ function getCacheHealth(): any {
     errors: cacheHealth.errors,
     cachedErrors: cacheHealth.cachedErrors,
     corruptedEntries: cacheHealth.corruptedEntries,
+    coldStoreHits: cacheHealth.coldStoreHits,
+    coldStoreMisses: cacheHealth.coldStoreMisses,
+    coldStoreComponents: cacheHealth.coldStoreComponents,
     hitRate: total > 0 ? ((cacheHealth.hits / total) * 100).toFixed(2) : '0.00',
     errorRate: total > 0 ? ((cacheHealth.errors / total) * 100).toFixed(2) : '0.00',
     totalRequests: total,
@@ -2319,6 +2365,9 @@ function clearCacheHealth(): void {
   cacheHealth.errors = 0;
   cacheHealth.cachedErrors = 0;
   cacheHealth.corruptedEntries = 0;
+  cacheHealth.coldStoreHits = 0;
+  cacheHealth.coldStoreMisses = 0;
+  cacheHealth.coldStoreComponents = 0;
   cacheHealth.errorCounts = {};
   cacheHealth.keyAccessCounts.clear();
   cacheHealthLogger.info('Statistics cleared');

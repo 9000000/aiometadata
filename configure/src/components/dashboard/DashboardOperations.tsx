@@ -10,6 +10,17 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import {
   Clock,
   Database,
@@ -34,6 +45,9 @@ import {
   usePosterCacheStats,
   useInvalidateCachedImage,
   useClearCacheById,
+  useColdStoreStats,
+  usePurgeColdStore,
+  useSweepColdStore,
   type DashboardTab,
 } from "@/hooks/useDashboardQueries";
 import { AnimatedNumber } from "../AnimatedNumber";
@@ -41,6 +55,40 @@ import { AnimatedNumber } from "../AnimatedNumber";
 const formatBytes = (bytes: number): string => {
   if (!bytes || bytes === 0) return "0 MB";
   return Math.round(bytes / 1024 / 1024) + " MB";
+};
+
+/** Compact size for cold-store figures, which start far below the 1 MB floor above. */
+const formatSize = (bytes: number): string => {
+  if (!bytes || bytes <= 0) return "0 B";
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${bytes} B`;
+};
+
+const formatAge = (timestamp: number | null): string => {
+  if (!timestamp) return "—";
+  const days = Math.round(Math.abs(Date.now() - timestamp) / 86400000);
+  if (days >= 1) return `${days}d`;
+  const hours = Math.round(Math.abs(Date.now() - timestamp) / 3600000);
+  return hours >= 1 ? `${hours}h` : "<1h";
+};
+
+const MEDIA_ID_RE = [
+  /^tt\d{7,10}$/i,
+  /^(?:tmdb|tvdb|tvdbc|kitsu|mal|anilist|anidb):[A-Za-z0-9._-]+$/i,
+  /^tun_[A-Za-z0-9._:-]+$/i,
+];
+const looksLikeMediaId = (token: string) => MEDIA_ID_RE.some((re) => re.test(token.trim()));
+
+const COLD_TIER_LABELS: Record<string, string> = {
+  frozen: "Frozen",
+  stable: "Stable",
+};
+
+const COLD_TIER_HINTS: Record<string, string> = {
+  frozen: "Older than FROZEN_AGE — longest disk TTL",
+  stable: "Recently finished — shorter disk TTL",
 };
 
 const IMAGE_TYPE_LABELS: Record<string, string> = {
@@ -59,12 +107,30 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
   const clearCacheMutation = useClearCache();
   const clearByIdMutation = useClearCacheById();
   const [clearToken, setClearToken] = useState("");
-  const [clearPreview, setClearPreview] = useState<{ count: number; samples: string[] } | null>(null);
+  const [clearPreview, setClearPreview] = useState<{ count: number; samples: string[]; matchMode?: string; coldStoreCount?: number } | null>(null);
   const executeTaskMutation = useExecuteMaintenanceTask();
   const clearErrorsMutation = useClearErrorLogs();
   const purgePosterCacheMutation = usePurgePosterCache();
   const posterCacheStatsQuery = usePosterCacheStats({ activeTab });
   const invalidateImageMutation = useInvalidateCachedImage();
+
+  const coldStoreStatsQuery = useColdStoreStats({ activeTab });
+  const purgeColdStoreMutation = usePurgeColdStore();
+  const sweepColdStoreMutation = useSweepColdStore();
+  const [coldStoreMetaId, setColdStoreMetaId] = useState("");
+  const [coldPurgingScope, setColdPurgingScope] = useState<"all" | "title" | null>(null);
+
+  // Targeted "act on one id" operations live in dialogs so their inputs stay out
+  // of the resting layout. Each closes on a successful action (see the handlers).
+  const [clearByIdOpen, setClearByIdOpen] = useState(false);
+  const [refreshImageOpen, setRefreshImageOpen] = useState(false);
+  const [dropTitleOpen, setDropTitleOpen] = useState(false);
+
+  // Each clear defaults to hitting both tiers — clearing only one leaves the
+  // other still serving the entry — but stays opt-out so an operator can keep
+  // the expensive disk tier while refreshing Redis, or vice versa.
+  const [clearByIdIncludeDisk, setClearByIdIncludeDisk] = useState(true);
+  const [dropTitleIncludeRedis, setDropTitleIncludeRedis] = useState(true);
 
   const [cacheStats, setCacheStats] = useState(() => {
     if (data?.cacheStats) {
@@ -132,14 +198,20 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
   const handleClearById = (dryRun: boolean) => {
     const token = clearToken.trim();
     if (!token) return;
-    clearByIdMutation.mutate({ token, dryRun }, {
+    clearByIdMutation.mutate({ token, dryRun, includeColdStore: clearByIdIncludeDisk }, {
       onSuccess: (result) => {
         if (result.dryRun) {
-          setClearPreview({ count: result.deletedCount, samples: result.samples });
+          setClearPreview({
+            count: result.deletedCount,
+            samples: result.samples,
+            matchMode: (result as any).matchMode,
+            coldStoreCount: (result as any).coldStoreCount,
+          });
           toast.info("Preview", { description: result.message });
         } else {
           setClearPreview(null);
           setClearToken("");
+          setClearByIdOpen(false);
           toast.success("Cache Cleared", { description: result.message });
         }
       },
@@ -219,8 +291,10 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
         if (result?.removed?.length) {
           toast.success("Image Refreshed", { description: result.message });
           setRefreshUrl("");
+          setRefreshImageOpen(false);
         } else {
-          // Not an error: the next request will fetch it fresh either way.
+          // Not an error: the next request will fetch it fresh either way. Keep
+          // the dialog open so a mistyped URL can be corrected without reopening.
           toast.info("Not Cached", { description: result?.message || "That image was not in the cache." });
         }
       },
@@ -255,6 +329,53 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
     });
   };
 
+  const handlePurgeColdStore = (metaId?: string) => {
+    if (!metaId && !window.confirm("Drop every entry from the meta cold store? Stable titles will be re-fetched from their providers on the next request.")) {
+      return;
+    }
+    setColdPurgingScope(metaId ? "title" : "all");
+    purgeColdStoreMutation.mutate({ metaId, includeRedis: dropTitleIncludeRedis }, {
+      onSuccess: (result: any) => {
+        if (metaId && result?.removed === 0) {
+          // Keep the dialog open and the input intact so a mistyped id can be fixed.
+          toast.info("Nothing to remove", { description: `No cold-store entries for ${metaId}.` });
+        } else {
+          const redisNote = result?.redisRemoved
+            ? ` + ${result.redisRemoved} Redis key(s)`
+            : "";
+          toast.success("Cold Store Purged", {
+            description: metaId
+              ? `${metaId}: ${result?.removed ?? 0} component(s) dropped${redisNote}.`
+              : `${result?.removed ?? 0} component(s) dropped.`,
+          });
+          if (metaId) {
+            setColdStoreMetaId("");
+            setDropTitleOpen(false);
+          }
+        }
+      },
+      onError: (error) => {
+        toast.error("Cold Store Purge Failed", { description: error.message });
+      },
+      onSettled: () => setColdPurgingScope(null),
+    });
+  };
+
+  const handleSweepColdStore = () => {
+    sweepColdStoreMutation.mutate(undefined, {
+      onSuccess: (result: any) => {
+        toast.success("Cold Store Swept", {
+          description: result?.removed
+            ? `${result.removed} expired or inactive row(s) dropped.`
+            : "Nothing expired or inactive.",
+        });
+      },
+      onError: (error) => {
+        toast.error("Cold Store Sweep Failed", { description: error.message });
+      },
+    });
+  };
+
   const cacheClearing = clearCacheMutation.isPending;
   const clearingErrors = clearErrorsMutation.isPending;
 
@@ -270,13 +391,13 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
 
   return (
     <div className="space-y-6">
-      {/* Cache & Poster Management */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+      {/* Redis L1 cache — full width above the two disk-backed stores */}
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center gap-2">
             <Database className="h-5 w-5" />
             <CardTitle>Cache Management</CardTitle>
+            <Badge variant="outline" className="ml-auto font-normal">Redis · L1</Badge>
           </div>
         </CardHeader>
         <CardContent className="pt-0">
@@ -350,67 +471,130 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
                   </>
                 )}
               </Button>
+              <Dialog
+                open={clearByIdOpen}
+                onOpenChange={(o) => { setClearByIdOpen(o); if (!o) setClearPreview(null); }}
+              >
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    <Trash2 className="h-4 w-4 mr-1.5" />
+                    Clear by ID…
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Clear cached entries by ID</DialogTitle>
+                    <DialogDescription>
+                      Removes every cached entry whose key contains this value — a meta id
+                      (<code>tt0111161</code>, <code>mal:64019</code>) or a catalog id
+                      (<code>movielens.toppicks</code>). Preview first to see what matches.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3">
+                    <Input
+                      autoFocus
+                      placeholder="tt0111161 or movielens.toppicks"
+                      value={clearToken}
+                      onChange={(e) => { setClearToken(e.target.value); setClearPreview(null); }}
+                      onKeyDown={(e) => { if (e.key === "Enter") handleClearById(true); }}
+                      disabled={clearByIdMutation.isPending}
+                    />
+                    {/* Make the match mode visible before anything is deleted. */}
+                    {clearToken.trim().length >= 3 && (
+                      <p className="text-xs -mt-1">
+                        {looksLikeMediaId(clearToken) ? (
+                          <span className="text-muted-foreground">
+                            Recognized media id — clears <span className="font-medium text-foreground">this title only</span>.
+                          </span>
+                        ) : (
+                          <span className="text-amber-600 dark:text-amber-500">
+                            Not a complete media id — clears <span className="font-medium">any entry containing this text</span>. Preview first.
+                          </span>
+                        )}
+                      </p>
+                    )}
+                    {/* Only meaningful when there is a disk tier to clear. */}
+                    {coldStoreStatsQuery.data?.configured && (
+                      <div className="flex items-center justify-between gap-3 rounded-md border p-2.5">
+                        <div className="space-y-0.5">
+                          <Label htmlFor="clear-by-id-disk" className="text-sm">Clear on disk too</Label>
+                          <p className="text-xs text-muted-foreground">
+                            Also drop matching cold-store entries. Without this the title is
+                            restored from disk on the next request.
+                          </p>
+                        </div>
+                        <Switch
+                          id="clear-by-id-disk"
+                          checked={clearByIdIncludeDisk}
+                          onCheckedChange={(v) => { setClearByIdIncludeDisk(v); setClearPreview(null); }}
+                          disabled={clearByIdMutation.isPending}
+                        />
+                      </div>
+                    )}
+                    {clearPreview && (
+                      <div className="rounded-md border bg-muted/40 p-2 space-y-1">
+                        <p className="text-xs font-medium">
+                          {clearPreview.count.toLocaleString()} matching entries
+                          {clearPreview.coldStoreCount ? ` (${clearPreview.coldStoreCount} on disk)` : ""}
+                          {clearPreview.matchMode && (
+                            <Badge variant="outline" className="ml-2 font-normal">
+                              {clearPreview.matchMode === "exact" ? "exact match" : "substring"}
+                            </Badge>
+                          )}
+                        </p>
+                        {clearPreview.samples.length > 0 && (
+                          <ul className="text-[11px] font-mono text-muted-foreground space-y-0.5 max-h-40 overflow-auto">
+                            {clearPreview.samples.map((k) => <li key={k} className="whitespace-nowrap">{k}</li>)}
+                          </ul>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <DialogFooter>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setClearByIdOpen(false)}
+                      disabled={clearByIdMutation.isPending}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={() => handleClearById(true)}
+                      variant="outline"
+                      size="sm"
+                      disabled={clearByIdMutation.isPending || clearToken.trim().length < 3}
+                    >
+                      {clearByIdMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Preview"}
+                    </Button>
+                    <Button
+                      onClick={() => handleClearById(false)}
+                      variant="outline"
+                      size="sm"
+                      disabled={clearByIdMutation.isPending || clearToken.trim().length < 3}
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
+                    >
+                      <Trash2 className="h-4 w-4 mr-1.5" />
+                      Clear
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
             </div>
-          </div>
-
-          <div className="mt-3 pt-3 border-t space-y-2">
-            <div className="space-y-0.5">
-              <span className="text-sm font-medium">Clear by ID</span>
-              <p className="text-xs text-muted-foreground">
-                Removes every cached entry whose key contains this value — a meta id
-                (<code>tt0111161</code>, <code>mal:64019</code>) or a catalog id
-                (<code>movielens.explore</code>). Preview first to see what matches.
-              </p>
-            </div>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <Input
-                placeholder="tt0111161 or movielens.explore"
-                value={clearToken}
-                onChange={(e) => { setClearToken(e.target.value); setClearPreview(null); }}
-                onKeyDown={(e) => { if (e.key === "Enter") handleClearById(true); }}
-                disabled={clearByIdMutation.isPending}
-              />
-              <div className="flex gap-2">
-                <Button
-                  onClick={() => handleClearById(true)}
-                  variant="outline"
-                  size="sm"
-                  disabled={clearByIdMutation.isPending || clearToken.trim().length < 3}
-                >
-                  {clearByIdMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Preview"}
-                </Button>
-                <Button
-                  onClick={() => handleClearById(false)}
-                  variant="outline"
-                  size="sm"
-                  disabled={clearByIdMutation.isPending || clearToken.trim().length < 3}
-                  className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
-                >
-                  <Trash2 className="h-4 w-4 mr-1.5" />
-                  Clear
-                </Button>
-              </div>
-            </div>
-            {clearPreview && (
-              <div className="rounded-md border bg-muted/40 p-2 space-y-1">
-                <p className="text-xs font-medium">{clearPreview.count.toLocaleString()} matching entries</p>
-                {clearPreview.samples.length > 0 && (
-                  <ul className="text-[11px] font-mono text-muted-foreground space-y-0.5 overflow-x-auto">
-                    {clearPreview.samples.map((k) => <li key={k} className="whitespace-nowrap">{k}</li>)}
-                  </ul>
-                )}
-              </div>
-            )}
           </div>
         </CardContent>
       </Card>
 
+      {/* On-disk stores: image cache and meta cold store, paired by storage tier.
+          Either spans the full row when the other is unavailable, so no gap opens. */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
       {posterCacheStatsQuery.data !== undefined && (
-        <Card>
+        <Card className={!coldStoreStatsQuery.data ? "xl:col-span-2" : undefined}>
           <CardHeader className="pb-3">
             <div className="flex items-center gap-2">
               <Image className="h-5 w-5" />
               <CardTitle>Image Cache</CardTitle>
+              <Badge variant="outline" className="ml-auto font-normal">On-disk</Badge>
             </div>
           </CardHeader>
           <CardContent className="pt-0">
@@ -461,39 +645,57 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
                   </div>
                 )}
 
-                {/* Refresh one image — a stale URL should not require wiping a whole class. */}
-                {posterCacheStatsQuery.data.by_type && (
-                  <div className="mt-4 pt-3 border-t">
-                    <label htmlFor="refresh-image-url" className="text-xs text-muted-foreground">
-                      Refresh a single image
-                    </label>
-                    <div className="flex gap-2 mt-1.5">
-                      <input
-                        id="refresh-image-url"
-                        type="text"
-                        value={refreshUrl}
-                        onChange={(e) => setRefreshUrl(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') handleRefreshImage(); }}
-                        placeholder="Paste an image or /poster-cache/ URL"
-                        className="flex-1 min-w-0 rounded-md border bg-background px-2.5 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      />
-                      <Button
-                        onClick={handleRefreshImage}
-                        variant="outline"
-                        size="sm"
-                        disabled={!refreshUrl.trim() || invalidateImageMutation.isPending}
-                      >
-                        {invalidateImageMutation.isPending ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          "Refresh"
-                        )}
-                      </Button>
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex justify-center mt-3 pt-3 border-t">
+                <div className="flex flex-wrap justify-center items-center gap-2 mt-3 pt-3 border-t">
+                  {/* Refresh one image — a stale URL should not require wiping a whole class. */}
+                  {posterCacheStatsQuery.data.by_type && (
+                    <Dialog open={refreshImageOpen} onOpenChange={setRefreshImageOpen}>
+                      <DialogTrigger asChild>
+                        <Button variant="outline" size="sm">
+                          <RefreshCw className="h-4 w-4 mr-1.5" />
+                          Refresh an image…
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Refresh a cached image</DialogTitle>
+                          <DialogDescription>
+                            Drops one image from the cache so it is re-fetched on the next
+                            request. Accepts the upstream URL or a <code>/poster-cache/</code> URL.
+                          </DialogDescription>
+                        </DialogHeader>
+                        <Input
+                          autoFocus
+                          placeholder="Paste an image or /poster-cache/ URL"
+                          value={refreshUrl}
+                          onChange={(e) => setRefreshUrl(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleRefreshImage(); }}
+                          disabled={invalidateImageMutation.isPending}
+                        />
+                        <DialogFooter>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setRefreshImageOpen(false)}
+                            disabled={invalidateImageMutation.isPending}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            onClick={handleRefreshImage}
+                            variant="outline"
+                            size="sm"
+                            disabled={!refreshUrl.trim() || invalidateImageMutation.isPending}
+                          >
+                            {invalidateImageMutation.isPending ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              "Refresh"
+                            )}
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+                  )}
                   <Button
                     onClick={() => handlePurgePosterCache()}
                     variant="outline"
@@ -514,6 +716,216 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
               </>
             ) : (
               <p className="text-sm text-muted-foreground">Image cache not configured or unreachable.</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {coldStoreStatsQuery.data && (
+        <Card className={posterCacheStatsQuery.data === undefined ? "xl:col-span-2" : undefined}>
+          <CardHeader className="pb-3">
+            <div className="flex items-center gap-2">
+              <HardDrive className="h-5 w-5" />
+              <CardTitle>Meta Cold Store</CardTitle>
+              <Badge variant="outline" className="ml-auto font-normal">On-disk</Badge>
+              {!coldStoreStatsQuery.data.configured && (
+                <Badge variant="outline">Disabled</Badge>
+              )}
+            </div>
+            <CardDescription>
+              Disk tier holding metadata that never changes — old films, ended series, finished
+              anime. Serves them when Redis evicts, instead of re-fetching from providers.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {!coldStoreStatsQuery.data.configured ? (
+              <p className="text-sm text-muted-foreground">
+                Not enabled. Set <code className="text-xs">META_COLD_STORE_ENABLED=true</code> and
+                restart to persist stable metadata on disk.
+              </p>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">Titles</span>
+                    <p className="text-lg font-semibold"><AnimatedNumber value={coldStoreStatsQuery.data.titles} /></p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Components</span>
+                    <p className="text-lg font-semibold"><AnimatedNumber value={coldStoreStatsQuery.data.rows} /></p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Disk Usage</span>
+                    <p className="text-lg font-semibold">{formatSize(coldStoreStatsQuery.data.bytes)}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground" title="Lookups served from disk vs. fell through to the provider">
+                      Hits / Misses
+                    </span>
+                    <p className="text-lg font-semibold">
+                      <AnimatedNumber value={coldStoreStatsQuery.data.hits} />
+                      <span className="text-muted-foreground font-normal"> / </span>
+                      <AnimatedNumber value={coldStoreStatsQuery.data.misses} />
+                    </p>
+                  </div>
+                </div>
+
+                {/* Disk budget against META_COLD_STORE_MAX_BYTES; LRU eviction kicks in at the cap. */}
+                {coldStoreStatsQuery.data.maxBytes > 0 && (
+                  <div className="mt-4">
+                    <div className="flex items-center justify-between text-xs text-muted-foreground mb-1.5">
+                      <span>Disk budget</span>
+                      <span className="tabular-nums">
+                        {formatSize(coldStoreStatsQuery.data.bytes)} / {formatSize(coldStoreStatsQuery.data.maxBytes)}
+                      </span>
+                    </div>
+                    <Progress
+                      value={Math.min(100, (coldStoreStatsQuery.data.bytes / coldStoreStatsQuery.data.maxBytes) * 100)}
+                    />
+                  </div>
+                )}
+
+                {coldStoreStatsQuery.data.tiers.length > 0 && (
+                  <div className="mt-4 pt-3 border-t space-y-1">
+                    {coldStoreStatsQuery.data.tiers.map((tier) => (
+                      <div key={tier.tier} className="flex items-center justify-between gap-3 text-sm py-1">
+                        <span className="font-medium" title={COLD_TIER_HINTS[tier.tier] || undefined}>
+                          {COLD_TIER_LABELS[tier.tier] || tier.tier}
+                        </span>
+                        <span className="text-muted-foreground tabular-nums">
+                          {tier.titles.toLocaleString()} titles · {tier.count.toLocaleString()} components · {formatSize(tier.bytes)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="mt-4 pt-3 border-t grid grid-cols-3 gap-4 text-sm">
+                  <div>
+                    <span className="text-muted-foreground text-xs">Components served</span>
+                    <p className="font-semibold tabular-nums">{coldStoreStatsQuery.data.componentsServed.toLocaleString()}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground text-xs">Oldest entry</span>
+                    <p className="font-semibold tabular-nums">{formatAge(coldStoreStatsQuery.data.oldestCreatedAt)}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground text-xs" title="Rows past their TTL, cleared on the next sweep">
+                      Expired rows
+                    </span>
+                    <p className="font-semibold tabular-nums">{coldStoreStatsQuery.data.expiredRows.toLocaleString()}</p>
+                  </div>
+                </div>
+
+                <div className="flex justify-center mt-3 pt-3 border-t">
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    {/* Drop one title — a bad or revived entry should not require wiping the store. */}
+                    <Dialog open={dropTitleOpen} onOpenChange={setDropTitleOpen}>
+                      <DialogTrigger asChild>
+                        <Button variant="outline" size="sm">
+                          <Trash2 className="h-4 w-4 mr-1.5" />
+                          Drop a title…
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Drop a single title</DialogTitle>
+                          <DialogDescription>
+                            Removes every cold-store component for one title so it is re-fetched
+                            and re-classified on the next request. Use this for a bad or revived
+                            entry instead of clearing the whole store.
+                          </DialogDescription>
+                        </DialogHeader>
+                        <div className="space-y-3">
+                          <Input
+                            autoFocus
+                            placeholder="Meta ID, e.g. tt0903747 or kitsu:1"
+                            value={coldStoreMetaId}
+                            onChange={(e) => setColdStoreMetaId(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && coldStoreMetaId.trim()) handlePurgeColdStore(coldStoreMetaId.trim());
+                            }}
+                            disabled={purgeColdStoreMutation.isPending}
+                          />
+                          <div className="flex items-center justify-between gap-3 rounded-md border p-2.5">
+                            <div className="space-y-0.5">
+                              <Label htmlFor="drop-title-redis" className="text-sm">Clear on Redis too</Label>
+                              <p className="text-xs text-muted-foreground">
+                                Also drop the title's Redis entries. Without this the hot cache
+                                keeps serving it until its TTL expires.
+                              </p>
+                            </div>
+                            <Switch
+                              id="drop-title-redis"
+                              checked={dropTitleIncludeRedis}
+                              onCheckedChange={setDropTitleIncludeRedis}
+                              disabled={purgeColdStoreMutation.isPending}
+                            />
+                          </div>
+                        </div>
+                        <DialogFooter>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setDropTitleOpen(false)}
+                            disabled={purgeColdStoreMutation.isPending}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            onClick={() => handlePurgeColdStore(coldStoreMetaId.trim())}
+                            variant="outline"
+                            size="sm"
+                            disabled={!coldStoreMetaId.trim() || purgeColdStoreMutation.isPending}
+                            className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
+                          >
+                            {purgeColdStoreMutation.isPending && coldPurgingScope === "title" ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <>
+                                <Trash2 className="h-4 w-4 mr-1.5" />
+                                Drop
+                              </>
+                            )}
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+                    <Button
+                      onClick={handleSweepColdStore}
+                      variant="outline"
+                      size="sm"
+                      disabled={sweepColdStoreMutation.isPending}
+                      title="Drop expired and inactive rows now instead of waiting for the hourly sweep"
+                    >
+                      {sweepColdStoreMutation.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <>
+                          <Clock className="h-4 w-4 mr-1.5" />
+                          Sweep Now
+                        </>
+                      )}
+                    </Button>
+                    <Button
+                      onClick={() => handlePurgeColdStore()}
+                      variant="outline"
+                      size="sm"
+                      disabled={purgeColdStoreMutation.isPending}
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
+                    >
+                      {purgeColdStoreMutation.isPending && coldPurgingScope === "all" ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <>
+                          <Trash2 className="h-4 w-4 mr-1.5" />
+                          Clear Cold Store
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </>
             )}
           </CardContent>
         </Card>

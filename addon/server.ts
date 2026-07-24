@@ -11,7 +11,7 @@ import { initializeTmdbNetworkIndex } from './lib/tmdb-network-index.js';
 import { initializeTmdbKeywordIndex } from './lib/tmdb-keyword-index.js';
 import { runCacheCleanup } from './cache-cleanup.js';
 import { runCachePathMigration } from './lib/cache-path-migration.js';
-import { performVersionCleanup } from './lib/versionCleanup.js';
+import { performEpochCleanup } from './lib/epochCleanup.js';
 import { waitForRedisReady } from './lib/redisReady.js';
 import database from './lib/database.js';
 import consola from 'consola';
@@ -63,6 +63,14 @@ async function startServer(): Promise<void> {
     runNginxImport().catch((e: any) => consola.warn('[PosterCache] nginx import failed:', e?.message));
   }
 
+  const metaColdStore = require('./lib/metaColdStore');
+  if (metaColdStore.isEnabled()) {
+    metaColdStore.init();
+    setInterval(() => {
+      try { metaColdStore.sweep(); } catch (e: any) { consola.warn('[ColdStore] sweep failed:', e?.message); }
+    }, 60 * 60 * 1000).unref?.();
+  }
+
   const redisReady = await waitForRedisReady();
   if (redisReady) {
     consola.success('Redis ready.');
@@ -77,8 +85,8 @@ async function startServer(): Promise<void> {
   
   consola.info('Initializing Mappers, Ratings, and Cache Cleanup...');
 
-  performVersionCleanup().catch((error: any) => {
-    consola.error('Background version cleanup failed:', error.message);
+  performEpochCleanup().catch((error: any) => {
+    consola.error('Background epoch cleanup failed:', error.message);
   });
   
   const initializationTasks = [

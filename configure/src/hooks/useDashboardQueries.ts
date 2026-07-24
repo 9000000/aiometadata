@@ -617,7 +617,7 @@ export function useClearCacheById() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ token, dryRun }: { token: string; dryRun?: boolean }): Promise<ClearCacheByIdResult> => {
+    mutationFn: async ({ token, dryRun, includeColdStore }: { token: string; dryRun?: boolean; includeColdStore?: boolean }): Promise<ClearCacheByIdResult> => {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (adminKey) {
         headers['x-admin-key'] = adminKey;
@@ -626,7 +626,7 @@ export function useClearCacheById() {
       const response = await fetch('/api/dashboard/cache/clear-by-id', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ token, dryRun: !!dryRun }),
+        body: JSON.stringify({ token, dryRun: !!dryRun, includeColdStore: includeColdStore !== false }),
       });
 
       if (response.status === 401) {
@@ -801,6 +801,137 @@ export function useInvalidateCachedImage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['poster-cache-stats'] });
+    },
+  });
+}
+
+export interface ColdStoreTierStats {
+  tier: string;
+  count: number;
+  titles: number;
+  bytes: number;
+}
+
+export interface ColdStoreStats {
+  /** True once the SQLite handle is open (i.e. the feature booted). */
+  enabled: boolean;
+  /** True when META_COLD_STORE_ENABLED is set, even before init. */
+  configured: boolean;
+  rows: number;
+  titles: number;
+  bytes: number;
+  maxBytes: number;
+  tiers: ColdStoreTierStats[];
+  oldestCreatedAt: number | null;
+  nextExpiryAt: number | null;
+  expiredRows: number;
+  /** Lookups served from disk. */
+  hits: number;
+  /** Lookups that fell through to the origin provider. */
+  misses: number;
+  /** Individual components handed back across all hits. */
+  componentsServed: number;
+}
+
+/**
+ * Meta cold store stats. Unlike the poster cache this always resolves — a
+ * disabled store reports `configured: false` so the panel can explain itself
+ * rather than render an error.
+ */
+export function useColdStoreStats(options: DashboardQueryOptions = {}) {
+  const { isAdmin, adminKey } = useAdmin();
+  const isVisible = usePageVisibility();
+  const { activeTab = 'overview', enabled = true } = options;
+
+  const isActiveTab = activeTab === 'operations';
+  const shouldPoll = isVisible && isActiveTab && isAdmin;
+
+  return useQuery<ColdStoreStats | null>({
+    queryKey: ['cold-store-stats'],
+    queryFn: async () => {
+      const headers: Record<string, string> = {};
+      if (adminKey) {
+        headers['x-admin-key'] = adminKey;
+      }
+
+      const response = await fetch('/api/dashboard/cold-store/stats', { headers });
+      if (!response.ok) return null;
+      return response.json();
+    },
+    enabled: enabled && isAdmin && !!adminKey && isActiveTab,
+    refetchInterval: shouldPoll ? POLLING_INTERVALS.OPERATIONS : false,
+    refetchIntervalInBackground: false,
+  });
+}
+
+/**
+ * Drop cold-store rows. Passing a metaId drops just that title; omitting it
+ * drops the whole store.
+ */
+export function usePurgeColdStore() {
+  const { adminKey, logout } = useAdmin();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (args?: string | { metaId?: string; includeRedis?: boolean }) => {
+      const { metaId, includeRedis } = typeof args === 'string' ? { metaId: args, includeRedis: undefined } : (args || {});
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (adminKey) {
+        headers['x-admin-key'] = adminKey;
+      }
+
+      const response = await fetch('/api/dashboard/cold-store/purge', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(metaId ? { metaId, includeRedis: includeRedis !== false } : {}),
+      });
+
+      if (response.status === 401) {
+        logout();
+        throw new Error('Session expired. Please log in again.');
+      }
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to purge cold store');
+      }
+      return result;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['cold-store-stats'] });
+      // May also have cleared Redis keys, so refresh the cache stats alongside.
+      queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.operations });
+    },
+  });
+}
+
+/** Drop expired and inactive rows now instead of waiting for the hourly sweep. */
+export function useSweepColdStore() {
+  const { adminKey, logout } = useAdmin();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (adminKey) {
+        headers['x-admin-key'] = adminKey;
+      }
+
+      const response = await fetch('/api/dashboard/cold-store/sweep', { method: 'POST', headers });
+
+      if (response.status === 401) {
+        logout();
+        throw new Error('Session expired. Please log in again.');
+      }
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to sweep cold store');
+      }
+      return result;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['cold-store-stats'] });
     },
   });
 }

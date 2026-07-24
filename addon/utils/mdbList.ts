@@ -433,7 +433,7 @@ async function fetchMDBListItems(listId: string, apiKey: string, language: strin
         hasMore,
         totalPages
       };
-    }, ttl, { skipVersion: true });
+    }, ttl, { upstream: true });
   } catch (err: any) {
     logger.error(`Error retrieving items for list ${listId}, page ${page}:`, err.message);
     return { items: [] };
@@ -713,7 +713,7 @@ async function fetchMDBListExternalItems(
       }
 
       return { items, hasMore };
-    }, ttl, { skipVersion: true });
+    }, ttl, { upstream: true });
   } catch (err: any) {
     logger.error(`Error retrieving items from URL ${sanitizeUrlForLogging(url)}, page ${page}:`, err.message);
     return { items: [] };
@@ -1628,7 +1628,7 @@ async function fetchMDBListCatalog(
         try {
           cursor = await cacheWrapGlobal(cursorCacheKey, async () => {
             return null;
-          }, ttl, { skipVersion: true });
+          }, ttl, { upstream: true });
         } catch {
           cursor = undefined;
         }
@@ -1673,7 +1673,7 @@ async function fetchMDBListCatalog(
       // Store cursor for next page
       if (nextCursor && hasMore) {
         const cursorStoreKey = `mdblist-catalog:cursor:${paramsHash}:${mediaType}:page:${page}`;
-        await cacheWrapGlobal(cursorStoreKey, async () => nextCursor, ttl, { skipVersion: true });
+        await cacheWrapGlobal(cursorStoreKey, async () => nextCursor, ttl, { upstream: true });
       }
 
       logger.info(`[MDBList Catalog] Fetched ${items.length} ${mediaType} items (page ${page}, hasMore: ${hasMore})`);
@@ -1682,7 +1682,7 @@ async function fetchMDBListCatalog(
       logger.error(`[MDBList Catalog] Error fetching ${mediaType} catalog page ${page}: ${err.message}`);
       return { items: [], hasMore: false };
     }
-  }, ttl, { skipVersion: true });
+  }, ttl, { upstream: true });
 }
 
 export {

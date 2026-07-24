@@ -15,6 +15,7 @@ const { isAnime: isAnimeFunc } = require('../utils/isAnime');
 const e = require("express");
 const { resolveAllIds } = require('./id-resolver');
 const { cacheWrapMeta, cacheWrapJikanApi, cacheWrapGlobal } = require('./getCache');
+const { deriveStabilityStamp } = require('./metaColdStore');
 function CATALOG_TTL() { return parseInt(process.env.CATALOG_TTL || 1 * 24 * 60 * 60, 10); }
 const kitsu = require('./kitsu');
 var nameToImdb = require("name-to-imdb");
@@ -1093,9 +1094,9 @@ async function getAnimeMeta(preferredProvider, stremioId, language, config, user
     try {
       logger.debug(`[AnimeMeta] Using provider 'mal' for ${stremioId}`);
       const [details, characters, episodes] = await Promise.all([
-        cacheWrapJikanApi(`anime-details-${allIds.malId}`, () => jikan.getAnimeDetails(allIds.malId), null, { skipVersion: true }),
-        includeVideos ? cacheWrapJikanApi(`anime-characters-${allIds.malId}`, () => jikan.getAnimeCharacters(allIds.malId), null, { skipVersion: true }) : null,
-        includeVideos ? cacheWrapJikanApi(`anime-episodes-${allIds.malId}`, () => jikan.getAnimeEpisodes(allIds.malId), 24 * 60 * 60, { skipVersion: true }) : null,
+        cacheWrapJikanApi(`anime-details-${allIds.malId}`, () => jikan.getAnimeDetails(allIds.malId), null),
+        includeVideos ? cacheWrapJikanApi(`anime-characters-${allIds.malId}`, () => jikan.getAnimeCharacters(allIds.malId), null) : null,
+        includeVideos ? cacheWrapJikanApi(`anime-episodes-${allIds.malId}`, () => jikan.getAnimeEpisodes(allIds.malId), 24 * 60 * 60) : null,
       ]);
       if (!details) {
         throw new Error(`Jikan returned no core details for MAL ID ${allIds.malId}.`);
@@ -1176,19 +1177,33 @@ async function buildImdbSeriesResponse(stremioId, imdbData, enrichmentData = {},
 
   let poster, background, logoUrl;
 
+  const langCode = config.language.split('-')[0];
+  const videoLanguages = Array.from(new Set([langCode, 'en', 'null'])).join(',');
+  const seriesInfoPromise = tmdbId
+    ? moviedb.tvInfo({ id: tmdbId, language: config.language, append_to_response: "content_ratings,videos", include_video_language: videoLanguages }, config)
+    : Promise.resolve(null);
+
+  let seriesData;
   const animeIdProviders = ['mal', 'anilist', 'kitsu', 'anidb'];
   // check if stremioId starts with one of the animeIdProviders
   if (isAnime && animeIdProviders.some(provider => stremioId.startsWith(provider))) {
-    const artwork = await getAnimeArtwork(allIds, config, imdbPosterUrl, imdbBackgroundUrl, 'series');
+    const [artwork, si] = await Promise.all([
+      getAnimeArtwork(allIds, config, imdbPosterUrl, imdbBackgroundUrl, 'series'),
+      seriesInfoPromise
+    ]);
     poster = artwork.poster;
     background = artwork.background;
     logoUrl = artwork.logo;
+    seriesData = si;
   } else {
-    [poster, background, logoUrl] = await Promise.all([
+    let si;
+    [poster, background, logoUrl, si] = await Promise.all([
       Utils.getSeriesPoster({ tmdbId, tvdbId, imdbId, metaProvider: 'imdb', fallbackPosterUrl: imdbPosterUrl }, config),
       Utils.getSeriesBackground({ tmdbId, tvdbId, imdbId, metaProvider: 'imdb', fallbackBackgroundUrl: imdbBackgroundUrl }, config),
-      Utils.getSeriesLogo({ tmdbId, tvdbId, imdbId, metaProvider: 'imdb', fallbackLogoUrl: imdbLogoUrl }, config)
+      Utils.getSeriesLogo({ tmdbId, tvdbId, imdbId, metaProvider: 'imdb', fallbackLogoUrl: imdbLogoUrl }, config),
+      seriesInfoPromise
     ]);
+    seriesData = si;
   }
 
   const fallbackPosterUrl = poster || `${host}/missing_poster.png`;
@@ -1207,9 +1222,6 @@ async function buildImdbSeriesResponse(stremioId, imdbData, enrichmentData = {},
     imdbData.description = Utils.addMetaProviderAttribution(imdbData.description, 'IMDB', config);
   }
   if (tmdbId){
-    const langCode = config.language.split('-')[0];
-    const videoLanguages = Array.from(new Set([langCode, 'en', 'null'])).join(',');
-    const seriesData = await moviedb.tvInfo({ id: tmdbId, language: config.language, append_to_response: "content_ratings,videos", include_video_language: videoLanguages }, config);
     imdbData.app_extras = imdbData.app_extras || {};
     if(seriesData){
       const certification = Utils.getTmdbTvCertificationForCountry(seriesData.content_ratings);
@@ -1256,19 +1268,33 @@ async function buildImdbMovieResponse(stremioId, imdbData, enrichmentData = {}, 
 
   let poster, background, logoUrl;
 
+  const langCode = config.language.split('-')[0];
+  const videoLanguages = Array.from(new Set([langCode, 'en', 'null'])).join(',');
+  const movieInfoPromise = tmdbId
+    ? moviedb.movieInfo({ id: tmdbId, language: config.language, append_to_response: "release_dates,videos", include_video_language: videoLanguages }, config)
+    : Promise.resolve(null);
+
+  let movieData;
   const animeIdProviders = ['mal', 'anilist', 'kitsu', 'anidb'];
   // check if stremioId starts with one of the animeIdProviders
   if (isAnime && animeIdProviders.some(provider => stremioId.startsWith(provider))) {
-    const artwork = await getAnimeArtwork(allIds, config, imdbPosterUrl, imdbBackgroundUrl, 'movie');
+    const [artwork, mi] = await Promise.all([
+      getAnimeArtwork(allIds, config, imdbPosterUrl, imdbBackgroundUrl, 'movie'),
+      movieInfoPromise
+    ]);
     poster = artwork.poster;
     background = artwork.background;
     logoUrl = artwork.logo;
+    movieData = mi;
   } else {
-    [poster, background, logoUrl] = await Promise.all([
+    let mi;
+    [poster, background, logoUrl, mi] = await Promise.all([
       Utils.getMoviePoster({ tmdbId, tvdbId, imdbId, metaProvider: 'imdb', fallbackPosterUrl: imdbPosterUrl }, config),
       Utils.getMovieBackground({ tmdbId, tvdbId, imdbId, metaProvider: 'imdb', fallbackBackgroundUrl: imdbBackgroundUrl }, config),
-      Utils.getMovieLogo({ tmdbId, tvdbId, imdbId, metaProvider: 'imdb', fallbackLogoUrl: imdbLogoUrl }, config)
+      Utils.getMovieLogo({ tmdbId, tvdbId, imdbId, metaProvider: 'imdb', fallbackLogoUrl: imdbLogoUrl }, config),
+      movieInfoPromise
     ]);
+    movieData = mi;
   }
 
   const _rawPosterUrl = poster || `${host}/missing_poster.png`;
@@ -1285,9 +1311,6 @@ async function buildImdbMovieResponse(stremioId, imdbData, enrichmentData = {}, 
     imdbData.description = Utils.addMetaProviderAttribution(imdbData.description, 'IMDB', config);
   }
   if (tmdbId){
-    const langCode = config.language.split('-')[0];
-    const videoLanguages = Array.from(new Set([langCode, 'en', 'null'])).join(',');
-    const movieData = await moviedb.movieInfo({ id: tmdbId, language: config.language, append_to_response: "release_dates,videos", include_video_language: videoLanguages }, config);
     if (movieData) {
     imdbData.app_extras = imdbData.app_extras || {};
     imdbData.released = movieData.release_date ? resolveReleaseTimestamp(movieData.release_date, { originCountry: movieData.production_countries?.[0]?.iso_3166_1 }) : null;
@@ -1467,6 +1490,7 @@ async function buildTmdbMovieResponse(stremioId, movieData, language, config, us
     year: movieData.release_date ? movieData.release_date.substring(0, 4) : "",
     released: movieData.release_date ? resolveReleaseTimestamp(movieData.release_date, { originCountry: movieData.production_countries?.[0]?.iso_3166_1 }) : null,
     releaseInfo: movieData.release_date ? movieData.release_date.substring(0, 4) : "",
+    _stability: deriveStabilityStamp('tmdb', movieData, 'movie'),
     runtime: Utils.parseRunTime(movieData.runtime),
     country: Utils.parseCoutry(movieData.production_countries),
     imdbRating,
@@ -1581,26 +1605,24 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
     }
     //console.log(`[TmdbSeriesMeta] credits: ${JSON.stringify(credits)}`);
 
-    // Fetch Cinemeta videos data for IMDB episode mapping (once per IMDB series)
-    let cinemetaVideos = [];
-    if (imdbId) {
-      try {
-        const imdbMeta = await imdb.getMetaFromImdb(imdbId, 'series', stremioId);
-        cinemetaVideos = imdbMeta?.videos || [];
-        if (cinemetaVideos && cinemetaVideos.length > 0) {
-          logger.debug(`[ID Builder] Fetched ${cinemetaVideos.length} Cinemeta videos for IMDB ${imdbId}`);
-        }
-      } catch (error) {
-        logger.warn(`[ID Builder] Failed to fetch Cinemeta videos for IMDB ${imdbId}:`, error.message || error || 'Unknown error');
-      }
-    }
-
-    
+    const cinemetaPromise = imdbId
+      ? imdb.getMetaFromImdb(imdbId, 'series', stremioId).catch(error => {
+          logger.warn(`[ID Builder] Failed to fetch Cinemeta videos for IMDB ${imdbId}:`, error.message || error || 'Unknown error');
+          return null;
+        })
+      : Promise.resolve(null);
 
     const seasonsString = Utils.genSeasonsString(seasons);
-    const seasonPromises = seasonsString.map(el => moviedb.tvInfo({ id: tmdbId, language, append_to_response: el }, config));
-    
-    const seasonResponses = await Promise.all(seasonPromises);
+    const seasonPromise = Promise.all(
+      seasonsString.map(el => moviedb.tvInfo({ id: tmdbId, language, append_to_response: el }, config))
+    );
+
+    const [imdbMeta, seasonResponses] = await Promise.all([cinemetaPromise, seasonPromise]);
+
+    let cinemetaVideos = imdbMeta?.videos || [];
+    if (cinemetaVideos && cinemetaVideos.length > 0) {
+      logger.debug(`[ID Builder] Fetched ${cinemetaVideos.length} Cinemeta videos for IMDB ${imdbId}`);
+    }
     
     // Extract and combine all season data into an array
     const seasonDetails = [];
@@ -1912,6 +1934,7 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
     releaseInfo: releaseInfo,
     released: seriesData.first_air_date ? resolveReleaseTimestamp(seriesData.first_air_date, { originCountry: seriesData.origin_country?.[0] }).toISOString() : null,
     status: seriesData.status,
+    _stability: deriveStabilityStamp('tmdb', seriesData, 'series'),
     imdbRating,
     poster: Utils.isPosterRatingEnabled(config) ? posterProxyUrl : poster,
     _rawPosterUrl: _rawPosterUrl,
@@ -2086,6 +2109,7 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
     year: year,
     releaseInfo: year,
     released: movieData.first_release.date ? resolveReleaseTimestamp(movieData.first_release.date, { originCountry: movieData.originalCountry }).toISOString() : null,
+    _stability: deriveStabilityStamp('tvdb', movieData, 'movie'),
     runtime: Utils.parseRunTime(movieData.runtime),
     country: movieData.originalCountry,
     imdbRating,
@@ -2535,6 +2559,7 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
     released: tvdbShow.firstAired ? resolveReleaseTimestamp(tvdbShow.firstAired, { originCountry: tvdbShow.originalCountry, airsTime: tvdbShow.airsTime }) : null,
     runtime: Utils.parseRunTime(tvdbShow.averageRuntime),
     status: tvdbShow.status?.name,
+    _stability: deriveStabilityStamp('tvdb', tvdbShow, 'series'),
     country: tvdbShow.originalCountry,
     imdbRating,
     poster: Utils.isPosterRatingEnabled(config) ? posterProxyUrl : poster,
@@ -2794,6 +2819,7 @@ async function buildSeriesResponseFromTvmaze(stremioId, tvmazeShow, episodes, la
     released: premiered ? resolveReleaseTimestamp(premiered, { originCountry: tvmazeShow.network?.country?.code || tvmazeShow.webChannel?.country?.code, airsTime: tvmazeShow.schedule?.time }) : null,
     runtime: tvmazeShow.runtime ? Utils.parseRunTime(tvmazeShow.runtime) : Utils.parseRunTime(tvmazeShow.averageRuntime),
     status: tvmazeShow.status,
+    _stability: deriveStabilityStamp('tvmaze', tvmazeShow, 'series'),
     country: tvmazeShow.network?.country?.name || null,
     imdbRating,
     poster: Utils.isPosterRatingEnabled(config) ? posterProxyUrl : poster, 
@@ -3143,6 +3169,7 @@ async function buildAnimeResponse(stremioId, malData, language, characterData, e
       released: (malData.aired?.from || malData.start_date) ? resolveReleaseTimestamp(malData.aired?.from || malData.start_date, { originCountry: 'jp' }) : null,
       runtime: Utils.parseRunTime(malData.duration),
       status: malData.status,
+      _stability: deriveStabilityStamp('mal', malData, 'series'),
       imdbRating,
       poster: finalPosterUrl,
       _rawPosterUrl: _rawPosterUrl,
@@ -3265,6 +3292,7 @@ async function buildKitsuAnimeResponse(stremioId, kitsuData, genres, includeObje
       releaseInfo: kitsuReleaseInfo,
       runtime: Utils.parseRunTime(kitsuData.attributes.episodeLength),
       status: kitsuData.attributes.status || 'unknown',
+      _stability: deriveStabilityStamp('kitsu', kitsuData.attributes, 'series'),
       imdbRating: imdbRating,
       poster:
         bestPosterUrl ||

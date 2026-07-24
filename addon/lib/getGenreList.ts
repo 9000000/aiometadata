@@ -24,7 +24,7 @@ async function getGenreList(catalogType: string, language: string, type: string,
       console.error(`Error fetching ${type} genres from ${catalogType}:`, error.message);
       return [];
     }
-  }, 30 * 24 * 60 * 60, { skipVersion: true });
+  }, 30 * 24 * 60 * 60, { upstream: true });
 }
 
 export { getGenreList };

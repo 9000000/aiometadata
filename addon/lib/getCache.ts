@@ -66,6 +66,9 @@ const cacheHealth: any = {
   errors: 0,
   cachedErrors: 0,
   corruptedEntries: 0,
+  coldStoreHits: 0,
+  coldStoreMisses: 0,
+  coldStoreComponents: 0,
   lastHealthCheck: Date.now(),
   errorCounts: {},
   keyAccessCounts: new Map(),
@@ -1750,6 +1753,16 @@ async function writeMetaComponentsWithConfig({ config, metaId, result, ttl = MET
    }
 
   await cacheComponentsPipeline(componentsToCache, ttl, { overwrite });
+
+  try {
+    const coldStore = require('./metaColdStore');
+    if (coldStore.isEnabled()) {
+      coldStore.writeThrough(meta, componentsToCache);
+    }
+  } catch (coldErr: any) {
+    cacheLogger.warn(`[ColdStore] write-through failed for ${metaId}: ${coldErr?.message}`);
+  }
+
    return { meta: projectMetaForUser(meta, config) };
 }
 
@@ -1815,7 +1828,7 @@ async function reconstructMetaFromComponents(userUUID: string, metaId: string, t
   });
 }
 
-async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = null, includeVideos = true, useShowPoster = false }: { config: any; metaId: string; type?: string | null; includeVideos?: boolean; useShowPoster?: boolean }): Promise<any> {
+async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = null, includeVideos = true, useShowPoster = false, countColdStoreMiss = true }: { config: any; metaId: string; type?: string | null; includeVideos?: boolean; useShowPoster?: boolean; countColdStoreMiss?: boolean }): Promise<any> {
   if (!metaId || typeof metaId !== 'string') {
     cacheLogger.warn(`Invalid metaId provided: ${metaId}`);
     return { errorReason: 'invalid metaId' };
@@ -1859,6 +1872,35 @@ async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = 
       cacheLogger.warn(`Error fetching components with MGET:`, error);
       componentResults = componentNames.map(componentName => ({ componentName, data: null }));
     }
+  }
+
+  try {
+    const coldStore = require('./metaColdStore');
+    if (coldStore.isEnabled()) {
+      const missing: Array<{ idx: number; key: string }> = [];
+      componentResults.forEach((result: any, idx: number) => {
+        if (result.data === null && cacheKeys[idx]) missing.push({ idx, key: cacheKeys[idx] });
+      });
+      if (missing.length > 0) {
+        const found = await coldStore.readThrough(missing.map(m => m.key));
+        if (found.size > 0) {
+          const rewarm = redis.pipeline();
+          for (const { idx, key } of missing) {
+            const hit = found.get(key);
+            if (!hit) continue;
+            componentResults[idx].data = hit.data;
+            rewarm.set(key, hit.buffer, 'EX', META_TTL());
+          }
+          rewarm.exec().catch(() => {});
+          cacheHealth.coldStoreHits += 1;
+          cacheHealth.coldStoreComponents += found.size;
+        } else if (countColdStoreMiss) {
+          cacheHealth.coldStoreMisses += 1;
+        }
+      }
+    }
+  } catch (coldErr: any) {
+    cacheLogger.warn(`[ColdStore] read-through failed for ${metaId}: ${coldErr?.message}`);
   }
 
   const availableComponents = componentResults.filter((result: any) => result.data !== null);
@@ -2075,6 +2117,7 @@ async function cacheWrapMetaSmart(userUUID: string, metaId: string, method: () =
       type,
       includeVideos,
       useShowPoster,
+      countColdStoreMiss: false,
     });
 
     if (reconstructedAfterWait && reconstructedAfterWait.meta) {
@@ -2294,6 +2337,9 @@ function getCacheHealth(): any {
     errors: cacheHealth.errors,
     cachedErrors: cacheHealth.cachedErrors,
     corruptedEntries: cacheHealth.corruptedEntries,
+    coldStoreHits: cacheHealth.coldStoreHits,
+    coldStoreMisses: cacheHealth.coldStoreMisses,
+    coldStoreComponents: cacheHealth.coldStoreComponents,
     hitRate: total > 0 ? ((cacheHealth.hits / total) * 100).toFixed(2) : '0.00',
     errorRate: total > 0 ? ((cacheHealth.errors / total) * 100).toFixed(2) : '0.00',
     totalRequests: total,
@@ -2310,6 +2356,9 @@ function clearCacheHealth(): void {
   cacheHealth.errors = 0;
   cacheHealth.cachedErrors = 0;
   cacheHealth.corruptedEntries = 0;
+  cacheHealth.coldStoreHits = 0;
+  cacheHealth.coldStoreMisses = 0;
+  cacheHealth.coldStoreComponents = 0;
   cacheHealth.errorCounts = {};
   cacheHealth.keyAccessCounts.clear();
   cacheHealthLogger.info('Statistics cleared');

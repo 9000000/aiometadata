@@ -63,6 +63,14 @@ async function startServer(): Promise<void> {
     runNginxImport().catch((e: any) => consola.warn('[PosterCache] nginx import failed:', e?.message));
   }
 
+  const metaColdStore = require('./lib/metaColdStore');
+  if (metaColdStore.isEnabled()) {
+    metaColdStore.init();
+    setInterval(() => {
+      try { metaColdStore.sweep(); } catch (e: any) { consola.warn('[ColdStore] sweep failed:', e?.message); }
+    }, 60 * 60 * 1000).unref?.();
+  }
+
   const redisReady = await waitForRedisReady();
   if (redisReady) {
     consola.success('Redis ready.');

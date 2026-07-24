@@ -1,3 +1,5 @@
+import { DEFAULT_CACHE_EPOCH } from './cacheEpoch';
+
 export interface DisabledRule {
   settingKey: string;
   operator: 'eq' | 'neq';
@@ -1795,6 +1797,118 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     type: 'number',
     default: 4000,
   },
+  {
+    key: 'CACHE_EPOCH',
+    envVar: 'CACHE_EPOCH',
+    label: 'Cache Epoch',
+    description: 'Overrides the compiled-in cache epoch. Caches are keyed by this number rather than by the addon version, so upgrades no longer discard good data. Raise it to force a full rebuild of derived caches without waiting for a release; anything stored under a lower epoch is dropped on restart.',
+    category: 'Cache',
+    type: 'number',
+    default: DEFAULT_CACHE_EPOCH,
+    min: 1,
+    requiresRestart: true,
+  },
+
+  // --- Meta Cold Store (disk L2 for stable metadata) ---
+  {
+    key: 'META_COLD_STORE_ENABLED',
+    envVar: 'META_COLD_STORE_ENABLED',
+    label: 'Meta Cold Store',
+    description: 'Persist stable metadata (old films, ended series) in an on-disk SQLite tier to reduce upstream API calls',
+    category: 'Cache',
+    type: 'boolean',
+    default: false,
+    requiresRestart: true,
+  },
+  {
+    key: 'META_COLD_STORE_PATH',
+    envVar: 'META_COLD_STORE_PATH',
+    label: 'Cold Store Path',
+    description: 'File path for the dedicated meta cold-store SQLite database',
+    category: 'Cache',
+    type: 'string',
+    default: '',
+    requiresRestart: true,
+  },
+  {
+    key: 'META_COLD_STORE_MAX_BYTES',
+    envVar: 'META_COLD_STORE_MAX_BYTES',
+    label: 'Cold Store Max Size',
+    description: 'Disk budget before LRU eviction (e.g. 2gb)',
+    category: 'Cache',
+    type: 'string',
+    default: '2gb',
+    validate: (v: string) => /^\s*\d+(\.\d+)?\s*(b|k|kb|m|mb|g|gb|t|tb)?\s*$/i.test(v),
+  },
+  {
+    key: 'META_COLD_STORE_COMPRESSION',
+    envVar: 'META_COLD_STORE_COMPRESSION',
+    label: 'Cold Store Compression',
+    description: 'lz4-compress cold-store payloads above the compression threshold. Roughly halves disk usage (the saving is concentrated in the large cast and links components). Safe to change at any time — existing entries stay readable.',
+    category: 'Cache',
+    type: 'boolean',
+    default: true,
+  },
+  {
+    key: 'COLD_TTL_FROZEN',
+    envVar: 'COLD_TTL_FROZEN',
+    label: 'Cold TTL (frozen tier)',
+    description: 'Disk TTL for very old/frozen entries (e.g. 180d)',
+    category: 'Cache',
+    type: 'string',
+    default: '180d',
+    validate: (v: string) => /^\s*\d+(\.\d+)?\s*(s|sec|m|min|h|hr|d|w|y)?\s*$/i.test(v),
+  },
+  {
+    key: 'COLD_TTL_STABLE',
+    envVar: 'COLD_TTL_STABLE',
+    label: 'Cold TTL (stable tier)',
+    description: 'Disk TTL for recently-finished stable entries (e.g. 60d)',
+    category: 'Cache',
+    type: 'string',
+    default: '60d',
+    validate: (v: string) => /^\s*\d+(\.\d+)?\s*(s|sec|m|min|h|hr|d|w|y)?\s*$/i.test(v),
+  },
+  {
+    key: 'SETTLE_MOVIE',
+    envVar: 'SETTLE_MOVIE',
+    label: 'Movie Settle Window',
+    description: 'Minimum age since release before a movie is disk-eligible (e.g. 180d)',
+    category: 'Cache',
+    type: 'string',
+    default: '180d',
+    validate: (v: string) => /^\s*\d+(\.\d+)?\s*(s|sec|m|min|h|hr|d|w|y)?\s*$/i.test(v),
+  },
+  {
+    key: 'SETTLE_SERIES',
+    envVar: 'SETTLE_SERIES',
+    label: 'Series Settle Window',
+    description: 'Minimum age since last air/end before a series/anime is disk-eligible (e.g. 90d)',
+    category: 'Cache',
+    type: 'string',
+    default: '90d',
+    validate: (v: string) => /^\s*\d+(\.\d+)?\s*(s|sec|m|min|h|hr|d|w|y)?\s*$/i.test(v),
+  },
+  {
+    key: 'FROZEN_AGE',
+    envVar: 'FROZEN_AGE',
+    label: 'Frozen Age Threshold',
+    description: 'Age past which a stable entry is treated as frozen (longer TTL) (e.g. 2y)',
+    category: 'Cache',
+    type: 'string',
+    default: '2y',
+    validate: (v: string) => /^\s*\d+(\.\d+)?\s*(s|sec|m|min|h|hr|d|w|y)?\s*$/i.test(v),
+  },
+  {
+    key: 'COLD_STORE_INACTIVE_DAYS',
+    envVar: 'COLD_STORE_INACTIVE_DAYS',
+    label: 'Cold Store Inactive Days',
+    description: 'Drop cold-store rows untouched for this many days',
+    category: 'Cache',
+    type: 'number',
+    default: 30,
+    min: 1,
+  },
 ];
 
 // Rules: when a setting has a certain value, other settings become disabled.
@@ -1849,6 +1963,19 @@ export const CONDITIONAL_RULES: ConditionalRule[] = [
       ],
     },
     reason: 'The built-in image cache is disabled',
+  },
+  {
+    when: { key: 'META_COLD_STORE_ENABLED', eq: 'false' },
+    disable: {
+      keys: [
+        'META_COLD_STORE_PATH', 'META_COLD_STORE_MAX_BYTES',
+        'META_COLD_STORE_COMPRESSION',
+        'COLD_TTL_FROZEN', 'COLD_TTL_STABLE',
+        'SETTLE_MOVIE', 'SETTLE_SERIES', 'FROZEN_AGE',
+        'COLD_STORE_INACTIVE_DAYS',
+      ],
+    },
+    reason: 'The meta cold store is disabled',
   },
 ];
 

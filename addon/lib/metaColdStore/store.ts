@@ -19,6 +19,8 @@ export type PutRow = { k: string; metaId: string; component: string; tier: 'froz
 let db: BetterSqlite3.Database | null = null;
 const writeQueue: PutRow[] = [];
 let flushScheduled = false;
+let bytesSinceEvictCheck = 0;
+const EVICT_CHECK_MAX_BYTES = 64 * 1024 * 1024;
 
 // Resolved once per open, not per query: the purge below is keyed to it, so a
 // mid-run env change must not desync reads from what init() already dropped.
@@ -136,7 +138,12 @@ export async function flushNow(): Promise<void> {
   `);
   const tx = db.transaction((items: typeof prepared) => { for (const it of items) upsert.run(it); });
   tx(prepared);
-  evictIfNeeded();
+
+  for (const it of prepared) bytesSinceEvictCheck += it.payload.length;
+  if (bytesSinceEvictCheck >= Math.min(EVICT_CHECK_MAX_BYTES, Math.floor(getColdStoreMaxBytes() / 16))) {
+    bytesSinceEvictCheck = 0;
+    evictIfNeeded();
+  }
 }
 
 function totalBytes(): number {
@@ -147,14 +154,17 @@ function totalBytes(): number {
 function evictIfNeeded(): void {
   if (!db) return;
   const max = getColdStoreMaxBytes();
-  if (totalBytes() <= max) return;
+  let total = totalBytes();
+  if (total <= max) return;
   const target = Math.floor(max * 0.9);
   const del = db.prepare(`DELETE FROM meta_components WHERE k IN (
     SELECT k FROM meta_components ORDER BY last_access ASC LIMIT ?
-  )`);
+  ) RETURNING LENGTH(payload) AS n`);
   let guard = 0;
-  while (totalBytes() > target && guard++ < 10000) {
-    if (del.run(500).changes === 0) break;
+  while (total > target && guard++ < 10000) {
+    const rows = del.all(500) as Array<{ n: number }>;
+    if (rows.length === 0) break;
+    for (const r of rows) total -= r.n;
   }
 }
 

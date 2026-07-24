@@ -600,7 +600,7 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
           <CardContent className="pt-0">
             {posterCacheStatsQuery.data ? (
               <>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
                   <div>
                     <span className="text-muted-foreground">Cached Images</span>
                     <p className="text-lg font-semibold"><AnimatedNumber value={posterCacheStatsQuery.data.cached_images} /></p>
@@ -613,6 +613,12 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
                     <span className="text-muted-foreground">Max Size</span>
                     <p className="text-lg font-semibold">{posterCacheStatsQuery.data.max_size}</p>
                   </div>
+                  {posterCacheStatsQuery.data.ttl && (
+                    <div>
+                      <span className="text-muted-foreground">Validity</span>
+                      <p className="text-lg font-semibold">{posterCacheStatsQuery.data.ttl}</p>
+                    </div>
+                  )}
                 </div>
 
                 {/* Per-type breakdown. Absent when an external proxy serves the

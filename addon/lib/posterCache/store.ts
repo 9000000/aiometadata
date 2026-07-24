@@ -7,6 +7,8 @@ import {
   IMAGE_CLASSES,
   formatSize,
   getCacheDir,
+  getEntryTtlDays,
+  getEntryTtlMs,
   getInactiveDays,
   getMaxBytes,
   getMaxSizeRaw,
@@ -21,8 +23,11 @@ const logger = consola.withTag('PosterCache');
 const MAGIC = Buffer.from('AIOM1', 'ascii');
 const HEADER_OFFSET = MAGIC.length + 4;
 
-const ENTRY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const ACCESS_TOUCH_MS = 6 * 60 * 60 * 1000;
+
+function isExpired(storedAt: number): boolean {
+  return Date.now() - storedAt > getEntryTtlMs();
+}
 
 export interface EntryHeader {
   key: string;
@@ -218,7 +223,7 @@ export async function get(imageClass: ImageClass, key: string): Promise<CacheEnt
     return {
       contentType: cached.contentType,
       storedAt: cached.storedAt,
-      expired: Date.now() - cached.storedAt > ENTRY_TTL_MS,
+      expired: isExpired(cached.storedAt),
       hash,
       etag: cached.etag,
       size: cached.body.length,
@@ -279,7 +284,7 @@ export async function get(imageClass: ImageClass, key: string): Promise<CacheEnt
     const meta = {
       contentType: header.contentType,
       storedAt: header.storedAt,
-      expired: Date.now() - header.storedAt > ENTRY_TTL_MS,
+      expired: isExpired(header.storedAt),
       hash,
       etag: header.bodyHash || legacyEtag(hash, header.storedAt),
       size: bodySize,
@@ -341,7 +346,7 @@ async function readBuffered(imageClass: ImageClass, hash: string, file: string):
   return {
     contentType: header.contentType,
     storedAt: header.storedAt,
-    expired: Date.now() - header.storedAt > ENTRY_TTL_MS,
+    expired: isExpired(header.storedAt),
     hash,
     etag,
     size: body.length,
@@ -550,6 +555,7 @@ export function stats(): Record<string, any> {
     disk_usage: formatSize(bytes),
     disk_usage_bytes: bytes,
     max_size: getMaxSizeRaw(),
+    ttl: getEntryTtlDays() > 0 ? `${getEntryTtlDays()}d` : 'never',
     inactive: `${getInactiveDays()}d`,
     by_type: byType,
     scanning,
@@ -677,7 +683,8 @@ export async function init(): Promise<void> {
   const budget = getMemoryBudget();
   logger.info(
     `Built-in poster cache active at ${getCacheDir()} ` +
-    `(disk ${getMaxSizeRaw()}, memory ${budget > 0 ? getMemorySizeRaw() : 'disabled — disk only'})`
+    `(disk ${getMaxSizeRaw()}, memory ${budget > 0 ? getMemorySizeRaw() : 'disabled — disk only'}, ` +
+    `ttl ${getEntryTtlDays() > 0 ? `${getEntryTtlDays()}d` : 'never expires'})`
   );
 }
 

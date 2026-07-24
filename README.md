@@ -140,7 +140,7 @@ These are also toggles in the dashboard's **Settings** tab, and the **Operations
 
 The memory tier is on top of the addon's own footprint, so budget roughly `baseline + POSTER_CACHE_MEMORY_SIZE`. It skips both the disk read and the per-request allocation, which lowers GC pressure — set it to `0` on memory-constrained hosts.
 
-`POSTER_CACHE_INACTIVE_DAYS` (default `30`) drops images nobody has requested, and `POSTER_CACHE_DIR` moves the cache elsewhere.
+**Validity.** `POSTER_CACHE_TTL_DAYS` (default `30`) sets how long a stored image stays fresh before the next request refetches it; fractional values work, and `0` means never expire. `POSTER_PROXY_MAX_AGE_DAYS` (default `1`) is the matching client-side lifetime for the `/poster`, `/logo` and `/background` proxy routes — shorter because rating posters change as ratings do. `POSTER_CACHE_INACTIVE_DAYS` (default `30`) drops images nobody has requested, and `POSTER_CACHE_DIR` moves the cache elsewhere.
 
 > **Multi-replica / Kubernetes:** each replica keeps its own local cache — independent and unshared, which costs N× storage and N× cold fetches but needs no coordination. Use Option B if you want a single shared cache.
 

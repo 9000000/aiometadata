@@ -709,9 +709,19 @@ Caches artwork on disk and serves it from `/poster-cache` on the addon's own por
   This is *in addition to* the addon's own footprint, so budget roughly `baseline + POSTER_CACHE_MEMORY_SIZE`. The benefit is largest when the disk cache is too big for the OS page cache to absorb; if the whole cache already fits in free RAM, the operating system is effectively doing this for you.
 - **Example**: `POSTER_CACHE_MEMORY_SIZE=512m` or `POSTER_CACHE_MEMORY_SIZE=0`
 
+### `POSTER_CACHE_TTL_DAYS`
+- **Default**: `30`
+- **Description**: How long a stored image stays fresh. Past it, the next request refetches from the source and replaces the copy; if that fetch fails the old bytes are still served (`X-Cache-Status: STALE`) rather than the request erroring. Fractional values work (`0.5` = 12 hours). **Set to `0` to never expire** — images then live until they are evicted for space (`POSTER_CACHE_MAX_SIZE`) or swept as unused (`POSTER_CACHE_INACTIVE_DAYS`), which suits artwork that never changes at a given URL. The `Cache-Control: max-age` sent to clients follows this value (capped at one year), so browsers don't hold a copy past the server's own refresh; revalidation is ETag-cheap either way.
+- **Example**: `POSTER_CACHE_TTL_DAYS=7` or `POSTER_CACHE_TTL_DAYS=0`
+
+### `POSTER_PROXY_MAX_AGE_DAYS`
+- **Default**: `1`
+- **Description**: `Cache-Control: max-age` sent to players and browsers by the `/poster`, `/logo` and `/background` proxy routes (and their `/poster-cache/proxy/…` twins). Deliberately shorter than the store's own validity: the ETag on these routes is derived from the request parameters rather than the bytes, so a revalidation always answers `304` and only expiry brings down new art — which matters for rating posters, whose overlay changes as the rating does. Fractional values work (`0.25` = 6 hours), `0` means never expire, and anything below one minute is rounded up to it. Applies whether or not the built-in cache is on, but is capped by `POSTER_CACHE_TTL_DAYS` when that is shorter, so a client can never hold art the cache has already refreshed. `stale-while-revalidate` stays at 7 days, or the `max-age` if that is longer.
+- **Example**: `POSTER_PROXY_MAX_AGE_DAYS=7` or `POSTER_PROXY_MAX_AGE_DAYS=0.25`
+
 ### `POSTER_CACHE_INACTIVE_DAYS`
 - **Default**: `30`
-- **Description**: Images not requested within this many days are swept hourly.
+- **Description**: Images not requested within this many days are swept hourly. Independent of `POSTER_CACHE_TTL_DAYS`: this one counts from the last *request*, the TTL from the last *fetch*.
 - **Example**: `POSTER_CACHE_INACTIVE_DAYS=14`
 
 ### `POSTER_CACHE_MAX_OBJECT_BYTES`

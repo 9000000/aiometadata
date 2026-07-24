@@ -4881,10 +4881,15 @@ async function fetchPosterImageStream(posterUrl) {
   return imageResponse;
 }
 
+function proxyImageCacheControl() {
+  const maxAge = posterCacheConfig.getProxyMaxAgeSeconds();
+  return `public, max-age=${maxAge}, stale-while-revalidate=${Math.max(maxAge, 604800)}`;
+}
+
 function pipePosterImageResponse(res, imageResponse) {
   const contentType = imageResponse.headers['content-type'];
   res.setHeader('Content-Type', contentType || 'image/jpeg');
-  res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+  res.setHeader('Cache-Control', proxyImageCacheControl());
   imageResponse.data.pipe(res);
 }
 
@@ -4996,7 +5001,7 @@ const handlePosterProxy = async function (req, res) {
       const allowPrivateHost = customUrl ? proxyArtUrlVouched(customUrl, sig) : true;
       const result = await posterCacheStore.getOrFetch('processed', `rating-poster:${posterUrl}`, () => produceProcessedBytes(posterUrl, () => fetchImage(posterUrl, { allowPrivateHost })));
       recordServe('poster', result.status, result.entry.size, req.method, posterUrl);
-      res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+      res.setHeader('Cache-Control', proxyImageCacheControl());
       return await sendCachedImage(res, result);
     }
 
@@ -5035,7 +5040,7 @@ function streamArtWithFallback(assetName) {
         const allowPrivateHost = proxyArtUrlVouched(customUrl, sig);
         const result = await posterCacheStore.getOrFetch('processed', `${assetName}:${customUrl}`, () => produceProcessedBytes(customUrl, () => fetchImage(customUrl, { allowPrivateHost })));
         recordServe(assetName, result.status, result.entry.size, req.method, customUrl);
-        res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+        res.setHeader('Cache-Control', proxyImageCacheControl());
         return await sendCachedImage(res, result);
       }
 
@@ -5049,7 +5054,7 @@ function streamArtWithFallback(assetName) {
       });
       const contentType = imageResponse.headers['content-type'];
       res.setHeader('Content-Type', contentType || 'image/jpeg');
-      res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+      res.setHeader('Cache-Control', proxyImageCacheControl());
       imageResponse.data.pipe(res);
     } catch (error) {
       if (isProcessedImageCacheEnabled()) require('./lib/posterCache/handler.js').recordServeError();

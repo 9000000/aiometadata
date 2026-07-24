@@ -3,6 +3,7 @@ import { ingestExternalLog } from '../logBuffer.js';
 import {
   POSTER_CACHE_ROUTE,
   URL_ADDRESSABLE_CLASSES,
+  getBrowserMaxAgeSeconds,
   isBuiltinPosterCacheEnabled,
   isClassEnabled,
   shouldLogRequests,
@@ -141,7 +142,7 @@ async function pipeStream(
   url: string
 ): Promise<void> {
   res.setHeader('X-Cache-Status', 'BYPASS');
-  res.setHeader('Cache-Control', 'public, max-age=2592000');
+  res.setHeader('Cache-Control', `public, max-age=${getBrowserMaxAgeSeconds()}`);
   res.setHeader('Content-Type', contentType || 'image/jpeg');
   record('BYPASS');
   if (shouldLogRequests()) log(3, `${req.method} ${imageClass} BYPASS ${url}`);
@@ -223,7 +224,7 @@ export function posterCacheHandler() {
       const etag = `"${entry.etag}"`;
       res.setHeader('ETag', etag);
       res.setHeader('X-Cache-Status', status);
-      res.setHeader('Cache-Control', 'public, max-age=2592000');
+      res.setHeader('Cache-Control', `public, max-age=${getBrowserMaxAgeSeconds()}`);
       res.setHeader('Content-Type', entry.contentType || 'image/jpeg');
 
       if (req.headers['if-none-match'] === etag) {

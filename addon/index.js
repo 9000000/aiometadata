@@ -4158,7 +4158,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
           if (proxyApiKey) {
             const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
             if (proxyId) {
-              meta.poster = `${host}/poster/${type}/${proxyId}?fallback=${encodeURIComponent(meta.poster || '')}&lang=${config.language || 'en-US'}&key=${proxyApiKey}`;
+              meta.poster = `${host}/poster-cache/proxy/poster/${type}/${proxyId}?fallback=${encodeURIComponent(meta.poster || '')}&lang=${config.language || 'en-US'}&key=${proxyApiKey}`;
             }
           } else {
             const resolved = resolveCustomArtUrl(posterPattern, ids, type, config);
@@ -4166,7 +4166,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
               if (config.usePosterProxy) {
                 const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
                 if (proxyId) {
-                  meta.poster = `${host}/poster/${type}/${proxyId}?fallback=${encodeURIComponent(meta.poster || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`;
+                  meta.poster = `${host}/poster-cache/proxy/poster/${type}/${proxyId}?fallback=${encodeURIComponent(meta.poster || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`;
                 }
               } else {
                 meta.poster = resolved;
@@ -4180,7 +4180,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
             if (config.usePosterProxy) {
               const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
               if (proxyId) {
-                meta.background = `${host}/background/${type}/${proxyId}?fallback=${encodeURIComponent(meta.background || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`;
+                meta.background = `${host}/poster-cache/proxy/background/${type}/${proxyId}?fallback=${encodeURIComponent(meta.background || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`;
               } else {
                 meta.background = resolved;
               }
@@ -4195,7 +4195,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
             if (config.usePosterProxy) {
               const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
               if (proxyId) {
-                meta.logo = `${host}/logo/${type}/${proxyId}?fallback=${encodeURIComponent(meta.logo || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`;
+                meta.logo = `${host}/poster-cache/proxy/logo/${type}/${proxyId}?fallback=${encodeURIComponent(meta.logo || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`;
               } else {
                 meta.logo = resolved;
               }
@@ -4313,7 +4313,7 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
           if (proxyApiKey) {
             const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
             if (proxyId) {
-              result.meta.poster = `${host}/poster/${metaType}/${proxyId}?fallback=${encodeURIComponent(result.meta.poster || '')}&lang=${config.language || 'en-US'}&key=${proxyApiKey}`;
+              result.meta.poster = `${host}/poster-cache/proxy/poster/${metaType}/${proxyId}?fallback=${encodeURIComponent(result.meta.poster || '')}&lang=${config.language || 'en-US'}&key=${proxyApiKey}`;
             }
           } else {
             const resolved = resolveCustomArtUrl(metaPosterPattern, ids, metaType, config, { userAgent });
@@ -4321,7 +4321,7 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
               if (config.usePosterProxy) {
                 const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
                 if (proxyId) {
-                  result.meta.poster = `${host}/poster/${metaType}/${proxyId}?fallback=${encodeURIComponent(result.meta.poster || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`;
+                  result.meta.poster = `${host}/poster-cache/proxy/poster/${metaType}/${proxyId}?fallback=${encodeURIComponent(result.meta.poster || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`;
                 }
               } else {
                 result.meta.poster = resolved;
@@ -4336,7 +4336,7 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
           if (config.usePosterProxy) {
             const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
             if (proxyId) {
-              result.meta.background = `${host}/background/${metaType}/${proxyId}?fallback=${encodeURIComponent(result.meta.background || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`;
+              result.meta.background = `${host}/poster-cache/proxy/background/${metaType}/${proxyId}?fallback=${encodeURIComponent(result.meta.background || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`;
             } else {
               result.meta.background = resolved;
             }
@@ -4351,7 +4351,7 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
           if (config.usePosterProxy) {
             const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
             if (proxyId) {
-              result.meta.logo = `${host}/logo/${metaType}/${proxyId}?fallback=${encodeURIComponent(result.meta.logo || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`;
+              result.meta.logo = `${host}/poster-cache/proxy/logo/${metaType}/${proxyId}?fallback=${encodeURIComponent(result.meta.logo || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`;
             } else {
               result.meta.logo = resolved;
             }
@@ -4386,7 +4386,7 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
                   const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
                   // Episode thumbnails share the show's proxyId; the per-episode url param keeps the proxy cache/etag distinct.
                   video.thumbnail = proxyId
-                    ? `${host}/background/${metaType}/${proxyId}?fallback=${encodeURIComponent(originalThumb || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`
+                    ? `${host}/poster-cache/proxy/background/${metaType}/${proxyId}?fallback=${encodeURIComponent(originalThumb || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`
                     : resolved;
                 } else {
                   video.thumbnail = resolved;
@@ -4881,6 +4881,22 @@ function proxyArtUrlVouched(targetUrl, sig) {
   return provided.length === wanted.length && crypto.timingSafeEqual(provided, wanted);
 }
 
+async function readEntryBytes(entry) {
+  if (entry.body) return entry.body;
+  const chunks = [];
+  for await (const chunk of entry.openStream()) chunks.push(chunk);
+  return Buffer.concat(chunks);
+}
+
+async function produceProcessedBytes(bareUrl, fetchFallback) {
+  const posterCacheStore = require('./lib/posterCache/store.js');
+  const migrated = await posterCacheStore.get('poster', bareUrl);
+  if (migrated && !migrated.expired) {
+    return { body: await readEntryBytes(migrated), contentType: migrated.contentType };
+  }
+  return fetchFallback();
+}
+
 async function sendCachedImage(res, result, fallbackContentType) {
   const { entry } = result;
   res.setHeader('X-Cache-Status', result.status);
@@ -4909,7 +4925,7 @@ async function cacheProcessedImage(cacheKey, contentType, produce) {
   });
 }
 
-addon.get("/poster/:type/:id", async function (req, res) {
+const handlePosterProxy = async function (req, res) {
   const { type, id } = req.params;
   const { fallback, lang, key, url: customUrl, sig } = req.query;
   if (!key && !customUrl) {
@@ -4949,7 +4965,7 @@ addon.get("/poster/:type/:id", async function (req, res) {
       const { fetchImage } = require('./lib/posterCache/upstream.js');
       const { recordServe } = require('./lib/posterCache/handler.js');
       const allowPrivateHost = customUrl ? proxyArtUrlVouched(customUrl, sig) : true;
-      const result = await posterCacheStore.getOrFetch('processed', `rating-poster:${posterUrl}`, () => fetchImage(posterUrl, { allowPrivateHost }));
+      const result = await posterCacheStore.getOrFetch('processed', `rating-poster:${posterUrl}`, () => produceProcessedBytes(posterUrl, () => fetchImage(posterUrl, { allowPrivateHost })));
       recordServe('poster', result.status, result.entry.size, req.method, posterUrl);
       res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
       return await sendCachedImage(res, result);
@@ -4967,7 +4983,8 @@ addon.get("/poster/:type/:id", async function (req, res) {
     }
     res.redirect(302, fallback);
   }
-});
+};
+addon.get("/poster/:type/:id", handlePosterProxy);
 
 function streamArtWithFallback(assetName) {
   return async function (req, res) {
@@ -4987,7 +5004,7 @@ function streamArtWithFallback(assetName) {
         const { fetchImage } = require('./lib/posterCache/upstream.js');
         const { recordServe } = require('./lib/posterCache/handler.js');
         const allowPrivateHost = proxyArtUrlVouched(customUrl, sig);
-        const result = await posterCacheStore.getOrFetch('processed', `${assetName}:${customUrl}`, () => fetchImage(customUrl, { allowPrivateHost }));
+        const result = await posterCacheStore.getOrFetch('processed', `${assetName}:${customUrl}`, () => produceProcessedBytes(customUrl, () => fetchImage(customUrl, { allowPrivateHost })));
         recordServe(assetName, result.status, result.entry.size, req.method, customUrl);
         res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
         return await sendCachedImage(res, result);
@@ -5018,6 +5035,10 @@ function streamArtWithFallback(assetName) {
 
 addon.get("/logo/:type/:id", streamArtWithFallback('logo'));
 addon.get("/background/:type/:id", streamArtWithFallback('background'));
+
+addon.get("/poster-cache/proxy/poster/:type/:id", handlePosterProxy);
+addon.get("/poster-cache/proxy/logo/:type/:id", streamArtWithFallback('logo'));
+addon.get("/poster-cache/proxy/background/:type/:id", streamArtWithFallback('background'));
 
 // --- Built-in image cache ---
 // Serves /poster-cache/[class/]<absolute-image-url>. Registered well before the

@@ -38,6 +38,10 @@ export function isTruthy(value: string | undefined): boolean {
   return /^(1|true|yes|on)$/i.test(value || '');
 }
 
+export function isExplicitlyDisabled(value: string | undefined): boolean {
+  return /^(0|false|no|off)$/i.test((value || '').trim());
+}
+
 export function isBuiltinPosterCacheEnabled(): boolean {
   return isTruthy(process.env.ENABLE_BUILTIN_POSTER_CACHE);
 }
@@ -45,6 +49,7 @@ export function isBuiltinPosterCacheEnabled(): boolean {
 export function isClassEnabled(imageClass: ImageClass): boolean {
   if (!isBuiltinPosterCacheEnabled()) return false;
   if (imageClass === 'poster') return true;
+  if (imageClass === 'processed') return !isExplicitlyDisabled(process.env.POSTER_CACHE_PROCESSED_IMAGES);
   return isTruthy(process.env[CLASS_ENV[imageClass]]);
 }
 
@@ -210,4 +215,9 @@ export function getStreamThresholdBytes(): number {
 
 export function shouldLogRequests(): boolean {
   return isTruthy(process.env.POSTER_CACHE_LOG_REQUESTS);
+}
+
+export function getAllowedPrivateHosts(): Set<string> {
+  const raw = process.env.POSTER_CACHE_ALLOWED_HOSTS || '';
+  return new Set(raw.split(',').map((host) => host.trim().toLowerCase()).filter(Boolean));
 }

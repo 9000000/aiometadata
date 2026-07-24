@@ -116,6 +116,15 @@ function ensureSummaryTimer(): void {
   summaryTimer.unref?.();
 }
 
+export function recordServe(imageClass: ImageClass, status: string, bytes: number, method: string, url: string): void {
+  record(status, bytes);
+  if (shouldLogRequests()) log(3, `${method} ${imageClass} ${status} ${url}`);
+}
+
+export function recordServeError(): void {
+  recordError();
+}
+
 const CLAIMED = Symbol('poster-cache-claimed');
 function claimStream(stream: any): boolean {
   if (stream[CLAIMED]) return true;

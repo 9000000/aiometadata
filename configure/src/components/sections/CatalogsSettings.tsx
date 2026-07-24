@@ -1038,6 +1038,8 @@ const MOVIELENS_SORT_OPTIONS = [
   { value: 'releaseDate', label: 'Release Date' },
   { value: 'dateAdded', label: 'Date Added' },
   { value: 'title', label: 'Title (A-Z)' },
+  { value: 'userRating', label: 'Your Rating' },
+  { value: 'userRatedDate', label: 'Your Rating Date' },
 ];
 
 const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogConfig, isOpen: boolean, onClose: () => void }) => {
@@ -1054,11 +1056,6 @@ const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catalo
   const [maxYear, setMaxYear] = useState<string>(catalog.metadata?.maxYear ? String(catalog.metadata.maxYear) : '');
   const [includeRated, setIncludeRated] = useState<boolean>(catalog.metadata?.includeRated === true);
   const [maxDaysAgo, setMaxDaysAgo] = useState<string>(catalog.metadata?.maxDaysAgo ? String(catalog.metadata.maxDaysAgo) : '');
-  const [displayName, setDisplayName] = useState<string>(catalog.name || '');
-
-  useEffect(() => {
-    if (isOpen) setDisplayName(catalog.name || '');
-  }, [isOpen, catalog.name]);
 
   const handleSave = () => {
     const minYearNum = parseInt(minYear, 10);
@@ -1070,7 +1067,6 @@ const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catalo
         c.id === catalog.id && c.type === catalog.type
           ? {
               ...c,
-              name: displayName.trim() || c.name,
               cacheTTL: Math.max(cacheTTL, 300),
               metadata: {
                 ...c.metadata,
@@ -1098,11 +1094,6 @@ const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catalo
           <DialogTitle>MovieLens Settings</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 py-4">
-          <div className="space-y-2">
-            <Label>Catalog Name</Label>
-            <Input placeholder="e.g. Zombie Picks (Last 2 Years)" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-            <p className="text-xs text-muted-foreground">Shown as the row title in Stremio.</p>
-          </div>
           {!isWatchlist && (
             <>
               <div className="grid grid-cols-2 gap-3">
@@ -2669,7 +2660,7 @@ const SortableCatalogItem = ({ catalog, onEditDiscover, onCustomize, onDuplicate
     (catalog.source === 'tmdb' && (catalog.id === 'tmdb.year' || catalog.id === 'tmdb.language')) ||
     !!(config.apiKeys?.traktTokenId || config.apiKeys?.anilistTokenId || config.apiKeys?.mdblist);
   const isDiscover = catalog.id.includes('.discover.') && !!catalog.metadata?.discover?.formState;
-  const isMovieLensExplore = catalog.source === 'movielens' && catalog.id.startsWith('movielens.toppicks');
+  const isMovieLensExplore = catalog.source === 'movielens' && catalog.id.startsWith('movielens.explore');
   const canDuplicate = isDiscover || isMovieLensExplore;
   const canDelete = true;
 
@@ -3578,7 +3569,7 @@ function CatalogsSettingsContent({
     const sourcePrefix = SOURCE_PREFIXES[source] ?? 'tmdb.discover';
     const catalogType = catalog.type || 'movie';
     const newId = catalog.source === 'movielens'
-      ? `movielens.toppicks.${sanitizedName}.${uniqueSuffix}`
+      ? `movielens.explore.${sanitizedName}.${uniqueSuffix}`
       : `${sourcePrefix}.${catalogType}.${sanitizedName}.${uniqueSuffix}`;
 
     const newCatalog: CatalogConfig = {

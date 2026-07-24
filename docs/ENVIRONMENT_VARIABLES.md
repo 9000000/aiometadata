@@ -681,9 +681,19 @@ Caches artwork on disk and serves it from `/poster-cache` on the addon's own por
 - **Example**: `POSTER_CACHE_THUMBNAILS=true`
 
 ### `POSTER_CACHE_PROCESSED_IMAGES`
-- **Default**: `false`
-- **Description**: Cache the rendered output of `/api/image/blur` and `/api/image/banner-to-background`, plus the `/poster`, `/logo` and `/background` proxy routes. Without this, every request re-runs the image transform. Most useful with blurred episode thumbnails or a rating-poster provider, which is what drives these routes.
-- **Example**: `POSTER_CACHE_PROCESSED_IMAGES=true`
+- **Default**: `true` (when `ENABLE_BUILTIN_POSTER_CACHE` is on)
+- **Description**: Caches the addon-rendered images — the `/poster`, `/logo` and `/background` proxy routes (rating-overlaid and custom-art posters, active when **Proxy Rating & Custom Art** is on) plus the `/api/image/blur` and `/api/image/banner-to-background` transforms. This is where your posters land when the art proxy is on, so it is enabled by default with the cache; without it those requests re-fetch and re-render on every view. Set to `false` only to deliberately keep these out of the cache. Total volume is still bounded by `POSTER_CACHE_MAX_SIZE`.
+- **Example**: `POSTER_CACHE_PROCESSED_IMAGES=false`
+
+### `POSTER_CACHE_ALLOWED_HOSTS`
+- **Default**: _(empty)_
+- **Description**: Comma-separated hosts the image cache is allowed to fetch from even when they resolve to a private/LAN address. By default any upstream resolving to a private address is refused (SSRF protection). You usually **don't** need this: art from your own configured rating/custom-art providers is auto-trusted via a signed proxy URL, so a self-hosted PosterPlus on your LAN works without listing it. Use this only to permit a private host reached some other way. Match is by hostname; everything not listed stays blocked, and listed hosts are still pinned to their resolved addresses.
+- **Example**: `POSTER_CACHE_ALLOWED_HOSTS=postersplus,xrdb`
+
+### `IMAGE_PROXY_SIGNING_SECRET`
+- **Default**: falls back to `ADMIN_KEY`, then `MOVIELENS_CRED_KEY`
+- **Description**: Secret used to sign the `/poster`, `/logo` and `/background` proxy URLs the addon generates from your art config. A valid signature lets those (and only those) URLs reach a private/LAN provider without an explicit allowlist entry; unsigned or tampered `url=` values still face the full SSRF guard. Optional — only set it to pin a dedicated secret; the `ADMIN_KEY` fallback is sufficient for most deployments.
+- **Example**: `IMAGE_PROXY_SIGNING_SECRET=some-long-random-string`
 
 ### `POSTER_CACHE_MAX_SIZE`
 - **Default**: `10g`

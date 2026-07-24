@@ -3,7 +3,7 @@ import * as net from 'node:net';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import axios from 'axios';
-import { getFetchConcurrency, getMaxObjectBytes, getUpstreamTimeoutMs } from './config.js';
+import { getAllowedPrivateHosts, getFetchConcurrency, getMaxObjectBytes, getUpstreamTimeoutMs } from './config.js';
 
 const buildInfo = require('../buildInfo.js');
 
@@ -59,8 +59,12 @@ export interface ValidatedUpstream {
   addresses: string[];
 }
 
-/** Resolves the host and rejects if any answer lands in private address space. */
-export async function resolvePublicUrl(rawUrl: string): Promise<ValidatedUpstream> {
+export interface ResolveOptions {
+  allowPrivateHost?: boolean;
+}
+
+/** Resolves the host; rejects private-space answers unless the host is allowlisted or vouched for. */
+export async function resolvePublicUrl(rawUrl: string, opts: ResolveOptions = {}): Promise<ValidatedUpstream> {
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
@@ -73,8 +77,10 @@ export async function resolvePublicUrl(rawUrl: string): Promise<ValidatedUpstrea
   }
 
   const host = parsed.hostname.replace(/^\[|\]$/g, '');
+  const allowPrivate = opts.allowPrivateHost === true || getAllowedPrivateHosts().has(host.toLowerCase());
+
   if (net.isIP(host)) {
-    if (isPrivateAddress(host)) {
+    if (!allowPrivate && isPrivateAddress(host)) {
       throw new UpstreamRejected(`Refusing to proxy private address: ${host}`, 403);
     }
     return { url: parsed, addresses: [host] };
@@ -87,7 +93,10 @@ export async function resolvePublicUrl(rawUrl: string): Promise<ValidatedUpstrea
     throw new UpstreamRejected(`Could not resolve upstream host: ${host}`, 502);
   }
 
-  if (addresses.length === 0 || addresses.some((entry) => isPrivateAddress(entry.address))) {
+  if (addresses.length === 0) {
+    throw new UpstreamRejected(`Could not resolve upstream host: ${host}`, 502);
+  }
+  if (!allowPrivate && addresses.some((entry) => isPrivateAddress(entry.address))) {
     throw new UpstreamRejected(`Refusing to proxy host resolving to private address: ${host}`, 403);
   }
 
@@ -166,11 +175,11 @@ export function getQueuedCount(): number {
   return waiting.length;
 }
 
-export async function openImageStream(rawUrl: string): Promise<{ response: any; contentType: string }> {
+export async function openImageStream(rawUrl: string, opts: ResolveOptions = {}): Promise<{ response: any; contentType: string }> {
   let current = rawUrl;
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const { url, addresses } = await resolvePublicUrl(current);
+    const { url, addresses } = await resolvePublicUrl(current, hop === 0 ? opts : {});
     const agents = pinnedAgents(addresses);
 
     const response = await axios.get(url.toString(), {
@@ -208,14 +217,14 @@ export async function openImageStream(rawUrl: string): Promise<{ response: any; 
 }
 
 
-export async function fetchImage(rawUrl: string): Promise<FetchedImage> {
+export async function fetchImage(rawUrl: string, opts: ResolveOptions = {}): Promise<FetchedImage> {
   const maxBytes = getMaxObjectBytes();
   await acquire();
 
   let response: any;
   let contentType: string;
   try {
-    ({ response, contentType } = await openImageStream(rawUrl));
+    ({ response, contentType } = await openImageStream(rawUrl, opts));
   } catch (error) {
     release();
     throw error;

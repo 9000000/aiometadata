@@ -407,7 +407,8 @@ function classifyResult(result: any, error: any = null, cacheKey: string | null 
     cacheKey.includes('mdblist_') ||
     cacheKey.includes('stremthru-') ||
     cacheKey.includes('cinemeta-') ||
-    cacheKey.includes('flixpatrol-')
+    cacheKey.includes('flixpatrol-') ||
+    cacheKey.includes('movielens-')
   );
 
   if (isExternalApi) {
@@ -445,6 +446,11 @@ function classifyResult(result: any, error: any = null, cacheKey: string | null 
   }
 
   return { type: 'EMPTY_RESULT', ttl: ERROR_TTL_STRATEGIES.EMPTY_RESULT };
+}
+
+function classifyResultAllowEmpty(result: any, error: any = null, cacheKey: string | null = null): { type: string; ttl: number | null } {
+  const base = classifyResult(result, error, cacheKey);
+  return base.type === 'EMPTY_RESULT' ? { type: 'SUCCESS', ttl: null } : base;
 }
 
 async function cacheWrap(key: string, method: () => Promise<any>, ttl: number, options: any = {}): Promise<any> {
@@ -1397,6 +1403,9 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
         return { type: 'SUCCESS', ttl: null };
       },
     };
+  }
+  if (idOnly.startsWith('movielens.') && !idOnly.startsWith('movielens.list.')) {
+    options = { ...options, resultClassifier: classifyResultAllowEmpty };
   }
   const existingOnHit = options.onHit;
   options = {
@@ -2398,6 +2407,7 @@ export {
   redis,
   cacheWrap,
   cacheWrapGlobal,
+  classifyResultAllowEmpty,
   deleteKeysByPattern,
   scanKeys,
   cacheWrapCatalog,
@@ -2429,6 +2439,7 @@ module.exports = {
   redis,
   cacheWrap,
   cacheWrapGlobal,
+  classifyResultAllowEmpty,
   deleteKeysByPattern,
   scanKeys,
   cacheWrapCatalog,

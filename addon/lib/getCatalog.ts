@@ -2663,7 +2663,7 @@ async function getMovieLensCatalog(
     const genreName = genre && genre.toLowerCase() !== 'none' ? genre.toLowerCase() : undefined;
 
     const isList = catalogId.startsWith('movielens.list.');
-    const isExplore = !isList && catalogId !== 'movielens.watchlist';
+    const isExplore = catalogId.startsWith('movielens.explore');
 
     const metadata: any = catalogConfig?.metadata || {};
     const sortBy = metadata.sortBy || 'prediction';
@@ -2675,7 +2675,9 @@ async function getMovieLensCatalog(
     const maxFutureDays = metadata.maxFutureDays
       ?? (isExplore ? 0 : undefined);
     const sortDirection = metadata.sortDirection;
-    const includeRated = metadata.includeRated === true;
+    // always include rated movies if sorting by "your rating".
+    const onlyIncludeRated = sortBy === 'userRating' || sortBy === 'userRatedDate';
+    const includeRated = onlyIncludeRated || metadata.includeRated === true;
     let tag = String(metadata.tags || '')
       .split(',').map((s: string) => s.trim()).filter(Boolean).join(',') || undefined;
 
@@ -2689,7 +2691,7 @@ async function getMovieLensCatalog(
       }
     }
 
-    const filterKey = `${sortBy}:${sortDirection || ''}:${tag || ''}:${minYear || ''}:${maxYear || ''}:${minPop || ''}:${maxFutureDays ?? ''}:${maxDaysAgo || ''}:${includeRated ? 'r1' : 'r0'}`;
+    const filterKey = `${sortBy}:${sortDirection || ''}:${tag || ''}:${minYear || ''}:${maxYear || ''}:${minPop || ''}:${maxFutureDays ?? ''}:${maxDaysAgo || ''}:${includeRated ? (onlyIncludeRated ? 'r-y' : 'r-a') : 'r-n'}`;
     const cacheKey = `movielens-catalog:${credId}:${catalogId}:${genreName || 'all'}:${filterKey}:${page}:${pageSize}`;
     const items = await cacheWrapGlobal(cacheKey, async () => {
       if (isList) {
@@ -2711,10 +2713,12 @@ async function getMovieLensCatalog(
         return collected.slice(offset, offset + pageSize);
       }
       if (catalogId === 'movielens.watchlist') {
-        return movielens.wishlist(credId, { page, pageSize });
+        return movielens.wishlist(credId, { genre: genreName, page, pageSize });
       }
       return movielens.explore(credId, {
-        hasRated: includeRated ? undefined : 'no', sortBy, sortDirection, tag, genre: genreName, minYear, maxYear, minPop, maxFutureDays, maxDaysAgo, page, pageSize,
+        // "yes" = only rated, "no" = exclude rated, undefined = include both (all).
+        hasRated: includeRated ? (onlyIncludeRated ? 'yes' : undefined) : 'no',
+        sortBy, sortDirection, tag, genre: genreName, minYear, maxYear, minPop, maxFutureDays, maxDaysAgo, page, pageSize,
       });
     }, ttl, isList ? {} : { resultClassifier: classifyResultAllowEmpty });
     const windowItems = Array.isArray(items) ? items : [];

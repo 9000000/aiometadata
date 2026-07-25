@@ -126,10 +126,16 @@ const MOVIE_SORT_OPTIONS = [
   { value: 'popularity.asc', label: 'Popularity (Low to High)' },
   { value: 'primary_release_date.desc', label: 'Release Date (Newest)' },
   { value: 'primary_release_date.asc', label: 'Release Date (Oldest)' },
+  { value: 'title.asc', label: 'Title (A-Z)' },
+  { value: 'title.desc', label: 'Title (Z-A)' },
+  { value: 'original_title.asc', label: 'Original Title (A-Z)' },
+  { value: 'original_title.desc', label: 'Original Title (Z-A)' },
   { value: 'vote_average.desc', label: 'User Score (Highest)' },
   { value: 'vote_average.asc', label: 'User Score (Lowest)' },
   { value: 'vote_count.desc', label: 'Vote Count (Highest)' },
+  { value: 'vote_count.asc', label: 'Vote Count (Lowest)' },
   { value: 'revenue.desc', label: 'Revenue (Highest)' },
+  { value: 'revenue.asc', label: 'Revenue (Lowest)' },
 ] as const;
 
 const TV_SORT_OPTIONS = [
@@ -137,9 +143,14 @@ const TV_SORT_OPTIONS = [
   { value: 'popularity.asc', label: 'Popularity (Low to High)' },
   { value: 'first_air_date.desc', label: 'First Air Date (Newest)' },
   { value: 'first_air_date.asc', label: 'First Air Date (Oldest)' },
+  { value: 'name.asc', label: 'Name (A-Z)' },
+  { value: 'name.desc', label: 'Name (Z-A)' },
+  { value: 'original_name.asc', label: 'Original Name (A-Z)' },
+  { value: 'original_name.desc', label: 'Original Name (Z-A)' },
   { value: 'vote_average.desc', label: 'User Score (Highest)' },
   { value: 'vote_average.asc', label: 'User Score (Lowest)' },
   { value: 'vote_count.desc', label: 'Vote Count (Highest)' },
+  { value: 'vote_count.asc', label: 'Vote Count (Lowest)' },
 ] as const;
 
 const TMDB_TV_STATUS_OPTIONS = [

@@ -241,6 +241,7 @@ async function testKeysRateLimitMiddleware(req, res, next) {
 
 
 const posterCacheConfig = require('./lib/posterCache/config.js');
+const { signProxyArtUrl, proxyArtUrlVouched } = require('./lib/posterCache/proxyArt.js');
 
 function POSTER_PROXY_PREFIX_URL() { return posterCacheConfig.getPosterProxyPrefix(); }
 
@@ -4917,23 +4918,6 @@ function isProcessedImageCacheEnabled() {
   return posterCacheConfig.isClassEnabled('processed');
 }
 
-function imageProxySigningSecret() {
-  return process.env.IMAGE_PROXY_SIGNING_SECRET || process.env.ADMIN_KEY || process.env.MOVIELENS_CRED_KEY || '';
-}
-
-function signProxyArtUrl(targetUrl) {
-  const secret = imageProxySigningSecret();
-  if (!secret || !targetUrl) return '';
-  return crypto.createHmac('sha256', secret).update(targetUrl).digest('base64url').slice(0, 22);
-}
-
-function proxyArtUrlVouched(targetUrl, sig) {
-  const expected = signProxyArtUrl(targetUrl);
-  if (!expected || !sig) return false;
-  const provided = Buffer.from(String(sig));
-  const wanted = Buffer.from(expected);
-  return provided.length === wanted.length && crypto.timingSafeEqual(provided, wanted);
-}
 
 async function readEntryBytes(entry) {
   if (entry.body) return entry.body;

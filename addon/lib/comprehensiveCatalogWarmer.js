@@ -10,6 +10,7 @@ const {
 const { getGenreList } = require('./getGenreList');
 const { parseAnimeCatalogMetaBatch } = require('../utils/parseProps');
 const jikan = require('./mal');
+const { signProxyArtUrl } = require('./posterCache/proxyArt.js');
 const movielens = require('./movielens');
 const database = require('./database');
 const redis = require('./redisClient');
@@ -62,7 +63,7 @@ function collectWarmupTargets(metas, config, fallbackType, warmBase) {
         const resolved = resolveCustomArtUrl(posterPattern, ids, type, config);
         if (resolved) {
           if (config.usePosterProxy) {
-            targets.push(`${addonHost}/poster/${type}/${proxyId}?fallback=${encodeURIComponent(meta.poster || '')}&url=${encodeURIComponent(resolved)}`);
+            targets.push(`${addonHost}/poster/${type}/${proxyId}?fallback=${encodeURIComponent(meta.poster || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`);
           } else {
             addThirdParty(resolved, 'poster', 'poster');
           }

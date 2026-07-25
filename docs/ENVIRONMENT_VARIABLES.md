@@ -687,6 +687,11 @@ Caches artwork on disk and serves it from `/poster-cache` on the addon's own por
   This covers *rendered* images only. Custom art URLs travel through the same `/poster`, `/logo` and `/background` proxy routes but are passed through byte-for-byte, so they are stored as the class they actually are and follow that class's toggle — a custom logo needs `POSTER_CACHE_LOGOS`, a custom background needs `POSTER_CACHE_BACKGROUNDS`.
 - **Example**: `POSTER_CACHE_PROCESSED_IMAGES=false`
 
+### `POSTER_PROXY_ALLOW_PRIVATE`
+- **Default**: `true`
+- **Description**: Whether a signed art URL may reach a private/LAN address. The signature proves the addon generated the URL from your art config — but on a multi-user instance that config is *user-supplied*, so it proves origin, not safety: any user could set an art pattern pointing at an address inside your network and have the addon fetch it. Leave this on for a single-operator deployment, where a self-hosted art provider then works with no allowlist entry. **Set it to `false` on a public multi-user instance**; `POSTER_CACHE_ALLOWED_HOSTS` still lets you permit specific hosts you control, and public art providers are unaffected either way.
+- **Example**: `POSTER_PROXY_ALLOW_PRIVATE=false`
+
 ### `POSTER_CACHE_ALLOWED_HOSTS`
 - **Default**: _(empty)_
 - **Description**: Comma-separated hosts the image cache is allowed to fetch from even when they resolve to a private/LAN address. By default any upstream resolving to a private address is refused (SSRF protection). You usually **don't** need this with **Proxy Rating & Custom Art** on: those URLs are signed, and a valid signature is what grants the exception, so a self-hosted PosterPlus on your LAN works without listing it — in catalogs, on detail pages and during cache warming alike.

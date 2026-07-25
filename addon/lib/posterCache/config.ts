@@ -261,6 +261,16 @@ export function shouldLogRequests(): boolean {
   return isTruthy(process.env.POSTER_CACHE_LOG_REQUESTS);
 }
 
+/**
+ * Whether a signed, config-derived art URL may reach a private address. On a
+ * multi-user instance the config that produces those URLs is user-supplied, so
+ * the signature proves origin but not safety; turning this off leaves
+ * POSTER_CACHE_ALLOWED_HOSTS as the only route to a private host.
+ */
+export function isPrivateArtAllowed(): boolean {
+  return !isExplicitlyDisabled(process.env.POSTER_PROXY_ALLOW_PRIVATE);
+}
+
 export function getAllowedPrivateHosts(): Set<string> {
   const raw = process.env.POSTER_CACHE_ALLOWED_HOSTS || '';
   return new Set(raw.split(',').map((host) => host.trim().toLowerCase()).filter(Boolean));

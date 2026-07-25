@@ -3,7 +3,7 @@ import * as net from 'node:net';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import axios from 'axios';
-import { getAllowedPrivateHosts, getFetchConcurrency, getMaxObjectBytes, getUpstreamTimeoutMs } from './config.js';
+import { getAllowedPrivateHosts, getFetchConcurrency, getMaxObjectBytes, getUpstreamTimeoutMs, isPrivateArtAllowed } from './config.js';
 
 const buildInfo = require('../buildInfo.js');
 
@@ -77,7 +77,8 @@ export async function resolvePublicUrl(rawUrl: string, opts: ResolveOptions = {}
   }
 
   const host = parsed.hostname.replace(/^\[|\]$/g, '');
-  const allowPrivate = opts.allowPrivateHost === true || getAllowedPrivateHosts().has(host.toLowerCase());
+  const allowPrivate = (opts.allowPrivateHost === true && isPrivateArtAllowed())
+    || getAllowedPrivateHosts().has(host.toLowerCase());
 
   if (net.isIP(host)) {
     if (!allowPrivate && isPrivateAddress(host)) {

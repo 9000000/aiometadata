@@ -381,11 +381,11 @@ This feature warms **ALL** enabled catalogs (TMDB, MAL, MDBList, Custom Manifest
 - **Description**: Log verbosity for catalog warmup process
 - **Example**: `CATALOG_WARMUP_LOG_LEVEL=debug`
 
-### `CATALOG_WARMUP_AUTO_ON_VERSION_CHANGE`
+### `CATALOG_WARMUP_AUTO_ON_EPOCH_CHANGE`
 - **Default**: `false`
-- **Description**: Automatically trigger catalog warmup when app version changes. When enabled, the warmer compares the current app version with the last stored version in Redis. If they differ, it immediately runs a warmup to refresh all caches with the new version's cache keys.
-- **Example**: `CATALOG_WARMUP_AUTO_ON_VERSION_CHANGE=true`
-- **Note**: Requires `CACHE_WARMUP_MODE=comprehensive` to be enabled. Cache keys are tied to app version, so this ensures fresh data after updates.
+- **Description**: Automatically trigger catalog warmup when `CACHE_EPOCH` changes. The warmer compares the current epoch against the last one stored in Redis and, if they differ, runs a warmup immediately — bumping the epoch supersedes every existing key, so the cache is genuinely empty and worth refilling.
+- **Example**: `CATALOG_WARMUP_AUTO_ON_EPOCH_CHANGE=true`
+- **Note**: Requires `CACHE_WARMUP_MODE=comprehensive`. Formerly `CATALOG_WARMUP_AUTO_ON_VERSION_CHANGE`, which is still accepted: keys used to be prefixed with the addon version, so a release invalidated everything. They now carry `e<CACHE_EPOCH>:` instead, and a release on its own invalidates nothing — warming on it just repeated work against a valid cache.
 
 ---
 

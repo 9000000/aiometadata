@@ -18,7 +18,6 @@ const consola = require('consola');
 const { loadConfigFromDatabase } = require('./configApi.js');
 const { resolveDynamicTmdbDiscoverParams } = require('./tmdbDiscoverDateTokens');
 const { getTvmazeScheduleCatalog } = require('./tvmazeScheduleCatalog');
-const buildInfo = require('./buildInfo');
 const crypto = require('crypto');
 const { runWithRequestContext } = require('./logBuffer.js');
 const posterCacheConfig = require('./posterCache/config.js');
@@ -140,7 +139,8 @@ const WARMUP_CONFIG = {
   quietHoursRange: process.env.CATALOG_WARMUP_QUIET_HOURS || '02:00-06:00',
   taskDelayMs: parseInt(process.env.CATALOG_WARMUP_TASK_DELAY_MS) || 100,
   logLevel: process.env.CATALOG_WARMUP_LOG_LEVEL || 'info',
-  autoOnVersionChange: process.env.CATALOG_WARMUP_AUTO_ON_VERSION_CHANGE === 'true'
+  autoOnEpochChange: (process.env.CATALOG_WARMUP_AUTO_ON_EPOCH_CHANGE
+    ?? process.env.CATALOG_WARMUP_AUTO_ON_VERSION_CHANGE) === 'true'
 };
 
 // Stats tracking - now supports multiple UUIDs
@@ -214,7 +214,8 @@ class ComprehensiveCatalogWarmer {
     this.config.quietHoursRange = process.env.CATALOG_WARMUP_QUIET_HOURS || '02:00-06:00';
     this.config.taskDelayMs = parseInt(process.env.CATALOG_WARMUP_TASK_DELAY_MS) || 100;
     this.config.logLevel = process.env.CATALOG_WARMUP_LOG_LEVEL || 'info';
-    this.config.autoOnVersionChange = process.env.CATALOG_WARMUP_AUTO_ON_VERSION_CHANGE === 'true';
+    this.config.autoOnEpochChange = (process.env.CATALOG_WARMUP_AUTO_ON_EPOCH_CHANGE
+      ?? process.env.CATALOG_WARMUP_AUTO_ON_VERSION_CHANGE) === 'true';
     this.stats.enabled = this.config.enabled;
     this.stats.totalUUIDs = this.config.uuids.length;
   }
@@ -1156,39 +1157,38 @@ class ComprehensiveCatalogWarmer {
     }
   }
 
-  async checkVersionAndWarmIfNeeded() {
-    if (!this.config.autoOnVersionChange) {
+  async checkEpochAndWarmIfNeeded() {
+    if (!this.config.autoOnEpochChange) {
       return false;
     }
 
-    const currentVersion = buildInfo.version;
-    const versionKey = 'catalog-warmup:last-version';
-    
+    const { getCacheEpoch } = require('./cacheEpoch');
+    const currentEpoch = String(getCacheEpoch());
+    const epochKey = 'catalog-warmup:last-epoch';
+
     try {
-      const lastVersion = await redis.get(versionKey);
-      
-      if (lastVersion && lastVersion !== currentVersion) {
-        this.log('success', `App version changed from ${lastVersion} to ${currentVersion} - triggering automatic warmup`);
-        // Run warmup immediately (force=true bypasses interval checks)
+      const lastEpoch = await redis.get(epochKey);
+
+      if (lastEpoch && lastEpoch !== currentEpoch) {
+        this.log('success', `Cache epoch changed from ${lastEpoch} to ${currentEpoch} - triggering automatic warmup`);
         const warmupCompleted = await this.runWarmup(true);
-        
+
         if (warmupCompleted) {
-          // Store new version after successful warmup
-          await redis.set(versionKey, currentVersion);
-          this.log('success', `Version change warmup completed. Updated stored version to ${currentVersion}`);
+          await redis.set(epochKey, currentEpoch);
+          this.log('success', `Epoch change warmup completed. Updated stored epoch to ${currentEpoch}`);
           return true;
         } else {
-          this.log('warn', 'Version change warmup was skipped or failed');
+          this.log('warn', 'Epoch change warmup was skipped or failed');
           return false;
         }
-      } else if (!lastVersion) {
-        await redis.set(versionKey, currentVersion);
-        this.log('info', `Storing initial app version: ${currentVersion}`);
+      } else if (!lastEpoch) {
+        await redis.set(epochKey, currentEpoch);
+        this.log('info', `Storing initial cache epoch: ${currentEpoch}`);
       }
-      
+
       return false;
     } catch (error) {
-      this.log('error', `Error checking version: ${error.message}`);
+      this.log('error', `Error checking cache epoch: ${error.message}`);
       return false;
     }
   }
@@ -1210,11 +1210,11 @@ class ComprehensiveCatalogWarmer {
     this.log('success', `Comprehensive catalog warming enabled for ${this.config.uuids.length} UUID(s): ${this.config.uuids.join(', ')}`);
     this.log('info', `Interval: ${this.config.intervalHours}h, Initial delay: ${this.config.initialDelaySeconds}s`);
     
-    if (this.config.autoOnVersionChange) {
-      this.log('info', 'Auto-warmup on version change: enabled');
+    if (this.config.autoOnEpochChange) {
+      this.log('info', 'Auto-warmup on cache epoch change: enabled');
     }
 
-    const versionWarmupRan = await this.checkVersionAndWarmIfNeeded();
+    const epochWarmupRan = await this.checkEpochAndWarmIfNeeded();
     
     // If version warmup ran, we still want to schedule the next regular warmup
     // Calculate next run time based on the earliest UUID that needs warming
@@ -1236,7 +1236,7 @@ class ComprehensiveCatalogWarmer {
       this.stats.nextRun = new Date(earliestNextRun).toISOString();
     }
 
-    if (!versionWarmupRan) {
+    if (!epochWarmupRan) {
       await this.delay(this.config.initialDelaySeconds * 1000);
     }
 

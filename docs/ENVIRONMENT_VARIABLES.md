@@ -689,12 +689,16 @@ Caches artwork on disk and serves it from `/poster-cache` on the addon's own por
 
 ### `POSTER_CACHE_ALLOWED_HOSTS`
 - **Default**: _(empty)_
-- **Description**: Comma-separated hosts the image cache is allowed to fetch from even when they resolve to a private/LAN address. By default any upstream resolving to a private address is refused (SSRF protection). You usually **don't** need this: art from your own configured rating/custom-art providers is auto-trusted via a signed proxy URL, so a self-hosted PosterPlus on your LAN works without listing it. Use this only to permit a private host reached some other way. Match is by hostname; everything not listed stays blocked, and listed hosts are still pinned to their resolved addresses.
+- **Description**: Comma-separated hosts the image cache is allowed to fetch from even when they resolve to a private/LAN address. By default any upstream resolving to a private address is refused (SSRF protection). You usually **don't** need this with **Proxy Rating & Custom Art** on: those URLs are signed, and a valid signature is what grants the exception, so a self-hosted PosterPlus on your LAN works without listing it — in catalogs, on detail pages and during cache warming alike.
+
+  You **do** need it when a private art host is reached without that signature: with the art proxy **off**, art URLs go straight to `/poster-cache/<class>/<url>`, which carries no signature and so faces the full guard. Match is by hostname; everything not listed stays blocked, and listed hosts are still pinned to their resolved addresses.
 - **Example**: `POSTER_CACHE_ALLOWED_HOSTS=postersplus,xrdb`
 
 ### `IMAGE_PROXY_SIGNING_SECRET`
 - **Default**: falls back to `ADMIN_KEY`, then `MOVIELENS_CRED_KEY`
 - **Description**: Secret used to sign the `/poster`, `/logo` and `/background` proxy URLs the addon generates from your art config. A valid signature lets those (and only those) URLs reach a private/LAN provider without an explicit allowlist entry; unsigned or tampered `url=` values still face the full SSRF guard. Optional — only set it to pin a dedicated secret; the `ADMIN_KEY` fallback is sufficient for most deployments.
+
+  Note that rotating this value (or `ADMIN_KEY`, when it is the fallback) invalidates every signature already issued, so art URLs sitting in cached meta responses stop verifying and fall back to their unproxied source until that cache turns over.
 - **Example**: `IMAGE_PROXY_SIGNING_SECRET=some-long-random-string`
 
 ### `POSTER_CACHE_MAX_SIZE`

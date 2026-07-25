@@ -750,6 +750,16 @@ Caches artwork on disk and serves it from `/poster-cache` on the addon's own por
 - **Description**: Cached images larger than this are streamed from disk rather than read into memory, so a burst of concurrent hits on large artwork cannot pile whole images onto the heap. Smaller images take a faster single-read path.
 - **Example**: `POSTER_CACHE_STREAM_THRESHOLD=512k`
 
+### `POSTER_CACHE_AGENT_TTL_MS`
+- **Default**: `60000`
+- **Description**: How long a validated upstream host's pinned IP addresses and pooled keep-alive connections are reused before the host is re-resolved. Pooling avoids a fresh DNS lookup and TLS handshake on every cache-miss image fetch; the TTL bounds how long a since-retired CDN address may still be dialed. Reusing an already-open socket stays safe regardless of DNS — its peer was proven public when it connected — so this only trades connection freshness against handshake cost. Advanced tuning; the default suits almost everyone.
+- **Example**: `POSTER_CACHE_AGENT_TTL_MS=30000`
+
+### `POSTER_CACHE_AGENT_MAX`
+- **Default**: `512`
+- **Description**: Maximum number of distinct upstream hosts kept in the connection pool at once. Because the host is taken from the requested image URL, this bounds how much memory and how many open sockets the pool can hold. When the limit is reached the least-recently-added host is evicted and its sockets are closed. Advanced tuning.
+- **Example**: `POSTER_CACHE_AGENT_MAX=256`
+
 ### `POSTER_CACHE_LOG_REQUESTS`
 - **Default**: `false`
 - **Description**: Logs every image request. Off by default: at a few thousand images per second it fills the shared log buffer within seconds and evicts everything else, exactly when you need those other logs. A one-line summary (`served N images (X% hit) …`) is written each minute regardless, and errors are always logged.

@@ -3,7 +3,7 @@ import * as net from 'node:net';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import axios from 'axios';
-import { getAllowedPrivateHosts, getFetchConcurrency, getMaxObjectBytes, getUpstreamTimeoutMs, isPrivateArtAllowed } from './config.js';
+import { getAllowedPrivateHosts, getConnectionCacheMax, getConnectionCacheTtlMs, getFetchConcurrency, getMaxObjectBytes, getUpstreamTimeoutMs, isPrivateArtAllowed } from './config.js';
 
 const buildInfo = require('../buildInfo.js');
 
@@ -63,8 +63,8 @@ export interface ResolveOptions {
   allowPrivateHost?: boolean;
 }
 
-/** Resolves the host; rejects private-space answers unless the host is allowlisted or vouched for. */
-export async function resolvePublicUrl(rawUrl: string, opts: ResolveOptions = {}): Promise<ValidatedUpstream> {
+/** Parses and validates the scheme; shared by the resolver and the connection cache. */
+function parseUpstreamUrl(rawUrl: string): URL {
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
@@ -75,6 +75,13 @@ export async function resolvePublicUrl(rawUrl: string, opts: ResolveOptions = {}
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new UpstreamRejected(`Unsupported protocol: ${parsed.protocol}`);
   }
+
+  return parsed;
+}
+
+/** Resolves the host; rejects private-space answers unless the host is allowlisted or vouched for. */
+export async function resolvePublicUrl(rawUrl: string, opts: ResolveOptions = {}): Promise<ValidatedUpstream> {
+  const parsed = parseUpstreamUrl(rawUrl);
 
   const host = parsed.hostname.replace(/^\[|\]$/g, '');
   const allowPrivate = (opts.allowPrivateHost === true && isPrivateArtAllowed())
@@ -109,7 +116,7 @@ export async function assertPublicUrl(rawUrl: string): Promise<URL> {
 }
 
 /** Pins DNS to already-validated addresses; the request still targets the hostname. */
-function pinnedAgents(addresses: string[]): { httpAgent: http.Agent; httpsAgent: https.Agent } {
+function pinnedAgents(addresses: string[], keepAlive: boolean): { httpAgent: http.Agent; httpsAgent: https.Agent } {
   const lookup = (_hostname: string, options: any, callback: any) => {
     const cb = typeof options === 'function' ? options : callback;
     const opts = typeof options === 'function' ? {} : (options || {});
@@ -120,10 +127,103 @@ function pinnedAgents(addresses: string[]): { httpAgent: http.Agent; httpsAgent:
     const address = addresses[0];
     cb(null, address, net.isIP(address));
   };
+  // Bound sockets per host so a burst cannot open an unbounded number of them.
+  const maxSockets = Math.max(1, getFetchConcurrency());
   return {
-    httpAgent: new http.Agent({ lookup } as any),
-    httpsAgent: new https.Agent({ lookup } as any),
+    httpAgent: new http.Agent({ lookup, keepAlive, maxSockets, maxFreeSockets: 32 } as any),
+    httpsAgent: new https.Agent({ lookup, keepAlive, maxSockets, maxFreeSockets: 32 } as any),
   };
+}
+
+export interface Connection {
+  url: URL;
+  httpAgent: http.Agent;
+  httpsAgent: https.Agent;
+}
+
+const DESTROY_GRACE_MS = 1_000;
+
+interface HostEntry {
+  addresses: string[];
+  httpAgent: http.Agent;
+  httpsAgent: https.Agent;
+  expiresAt: number;
+}
+
+const hostCache = new Map<string, HostEntry>();
+const resolving = new Map<string, Promise<HostEntry>>();
+
+function destroyEntry(entry: HostEntry): void {
+  entry.httpAgent.destroy();
+  entry.httpsAgent.destroy();
+}
+
+function scheduleDestroy(entry: HostEntry): void {
+  setTimeout(() => destroyEntry(entry), getUpstreamTimeoutMs() + DESTROY_GRACE_MS).unref();
+}
+
+function dropHost(host: string): void {
+  const entry = hostCache.get(host);
+  if (!entry) return;
+  hostCache.delete(host);
+  scheduleDestroy(entry);
+}
+
+function storeHost(host: string, entry: HostEntry): void {
+  dropHost(host); // Replace any existing entry.
+  hostCache.set(host, entry);
+  const max = getConnectionCacheMax();
+  while (hostCache.size > max) {
+    const oldest = hostCache.keys().next();
+    if (oldest.done) break;
+    dropHost(oldest.value); // Evict least-recently-added.
+  }
+}
+
+async function getHostEntry(host: string, rawUrl: string, opts: ResolveOptions): Promise<HostEntry> {
+  const cached = hostCache.get(host);
+  if (cached && cached.expiresAt > Date.now()) return cached;
+
+  const pending = resolving.get(host);
+  if (pending) return pending;
+
+  const task = (async (): Promise<HostEntry> => {
+    const { addresses } = await resolvePublicUrl(rawUrl, opts);
+    const agents = pinnedAgents(addresses, true);
+    const entry: HostEntry = { addresses, ...agents, expiresAt: Date.now() + getConnectionCacheTtlMs() };
+    storeHost(host, entry);
+    return entry;
+  })();
+  resolving.set(host, task);
+  try {
+    return await task;
+  } finally {
+    resolving.delete(host);
+  }
+}
+
+export async function resolveConnection(rawUrl: string, opts: ResolveOptions = {}): Promise<Connection> {
+  const parsed = parseUpstreamUrl(rawUrl);
+  const host = parsed.hostname.replace(/^\[|\]$/g, '');
+  const perRequestPrivate = opts.allowPrivateHost === true && isPrivateArtAllowed();
+
+  if (perRequestPrivate) {
+    const { url, addresses } = await resolvePublicUrl(rawUrl, opts);
+    return { url, ...pinnedAgents(addresses, false) };
+  }
+
+  const entry = await getHostEntry(host, rawUrl, opts);
+  return { url: parsed, httpAgent: entry.httpAgent, httpsAgent: entry.httpsAgent };
+}
+
+export function getConnectionCacheStats(): { size: number; max: number } {
+  return { size: hostCache.size, max: getConnectionCacheMax() };
+}
+
+export function _resetConnectionCache(): void {
+  for (const entry of hostCache.values()) destroyEntry(entry);
+  hostCache.clear();
+  resolving.clear();
 }
 
 export interface FetchedImage {
@@ -180,14 +280,14 @@ export async function openImageStream(rawUrl: string, opts: ResolveOptions = {})
   let current = rawUrl;
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const { url, addresses } = await resolvePublicUrl(current, hop === 0 ? opts : {});
-    const agents = pinnedAgents(addresses);
+    const { url, httpAgent, httpsAgent } = await resolveConnection(current, hop === 0 ? opts : {});
 
     const response = await axios.get(url.toString(), {
       responseType: 'stream',
       timeout: getUpstreamTimeoutMs(),
       maxRedirects: 0,
-      ...agents,
+      httpAgent,
+      httpsAgent,
       maxContentLength: Infinity,
       maxBodyLength: Infinity,
       decompress: true,

@@ -1009,7 +1009,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'IMAGE_PROXY_SIGNING_SECRET',
     envVar: 'IMAGE_PROXY_SIGNING_SECRET',
     label: 'Image Proxy Signing Secret',
-    description: 'HMAC secret used to sign the /poster, /logo and /background proxy URLs. Falls back to ADMIN_KEY, then MOVIELENS_CRED_KEY; if none of the three is set, proxy URLs are served unsigned. Rotating it invalidates every previously signed URL.',
+    description: 'HMAC secret used to sign the /poster, /logo and /background proxy URLs. Falls back to ADMIN_KEY; if neither is set, proxy URLs are served unsigned. A purpose-specific key is derived from it, so a signature reveals nothing about the secret itself. Rotating it invalidates every previously signed URL.',
     category: 'Server',
     type: 'string',
     default: '',

@@ -91,8 +91,8 @@ cp .env.example .env
 - **Note**: Generate with: `openssl rand -hex 32`
 
 ### `IMAGE_PROXY_SIGNING_SECRET`
-- **Default**: unset (falls back to `ADMIN_KEY`, then `MOVIELENS_CRED_KEY`)
-- **Description**: HMAC secret used to sign the `/poster`, `/logo` and `/background` proxy URLs, so the addon will only render artwork for URLs it issued itself. If none of the three variables is set, proxy URLs are served unsigned.
+- **Default**: unset (falls back to `ADMIN_KEY`)
+- **Description**: HMAC secret used to sign the `/poster`, `/logo` and `/background` proxy URLs, so the addon will only render artwork for URLs it issued itself. If neither variable is set, proxy URLs are served unsigned. The signing key is derived from this value for that single purpose, so a published signature reveals nothing about the secret — which, via the `ADMIN_KEY` fallback, may also guard admin access.
 - **Example**: `IMAGE_PROXY_SIGNING_SECRET=your-secure-random-key-here`
 - **Note**: Generate with `openssl rand -hex 32`. Rotating it invalidates every previously signed URL, so already-published artwork links stop resolving until clients refetch them.
 
@@ -695,7 +695,7 @@ Caches artwork on disk and serves it from `/poster-cache` on the addon's own por
 - **Example**: `POSTER_CACHE_ALLOWED_HOSTS=postersplus,xrdb`
 
 ### `IMAGE_PROXY_SIGNING_SECRET`
-- **Default**: falls back to `ADMIN_KEY`, then `MOVIELENS_CRED_KEY`
+- **Default**: falls back to `ADMIN_KEY`
 - **Description**: Secret used to sign the `/poster`, `/logo` and `/background` proxy URLs the addon generates from your art config. A valid signature lets those (and only those) URLs reach a private/LAN provider without an explicit allowlist entry; unsigned or tampered `url=` values still face the full SSRF guard. Optional — only set it to pin a dedicated secret; the `ADMIN_KEY` fallback is sufficient for most deployments.
 
   Note that rotating this value (or `ADMIN_KEY`, when it is the fallback) invalidates every signature already issued, so art URLs sitting in cached meta responses stop verifying and fall back to their unproxied source until that cache turns over.

@@ -1,22 +1,52 @@
 import * as crypto from 'node:crypto';
 
 export function imageProxySigningSecret(): string {
-  return process.env.IMAGE_PROXY_SIGNING_SECRET || process.env.ADMIN_KEY || process.env.MOVIELENS_CRED_KEY || '';
+  return process.env.IMAGE_PROXY_SIGNING_SECRET || process.env.ADMIN_KEY || '';
+}
+
+const SIGNING_PURPOSE = 'image-proxy-url';
+
+let derivedFrom: string | null = null;
+let derivedKey: Buffer | null = null;
+
+/**
+ * Derives a purpose-specific key so a published signature reveals nothing about
+ * the secret it came from, which may also guard admin access.
+ */
+function signingKey(secret: string): Buffer {
+  if (secret !== derivedFrom) {
+    derivedFrom = secret;
+    derivedKey = crypto.createHash('sha256').update(`${secret}|${SIGNING_PURPOSE}`).digest();
+  }
+  return derivedKey!;
 }
 
 /** Marks a `url=` as addon-generated so the SSRF guard may reach a private host. */
 export function signProxyArtUrl(targetUrl: string): string {
   const secret = imageProxySigningSecret();
   if (!secret || !targetUrl) return '';
+  return crypto.createHmac('sha256', signingKey(secret)).update(targetUrl).digest('base64url').slice(0, 22);
+}
+
+function matches(provided: string, expected: string): boolean {
+  if (!expected) return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/** Signed with the raw secret before key derivation. Accepted, never issued. */
+function legacySignProxyArtUrl(targetUrl: string): string {
+  const secret = imageProxySigningSecret();
+  if (!secret || !targetUrl) return '';
   return crypto.createHmac('sha256', secret).update(targetUrl).digest('base64url').slice(0, 22);
 }
 
 export function proxyArtUrlVouched(targetUrl: string, sig: unknown): boolean {
-  const expected = signProxyArtUrl(targetUrl);
-  if (!expected || !sig) return false;
-  const provided = Buffer.from(String(sig));
-  const wanted = Buffer.from(expected);
-  return provided.length === wanted.length && crypto.timingSafeEqual(provided, wanted);
+  if (!sig) return false;
+  const provided = String(sig);
+  return matches(provided, signProxyArtUrl(targetUrl))
+    || matches(provided, legacySignProxyArtUrl(targetUrl));
 }
 
 export interface ProxyArtUrlOptions {

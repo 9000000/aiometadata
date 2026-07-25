@@ -1259,6 +1259,12 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
     };
   }
 
+  if (idOnly.startsWith('movielens.')) {
+    catalogConfig.apiKeys = {
+      movieLensCredId: config.apiKeys?.movieLensCredId || ''
+    };
+  }
+
   if (isMALCatalog || contentScope === 'anime') {
     catalogConfig.mal = {
       useImdbIdForCatalogAndSearch: config.mal?.useImdbIdForCatalogAndSearch || false

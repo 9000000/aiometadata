@@ -799,6 +799,23 @@ class ComprehensiveCatalogWarmer {
           extraArgs.genre = !extraArgs.genre || extraArgs.genre === 'None' ? '' : extraArgs.genre.toUpperCase();
         }
 
+        if (catalogId.startsWith('simkl.watchlist.')) {
+          try {
+            const { getSimklToken, getSimklActivityFingerprint } = require('../utils/simklUtils');
+            const tokenId = config.apiKeys?.simklTokenId;
+            if (tokenId) {
+              const token = await getSimklToken(tokenId);
+              if (token?.access_token) {
+                const parts = catalogId.split('.');
+                const fp = await getSimklActivityFingerprint(token.access_token, parts[2], parts[3]);
+                if (fp) extraArgs._simklAct = fp;
+              }
+            }
+          } catch (e) {
+            this.log('warn', `Simkl activity fingerprint failed for ${catalogId}: ${e.message}`);
+          }
+        }
+
         if (catalogId.startsWith('movielens.explore')) {
           try {
             const credId = config.apiKeys?.movieLensCredId;

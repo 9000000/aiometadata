@@ -6347,14 +6347,12 @@ addon.post("/api/dashboard/poster-cache/invalidate", requireDashboardAdmin, asyn
   const markerAt = raw.indexOf(marker);
   if (markerAt >= 0) {
     const afterMount = raw.slice(markerAt + marker.length - 1);
-    // The art-proxy routes carry the real image in a url= parameter rather than
-    // in the path, so they need reading apart differently.
     const proxyRoute = /^\/proxy\/(poster|logo|background)\//.exec(afterMount);
     if (proxyRoute) {
       let customUrl = null;
       try {
         customUrl = new URL(raw, 'http://addon.invalid').searchParams.get('url');
-      } catch { /* fall through to the error below */ }
+      } catch { /* ignore */ }
       if (!customUrl) {
         return res.status(400).json({
           error: 'That art-proxy URL has no url= parameter to refresh. Rating-provider posters are keyed by the generated provider URL — paste that, or clear the Processed Images type.',
@@ -6377,8 +6375,6 @@ addon.post("/api/dashboard/poster-cache/invalidate", requireDashboardAdmin, asyn
     const posterCacheStore = require('./lib/posterCache/store.js');
     const result = await posterCacheStore.invalidate(target, parsedType);
 
-    // Art served through the proxy routes used to be stored in the processed
-    // class under a prefixed key; drop those too so nothing stale survives.
     const removed = [...result.removed];
     let freed = result.freed_bytes;
     for (const prefix of ['rating-poster', 'logo', 'background']) {

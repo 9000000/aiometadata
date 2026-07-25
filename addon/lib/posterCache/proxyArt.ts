@@ -9,10 +9,6 @@ const SIGNING_PURPOSE = 'image-proxy-url';
 let derivedFrom: string | null = null;
 let derivedKey: Buffer | null = null;
 
-/**
- * Derives a purpose-specific key so a published signature reveals nothing about
- * the secret it came from, which may also guard admin access.
- */
 function signingKey(secret: string): Buffer {
   if (secret !== derivedFrom) {
     derivedFrom = secret;
@@ -21,7 +17,6 @@ function signingKey(secret: string): Buffer {
   return derivedKey!;
 }
 
-/** Marks a `url=` as addon-generated so the SSRF guard may reach a private host. */
 export function signProxyArtUrl(targetUrl: string): string {
   const secret = imageProxySigningSecret();
   if (!secret || !targetUrl) return '';
@@ -35,7 +30,6 @@ function matches(provided: string, expected: string): boolean {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-/** Signed with the raw secret before key derivation. Accepted, never issued. */
 function legacySignProxyArtUrl(targetUrl: string): string {
   const secret = imageProxySigningSecret();
   if (!secret || !targetUrl) return '';
@@ -50,15 +44,12 @@ export function proxyArtUrlVouched(targetUrl: string, sig: unknown): boolean {
 }
 
 export interface ProxyArtUrlOptions {
-  /** `${host}/poster-cache/proxy` for meta responses, `${addonHost}` for warmup targets. */
   base: string;
   imageClass: 'poster' | 'logo' | 'background';
   type: string;
   id: string;
   fallback?: string;
-  /** Custom art URL. Signed here so no caller has to remember to. */
   url?: string;
-  /** Rating provider key, used instead of `url`. */
   ratingKey?: string;
   lang?: string;
 }

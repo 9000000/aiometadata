@@ -126,7 +126,6 @@ export function recordServeError(): void {
   recordError();
 }
 
-/** A client revalidated and got a 304 — a hit that sends no bytes. */
 export function recordRevalidated(imageClass: ImageClass, method: string, url: string): void {
   record('HIT');
   if (shouldLogRequests()) log(3, `${method} ${imageClass} HIT 304 ${url}`);

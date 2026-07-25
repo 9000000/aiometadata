@@ -172,7 +172,6 @@ export function getMemoryBudget(): number {
   return parsed === null ? parseSize(DEFAULT_MEMORY_SIZE)! : parsed;
 }
 
-/** Freshness window for stored images. */
 export const DEFAULT_TTL_DAYS = 30;
 
 export function getEntryTtlDays(): number {
@@ -183,7 +182,6 @@ export function getEntryTtlDays(): number {
   return parsed;
 }
 
-/** `Infinity` when the TTL is 0. */
 export function getEntryTtlMs(): number {
   const days = getEntryTtlDays();
   return days > 0 ? days * 24 * 60 * 60 * 1000 : Infinity;
@@ -191,14 +189,12 @@ export function getEntryTtlMs(): number {
 
 const MAX_BROWSER_MAX_AGE = 365 * 24 * 60 * 60;
 
-/** Client-side lifetime, capped at one year. */
 export function getBrowserMaxAgeSeconds(): number {
   const ttl = getEntryTtlMs();
   if (!Number.isFinite(ttl)) return MAX_BROWSER_MAX_AGE;
   return Math.min(MAX_BROWSER_MAX_AGE, Math.max(60, Math.floor(ttl / 1000)));
 }
 
-/** Client lifetime for the /poster, /logo and /background proxy routes. */
 export const DEFAULT_PROXY_MAX_AGE_DAYS = 1;
 
 export function getProxyMaxAgeSeconds(): number {
@@ -261,12 +257,6 @@ export function shouldLogRequests(): boolean {
   return isTruthy(process.env.POSTER_CACHE_LOG_REQUESTS);
 }
 
-/**
- * Whether a signed, config-derived art URL may reach a private address. On a
- * multi-user instance the config that produces those URLs is user-supplied, so
- * the signature proves origin but not safety; turning this off leaves
- * POSTER_CACHE_ALLOWED_HOSTS as the only route to a private host.
- */
 export function isPrivateArtAllowed(): boolean {
   return !isExplicitlyDisabled(process.env.POSTER_PROXY_ALLOW_PRIVATE);
 }

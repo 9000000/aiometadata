@@ -107,7 +107,7 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
   const clearCacheMutation = useClearCache();
   const clearByIdMutation = useClearCacheById();
   const [clearToken, setClearToken] = useState("");
-  const [clearPreview, setClearPreview] = useState<{ count: number; samples: string[]; matchMode?: string; coldStoreCount?: number } | null>(null);
+  const [clearPreview, setClearPreview] = useState<{ count: number; samples: string[]; matchMode?: string; coldStoreCount?: number; titleInfo?: { title: string; year?: number | null; type?: string } | null } | null>(null);
   const executeTaskMutation = useExecuteMaintenanceTask();
   const clearErrorsMutation = useClearErrorLogs();
   const purgePosterCacheMutation = usePurgePosterCache();
@@ -206,6 +206,7 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
             samples: result.samples,
             matchMode: (result as any).matchMode,
             coldStoreCount: (result as any).coldStoreCount,
+            titleInfo: (result as any).titleInfo,
           });
           toast.info("Preview", { description: result.message });
         } else {
@@ -505,6 +506,15 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
                         {looksLikeMediaId(clearToken) ? (
                           <span className="text-muted-foreground">
                             Recognized media id — clears <span className="font-medium text-foreground">this title only</span>.
+                            {clearPreview?.titleInfo?.title && (
+                              <>
+                                {" "}
+                                <span className="font-medium text-foreground">
+                                  {clearPreview.titleInfo.title}
+                                  {clearPreview.titleInfo.year ? ` (${clearPreview.titleInfo.year})` : ""}
+                                </span>
+                              </>
+                            )}
                           </span>
                         ) : (
                           <span className="text-amber-600 dark:text-amber-500">

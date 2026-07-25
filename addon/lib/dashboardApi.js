@@ -2026,6 +2026,23 @@ class DashboardAPI {
     }
   }
 
+  async lookupTitleForMetaId(id) {
+    if (!this.cache) return null;
+    for (const type of ['series', 'movie']) {
+      try {
+        const raw = await this.cache.get(`content_metadata:${type}:${id}`);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        if (parsed?.title) {
+          return { title: parsed.title, year: parsed.year || null, type: parsed.type || type };
+        }
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
+
   // Clear cache by type
   // Matches a meta id (suffix in the key) or catalog id (mid-key) by substring.
   async clearCacheByToken(token, { dryRun = false, includeColdStore = true } = {}) {
@@ -2042,6 +2059,8 @@ class DashboardAPI {
       // Anything else (catalog ids, partial ids, free text) keeps substring
       // matching — catalog ids sit mid-key and would be missed by an exact match.
       const matchMode = isCompleteMediaId(trimmed) ? 'exact' : 'substring';
+
+      const titleInfo = matchMode === 'exact' ? await this.lookupTitleForMetaId(trimmed) : null;
 
       const escaped = escapeRedisGlob(trimmed);
       const isPreserved = isPreservedCacheKey;
@@ -2120,7 +2139,7 @@ class DashboardAPI {
       }
 
       return {
-        success: true, dryRun, token: trimmed, matchMode,
+        success: true, dryRun, token: trimmed, matchMode, titleInfo,
         matched, deletedCount: total, redisCount: deletedCount,
         skipped, coldStoreCount, samples, message,
       };

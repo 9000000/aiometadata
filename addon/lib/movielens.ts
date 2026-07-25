@@ -139,7 +139,7 @@ async function getListItems(
     Object.entries({ page, pageSize }).filter(([, v]) => v !== undefined && v !== null) as any
   ).toString();
   const res = await apiFetch(credId, `users/${userId}/lists/${listId}${qs ? `?${qs}` : ''}`);
-  if (res.status !== 200) return [];
+  if (res.status !== 200) throw new Error(`MovieLens list items failed with status ${res.status}`);
   const json: any = await res.json();
   return json?.data?.searchData?.searchResults || [];
 }

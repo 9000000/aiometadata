@@ -126,6 +126,12 @@ export function recordServeError(): void {
   recordError();
 }
 
+/** A client revalidated and got a 304 — a hit that sends no bytes. */
+export function recordRevalidated(imageClass: ImageClass, method: string, url: string): void {
+  record('HIT');
+  if (shouldLogRequests()) log(3, `${method} ${imageClass} HIT 304 ${url}`);
+}
+
 const CLAIMED = Symbol('poster-cache-claimed');
 function claimStream(stream: any): boolean {
   if (stream[CLAIMED]) return true;
@@ -229,6 +235,7 @@ export function posterCacheHandler() {
 
       if (req.headers['if-none-match'] === etag) {
         record(status);
+        if (logRequests) log(3, `${req.method} ${imageClass} ${status} 304 ${url}`);
         res.status(304).end();
         return;
       }

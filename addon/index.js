@@ -4972,6 +4972,9 @@ const handlePosterProxy = async function (req, res) {
   const etag = crypto.createHash('md5').update(`${type}:${id}:${customUrl || key}:${lang}`).digest('hex');
   res.setHeader('ETag', `"${etag}"`);
   if (req.headers['if-none-match'] === `"${etag}"`) {
+    if (posterCacheConfig.isBuiltinPosterCacheEnabled()) {
+      require('./lib/posterCache/handler.js').recordRevalidated('poster', req.method, customUrl || id);
+    }
     return res.status(304).end();
   }
 
@@ -5038,6 +5041,9 @@ function streamArtWithFallback(assetName) {
     const etag = crypto.createHash('md5').update(`${assetName}:${type}:${id}:${customUrl}`).digest('hex');
     res.setHeader('ETag', `"${etag}"`);
     if (req.headers['if-none-match'] === `"${etag}"`) {
+      if (posterCacheConfig.isBuiltinPosterCacheEnabled()) {
+        require('./lib/posterCache/handler.js').recordRevalidated(assetName, req.method, customUrl);
+      }
       return res.status(304).end();
     }
     try {

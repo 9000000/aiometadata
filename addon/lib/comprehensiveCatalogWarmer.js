@@ -1,6 +1,7 @@
 require('dotenv').config();
 const {
   cacheWrapCatalog,
+  cacheWrapGlobal,
   cacheWrapJikanApi,
   stableStringify,
   projectCatalogPayloadForCache,
@@ -9,6 +10,7 @@ const {
 const { getGenreList } = require('./getGenreList');
 const { parseAnimeCatalogMetaBatch } = require('../utils/parseProps');
 const jikan = require('./mal');
+const movielens = require('./movielens');
 const database = require('./database');
 const redis = require('./redisClient');
 const consola = require('consola');
@@ -795,6 +797,25 @@ class ComprehensiveCatalogWarmer {
           const dateString = extraArgs.date || getTodayInTimezone(getUserTimezone());
           extraArgs.date = dateString;
           extraArgs.genre = !extraArgs.genre || extraArgs.genre === 'None' ? '' : extraArgs.genre.toUpperCase();
+        }
+
+        if (catalogId.startsWith('movielens.explore')) {
+          try {
+            const credId = config.apiKeys?.movieLensCredId;
+            const explicitTags = String(catalogConfig?.metadata?.tags || '')
+              .split(',').map(s => s.trim()).filter(Boolean).join(',');
+            if (credId && !explicitTags) {
+              const metaTtl = parseInt(
+                process.env.MOVIELENS_USERMETA_TTL_SECONDS || process.env.MOVIELENS_GROUPTAGS_TTL_SECONDS || '43200', 10);
+              const userMeta = await cacheWrapGlobal(`movielens-usermeta:${credId}`,
+                async () => movielens.getUserMeta(credId), metaTtl);
+              if (userMeta?.engineId === 'bard' && Array.isArray(userMeta.groupTags) && userMeta.groupTags.length) {
+                extraArgs._mlTags = userMeta.groupTags.map(t => t.trim()).filter(Boolean).join(',');
+              }
+            }
+          } catch (e) {
+            this.log('warn', `MovieLens group tags failed for ${catalogId}: ${e.message}`);
+          }
         }
 
           const derivedPage = currentPage;

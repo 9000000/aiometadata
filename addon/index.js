@@ -3940,6 +3940,26 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
     }
   }
 
+  if (cleanId.startsWith('movielens.explore')) {
+    try {
+      const credId = config.apiKeys?.movieLensCredId;
+      const catCfg = config.catalogs?.find(c => c.id === cleanId);
+      const explicitTags = String(catCfg?.metadata?.tags || '')
+        .split(',').map(s => s.trim()).filter(Boolean).join(',');
+      if (credId && !explicitTags) {
+        const metaTtl = parseInt(
+          process.env.MOVIELENS_USERMETA_TTL_SECONDS || process.env.MOVIELENS_GROUPTAGS_TTL_SECONDS || '43200', 10);
+        const userMeta = await cacheWrapGlobal(`movielens-usermeta:${credId}`,
+          async () => movielens.getUserMeta(credId), metaTtl);
+        if (userMeta?.engineId === 'bard' && Array.isArray(userMeta.groupTags) && userMeta.groupTags.length) {
+          cacheExtraArgs._mlTags = userMeta.groupTags.map(t => t.trim()).filter(Boolean).join(',');
+        }
+      }
+    } catch (e) {
+      consola.warn(`[Catalog] MovieLens group tags failed for ${cleanId}: ${e.message}`);
+    }
+  }
+
   const catalogKey = `${cleanId}:${actualType}:${stableStringify(cacheExtraArgs)}`;
 
   const cacheOptions = {

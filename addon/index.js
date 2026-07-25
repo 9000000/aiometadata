@@ -6340,26 +6340,57 @@ addon.post("/api/dashboard/poster-cache/invalidate", requireDashboardAdmin, asyn
   const marker = `${posterCacheConfig.POSTER_CACHE_ROUTE}/`;
   const markerAt = raw.indexOf(marker);
   if (markerAt >= 0) {
-    const { parsePosterCachePath } = require('./lib/posterCache/handler.js');
-    const parsed = parsePosterCachePath(raw.slice(markerAt + marker.length - 1));
-    if (!parsed) {
-      return res.status(400).json({ error: 'Could not read an image URL out of that cache URL' });
+    const afterMount = raw.slice(markerAt + marker.length - 1);
+    // The art-proxy routes carry the real image in a url= parameter rather than
+    // in the path, so they need reading apart differently.
+    const proxyRoute = /^\/proxy\/(poster|logo|background)\//.exec(afterMount);
+    if (proxyRoute) {
+      let customUrl = null;
+      try {
+        customUrl = new URL(raw, 'http://addon.invalid').searchParams.get('url');
+      } catch { /* fall through to the error below */ }
+      if (!customUrl) {
+        return res.status(400).json({
+          error: 'That art-proxy URL has no url= parameter to refresh. Rating-provider posters are keyed by the generated provider URL — paste that, or clear the Processed Images type.',
+        });
+      }
+      target = customUrl;
+      if (!parsedType) parsedType = proxyRoute[1];
+    } else {
+      const { parsePosterCachePath } = require('./lib/posterCache/handler.js');
+      const parsed = parsePosterCachePath(afterMount);
+      if (!parsed) {
+        return res.status(400).json({ error: 'Could not read an image URL out of that cache URL' });
+      }
+      target = parsed.url;
+      if (!parsedType) parsedType = parsed.imageClass;
     }
-    target = parsed.url;
-    if (!parsedType) parsedType = parsed.imageClass;
   }
 
   try {
     const posterCacheStore = require('./lib/posterCache/store.js');
     const result = await posterCacheStore.invalidate(target, parsedType);
-    consola.info(`[API] Image cache invalidation for ${target} (${result.removed.join(', ') || 'not cached'})`);
+
+    // Art served through the proxy routes used to be stored in the processed
+    // class under a prefixed key; drop those too so nothing stale survives.
+    const removed = [...result.removed];
+    let freed = result.freed_bytes;
+    for (const prefix of ['rating-poster', 'logo', 'background']) {
+      const legacy = await posterCacheStore.invalidate(`${prefix}:${target}`, 'processed');
+      if (legacy.removed.length) {
+        if (!removed.includes('processed')) removed.push('processed');
+        freed += legacy.freed_bytes;
+      }
+    }
+
+    consola.info(`[API] Image cache invalidation for ${target} (${removed.join(', ') || 'not cached'})`);
     res.json({
       success: true,
       url: target,
-      removed: result.removed,
-      freed_bytes: result.freed_bytes,
-      message: result.removed.length
-        ? `Removed from ${result.removed.join(', ')}; it will be re-fetched on the next request`
+      removed,
+      freed_bytes: freed,
+      message: removed.length
+        ? `Removed from ${removed.join(', ')}; it will be re-fetched on the next request. Your player may still show its own copy until its cache expires.`
         : 'That image was not in the cache',
     });
   } catch (error) {

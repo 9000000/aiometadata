@@ -10,7 +10,7 @@ const {
 const { getGenreList } = require('./getGenreList');
 const { parseAnimeCatalogMetaBatch } = require('../utils/parseProps');
 const jikan = require('./mal');
-const { signProxyArtUrl } = require('./posterCache/proxyArt.js');
+const { buildProxyArtUrl } = require('./posterCache/proxyArt.js');
 const movielens = require('./movielens');
 const database = require('./database');
 const redis = require('./redisClient');
@@ -58,12 +58,12 @@ function collectWarmupTargets(metas, config, fallbackType, warmBase) {
 
     if (posterPattern && proxyId) {
       if (proxyApiKey) {
-        targets.push(`${addonHost}/poster/${type}/${proxyId}?fallback=${encodeURIComponent(meta.poster || '')}&lang=${config.language || 'en-US'}&key=${proxyApiKey}`);
+        targets.push(buildProxyArtUrl({ base: addonHost, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, ratingKey: proxyApiKey, lang: config.language }));
       } else {
         const resolved = resolveCustomArtUrl(posterPattern, ids, type, config);
         if (resolved) {
           if (config.usePosterProxy) {
-            targets.push(`${addonHost}/poster/${type}/${proxyId}?fallback=${encodeURIComponent(meta.poster || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`);
+            targets.push(buildProxyArtUrl({ base: addonHost, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, url: resolved }));
           } else {
             addThirdParty(resolved, 'poster', 'poster');
           }

@@ -241,7 +241,7 @@ async function testKeysRateLimitMiddleware(req, res, next) {
 
 
 const posterCacheConfig = require('./lib/posterCache/config.js');
-const { signProxyArtUrl, proxyArtUrlVouched } = require('./lib/posterCache/proxyArt.js');
+const { buildProxyArtUrl, proxyArtUrlVouched } = require('./lib/posterCache/proxyArt.js');
 
 function POSTER_PROXY_PREFIX_URL() { return posterCacheConfig.getPosterProxyPrefix(); }
 
@@ -4208,7 +4208,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
           if (proxyApiKey) {
             const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
             if (proxyId) {
-              meta.poster = `${host}/poster-cache/proxy/poster/${type}/${proxyId}?fallback=${encodeURIComponent(meta.poster || '')}&lang=${config.language || 'en-US'}&key=${proxyApiKey}`;
+              meta.poster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, ratingKey: proxyApiKey, lang: config.language });
             }
           } else {
             const resolved = resolveCustomArtUrl(posterPattern, ids, type, config);
@@ -4216,7 +4216,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
               if (config.usePosterProxy) {
                 const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
                 if (proxyId) {
-                  meta.poster = `${host}/poster-cache/proxy/poster/${type}/${proxyId}?fallback=${encodeURIComponent(meta.poster || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`;
+                  meta.poster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, url: resolved });
                 }
               } else {
                 meta.poster = resolved;
@@ -4230,7 +4230,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
             if (config.usePosterProxy) {
               const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
               if (proxyId) {
-                meta.background = `${host}/poster-cache/proxy/background/${type}/${proxyId}?fallback=${encodeURIComponent(meta.background || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`;
+                meta.background = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'background', type: type, id: proxyId, fallback: meta.background, url: resolved });
               } else {
                 meta.background = resolved;
               }
@@ -4245,7 +4245,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
             if (config.usePosterProxy) {
               const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
               if (proxyId) {
-                meta.logo = `${host}/poster-cache/proxy/logo/${type}/${proxyId}?fallback=${encodeURIComponent(meta.logo || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`;
+                meta.logo = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'logo', type: type, id: proxyId, fallback: meta.logo, url: resolved });
               } else {
                 meta.logo = resolved;
               }
@@ -4363,7 +4363,7 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
           if (proxyApiKey) {
             const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
             if (proxyId) {
-              result.meta.poster = `${host}/poster-cache/proxy/poster/${metaType}/${proxyId}?fallback=${encodeURIComponent(result.meta.poster || '')}&lang=${config.language || 'en-US'}&key=${proxyApiKey}`;
+              result.meta.poster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'poster', type: metaType, id: proxyId, fallback: result.meta.poster, ratingKey: proxyApiKey, lang: config.language });
             }
           } else {
             const resolved = resolveCustomArtUrl(metaPosterPattern, ids, metaType, config, { userAgent });
@@ -4371,7 +4371,7 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
               if (config.usePosterProxy) {
                 const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
                 if (proxyId) {
-                  result.meta.poster = `${host}/poster-cache/proxy/poster/${metaType}/${proxyId}?fallback=${encodeURIComponent(result.meta.poster || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`;
+                  result.meta.poster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'poster', type: metaType, id: proxyId, fallback: result.meta.poster, url: resolved });
                 }
               } else {
                 result.meta.poster = resolved;
@@ -4386,7 +4386,7 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
           if (config.usePosterProxy) {
             const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
             if (proxyId) {
-              result.meta.background = `${host}/poster-cache/proxy/background/${metaType}/${proxyId}?fallback=${encodeURIComponent(result.meta.background || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`;
+              result.meta.background = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'background', type: metaType, id: proxyId, fallback: result.meta.background, url: resolved });
             } else {
               result.meta.background = resolved;
             }
@@ -4401,7 +4401,7 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
           if (config.usePosterProxy) {
             const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
             if (proxyId) {
-              result.meta.logo = `${host}/poster-cache/proxy/logo/${metaType}/${proxyId}?fallback=${encodeURIComponent(result.meta.logo || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`;
+              result.meta.logo = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'logo', type: metaType, id: proxyId, fallback: result.meta.logo, url: resolved });
             } else {
               result.meta.logo = resolved;
             }
@@ -4436,7 +4436,7 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
                   const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
                   // Episode thumbnails share the show's proxyId; the per-episode url param keeps the proxy cache/etag distinct.
                   video.thumbnail = proxyId
-                    ? `${host}/poster-cache/proxy/background/${metaType}/${proxyId}?fallback=${encodeURIComponent(originalThumb || '')}&url=${encodeURIComponent(resolved)}&sig=${signProxyArtUrl(resolved)}`
+                    ? buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'background', type: metaType, id: proxyId, fallback: originalThumb, url: resolved })
                     : resolved;
                 } else {
                   video.thumbnail = resolved;

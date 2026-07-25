@@ -18,3 +18,30 @@ export function proxyArtUrlVouched(targetUrl: string, sig: unknown): boolean {
   const wanted = Buffer.from(expected);
   return provided.length === wanted.length && crypto.timingSafeEqual(provided, wanted);
 }
+
+export interface ProxyArtUrlOptions {
+  /** `${host}/poster-cache/proxy` for meta responses, `${addonHost}` for warmup targets. */
+  base: string;
+  imageClass: 'poster' | 'logo' | 'background';
+  type: string;
+  id: string;
+  fallback?: string;
+  /** Custom art URL. Signed here so no caller has to remember to. */
+  url?: string;
+  /** Rating provider key, used instead of `url`. */
+  ratingKey?: string;
+  lang?: string;
+}
+
+export function buildProxyArtUrl(options: ProxyArtUrlOptions): string {
+  const { base, imageClass, type, id, fallback, url, ratingKey, lang } = options;
+  const params = [`fallback=${encodeURIComponent(fallback || '')}`];
+
+  if (ratingKey) {
+    params.push(`lang=${lang || 'en-US'}`, `key=${ratingKey}`);
+  } else if (url) {
+    params.push(`url=${encodeURIComponent(url)}`, `sig=${signProxyArtUrl(url)}`);
+  }
+
+  return `${base}/${imageClass}/${type}/${id}?${params.join('&')}`;
+}

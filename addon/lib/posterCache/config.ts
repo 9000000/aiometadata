@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import consola from 'consola';
-import { parseDurationMs } from './duration.js';
+import { parseDurationMs } from './duration';
 
 const logger = consola.withTag('PosterCache');
 

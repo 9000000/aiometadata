@@ -5038,8 +5038,11 @@ const handlePosterProxy = async function (req, res) {
   } catch (error) {
     if (posterCacheConfig.isBuiltinPosterCacheEnabled()) require('./lib/posterCache/handler.js').recordServeError();
     const isTimeout = error.code === 'ECONNABORTED' || /timeout/i.test(error.message || '');
+    const status = error.response?.status ?? error.status;
     if (isTimeout) {
       consola.warn(`Poster proxy timed out for ${id}, serving fallback:`, error.message);
+    } else if (status === 404) {
+      consola.debug(`No art for ${id} at the poster provider, serving fallback`);
     } else {
       consola.error(`Error in poster proxy for ${id}:`, error.message);
     }

@@ -17,6 +17,8 @@ export interface WarmTarget {
   imageClass: ImageClass;
   url: string;
   http?: string;
+  checkClass?: ImageClass;
+  checkKey?: string;
 }
 
 interface Stats {
@@ -24,6 +26,8 @@ interface Stats {
   skipped: number;
   queued: number;
   warmed: number;
+  alreadyFresh: number;
+  rendered: number;
   failed: number;
   dropped: number;
   atCapacity: number;
@@ -43,7 +47,8 @@ let capacityWarned = false;
 let idleTimer: NodeJS.Timeout | null = null;
 
 const stats: Stats = {
-  offered: 0, skipped: 0, queued: 0, warmed: 0, failed: 0, dropped: 0, atCapacity: 0,
+  offered: 0, skipped: 0, queued: 0, warmed: 0, alreadyFresh: 0, rendered: 0,
+  failed: 0, dropped: 0, atCapacity: 0,
 };
 
 const LAG_INTERVAL_MS = 250;
@@ -100,8 +105,9 @@ function scheduleIdleReport(): void {
     draining = false;
     stopLagProbe();
     logger.info(
-      `Image warming idle — ${stats.warmed} warmed, ${stats.skipped} already cached, ` +
-      `${stats.failed} failed, ${stats.dropped} dropped, ${stats.atCapacity} skipped for capacity`
+      `Image warming idle — ${stats.warmed} fetched, ${stats.skipped} skipped, ` +
+      `${stats.alreadyFresh} already fresh, ${stats.rendered} rendered, ` +
+      `${stats.failed} failed, ${stats.dropped} dropped, ${stats.atCapacity} over capacity`
     );
   }, IDLE_SETTLE_MS);
   idleTimer.unref?.();
@@ -136,7 +142,9 @@ export function offer(targets: WarmTarget[]): void {
   for (const target of targets) {
     stats.offered += 1;
 
-    if (!target.http && store.isCachedFresh(target.imageClass, target.url)) {
+    const freshClass = target.http ? target.checkClass : target.imageClass;
+    const freshKey = target.http ? target.checkKey : target.url;
+    if (freshClass && freshKey && store.isCachedFresh(freshClass, freshKey)) {
       stats.skipped += 1;
       continue;
     }
@@ -170,15 +178,16 @@ async function runOne(target: WarmTarget): Promise<void> {
     try {
       const response = await fetch(target.http, { method: 'GET', signal: controller.signal });
       await response.arrayBuffer();
-      stats.warmed += 1;
+      stats.rendered += 1;
     } finally {
       clearTimeout(timer);
     }
     return;
   }
 
-  await store.getOrFetch(target.imageClass, target.url, (validators) => fetchImage(target.url, { validators }));
-  stats.warmed += 1;
+  const result = await store.getOrFetch(target.imageClass, target.url, (validators) => fetchImage(target.url, { validators }));
+  if (result.status === 'HIT') stats.alreadyFresh += 1;
+  else stats.warmed += 1;
 }
 
 function pump(): void {

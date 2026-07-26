@@ -57,8 +57,11 @@ function collectWarmupTargets(metas, config, fallbackType, deps) {
     if (!cacheableFields.has(field || imageClass)) return;
     targets.push({ imageClass, url });
   };
-  const addRendered = (url) => {
-    if (url) targets.push({ imageClass: 'poster', url, http: url });
+  const addRendered = (url, checkKey) => {
+    if (!url) return;
+    targets.push(checkKey
+      ? { imageClass: 'poster', url, http: url, checkClass: 'poster', checkKey }
+      : { imageClass: 'poster', url, http: url });
   };
 
   for (const meta of metas) {
@@ -75,7 +78,7 @@ function collectWarmupTargets(metas, config, fallbackType, deps) {
         const resolved = resolveCustomArtUrl(posterPattern, ids, type, config);
         if (resolved) {
           if (config.usePosterProxy) {
-            addRendered(buildProxyArtUrl({ base: addonHost, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, url: resolved }));
+            addRendered(buildProxyArtUrl({ base: addonHost, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, url: resolved }), resolved);
           } else {
             addThirdParty(resolved, 'poster', 'poster');
           }

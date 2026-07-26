@@ -24,6 +24,7 @@ const POLLING_INTERVALS = {
   PERFORMANCE: 60 * 1000,       // 60 seconds - timing data (aggregated stats, slow-changing)
   SYSTEM: 10 * 1000,            // 10 seconds - system config + activity
   OPERATIONS: 5 * 1000,         // 5 seconds - warming tasks need fast updates
+  COLD_STORE: 60 * 1000,        // 60 seconds - size gauge over a large table, not a live feed
   USERS: 15 * 1000,             // 15 seconds - user activity
   CONTENT: 60 * 1000,           // 60 seconds - slow-changing data
   LOGS: 2 * 1000,               // 2 seconds - live log streaming (backstop for the SSE stream)
@@ -859,7 +860,7 @@ export function useColdStoreStats(options: DashboardQueryOptions = {}) {
       return response.json();
     },
     enabled: enabled && isAdmin && !!adminKey && isActiveTab,
-    refetchInterval: shouldPoll ? POLLING_INTERVALS.OPERATIONS : false,
+    refetchInterval: shouldPoll ? POLLING_INTERVALS.COLD_STORE : false,
     refetchIntervalInBackground: false,
   });
 }

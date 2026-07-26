@@ -9,6 +9,7 @@ import {
   getColdStoreMaxBytes,
   getColdTtlSeconds,
   getInactiveDays,
+  getColdStoreStatsTtlSeconds,
   isColdStoreCompressionEnabled,
 } from './config';
 
@@ -167,19 +168,25 @@ function evictIfNeeded(): void {
     if (rows.length === 0) break;
     for (const r of rows) total -= r.n;
   }
+  cachedStats = null;
+}
+
+function invalidated(changes: number): number {
+  if (changes > 0) cachedStats = null;
+  return changes;
 }
 
 export function invalidate(metaId: string): number {
-  return db ? db.prepare(`DELETE FROM meta_components WHERE meta_id = ?`).run(metaId).changes : 0;
+  return db ? invalidated(db.prepare(`DELETE FROM meta_components WHERE meta_id = ?`).run(metaId).changes) : 0;
 }
 
 /** Drop a single row by its component key, as opposed to every row for a title. */
 export function invalidateKey(k: string): number {
-  return db ? db.prepare(`DELETE FROM meta_components WHERE k = ?`).run(k).changes : 0;
+  return db ? invalidated(db.prepare(`DELETE FROM meta_components WHERE k = ?`).run(k).changes) : 0;
 }
 
 export function purge(): number {
-  return db ? db.prepare(`DELETE FROM meta_components`).run().changes : 0;
+  return db ? invalidated(db.prepare(`DELETE FROM meta_components`).run().changes) : 0;
 }
 
 /** Escape LIKE wildcards so an operator-supplied token matches literally. */
@@ -205,16 +212,16 @@ export function countByToken(token: string): number {
 
 export function invalidateByToken(token: string): number {
   if (!db || !token) return 0;
-  return db.prepare(
+  return invalidated(db.prepare(
     `DELETE FROM meta_components WHERE k LIKE ? ESCAPE '\\'`
-  ).run(`%${escapeLike(token)}%`).changes;
+  ).run(`%${escapeLike(token)}%`).changes);
 }
 
 export function sweep(): number {
   if (!db) return 0;
   const now = Date.now();
   const inactiveCutoff = now - getInactiveDays() * 86400 * 1000;
-  return db.prepare(`DELETE FROM meta_components WHERE expires_at <= ? OR last_access < ?`).run(now, inactiveCutoff).changes;
+  return invalidated(db.prepare(`DELETE FROM meta_components WHERE expires_at <= ? OR last_access < ?`).run(now, inactiveCutoff).changes);
 }
 
 export type TierStats = { tier: string; count: number; titles: number; bytes: number };
@@ -230,12 +237,17 @@ export type ColdStoreStats = {
   expiredRows: number;
 };
 
+let cachedStats: { at: number; value: ColdStoreStats } | null = null;
+
 export function stats(): ColdStoreStats {
   const empty: ColdStoreStats = {
     enabled: false, rows: 0, titles: 0, bytes: 0, maxBytes: getColdStoreMaxBytes(),
     tiers: [], oldestCreatedAt: null, nextExpiryAt: null, expiredRows: 0,
   };
   if (!db) return empty;
+
+  const ttlMs = getColdStoreStatsTtlSeconds() * 1000;
+  if (cachedStats && ttlMs > 0 && Date.now() - cachedStats.at < ttlMs) return cachedStats.value;
 
   const now = Date.now();
   const r = db.prepare(`
@@ -252,7 +264,7 @@ export function stats(): ColdStoreStats {
     FROM meta_components GROUP BY tier ORDER BY tier
   `).all() as TierStats[];
 
-  return {
+  const value: ColdStoreStats = {
     enabled: true,
     rows: r.rows,
     titles: r.titles,
@@ -263,6 +275,8 @@ export function stats(): ColdStoreStats {
     nextExpiryAt: r.next_expiry ?? null,
     expiredRows: r.expired,
   };
+  cachedStats = { at: Date.now(), value };
+  return value;
 }
 
 export function close(): void {

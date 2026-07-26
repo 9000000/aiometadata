@@ -1959,6 +1959,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: 30,
     min: 1,
   },
+  {
+    key: 'COLD_STORE_STATS_TTL',
+    envVar: 'COLD_STORE_STATS_TTL',
+    label: 'Cold Store Stats TTL',
+    description: 'How long the dashboard cold-store size figures are reused before recounting (0 disables)',
+    category: 'Cache',
+    type: 'string',
+    default: '30s',
+    validate: (v: string) => /^\s*\d+(\.\d+)?\s*(s|sec|m|min|h|hr|d|w|y)?\s*$/i.test(v),
+  },
 ];
 
 // Rules: when a setting has a certain value, other settings become disabled.
@@ -2024,7 +2034,7 @@ export const CONDITIONAL_RULES: ConditionalRule[] = [
         'META_COLD_STORE_COMPRESSION',
         'COLD_TTL_FROZEN', 'COLD_TTL_STABLE',
         'SETTLE_MOVIE', 'SETTLE_SERIES', 'FROZEN_AGE',
-        'COLD_STORE_INACTIVE_DAYS',
+        'COLD_STORE_INACTIVE_DAYS', 'COLD_STORE_STATS_TTL',
       ],
     },
     reason: 'The meta cold store is disabled',

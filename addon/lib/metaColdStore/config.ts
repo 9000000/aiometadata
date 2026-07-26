@@ -59,8 +59,13 @@ export function getInactiveDays(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 30;
 }
 
+export function getColdStoreStatsTtlSeconds(): number {
+  const parsed = parseDuration(process.env.COLD_STORE_STATS_TTL);
+  return parsed !== null && parsed >= 0 ? parsed : 30;
+}
+
 module.exports = {
   parseSize, parseDuration, isTruthy, isColdStoreEnabled, isColdStoreCompressionEnabled,
   getColdStorePath, getColdStoreMaxBytes, getColdTtlSeconds, getSettleSeconds,
-  getFrozenAgeSeconds, getInactiveDays,
+  getFrozenAgeSeconds, getInactiveDays, getColdStoreStatsTtlSeconds,
 };

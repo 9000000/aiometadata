@@ -59,6 +59,7 @@ const presetConfigs: PresetConfig[] = [
         series: { poster: 'meta', background: 'meta', logo: 'meta' },
         anime: { poster: 'tvdb', background: 'tvdb', logo: 'tvdb' },
         englishArtOnly: false,
+        originalLangFallback: false,
       },
       search: {
         enabled: true,
@@ -107,6 +108,7 @@ const presetConfigs: PresetConfig[] = [
         series: { poster: 'meta', background: 'meta', logo: 'meta' },
         anime: { poster: 'meta', background: 'imdb', logo: 'imdb' },
         englishArtOnly: false,
+        originalLangFallback: false,
       },
       mal: {
         skipFiller: false,
@@ -161,6 +163,7 @@ const presetConfigs: PresetConfig[] = [
         series: { poster: 'meta', background: 'meta', logo: 'meta' },
         anime: { poster: 'mal', background: 'imdb', logo: 'imdb' },
         englishArtOnly: false,
+        originalLangFallback: false,
       },
       mal: {
         skipFiller: false,
@@ -215,6 +218,7 @@ const presetConfigs: PresetConfig[] = [
         series: { poster: 'meta', background: 'imdb', logo: 'imdb' },
         anime: { poster: 'tvdb', background: 'imdb', logo: 'imdb' },
         englishArtOnly: false,
+        originalLangFallback: false,
       },
       mal: {
         skipFiller: false,

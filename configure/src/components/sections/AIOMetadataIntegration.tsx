@@ -14,7 +14,19 @@ interface AIOMetadataIntegrationProps {
   onClose: () => void;
 }
 
-const SOURCE_GROUPS = [
+interface SourceGroup {
+  source: string;
+  label: string;
+  description: string;
+  icon: string;
+  lucideLabel?: string;
+  gradient: string;
+  border: string;
+  accent: string;
+  badgeActive: string;
+}
+
+const SOURCE_GROUPS: SourceGroup[] = [
   {
     source: 'tmdb',
     label: 'TMDB',
@@ -58,7 +70,7 @@ const SOURCE_GROUPS = [
     accent: 'bg-orange-500/15 ring-orange-400/20',
     badgeActive: 'bg-orange-500/20 text-orange-300 border-orange-400/30',
   },
-] as const;
+];
 
 const allBuiltInCatalogs: CatalogDefinition[] = [...baseCatalogs, ...animeCatalogs];
 

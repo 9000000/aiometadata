@@ -220,7 +220,7 @@ export function ChangelogModal({ version, open, onOpenChange, hideTrigger = fals
 
   // Function to fetch more releases when needed
   const fetchMoreReleases = React.useCallback(async () => {
-    if (!hasMorePages || fetchingMore) return;
+    if (currentChannel === 'testing' || !hasMorePages || fetchingMore) return;
 
     setFetchingMore(true);
     try {

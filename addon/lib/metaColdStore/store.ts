@@ -65,7 +65,8 @@ export function init(): void {
     CREATE INDEX IF NOT EXISTS idx_mc_meta_id ON meta_components(meta_id);
     CREATE INDEX IF NOT EXISTS idx_mc_expires ON meta_components(expires_at);
     CREATE INDEX IF NOT EXISTS idx_mc_last_access ON meta_components(last_access);
-    CREATE INDEX IF NOT EXISTS idx_mc_epoch ON meta_components(epoch);
+    DROP INDEX IF EXISTS idx_mc_epoch;
+    DROP INDEX IF EXISTS idx_mc_stats;
   `);
 
   currentEpoch = getCacheEpoch();

@@ -53,6 +53,7 @@ interface IndexEntry {
   hash: string;
   size: number;
   lastAccess: number;
+  storedAt: number;
 }
 
 interface ClassTotals {
@@ -364,7 +365,7 @@ function touch(imageClass: ImageClass, hash: string, file: string, size: number)
     }
     existing.lastAccess = now;
   } else {
-    addToIndex({ imageClass, hash, size, lastAccess: now });
+    addToIndex({ imageClass, hash, size, lastAccess: now, storedAt: now });
   }
   const seconds = now / 1000;
   fsp.utimes(file, seconds, seconds).catch(() => { /* best effort */ });
@@ -400,7 +401,7 @@ export async function put(
     return bodyHash;
   }
 
-  addToIndex({ imageClass, hash, size: payload.length, lastAccess: Date.now() });
+  addToIndex({ imageClass, hash, size: payload.length, lastAccess: Date.now(), storedAt: header.storedAt });
   memoryPut(indexKey(imageClass, hash), body, header.contentType, header.storedAt, bodyHash);
   scheduleEviction();
   return bodyHash;
@@ -462,6 +463,17 @@ export async function getOrFetch(
 
   inflight.set(lockKey, task);
   return task;
+}
+
+export function isCachedFresh(imageClass: ImageClass, key: string): boolean {
+  const entry = index.get(indexKey(imageClass, hashKey(key)));
+  return !!entry && !isExpired(entry.storedAt);
+}
+
+export function capacityUsed(): { bytes: number; max: number; ratio: number } {
+  const bytes = totalBytes();
+  const max = getMaxBytes();
+  return { bytes, max, ratio: max > 0 ? bytes / max : 0 };
 }
 
 export interface InvalidateResult {
@@ -649,6 +661,7 @@ async function scan(): Promise<void> {
           hash: name,
           size: stat.size,
           lastAccess: stat.mtimeMs,
+          storedAt: stat.mtimeMs,
         });
         found += 1;
       } catch {

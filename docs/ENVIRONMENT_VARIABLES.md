@@ -869,6 +869,24 @@ un-cancelled show eventually refreshes on its own.
 - **Description**: Drop rows that have not been read for this many days. Runs on an hourly sweep alongside hard-expiry cleanup, so the store tracks what is actually being requested.
 - **Example**: `COLD_STORE_INACTIVE_DAYS=60`
 
+### `IMAGE_WARM_QUEUE`
+- **Default**: `true`
+- **Description**: Warm images through a single bounded background queue shared by every catalog. Previously each catalog created its own unbounded promise chain, so the number of concurrent image fetches grew with the length of a warm run and a run got slower the longer it went. Set to `false` to disable image warming entirely; images are then cached on first request instead.
+
+### `IMAGE_WARM_QUEUE_MAX`
+- **Default**: `50000`
+- **Description**: Maximum images waiting to be warmed. Beyond this, targets are dropped rather than queued — a dropped image is simply a cache miss the first time someone opens that title, whereas an unbounded backlog can never drain before the next warm cycle adds to it.
+- **Example**: `IMAGE_WARM_QUEUE_MAX=20000`
+
+### `IMAGE_WARM_CONCURRENCY_MIN` / `IMAGE_WARM_CONCURRENCY_MAX`
+- **Defaults**: `4` / `48`
+- **Description**: Bounds for the adaptive image warmer. It starts at the minimum and ramps toward the maximum while the event loop has headroom, halving back down when it does not. Raise the maximum on a fast box with spare cores; lower it if warming still competes with serving.
+
+### `IMAGE_WARM_TARGET_LAG_MS`
+- **Default**: `20`
+- **Description**: The event-loop lag the image warmer aims to stay under. Above this it reduces concurrency, below half of it it speeds up. This is what keeps image warming from slowing catalog warming: catalog work and request serving share the same event loop, so the warmer yields as soon as that loop starts backing up.
+- **Example**: `IMAGE_WARM_TARGET_LAG_MS=10`
+
 ### `COLD_STORE_STATS_TTL`
 - **Default**: `30s`
 - **Description**: How long the dashboard's cold-store size figures are reused before the store is recounted. The count is two aggregate scans over `meta_components`, and better-sqlite3 is synchronous, so each recount blocks the event loop for as long as it runs. Reusing the result keeps a polling dashboard from stalling the addon. A purge or sweep drops the cached figures immediately, so manual cache operations always show their effect. Set to `0` to recount on every request.

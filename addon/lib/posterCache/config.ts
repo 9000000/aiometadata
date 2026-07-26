@@ -248,6 +248,31 @@ export function getFetchConcurrency(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 128;
 }
 
+function intEnv(name: string, fallback: number, min: number): number {
+  const parsed = parseInt(process.env[name] || '', 10);
+  return Number.isFinite(parsed) && parsed >= min ? parsed : fallback;
+}
+
+export function getWarmQueueMax(): number {
+  return intEnv('IMAGE_WARM_QUEUE_MAX', 50000, 1);
+}
+
+export function getWarmConcurrencyMin(): number {
+  return intEnv('IMAGE_WARM_CONCURRENCY_MIN', 4, 1);
+}
+
+export function getWarmConcurrencyMax(): number {
+  return Math.max(getWarmConcurrencyMin(), intEnv('IMAGE_WARM_CONCURRENCY_MAX', 48, 1));
+}
+
+export function getWarmTargetLagMs(): number {
+  return intEnv('IMAGE_WARM_TARGET_LAG_MS', 20, 1);
+}
+
+export function isWarmQueueEnabled(): boolean {
+  return !isExplicitlyDisabled(process.env.IMAGE_WARM_QUEUE);
+}
+
 export function getStreamThresholdBytes(): number {
   const parsed = parseSize(process.env.POSTER_CACHE_STREAM_THRESHOLD);
   return parsed && parsed > 0 ? parsed : 256 * 1024;

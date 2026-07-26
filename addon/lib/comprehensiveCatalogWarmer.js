@@ -21,8 +21,9 @@ const { getTvmazeScheduleCatalog } = require('./tvmazeScheduleCatalog');
 const crypto = require('crypto');
 const { runWithRequestContext } = require('./logBuffer.js');
 const posterCacheConfig = require('./posterCache/config.js');
+const imageWarmQueue = require('./posterCache/warmQueue.js');
 
-function collectWarmupTargets(metas, config, fallbackType, warmBase) {
+function collectWarmupTargets(metas, config, fallbackType) {
   const {
     resolveCustomArtUrl,
     resolvePosterPattern,
@@ -47,7 +48,10 @@ function collectWarmupTargets(metas, config, fallbackType, warmBase) {
     if (!url || typeof url !== 'string' || !/^https?:\/\//i.test(url)) return;
     if (selfOrigin && url.startsWith(selfOrigin)) return;
     if (!cacheableFields.has(field || imageClass)) return;
-    targets.push(posterCacheConfig.buildCachedUrl(warmBase, imageClass, url));
+    targets.push({ imageClass, url });
+  };
+  const addRendered = (url) => {
+    if (url) targets.push({ imageClass: 'poster', url, http: url });
   };
 
   for (const meta of metas) {
@@ -58,13 +62,13 @@ function collectWarmupTargets(metas, config, fallbackType, warmBase) {
     let ratingPosterQueued = false;
     if (posterPattern && proxyId) {
       if (proxyApiKey) {
-        targets.push(buildProxyArtUrl({ base: addonHost, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, ratingKey: proxyApiKey, lang: config.language }));
+        addRendered(buildProxyArtUrl({ base: addonHost, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, ratingKey: proxyApiKey, lang: config.language }));
         ratingPosterQueued = true;
       } else {
         const resolved = resolveCustomArtUrl(posterPattern, ids, type, config);
         if (resolved) {
           if (config.usePosterProxy) {
-            targets.push(buildProxyArtUrl({ base: addonHost, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, url: resolved }));
+            addRendered(buildProxyArtUrl({ base: addonHost, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, url: resolved }));
           } else {
             addThirdParty(resolved, 'poster', 'poster');
           }
@@ -267,23 +271,6 @@ class ComprehensiveCatalogWarmer {
 
   async delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  /** HEADs each image URL in throttled batches so the cache fills without hammering upstreams. */
-  async warmImageTargets(targets, catalogId) {
-    const delayMs = parseInt(process.env.POSTER_WARMUP_DELAY_MS) || 50;
-    const concurrency = Math.max(1, parseInt(process.env.POSTER_WARMUP_CONCURRENCY) || 1);
-
-    let warmed = 0;
-    for (let i = 0; i < targets.length; i += concurrency) {
-      const batch = targets.slice(i, i + concurrency);
-      const results = await Promise.allSettled(
-        batch.map(url => fetch(url, { method: 'HEAD' }))
-      );
-      warmed += results.filter(r => r.status === 'fulfilled').length;
-      if (delayMs > 0) await this.delay(delayMs);
-    }
-    this.log('debug', `[Image Warming] Pre-warmed ${warmed}/${targets.length} images for catalog ${catalogId}`);
   }
 
   isQuietHours() {
@@ -697,7 +684,6 @@ class ComprehensiveCatalogWarmer {
     let currentPage = 1;
     let totalItems = 0;
     const maxPages = this.config.maxPagesPerCatalog;
-    let posterWarmingChain = Promise.resolve();
 
     while (currentPage <= maxPages) {
       try {
@@ -892,15 +878,8 @@ class ComprehensiveCatalogWarmer {
 
           const rawMetaCount = result?.metas?.length || 0;
 
-          const posterWarmupUrl = posterCacheConfig.getPosterWarmupBase();
-          if (posterWarmupUrl && rawMetaCount > 0) {
-            const targets = collectWarmupTargets(result.metas, config, catalog.type, posterWarmupUrl);
-            if (targets.length > 0) {
-              const pageCatalogId = catalogId;
-              posterWarmingChain = posterWarmingChain.then(
-                () => this.warmImageTargets(targets, pageCatalogId)
-              );
-            }
+          if (rawMetaCount > 0) {
+            imageWarmQueue.offer(collectWarmupTargets(result.metas, config, catalog.type));
           }
 
           if (rawMetaCount === 0) {
@@ -928,7 +907,6 @@ class ComprehensiveCatalogWarmer {
     let currentSkip = 0;
     let pagesWarmed = 0;
     let totalItems = 0;
-    let posterWarmingChain = Promise.resolve();
 
     while (pagesWarmed < maxPages) {
       try {
@@ -937,14 +915,8 @@ class ComprehensiveCatalogWarmer {
 
         const rawMetaCount = result?.metas?.length || 0;
 
-        const posterWarmupUrl = posterCacheConfig.getPosterWarmupBase();
-        if (posterWarmupUrl && rawMetaCount > 0) {
-          const targets = collectWarmupTargets(result.metas, config, catalog.type, posterWarmupUrl);
-          if (targets.length > 0) {
-            posterWarmingChain = posterWarmingChain.then(
-              () => this.warmImageTargets(targets, catalogId)
-            );
-          }
+        if (rawMetaCount > 0) {
+          imageWarmQueue.offer(collectWarmupTargets(result.metas, config, catalog.type));
         }
 
         if (rawMetaCount === 0) {
@@ -1141,6 +1113,11 @@ class ComprehensiveCatalogWarmer {
 
       const stoppedEarly = this.shouldStop;
       this.log('success', `Warmup ${stoppedEarly ? 'stopped' : 'complete'}! Processed ${this.config.uuids.length} UUID(s), warmed ${this.stats.catalogsWarmed}/${this.stats.totalCatalogs} catalogs, ${this.stats.totalPages} pages, ${this.stats.totalItems} items in ${this.stats.duration}`);
+
+      const imageStats = imageWarmQueue.getStats();
+      if (imageStats.depth > 0) {
+        this.log('info', `Image warming: ${imageStats.depth} queued, ${imageStats.warmed} warmed, ${imageStats.skipped} already cached`);
+      }
       
       // Update nextRun time after successful warmup (for both scheduled and forced runs)
       const intervalMs = this.config.intervalHours * 60 * 60 * 1000;

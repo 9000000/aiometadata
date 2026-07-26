@@ -8,6 +8,7 @@ import {
   formatSize,
   getCacheDir,
   getEntryExpiry,
+  getEntryExpiryFrom,
   getEntryTtlDays,
   getInactiveDays,
   getMaxBytes,
@@ -16,6 +17,7 @@ import {
   getMemorySizeRaw,
   getStreamThresholdBytes,
   hostFromKey,
+  inferredTtlMsFor,
   isInferTtlEnabled,
   isNotStorable,
   resolveEntryTtlMs,
@@ -53,17 +55,12 @@ export interface CacheEntry {
   openStream?: () => NodeJS.ReadableStream;
 }
 
-/** Only worth asking the origin when we have something for it to compare against. */
 function revalidationHint(entry: CacheEntry | null): ConditionalValidators | undefined {
   const upstream = entry?.upstream;
   if (!upstream || (!upstream.etag && !upstream.lastModified)) return undefined;
   return { etag: upstream.etag, lastModified: upstream.lastModified };
 }
 
-/**
- * Compared rather than the metadata objects themselves: `mergeRevalidated` resets
- * `age` to 0 unconditionally, so a deep-equal would differ on almost every 304.
- */
 function sameValidators(stored?: UpstreamCacheMeta, merged?: UpstreamCacheMeta): boolean {
   return (stored?.etag ?? '') === (merged?.etag ?? '')
     && (stored?.lastModified ?? '') === (merged?.lastModified ?? '');
@@ -75,6 +72,7 @@ interface IndexEntry {
   size: number;
   lastAccess: number;
   storedAt: number;
+  inferredMs: number | null;
 }
 
 interface ClassTotals {
@@ -249,8 +247,12 @@ export async function get(imageClass: ImageClass, key: string): Promise<CacheEnt
 
   const cached = memoryTake(idxKey);
   if (cached) {
-    touch(imageClass, hash, file, index.get(idxKey)?.size ?? cached.body.length);
-    const expiresAt = getEntryExpiry(key, cached.storedAt, cached.upstream);
+    const inferredMs = inferredTtlMsFor(cached.upstream);
+    touch(imageClass, hash, file, index.get(idxKey)?.size ?? cached.body.length, {
+      storedAt: cached.storedAt,
+      inferredMs,
+    });
+    const expiresAt = getEntryExpiryFrom(key, cached.storedAt, inferredMs);
     return {
       contentType: cached.contentType,
       storedAt: cached.storedAt,
@@ -312,9 +314,10 @@ export async function get(imageClass: ImageClass, key: string): Promise<CacheEnt
     }
 
     const bodySize = stat.size - framing.bodyOffset;
-    touch(imageClass, hash, file, stat.size);
+    const inferredMs = inferredTtlMsFor(header.upstream);
+    touch(imageClass, hash, file, stat.size, { storedAt: header.storedAt, inferredMs });
 
-    const expiresAt = getEntryExpiry(key, header.storedAt, header.upstream);
+    const expiresAt = getEntryExpiryFrom(key, header.storedAt, inferredMs);
     const meta = {
       contentType: header.contentType,
       storedAt: header.storedAt,
@@ -379,12 +382,13 @@ async function readBuffered(
     return null;
   }
 
-  touch(imageClass, hash, file, raw.length);
+  const inferredMs = inferredTtlMsFor(header.upstream);
+  touch(imageClass, hash, file, raw.length, { storedAt: header.storedAt, inferredMs });
   const body = raw.subarray(framing.bodyOffset);
   const etag = header.bodyHash || hashBody(body);
   memoryPut(indexKey(imageClass, hash), body, header.contentType, header.storedAt, etag, header.upstream);
 
-  const expiresAt = getEntryExpiry(key, header.storedAt, header.upstream);
+  const expiresAt = getEntryExpiryFrom(key, header.storedAt, inferredMs);
   return {
     contentType: header.contentType,
     storedAt: header.storedAt,
@@ -398,20 +402,42 @@ async function readBuffered(
   };
 }
 
-function touch(imageClass: ImageClass, hash: string, file: string, size: number): void {
+interface StoredFacts {
+  storedAt: number;
+  inferredMs: number | null;
+}
+
+function touch(
+  imageClass: ImageClass,
+  hash: string,
+  file: string,
+  size: number,
+  stored?: StoredFacts
+): void {
   const now = Date.now();
   const existing = index.get(indexKey(imageClass, hash));
   if (existing) {
+    if (stored) {
+      existing.storedAt = stored.storedAt;
+      existing.inferredMs = stored.inferredMs;
+    }
     if (now - existing.lastAccess < ACCESS_TOUCH_MS) {
       existing.lastAccess = now;
       return;
     }
     existing.lastAccess = now;
   } else {
-    addToIndex({ imageClass, hash, size, lastAccess: now, storedAt: now });
+    addToIndex({
+      imageClass,
+      hash,
+      size,
+      lastAccess: now,
+      storedAt: stored?.storedAt ?? now,
+      inferredMs: stored?.inferredMs ?? null,
+    });
   }
-  const seconds = now / 1000;
-  fsp.utimes(file, seconds, seconds).catch(() => { /* best effort */ });
+  const storedAt = stored?.storedAt ?? existing?.storedAt ?? now;
+  fsp.utimes(file, now / 1000, storedAt / 1000).catch(() => { /* best effort */ });
 }
 
 export async function put(
@@ -447,7 +473,14 @@ export async function put(
     return bodyHash;
   }
 
-  addToIndex({ imageClass, hash, size: payload.length, lastAccess: Date.now(), storedAt: header.storedAt });
+  addToIndex({
+    imageClass,
+    hash,
+    size: payload.length,
+    lastAccess: Date.now(),
+    storedAt: header.storedAt,
+    inferredMs: inferredTtlMsFor(header.upstream),
+  });
   memoryPut(indexKey(imageClass, hash), body, header.contentType, header.storedAt, bodyHash, header.upstream);
   scheduleEviction();
   return bodyHash;
@@ -495,7 +528,8 @@ async function rewriteHeaderStreaming(
   hash: string,
   file: string,
   header: EntryHeader,
-  oldBodyOffset: number
+  oldBodyOffset: number,
+  inferredMs: number | null
 ): Promise<{ bodySize: number; bodyOffset: number } | null> {
   const headerJson = Buffer.from(JSON.stringify(header), 'utf8');
   const prefix = Buffer.alloc(HEADER_OFFSET);
@@ -524,7 +558,14 @@ async function rewriteHeaderStreaming(
   }
 
   const bodyOffset = HEADER_OFFSET + headerJson.length;
-  addToIndex({ imageClass, hash, size: bodyOffset + bodySize, lastAccess: Date.now(), storedAt: header.storedAt });
+  addToIndex({
+    imageClass,
+    hash,
+    size: bodyOffset + bodySize,
+    lastAccess: Date.now(),
+    storedAt: header.storedAt,
+    inferredMs,
+  });
   memoryDrop(indexKey(imageClass, hash));
   return { bodySize, bodyOffset };
 }
@@ -544,15 +585,16 @@ async function refreshStoredEntry(
   header.storedAt = Date.now();
   if (Object.keys(upstream).length > 0) header.upstream = upstream;
   else delete header.upstream;
-  
+  const inferredMs = inferredTtlMsFor(header.upstream);
+
   if (fileSize - framing.bodyOffset > getStreamThresholdBytes()) {
-    const refreshed = await rewriteHeaderStreaming(imageClass, hash, file, header, framing.bodyOffset);
+    const refreshed = await rewriteHeaderStreaming(imageClass, hash, file, header, framing.bodyOffset, inferredMs);
     if (!refreshed) return null;
     return {
       contentType: header.contentType,
       storedAt: header.storedAt,
       expired: false,
-      expiresAt: getEntryExpiry(key, header.storedAt, header.upstream),
+      expiresAt: getEntryExpiryFrom(key, header.storedAt, inferredMs),
       hash,
       etag: header.bodyHash || legacyEtag(hash, header.storedAt),
       size: refreshed.bodySize,
@@ -582,10 +624,17 @@ async function refreshStoredEntry(
   }
 
   const etag = header.bodyHash || hashBody(body);
-  addToIndex({ imageClass, hash, size: payload.length, lastAccess: Date.now(), storedAt: header.storedAt });
+  addToIndex({
+    imageClass,
+    hash,
+    size: payload.length,
+    lastAccess: Date.now(),
+    storedAt: header.storedAt,
+    inferredMs,
+  });
   memoryPut(indexKey(imageClass, hash), body, header.contentType, header.storedAt, etag, header.upstream);
 
-  const expiresAt = getEntryExpiry(key, header.storedAt, header.upstream);
+  const expiresAt = getEntryExpiryFrom(key, header.storedAt, inferredMs);
   return {
     contentType: header.contentType,
     storedAt: header.storedAt,
@@ -697,15 +746,6 @@ export async function getOrFetch(
         });
       }
 
-      // Rewriting the entry buys a restarted validity, which is worth its cost
-      // everywhere except at zero — there it recurs on every request for the life
-      // of the entry, and a memory-tier hit does not avoid it because the refresh
-      // reads from disk regardless. When the merged metadata still resolves to
-      // zero *and* the validators are unchanged, the stored header and the merged
-      // one behave identically on every future read, so there is nothing to
-      // persist. The second condition matters: a rotated validator has to be
-      // stored, or we would keep sending the old one and never receive the 200
-      // that could lift the entry off zero.
       if (cached && resolveEntryTtlMs(key, merged) === 0 && sameValidators(cached.upstream, merged)) {
         return { entry: cached, status: 'REVALIDATED' };
       }
@@ -713,13 +753,8 @@ export async function getOrFetch(
       const refreshed = await refreshStoredEntry(imageClass, key, merged);
       if (refreshed) return { entry: refreshed, status: 'REVALIDATED' };
 
-      // The entry the 304 referred to went away underneath us, so there is
-      // nothing to refresh — ask again without validators to get the body.
       const retried = await producer();
       if (isNotModified(retried)) {
-        // This falls through to the STALE path below, which is the right outcome.
-        // Logged here because that path reports the symptom and not this cause —
-        // an origin answering 304 to a request carrying no validators at all.
         logger.warn(`${imageClass} entry vanished and upstream still answered 304: ${key}`);
         throw new Error('Upstream answered 304 with no cached entry to refresh');
       }
@@ -742,7 +777,7 @@ export async function getOrFetch(
 export function isCachedFresh(imageClass: ImageClass, key: string): boolean {
   const entry = index.get(indexKey(imageClass, hashKey(key)));
   if (!entry) return false;
-  return Date.now() <= getEntryExpiry(key, entry.storedAt);
+  return Date.now() <= getEntryExpiryFrom(key, entry.storedAt, entry.inferredMs);
 }
 
 export function capacityUsed(): { bytes: number; max: number; ratio: number } {
@@ -873,9 +908,6 @@ async function walkClass(
       try {
         await worker(next.value);
       } catch (error: any) {
-        // One unreadable entry must not abandon the walk silently, and must not
-        // leave the other workers draining the iterator after the caller has
-        // already been handed a rejection.
         stop = true;
         logger.warn(`Walk of ${imageClass} stopped at ${next.value}: ${error?.message}`);
         return;
@@ -930,8 +962,6 @@ export async function purgeDomain(domain: string): Promise<DomainPurgeResult> {
       const host = hostFromKey(identity.key);
       if (!host || (host !== target && !host.endsWith(`.${target}`))) return;
 
-      // `remove()` reports the indexed size, which is 0 for an entry the index
-      // never saw — the stat is what makes a cold purge account for itself.
       const indexed = await remove(imageClass, hash);
       freed += indexed || identity.size;
       removed += 1;
@@ -1120,8 +1150,9 @@ async function scan(): Promise<void> {
           imageClass,
           hash: name,
           size: stat.size,
-          lastAccess: stat.mtimeMs,
+          lastAccess: stat.atimeMs,
           storedAt: stat.mtimeMs,
+          inferredMs: null,
         });
         found += 1;
       } catch {
@@ -1161,7 +1192,6 @@ export async function init(): Promise<void> {
   );
 }
 
-/** Test/import helper — lets the nginx importer populate totals without a rescan. */
 export function isInitialized(): boolean {
   return initialized;
 }

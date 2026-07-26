@@ -55,9 +55,11 @@ function collectWarmupTargets(metas, config, fallbackType, warmBase) {
     const type = meta.type || fallbackType;
     const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
 
+    let ratingPosterQueued = false;
     if (posterPattern && proxyId) {
       if (proxyApiKey) {
         targets.push(buildProxyArtUrl({ base: addonHost, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, ratingKey: proxyApiKey, lang: config.language }));
+        ratingPosterQueued = true;
       } else {
         const resolved = resolveCustomArtUrl(posterPattern, ids, type, config);
         if (resolved) {
@@ -66,9 +68,11 @@ function collectWarmupTargets(metas, config, fallbackType, warmBase) {
           } else {
             addThirdParty(resolved, 'poster', 'poster');
           }
+          ratingPosterQueued = true;
         }
       }
-    } else if (meta.poster) {
+    }
+    if (!ratingPosterQueued && meta.poster) {
       addThirdParty(meta.poster, 'poster', 'poster');
     }
 

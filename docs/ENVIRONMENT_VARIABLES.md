@@ -879,6 +879,11 @@ un-cancelled show eventually refreshes on its own.
 - **Description**: Drop rows that have not been read for this many days. Runs on an hourly sweep alongside hard-expiry cleanup, so the store tracks what is actually being requested.
 - **Example**: `COLD_STORE_INACTIVE_DAYS=60`
 
+### `COLD_STORE_STATS_TTL`
+- **Default**: `30s`
+- **Description**: How long the dashboard's cold-store size figures are reused before the store is recounted. The count is two aggregate scans over `meta_components`, and better-sqlite3 is synchronous, so each recount blocks the event loop for as long as it runs. Reusing the result keeps a polling dashboard from stalling the addon. A purge or sweep drops the cached figures immediately, so manual cache operations always show their effect. Set to `0` to recount on every request.
+- **Example**: `COLD_STORE_STATS_TTL=2m`
+
 ### Admin endpoints
 
 Both are guarded by `ADMIN_KEY` (via the `x-admin-key` header) when it is set:

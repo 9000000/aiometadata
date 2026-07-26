@@ -722,17 +722,97 @@ Caches artwork on disk and serves it from `/poster-cache` on the addon's own por
 
 ### `POSTER_CACHE_TTL_DAYS`
 - **Default**: `30`
-- **Description**: How long a stored image stays fresh. Past it, the next request refetches from the source and replaces the copy; if that fetch fails the old bytes are still served (`X-Cache-Status: STALE`) rather than the request erroring. Fractional values work (`0.5` = 12 hours). **Set to `0` to never expire** — images then live until they are evicted for space (`POSTER_CACHE_MAX_SIZE`) or swept as unused (`POSTER_CACHE_INACTIVE_DAYS`), which suits artwork that never changes at a given URL. The `Cache-Control: max-age` sent to clients follows this value (capped at one year), so browsers don't hold a copy past the server's own refresh; revalidation is ETag-cheap either way.
+- **Description**: How long a cached image stays fresh. One number for every provider, re-evaluated on every read, so a change takes effect immediately — no migration, no rewrite, no purge.
+
+  > **If you use a rating poster service or a custom art URL pattern, give its domain a rule.** Those URLs name a *slot* rather than a file: `api.ratingposterdb.com/…/tt1234567.jpg` and `images.metahub.space/logo/medium/tt0055708/img` serve whatever the provider currently holds for that ID, at a URL that never changes. The bytes move underneath a URL that does not, and a rating baked into the pixels moves with them — so the flat validity will show a stale rating or overlay until it expires. Set a short `custom` validity for the domain under **Advanced…** on the Image Cache card, or in `POSTER_CACHE_PROVIDER_POLICIES` below.
+  >
+  > The rating services: `api.ratingposterdb.com`, `api.top-posters.com`, `btttr.cc`, `extendedratings.com`, `postersplus.elfhosted.com`. A custom pattern's domain is whatever you pointed it at — there is no list for that, which is why it is worth checking.
+  >
+  > `POSTER_CACHE_INFER_TTL` is **not** a substitute here. RPDB advertises 14–54 days per poster and answers `200` to `If-Modified-Since`, so inference makes it worse rather than better.
+
+  By contrast, art read out of a provider's metadata response mostly names a specific file — `image.tmdb.org/t/p/w600_and_h900_bestv2/xdhL….jpg` serves the same bytes forever, and when the artwork changes the path changes with it. Those are safe at the flat default.
+
+  Fractional values work (`0.5` = 12 hours). **Set to `0` to never expire**, so images live until they are evicted for space (`POSTER_CACHE_MAX_SIZE`) or swept as unused (`POSTER_CACHE_INACTIVE_DAYS`).
+
+  Expiry is not the same as a re-download. Where the source sent an `ETag` or `Last-Modified` — 90% and 99% of sampled art URLs respectively — the refetch is conditional, and a `304` restarts the entry's validity without transferring the body (`X-Cache-Status: REVALIDATED`). Only a genuinely changed image costs a full transfer. If the source is unreachable the old bytes are still served (`X-Cache-Status: STALE`) rather than erroring.
+
+  Clients are told what is left of the entry's own validity, so a browser revalidates at the same moment the store does rather than on a global schedule.
+
+  This is a flat number by design: a default nobody configured should be predictable and identical for every provider. To use what each source actually promises instead, see `POSTER_CACHE_INFER_TTL`; to override one provider, see `POSTER_CACHE_PROVIDER_POLICIES`.
 - **Example**: `POSTER_CACHE_TTL_DAYS=7` or `POSTER_CACHE_TTL_DAYS=0`
+
+### `POSTER_CACHE_INFER_TTL`
+- **Default**: `false`
+- **Description**: Derives each image's validity from the caching headers its own source sent with it, rather than from the flat setting above. Where a source promises nothing we can act on, the flat value still applies — this replaces the default, it does not remove it.
+
+  What the providers actually send, and what that works out to:
+
+  | Source | Read from | Resulting validity |
+  | --- | --- | --- |
+  | `image.tmdb.org` | `max-age=31919000` | 1 year (bounded; raw 369 days) |
+  | `media.kitsu.app` | `max-age=31536000` | 1 year |
+  | `images.metahub.space` | `max-age=5184000` − `Age` | ~55 days |
+  | `artworks.thetvdb.com` | *(no `Cache-Control`)* — `Last-Modified` heuristic | ~147 days |
+  | `cdn.myanimelist.net` | `max-age≈204000` | ~2.4 days |
+  | `api.ratingposterdb.com` | `max-age` − `Age`, computed per title | 14–54 days, per poster |
+  | `api.top-posters.com` | `max-age=21600` − `Age` | 27 minutes – 6 hours |
+  | `btttr.cc` | `max-age=0` with an `ETag` | revalidated on every read |
+
+  `s-maxage` outranks `max-age` (we are a shared cache), any `Age` is subtracted since the promise was already running before the bytes reached us, `Expires` is used only when nothing explicit was sent, and `immutable` goes straight to the one-year bound. Where a source sends no freshness at all but does send a `Last-Modified`, RFC 9111's heuristic applies — 10% of how long the art has already sat unchanged — but only for art at least 10 days old, since 10% of "rendered four minutes ago" is a timestamp artefact rather than a signal.
+
+  **No value is ever raised.** If a source says two days, it gets two days, even where the flat default would have been thirty. Inference either produces a confident answer or declines and falls back.
+
+  Three answers are not durations. `max-age=0`, `no-cache`, and a window whose `Age` has already consumed it all mean *revalidate before reuse* — so the entry is expired immediately and every read becomes a conditional `GET`, which is cheap where the source answers `304`. Where there is no `ETag` or `Last-Modified` to revalidate with, that would mean a full re-download per request, so inference declines instead and the flat default applies. And `no-store` is the source refusing to be cached at all: its image is served from the fetch already made but never written, any copy held from before is removed, and the client is told `no-store` too.
+
+  Two things worth knowing before enabling it. RPDB cannot be revalidated (above), so a long inferred validity there is a one-way bet with no cheap correction until it expires. And `Age` differs per CDN node, so the same URL can land on different validities from different edges — correct per HTTP, but not reproducible.
+
+  Shortening any validity produces a one-off revalidation wave: expiry is lazy, so entries refresh as they are next requested rather than all at once, but the warmer pulls whole catalogs in one run, so many entries share an expiry instant.
+- **Example**: `POSTER_CACHE_INFER_TTL=true`
+
+### `POSTER_CACHE_PROVIDER_POLICIES`
+- **Default**: unset — no rules, so every provider resolves to the flat validity
+- **Description**: Overrides how **one provider's** images are cached, leaving every other provider alone. A JSON list of rules:
+
+  ```json
+  [{ "domain": "image.tmdb.org",      "policy": "infer" },
+   { "domain": "extendedratings.com", "policy": "custom", "ttl": "6h" },
+   { "domain": "some.broken.cdn",     "policy": "bypass" }]
+  ```
+
+  Four policies:
+
+  | Policy | Meaning |
+  | --- | --- |
+  | `default` | The flat validity — `POSTER_CACHE_TTL_DAYS`. |
+  | `infer` | Follow what that provider's own headers promise, exactly as `POSTER_CACHE_INFER_TTL` does globally. |
+  | `custom` | A fixed duration given as `ttl`. Units are required: `30s`, `15m`, `12h`, `30d`, `2w`, `1y`. |
+  | `bypass` | Serve the provider's images without ever storing them. |
+
+  **Precedence**, most specific first: a rule here, then `POSTER_CACHE_INFER_TTL`, then the flat validity. A rule is matched on the host in the cache key, so one rule covers that provider's posters, backgrounds, logos, thumbnails and processed art alike. A rule saying `default` therefore switches one provider *back* to the flat number while the global toggle is on.
+
+  A domain covers its subdomains, so `elfhosted.com` matches `postersplus.elfhosted.com`. Where two rules both match, the more specific one wins regardless of the order they are written in.
+
+  You do not have to write this by hand: **Dashboard → Operations → Image Cache → Advanced…** edits the same setting and explains what each policy does as you pick it.
+
+  Malformed JSON is refused when you save it. If a bad value reaches the engine another way it is ignored — logged once, with every provider falling back to the flat validity — rather than taking the cache down with it.
+
+  **`bypass` leaves whatever is already cached for that provider on disk.** Those entries are simply never read again, so they are swept after `POSTER_CACHE_INACTIVE_DAYS` (30 days by default) with the disk held in the meantime. Saving a policy never deletes data as a side effect; to reclaim the space now, purge that provider explicitly:
+
+  ```
+  POST /api/dashboard/poster-cache/purge   { "domain": "some.broken.cdn" }
+  ```
+
+  which removes that domain's entries across every image class. Switching a provider back off `bypass` later simply finds the survivors expired, and they revalidate.
+- **Example**: `POSTER_CACHE_PROVIDER_POLICIES=[{"domain":"api.ratingposterdb.com","policy":"custom","ttl":"6h"}]`
 
 ### `POSTER_PROXY_MAX_AGE_DAYS`
 - **Default**: `1`
-- **Description**: `Cache-Control: max-age` sent to players and browsers by the `/poster`, `/logo` and `/background` proxy routes (and their `/poster-cache/proxy/…` twins). Deliberately shorter than the store's own validity: the ETag on these routes is derived from the request parameters rather than the bytes, so a revalidation always answers `304` and only expiry brings down new art — which matters for rating posters, whose overlay changes as the rating does. Fractional values work (`0.25` = 6 hours), `0` means never expire, and anything below one minute is rounded up to it. Applies whether or not the built-in cache is on, but is capped by `POSTER_CACHE_TTL_DAYS` when that is shorter, so a client can never hold art the cache has already refreshed. `stale-while-revalidate` stays at 7 days, or the `max-age` if that is longer.
+- **Description**: `Cache-Control: max-age` sent to players and browsers by the `/poster`, `/logo` and `/background` proxy routes (and their `/poster-cache/proxy/…` twins). Deliberately shorter than the store's own validity: the ETag on these routes is derived from the request parameters rather than the bytes, so a revalidation always answers `304` and only expiry brings down new art — which matters because most of what these routes serve is built from a URL template, so the bytes can change while the URL does not. Fractional values work (`0.25` = 6 hours), `0` means never expire, and anything below one minute is rounded up to it. Applies whether or not the built-in cache is on. It is capped by the served entry's own remaining validity, so a client can never hold art the cache has already refreshed. `stale-while-revalidate` stays at 7 days, or the `max-age` if that is longer.
 - **Example**: `POSTER_PROXY_MAX_AGE_DAYS=7` or `POSTER_PROXY_MAX_AGE_DAYS=0.25`
 
 ### `POSTER_CACHE_INACTIVE_DAYS`
 - **Default**: `30`
-- **Description**: Images not requested within this many days are swept hourly. Independent of `POSTER_CACHE_TTL_DAYS`: this one counts from the last *request*, the TTL from the last *fetch*.
+- **Description**: Images not requested within this many days are swept hourly. Independent of `POSTER_CACHE_TTL_DAYS`: this one counts from the last *request*, the TTL from the last *fetch*. With validity now running to a year for most art, this is the mechanism that actually bounds what the cache keeps.
 - **Example**: `POSTER_CACHE_INACTIVE_DAYS=14`
 
 ### `POSTER_CACHE_MAX_OBJECT_BYTES`
@@ -878,6 +958,11 @@ un-cancelled show eventually refreshes on its own.
 - **Default**: `30`
 - **Description**: Drop rows that have not been read for this many days. Runs on an hourly sweep alongside hard-expiry cleanup, so the store tracks what is actually being requested.
 - **Example**: `COLD_STORE_INACTIVE_DAYS=60`
+
+### `COLD_STORE_STATS_TTL`
+- **Default**: `30s`
+- **Description**: How long the dashboard's cold-store size figures are reused before the store is recounted. The count is two aggregate scans over `meta_components`, and better-sqlite3 is synchronous, so each recount blocks the event loop for as long as it runs. Reusing the result keeps a polling dashboard from stalling the addon. A purge or sweep drops the cached figures immediately, so manual cache operations always show their effect. Set to `0` to recount on every request.
+- **Example**: `COLD_STORE_STATS_TTL=2m`
 
 ### Admin endpoints
 

@@ -139,10 +139,7 @@ function shuffleMetas(metas = []) {
   return shuffled;
 }
 
-/**
- * Extract IDs from a catalog meta object for custom art URL resolution.
- * Handles id formats: "tmdb:123", "tvdb:456", "tt1234567", "kitsu:123", "mal:123", "anilist:123", "anidb:123"
- */
+
 function extractIdsFromMeta(meta) {
   const ids = {};
   if (!meta) return ids;
@@ -440,8 +437,6 @@ const respond = function (req, res, data, opts) {
   res.setHeader("Access-Control-Allow-Headers", "*");
   res.setHeader("Content-Type", "application/json");
 
-  // Route artwork URLs through the image cache. Posters are always included;
-  // every other class is opt-in, so an existing deployment is unchanged on upgrade.
   applyImageCachePrefix(data);
 
   stripReleaseAvailabilityForResponse(data);
@@ -4902,15 +4897,24 @@ async function fetchPosterImageStream(posterUrl) {
   return imageResponse;
 }
 
-function proxyImageCacheControl() {
-  const maxAge = posterCacheConfig.getProxyMaxAgeSeconds();
+function proxyImageCacheControl(entry, status) {
+  if (status === 'BYPASS') return 'no-store';
+  let maxAge = posterCacheConfig.getProxyMaxAgeSeconds();
+  if (entry && Number.isFinite(entry.expiresAt)) {
+    maxAge = Math.min(maxAge, posterCacheConfig.browserMaxAgeFor(entry.expiresAt));
+  }
   return `public, max-age=${maxAge}, stale-while-revalidate=${Math.max(maxAge, 604800)}`;
 }
 
-function pipePosterImageResponse(res, imageResponse) {
+function pipePosterImageResponse(res, imageResponse, bypassed) {
   const contentType = imageResponse.headers['content-type'];
   res.setHeader('Content-Type', contentType || 'image/jpeg');
-  res.setHeader('Cache-Control', proxyImageCacheControl());
+  if (bypassed) {
+    res.setHeader('X-Cache-Status', 'BYPASS');
+    res.setHeader('Cache-Control', 'no-store');
+  } else {
+    res.setHeader('Cache-Control', proxyImageCacheControl());
+  }
   imageResponse.data.pipe(res);
 }
 
@@ -4930,7 +4934,11 @@ async function produceProcessedBytes(bareUrl, fetchFallback) {
   const posterCacheStore = require('./lib/posterCache/store.js');
   const migrated = await posterCacheStore.get('poster', bareUrl);
   if (migrated && !migrated.expired) {
-    return { body: await readEntryBytes(migrated), contentType: migrated.contentType };
+    return {
+      body: await readEntryBytes(migrated),
+      contentType: migrated.contentType,
+      upstream: migrated.upstream,
+    };
   }
   return fetchFallback();
 }
@@ -4947,6 +4955,8 @@ async function sendCachedImage(res, result, fallbackContentType) {
   await stream.promises.pipeline(entry.openStream(), res);
 }
 
+// The `blur:` and `b2b:` transforms: rendered locally from an already-cached
+// source, so they carry no upstream headers to follow.
 async function cacheProcessedImage(cacheKey, contentType, produce) {
   const posterCacheStore = require('./lib/posterCache/store.js');
   return posterCacheStore.getOrFetch('processed', cacheKey, async () => {
@@ -5002,22 +5012,29 @@ const handlePosterProxy = async function (req, res) {
     }
 
     const isRatingPoster = !customUrl;
-    if (isRatingPoster ? isProcessedImageCacheEnabled() : posterCacheConfig.isClassEnabled('poster')) {
+    // The providers an operator is most likely to bypass — RPDB, TopPoster,
+    // btttr, xrdb, postersplus — only ever arrive here, never through the direct
+    // route, so the check has to be on this path too.
+    const bypassed = posterCacheConfig.isBypassed(posterUrl);
+    if (!bypassed && (isRatingPoster ? isProcessedImageCacheEnabled() : posterCacheConfig.isClassEnabled('poster'))) {
       const posterCacheStore = require('./lib/posterCache/store.js');
       const { fetchImage } = require('./lib/posterCache/upstream.js');
       const { recordServe } = require('./lib/posterCache/handler.js');
       const allowPrivateHost = customUrl ? proxyArtUrlVouched(customUrl, sig) : true;
-      const fetchUpstream = () => fetchImage(posterUrl, { allowPrivateHost });
+      const fetchUpstream = (validators) => fetchImage(posterUrl, { allowPrivateHost, validators });
       const result = isRatingPoster
-        ? await posterCacheStore.getOrFetch('processed', `rating-poster:${posterUrl}`, () => produceProcessedBytes(posterUrl, fetchUpstream))
+        ? await posterCacheStore.getOrFetch('processed', `rating-poster:${posterUrl}`, (validators) => produceProcessedBytes(posterUrl, () => fetchUpstream(validators)))
         : await posterCacheStore.getOrFetch('poster', posterUrl, fetchUpstream);
       recordServe('poster', result.status, result.entry.size, req.method, posterUrl);
-      res.setHeader('Cache-Control', proxyImageCacheControl());
+      res.setHeader('Cache-Control', proxyImageCacheControl(result.entry, result.status));
       return await sendCachedImage(res, result);
     }
 
     const imageResponse = await fetchPosterImageStream(posterUrl);
-    pipePosterImageResponse(res, imageResponse);
+    if (bypassed && posterCacheConfig.isBuiltinPosterCacheEnabled()) {
+      require('./lib/posterCache/handler.js').recordServe('poster', 'BYPASS', 0, req.method, posterUrl);
+    }
+    pipePosterImageResponse(res, imageResponse, bypassed);
   } catch (error) {
     if (posterCacheConfig.isBuiltinPosterCacheEnabled()) require('./lib/posterCache/handler.js').recordServeError();
     const isTimeout = error.code === 'ECONNABORTED' || /timeout/i.test(error.message || '');
@@ -5046,15 +5063,17 @@ function streamArtWithFallback(assetName) {
       }
       return res.status(304).end();
     }
+    const bypassed = posterCacheConfig.isBypassed(customUrl);
     try {
-      if (posterCacheConfig.isClassEnabled(assetName)) {
+      if (posterCacheConfig.isClassEnabled(assetName) && !bypassed) {
         const posterCacheStore = require('./lib/posterCache/store.js');
         const { fetchImage } = require('./lib/posterCache/upstream.js');
         const { recordServe } = require('./lib/posterCache/handler.js');
         const allowPrivateHost = proxyArtUrlVouched(customUrl, sig);
-        const result = await posterCacheStore.getOrFetch(assetName, customUrl, () => fetchImage(customUrl, { allowPrivateHost }));
+        const result = await posterCacheStore.getOrFetch(assetName, customUrl, (validators) =>
+          fetchImage(customUrl, { allowPrivateHost, validators }));
         recordServe(assetName, result.status, result.entry.size, req.method, customUrl);
-        res.setHeader('Cache-Control', proxyImageCacheControl());
+        res.setHeader('Cache-Control', proxyImageCacheControl(result.entry, result.status));
         return await sendCachedImage(res, result);
       }
 
@@ -5068,7 +5087,15 @@ function streamArtWithFallback(assetName) {
       });
       const contentType = imageResponse.headers['content-type'];
       res.setHeader('Content-Type', contentType || 'image/jpeg');
-      res.setHeader('Cache-Control', proxyImageCacheControl());
+      if (bypassed) {
+        res.setHeader('X-Cache-Status', 'BYPASS');
+        res.setHeader('Cache-Control', 'no-store');
+        if (posterCacheConfig.isBuiltinPosterCacheEnabled()) {
+          require('./lib/posterCache/handler.js').recordServe(assetName, 'BYPASS', 0, req.method, customUrl);
+        }
+      } else {
+        res.setHeader('Cache-Control', proxyImageCacheControl());
+      }
       imageResponse.data.pipe(res);
     } catch (error) {
       if (posterCacheConfig.isBuiltinPosterCacheEnabled()) require('./lib/posterCache/handler.js').recordServeError();
@@ -6291,6 +6318,11 @@ addon.post("/api/dashboard/poster-cache/purge", requireDashboardAdmin, async (re
   // Omitting `type` purges everything, which is the shape the dashboard has
   // always sent — existing callers keep working unchanged.
   const requestedType = req.body?.type;
+  // A provider's art spans poster, background, logo and processed, so a domain
+  // purge is across all of them and `type` does not apply to it. Asking for a
+  // domain at all routes here — a blank one is a bad request, never a licence to
+  // fall through and purge everything.
+  const askedForDomain = typeof req.body?.domain === 'string';
 
   if (posterCacheConfig.isBuiltinPosterCacheEnabled()) {
     if (requestedType !== undefined && !posterCacheConfig.isValidImageClass(requestedType)) {
@@ -6298,6 +6330,20 @@ addon.post("/api/dashboard/poster-cache/purge", requireDashboardAdmin, async (re
     }
     try {
       const posterCacheStore = require('./lib/posterCache/store.js');
+      if (askedForDomain) {
+        // Started rather than awaited: the walk covers the whole tree and takes
+        // minutes on a large cache, which outlives the dashboard's fetch. Progress
+        // is reported back through the stats endpoint's `domain_purge` field.
+        try {
+          const status = posterCacheStore.startDomainPurge(req.body.domain);
+          consola.info(`[API] Poster cache domain purge started: ${status.domain}`);
+          return res.status(202).json({ success: true, ...status });
+        } catch (error) {
+          return res.status(400).json({
+            success: false, message: error.message, domain: req.body.domain, removed: 0, freed_bytes: 0,
+          });
+        }
+      }
       const result = await posterCacheStore.purge(requestedType);
       consola.info(`[API] Poster cache purge requested via dashboard (${requestedType || 'all'})`);
       return res.json(result);
@@ -6404,9 +6450,25 @@ addon.post("/api/dashboard/poster-cache/invalidate", requireDashboardAdmin, asyn
 addon.get("/api/dashboard/poster-cache/stats", requireDashboardAdmin, async (req, res) => {
   if (posterCacheConfig.isBuiltinPosterCacheEnabled()) {
     const posterCacheStore = require('./lib/posterCache/store.js');
+    // Everything the policy UI needs, and all of it O(1): the domains worth
+    // offering and the rules currently in force. Deliberately not per-provider
+    // cache figures — those would cost a pass over the whole tree, and knowing
+    // what a policy means does not require knowing what is already stored.
     return res.json({
       ...posterCacheStore.stats(),
       enabled_types: posterCacheConfig.getEnabledClasses(),
+      known_providers: posterCacheConfig.KNOWN_ART_PROVIDERS,
+      // Progress for a domain purge, which runs in the background — null until one
+      // has been asked for in this process.
+      domain_purge: posterCacheStore.domainPurgeStatus(),
+      provider_policies: posterCacheConfig.parseProviderPolicies(process.env.POSTER_CACHE_PROVIDER_POLICIES) || [],
+      // What a provider with no rule of its own resolves to, so the modal can show
+      // the policy actually in force rather than a placeholder.
+      infer_ttl: posterCacheConfig.isInferTtlEnabled(),
+      // `ttl_days` — the raw number the modal edits, and the value it phrases the
+      // `default` policy from — arrives with the stats() spread above. The card's
+      // `ttl` string is separate: it carries an "(origin where inferable)" caveat,
+      // which is exactly what choosing `default` means not to do.
     });
   }
 

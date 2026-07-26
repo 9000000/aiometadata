@@ -1,24 +1,24 @@
+import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { ingestExternalLog } from '../logBuffer.js';
 import {
   POSTER_CACHE_ROUTE,
   URL_ADDRESSABLE_CLASSES,
+  browserMaxAgeFor,
   getBrowserMaxAgeSeconds,
   isBuiltinPosterCacheEnabled,
+  isBypassed,
   isClassEnabled,
+  isNotStorable,
   shouldLogRequests,
   type ImageClass,
+  type UpstreamCacheMeta,
 } from './config.js';
 import * as store from './store.js';
 import { OversizeImage, UpstreamRejected, fetchImage, openImageStream } from './upstream.js';
 
 const SERVICE = 'poster-cache';
 
-/**
- * Reconstructs the upstream URL from the request path, reusing the two patterns
- * the nginx `map` block used. The second exists because reverse proxies such as
- * Traefik collapse "https://" to "https:/" when normalizing paths.
- */
 const COLLAPSED_SCHEME = /^\/(https?):\/([^/].*)$/;
 const FULL_SCHEME = /^\/(https?:\/\/.*)$/;
 
@@ -59,8 +59,7 @@ export interface ParsedRequest {
   url: string;
 }
 
-
-export function parsePosterCachePath(pathAfterMount: string): ParsedRequest | null {
+function readPosterCachePath(pathAfterMount: string): ParsedRequest | null {
   let imageClass: ImageClass = 'poster';
   let remainder = pathAfterMount;
 
@@ -79,6 +78,22 @@ export function parsePosterCachePath(pathAfterMount: string): ParsedRequest | nu
   return null;
 }
 
+function decodeStructuralEscapes(path: string): string {
+  const queryAt = path.indexOf('?');
+  const head = queryAt === -1 ? path : path.slice(0, queryAt);
+  const tail = queryAt === -1 ? '' : path.slice(queryAt);
+  return head.replace(/%3A/gi, ':').replace(/%2F/gi, '/') + tail;
+}
+
+export function parsePosterCachePath(pathAfterMount: string): ParsedRequest | null {
+  const direct = readPosterCachePath(pathAfterMount);
+  if (direct) return direct;
+
+  const normalized = decodeStructuralEscapes(pathAfterMount);
+  if (normalized === pathAfterMount) return null;
+  return readPosterCachePath(normalized);
+}
+
 function log(level: number, message: string): void {
   try {
     ingestExternalLog({ service: SERVICE, level, message });
@@ -88,7 +103,7 @@ function log(level: number, message: string): void {
 }
 
 const SUMMARY_INTERVAL_MS = 60_000;
-const counters = { HIT: 0, MISS: 0, STALE: 0, BYPASS: 0, errors: 0, bytes: 0 };
+const counters = { HIT: 0, MISS: 0, STALE: 0, REVALIDATED: 0, BYPASS: 0, errors: 0, bytes: 0 };
 let summaryTimer: NodeJS.Timeout | null = null;
 
 function record(status: string, bytes = 0): void {
@@ -105,13 +120,14 @@ function recordError(): void {
 function ensureSummaryTimer(): void {
   if (summaryTimer) return;
   summaryTimer = setInterval(() => {
-    const total = counters.HIT + counters.MISS + counters.STALE + counters.BYPASS;
+    const total = counters.HIT + counters.MISS + counters.STALE + counters.REVALIDATED + counters.BYPASS;
     if (total === 0 && counters.errors === 0) return;
     const mb = (counters.bytes / 1024 / 1024).toFixed(1);
-    const hitRate = total > 0 ? Math.round((counters.HIT / total) * 100) : 0;
+    const hitRate = total > 0 ? Math.round(((counters.HIT + counters.REVALIDATED) / total) * 100) : 0;
     log(3, `served ${total} images (${hitRate}% hit) — ${counters.HIT} hit, ${counters.MISS} miss, ` +
-           `${counters.STALE} stale, ${counters.BYPASS} bypass, ${counters.errors} errors, ${mb} MB`);
-    counters.HIT = counters.MISS = counters.STALE = counters.BYPASS = counters.errors = 0;
+           `${counters.REVALIDATED} revalidated, ${counters.STALE} stale, ${counters.BYPASS} bypass, ` +
+           `${counters.errors} errors, ${mb} MB`);
+    counters.HIT = counters.MISS = counters.STALE = counters.REVALIDATED = counters.BYPASS = counters.errors = 0;
     counters.bytes = 0;
   }, SUMMARY_INTERVAL_MS);
   summaryTimer.unref?.();
@@ -144,27 +160,37 @@ async function pipeStream(
   body: NodeJS.ReadableStream,
   contentType: string,
   imageClass: ImageClass,
-  url: string
+  url: string,
+  upstream?: UpstreamCacheMeta
 ): Promise<void> {
   res.setHeader('X-Cache-Status', 'BYPASS');
-  res.setHeader('Cache-Control', `public, max-age=${getBrowserMaxAgeSeconds()}`);
+  res.setHeader('Cache-Control', isBypassed(url) || isNotStorable(url, upstream)
+    ? 'no-store'
+    : `public, max-age=${getBrowserMaxAgeSeconds()}`);
   res.setHeader('Content-Type', contentType || 'image/jpeg');
-  record('BYPASS');
-  if (shouldLogRequests()) log(3, `${req.method} ${imageClass} BYPASS ${url}`);
 
   if (req.method === 'HEAD') {
     (body as any).destroy?.();
+    record('BYPASS');
+    if (shouldLogRequests()) log(3, `${req.method} ${imageClass} BYPASS ${url}`);
     res.status(200).end();
     return;
   }
 
+  let bytes = 0;
+  const counter = new Transform({
+    transform(chunk, _encoding, done) { bytes += chunk.length; done(null, chunk); },
+  });
+
   res.status(200);
-  await pipeline(body, res);
+  await pipeline(body, counter, res);
+  record('BYPASS', bytes);
+  if (shouldLogRequests()) log(3, `${req.method} ${imageClass} BYPASS ${bytes} ${url}`);
 }
 
 async function passThrough(req: any, res: any, url: string, imageClass: ImageClass): Promise<void> {
-  const { response, contentType } = await openImageStream(url);
-  await pipeStream(req, res, response.data, contentType, imageClass, url);
+  const { response, contentType, upstream } = await openImageStream(url);
+  await pipeStream(req, res, response.data, contentType, imageClass, url, upstream);
 }
 
 export function posterCacheHandler() {
@@ -198,7 +224,7 @@ export function posterCacheHandler() {
       return;
     }
 
-    const shouldStore = isClassEnabled(imageClass);
+    const shouldStore = isClassEnabled(imageClass) && !isBypassed(cacheKey);
     const logRequests = shouldLogRequests();
 
     try {
@@ -210,14 +236,15 @@ export function posterCacheHandler() {
       let entry: store.CacheEntry;
       let status: string;
       try {
-        const result = await store.getOrFetch(imageClass, cacheKey, () => fetchImage(url));
+        const result = await store.getOrFetch(imageClass, cacheKey, (validators) =>
+          fetchImage(url, { validators }));
         entry = result.entry;
         status = result.status;
       } catch (error: any) {
         if (error instanceof OversizeImage) {
           const stream: any = error.stream;
           if (stream && !stream.destroyed && !stream.readableEnded && !claimStream(stream)) {
-            await pipeStream(req, res, stream, error.contentType, imageClass, url);
+            await pipeStream(req, res, stream, error.contentType, imageClass, url, error.upstream);
           } else {
             await passThrough(req, res, url, imageClass);
           }
@@ -229,7 +256,9 @@ export function posterCacheHandler() {
       const etag = `"${entry.etag}"`;
       res.setHeader('ETag', etag);
       res.setHeader('X-Cache-Status', status);
-      res.setHeader('Cache-Control', `public, max-age=${getBrowserMaxAgeSeconds()}`);
+      res.setHeader('Cache-Control', status === 'BYPASS'
+        ? 'no-store'
+        : `public, max-age=${browserMaxAgeFor(entry.expiresAt)}`);
       res.setHeader('Content-Type', entry.contentType || 'image/jpeg');
 
       if (req.headers['if-none-match'] === etag) {

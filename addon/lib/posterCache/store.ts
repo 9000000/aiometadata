@@ -7,16 +7,22 @@ import {
   IMAGE_CLASSES,
   formatSize,
   getCacheDir,
+  getEntryExpiry,
   getEntryTtlDays,
-  getEntryTtlMs,
   getInactiveDays,
   getMaxBytes,
   getMaxSizeRaw,
   getMemoryBudget,
   getMemorySizeRaw,
   getStreamThresholdBytes,
+  hostFromKey,
+  isInferTtlEnabled,
+  isNotStorable,
+  resolveEntryTtlMs,
   type ImageClass,
+  type UpstreamCacheMeta,
 } from './config.js';
+import { isNotModified, mergeRevalidated, type ConditionalValidators, type FetchOutcome } from './upstream.js';
 
 const logger = consola.withTag('PosterCache');
 
@@ -25,27 +31,42 @@ const HEADER_OFFSET = MAGIC.length + 4;
 
 const ACCESS_TOUCH_MS = 6 * 60 * 60 * 1000;
 
-function isExpired(storedAt: number): boolean {
-  return Date.now() - storedAt > getEntryTtlMs();
-}
-
 export interface EntryHeader {
   key: string;
   contentType: string;
   size: number;
   storedAt: number;
   bodyHash?: string;
+  upstream?: UpstreamCacheMeta;
 }
 
 export interface CacheEntry {
   contentType: string;
   storedAt: number;
   expired: boolean;
+  expiresAt: number;
   hash: string;
   etag: string;
   size: number;
+  upstream?: UpstreamCacheMeta;
   body?: Buffer;
   openStream?: () => NodeJS.ReadableStream;
+}
+
+/** Only worth asking the origin when we have something for it to compare against. */
+function revalidationHint(entry: CacheEntry | null): ConditionalValidators | undefined {
+  const upstream = entry?.upstream;
+  if (!upstream || (!upstream.etag && !upstream.lastModified)) return undefined;
+  return { etag: upstream.etag, lastModified: upstream.lastModified };
+}
+
+/**
+ * Compared rather than the metadata objects themselves: `mergeRevalidated` resets
+ * `age` to 0 unconditionally, so a deep-equal would differ on almost every 304.
+ */
+function sameValidators(stored?: UpstreamCacheMeta, merged?: UpstreamCacheMeta): boolean {
+  return (stored?.etag ?? '') === (merged?.etag ?? '')
+    && (stored?.lastModified ?? '') === (merged?.lastModified ?? '');
 }
 
 interface IndexEntry {
@@ -70,6 +91,7 @@ interface MemoryEntry {
   contentType: string;
   storedAt: number;
   etag: string;
+  upstream?: UpstreamCacheMeta;
 }
 const memory = new Map<string, MemoryEntry>();
 let memoryBytes = 0;
@@ -151,14 +173,21 @@ function memoryDrop(key: string): void {
   if (memoryBytes < 0) memoryBytes = 0;
 }
 
-function memoryPut(key: string, body: Buffer, contentType: string, storedAt: number, etag: string): void {
+function memoryPut(
+  key: string,
+  body: Buffer,
+  contentType: string,
+  storedAt: number,
+  etag: string,
+  upstream?: UpstreamCacheMeta
+): void {
   const budget = getMemoryBudget();
   if (budget <= 0) return;
   if (body.length > getStreamThresholdBytes()) return;
   if (body.length > budget) return;
 
   memoryDrop(key);
-  memory.set(key, { body, contentType, storedAt, etag });
+  memory.set(key, { body, contentType, storedAt, etag, upstream });
   memoryBytes += body.length;
 
   while (memoryBytes > budget) {
@@ -220,20 +249,23 @@ export async function get(imageClass: ImageClass, key: string): Promise<CacheEnt
   const cached = memoryTake(idxKey);
   if (cached) {
     touch(imageClass, hash, file, index.get(idxKey)?.size ?? cached.body.length);
+    const expiresAt = getEntryExpiry(key, cached.storedAt, cached.upstream);
     return {
       contentType: cached.contentType,
       storedAt: cached.storedAt,
-      expired: isExpired(cached.storedAt),
+      expired: Date.now() > expiresAt,
+      expiresAt,
       hash,
       etag: cached.etag,
       size: cached.body.length,
+      upstream: cached.upstream,
       body: cached.body,
     };
   }
 
   const known = index.get(idxKey);
   if (!known || known.size <= getStreamThresholdBytes()) {
-    return readBuffered(imageClass, hash, file);
+    return readBuffered(imageClass, key, hash, file);
   }
 
   let handle: fsp.FileHandle;
@@ -281,13 +313,16 @@ export async function get(imageClass: ImageClass, key: string): Promise<CacheEnt
     const bodySize = stat.size - framing.bodyOffset;
     touch(imageClass, hash, file, stat.size);
 
+    const expiresAt = getEntryExpiry(key, header.storedAt, header.upstream);
     const meta = {
       contentType: header.contentType,
       storedAt: header.storedAt,
-      expired: isExpired(header.storedAt),
+      expired: Date.now() > expiresAt,
+      expiresAt,
       hash,
       etag: header.bodyHash || legacyEtag(hash, header.storedAt),
       size: bodySize,
+      upstream: header.upstream,
     };
 
     if (bodySize > getStreamThresholdBytes()) {
@@ -311,7 +346,12 @@ export async function get(imageClass: ImageClass, key: string): Promise<CacheEnt
   }
 }
 
-async function readBuffered(imageClass: ImageClass, hash: string, file: string): Promise<CacheEntry | null> {
+async function readBuffered(
+  imageClass: ImageClass,
+  key: string,
+  hash: string,
+  file: string
+): Promise<CacheEntry | null> {
   let raw: Buffer;
   try {
     raw = await fsp.readFile(file);
@@ -341,15 +381,18 @@ async function readBuffered(imageClass: ImageClass, hash: string, file: string):
   touch(imageClass, hash, file, raw.length);
   const body = raw.subarray(framing.bodyOffset);
   const etag = header.bodyHash || hashBody(body);
-  memoryPut(indexKey(imageClass, hash), body, header.contentType, header.storedAt, etag);
+  memoryPut(indexKey(imageClass, hash), body, header.contentType, header.storedAt, etag, header.upstream);
 
+  const expiresAt = getEntryExpiry(key, header.storedAt, header.upstream);
   return {
     contentType: header.contentType,
     storedAt: header.storedAt,
-    expired: isExpired(header.storedAt),
+    expired: Date.now() > expiresAt,
+    expiresAt,
     hash,
     etag,
     size: body.length,
+    upstream: header.upstream,
     body,
   };
 }
@@ -374,7 +417,8 @@ export async function put(
   imageClass: ImageClass,
   key: string,
   body: Buffer,
-  contentType: string
+  contentType: string,
+  upstream?: UpstreamCacheMeta
 ): Promise<string> {
   const hash = hashKey(key);
   const file = entryPath(imageClass, hash);
@@ -386,6 +430,8 @@ export async function put(
     storedAt: Date.now(),
     bodyHash,
   };
+  if (upstream && Object.keys(upstream).length > 0) header.upstream = upstream;
+
   const payload = encode(header, body);
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
 
@@ -401,9 +447,155 @@ export async function put(
   }
 
   addToIndex({ imageClass, hash, size: payload.length, lastAccess: Date.now() });
-  memoryPut(indexKey(imageClass, hash), body, header.contentType, header.storedAt, bodyHash);
+  memoryPut(indexKey(imageClass, hash), body, header.contentType, header.storedAt, bodyHash, header.upstream);
   scheduleEviction();
   return bodyHash;
+}
+
+async function readStoredHeader(
+  imageClass: ImageClass,
+  hash: string,
+  file: string
+): Promise<{ header: EntryHeader; framing: { headerLen: number; bodyOffset: number }; fileSize: number } | null> {
+  let handle: fsp.FileHandle;
+  try {
+    handle = await fsp.open(file, 'r');
+  } catch (error: any) {
+    logger.debug(`Cannot refresh ${imageClass}/${hash}: ${error?.message}`);
+    return null;
+  }
+
+  try {
+    const fileSize = (await handle.stat()).size;
+    const probeLength = Math.min(HEADER_PROBE_BYTES, fileSize);
+    const probe = Buffer.alloc(probeLength);
+    await handle.read(probe, 0, probeLength, 0);
+
+    const framing = readFraming(probe);
+    if (!framing || framing.bodyOffset > fileSize) return null;
+
+    let headerJson: Buffer;
+    if (framing.bodyOffset <= probeLength) {
+      headerJson = probe.subarray(HEADER_OFFSET, framing.bodyOffset);
+    } else {
+      headerJson = Buffer.alloc(framing.headerLen);
+      await handle.read(headerJson, 0, framing.headerLen, HEADER_OFFSET);
+    }
+    return { header: JSON.parse(headerJson.toString('utf8')), framing, fileSize };
+  } catch {
+    return null;
+  } finally {
+    await handle.close().catch(() => { /* already closing */ });
+  }
+}
+
+async function rewriteHeaderStreaming(
+  imageClass: ImageClass,
+  hash: string,
+  file: string,
+  header: EntryHeader,
+  oldBodyOffset: number
+): Promise<{ bodySize: number; bodyOffset: number } | null> {
+  const headerJson = Buffer.from(JSON.stringify(header), 'utf8');
+  const prefix = Buffer.alloc(HEADER_OFFSET);
+  MAGIC.copy(prefix, 0);
+  prefix.writeUInt32BE(headerJson.length, MAGIC.length);
+
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  let bodySize = 0;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const out = fs.createWriteStream(tmp);
+      const body = fs.createReadStream(file, { start: oldBodyOffset });
+      out.on('error', reject);
+      body.on('error', reject);
+      out.write(prefix);
+      out.write(headerJson);
+      body.on('data', (chunk) => { bodySize += chunk.length; });
+      body.on('end', () => out.end(resolve));
+      body.pipe(out, { end: false });
+    });
+    await fsp.rename(tmp, file);
+  } catch (error: any) {
+    logger.warn(`Failed to refresh ${imageClass} entry: ${error?.message}`);
+    await fsp.unlink(tmp).catch(() => { /* nothing to clean up */ });
+    return null;
+  }
+
+  const bodyOffset = HEADER_OFFSET + headerJson.length;
+  addToIndex({ imageClass, hash, size: bodyOffset + bodySize, lastAccess: Date.now() });
+  memoryDrop(indexKey(imageClass, hash));
+  return { bodySize, bodyOffset };
+}
+
+async function refreshStoredEntry(
+  imageClass: ImageClass,
+  key: string,
+  upstream: UpstreamCacheMeta
+): Promise<CacheEntry | null> {
+  const hash = hashKey(key);
+  const file = entryPath(imageClass, hash);
+
+  const existing = await readStoredHeader(imageClass, hash, file);
+  if (!existing) return null;
+  const { header, framing, fileSize } = existing;
+
+  header.storedAt = Date.now();
+  if (Object.keys(upstream).length > 0) header.upstream = upstream;
+  else delete header.upstream;
+  
+  if (fileSize - framing.bodyOffset > getStreamThresholdBytes()) {
+    const refreshed = await rewriteHeaderStreaming(imageClass, hash, file, header, framing.bodyOffset);
+    if (!refreshed) return null;
+    return {
+      contentType: header.contentType,
+      storedAt: header.storedAt,
+      expired: false,
+      expiresAt: getEntryExpiry(key, header.storedAt, header.upstream),
+      hash,
+      etag: header.bodyHash || legacyEtag(hash, header.storedAt),
+      size: refreshed.bodySize,
+      upstream: header.upstream,
+      openStream: () => fs.createReadStream(file, { start: refreshed.bodyOffset }),
+    };
+  }
+
+  let raw: Buffer;
+  try {
+    raw = await fsp.readFile(file);
+  } catch (error: any) {
+    logger.debug(`Cannot refresh ${imageClass}/${hash}: ${error?.message}`);
+    return null;
+  }
+  const body = raw.subarray(framing.bodyOffset);
+
+  const payload = encode(header, body);
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await fsp.writeFile(tmp, payload);
+    await fsp.rename(tmp, file);
+  } catch (error: any) {
+    logger.warn(`Failed to refresh ${imageClass} entry: ${error?.message}`);
+    await fsp.unlink(tmp).catch(() => { /* nothing to clean up */ });
+    return null;
+  }
+
+  const etag = header.bodyHash || hashBody(body);
+  addToIndex({ imageClass, hash, size: payload.length, lastAccess: Date.now() });
+  memoryPut(indexKey(imageClass, hash), body, header.contentType, header.storedAt, etag, header.upstream);
+
+  const expiresAt = getEntryExpiry(key, header.storedAt, header.upstream);
+  return {
+    contentType: header.contentType,
+    storedAt: header.storedAt,
+    expired: false,
+    expiresAt,
+    hash,
+    etag,
+    size: body.length,
+    upstream: header.upstream,
+    body,
+  };
 }
 
 async function remove(imageClass: ImageClass, hash: string): Promise<number> {
@@ -413,18 +605,51 @@ async function remove(imageClass: ImageClass, hash: string): Promise<number> {
   return freed;
 }
 
-export type CacheStatus = 'HIT' | 'MISS' | 'STALE';
+/** `BYPASS` means the bytes were served but deliberately not kept. */
+export type CacheStatus = 'HIT' | 'MISS' | 'STALE' | 'REVALIDATED' | 'BYPASS';
 
 export interface FetchResult {
   entry: CacheEntry;
   status: CacheStatus;
 }
 
+export type ImageProducer = (validators?: ConditionalValidators) => Promise<FetchOutcome>;
+
+async function materialise(entry: CacheEntry): Promise<Buffer> {
+  if (entry.body) return entry.body;
+  const chunks: Buffer[] = [];
+  for await (const chunk of entry.openStream!()) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks);
+}
+
+async function dropAndServe(
+  imageClass: ImageClass,
+  key: string,
+  produced: { body: Buffer; contentType: string; upstream?: UpstreamCacheMeta }
+): Promise<FetchResult> {
+  const hash = hashKey(key);
+  await remove(imageClass, hash);
+  const now = Date.now();
+  return {
+    entry: {
+      body: produced.body,
+      contentType: produced.contentType,
+      storedAt: now,
+      expired: false,
+      expiresAt: now,
+      hash,
+      etag: hashBody(produced.body),
+      size: produced.body.length,
+      upstream: produced.upstream,
+    },
+    status: 'BYPASS',
+  };
+}
 
 export async function getOrFetch(
   imageClass: ImageClass,
   key: string,
-  producer: () => Promise<{ body: Buffer; contentType: string }>
+  producer: ImageProducer
 ): Promise<FetchResult> {
   const cached = await get(imageClass, key);
   if (cached && !cached.expired) return { entry: cached, status: 'HIT' };
@@ -433,22 +658,71 @@ export async function getOrFetch(
   const existing = inflight.get(lockKey);
   if (existing) return existing;
 
+  const store = async (produced: { body: Buffer; contentType: string; upstream?: UpstreamCacheMeta }) => {
+    if (isNotStorable(key, produced.upstream)) return dropAndServe(imageClass, key, produced);
+
+    const etag = await put(imageClass, key, produced.body, produced.contentType, produced.upstream);
+    const storedAt = Date.now();
+    return {
+      entry: {
+        body: produced.body,
+        contentType: produced.contentType,
+        storedAt,
+        expired: false,
+        expiresAt: getEntryExpiry(key, storedAt, produced.upstream),
+        hash: hashKey(key),
+        etag,
+        size: produced.body.length,
+        upstream: produced.upstream,
+      },
+      status: 'MISS' as CacheStatus,
+    };
+  };
+
   const task = (async (): Promise<FetchResult> => {
     try {
-      const produced = await producer();
-      const etag = await put(imageClass, key, produced.body, produced.contentType);
-      return {
-        entry: {
-          body: produced.body,
-          contentType: produced.contentType,
-          storedAt: Date.now(),
-          expired: false,
-          hash: hashKey(key),
-          etag,
-          size: produced.body.length,
-        },
-        status: 'MISS',
-      };
+      const produced = await producer(revalidationHint(cached));
+      if (!isNotModified(produced)) return await store(produced);
+
+      const merged = mergeRevalidated(cached?.upstream, produced.upstream);
+
+      // A 304 can carry the moment the origin starts refusing to be cached, so
+      // this has to be checked here as well as on the body path.
+      if (cached && isNotStorable(key, merged)) {
+        return await dropAndServe(imageClass, key, {
+          body: await materialise(cached),
+          contentType: cached.contentType,
+          upstream: merged,
+        });
+      }
+
+      // Rewriting the entry buys a restarted validity, which is worth its cost
+      // everywhere except at zero — there it recurs on every request for the life
+      // of the entry, and a memory-tier hit does not avoid it because the refresh
+      // reads from disk regardless. When the merged metadata still resolves to
+      // zero *and* the validators are unchanged, the stored header and the merged
+      // one behave identically on every future read, so there is nothing to
+      // persist. The second condition matters: a rotated validator has to be
+      // stored, or we would keep sending the old one and never receive the 200
+      // that could lift the entry off zero.
+      if (cached && resolveEntryTtlMs(key, merged) === 0 && sameValidators(cached.upstream, merged)) {
+        return { entry: cached, status: 'REVALIDATED' };
+      }
+
+      const refreshed = await refreshStoredEntry(imageClass, key, merged);
+      if (refreshed) return { entry: refreshed, status: 'REVALIDATED' };
+
+      // The entry the 304 referred to went away underneath us, so there is
+      // nothing to refresh — ask again without validators to get the body.
+      const retried = await producer();
+      if (isNotModified(retried)) {
+        // This falls through to the STALE path below, which is the right outcome.
+        // Logged here because that path reports the symptom and not this cause —
+        // an origin answering 304 to a request carrying no validators at all.
+        logger.warn(`${imageClass} entry vanished and upstream still answered 304: ${key}`);
+        throw new Error('Upstream answered 304 with no cached entry to refresh');
+      }
+      return await store(retried);
     } catch (error: any) {
       if (cached) {
         logger.debug(`Serving stale ${imageClass} entry after upstream error: ${error?.message}`);
@@ -530,10 +804,194 @@ export async function purge(imageClass?: ImageClass): Promise<PurgeResult> {
   };
 }
 
+async function readEntryIdentity(
+  imageClass: ImageClass,
+  hash: string
+): Promise<{ key: string; size: number } | null> {
+  let handle: fsp.FileHandle;
+  try {
+    handle = await fsp.open(entryPath(imageClass, hash), 'r');
+  } catch {
+    return null;
+  }
+
+  try {
+    const stat = await handle.stat();
+    const probeLength = Math.min(HEADER_PROBE_BYTES, stat.size);
+    const probe = Buffer.alloc(probeLength);
+    await handle.read(probe, 0, probeLength, 0);
+
+    const framing = readFraming(probe);
+    if (!framing) return null;
+
+    let headerJson: Buffer;
+    if (framing.bodyOffset <= probeLength) {
+      headerJson = probe.subarray(HEADER_OFFSET, framing.bodyOffset);
+    } else {
+      headerJson = Buffer.alloc(framing.headerLen);
+      await handle.read(headerJson, 0, framing.headerLen, HEADER_OFFSET);
+    }
+
+    const header: EntryHeader = JSON.parse(headerJson.toString('utf8'));
+    if (typeof header.key !== 'string') return null;
+    return { key: header.key, size: stat.size };
+  } catch {
+    return null;
+  } finally {
+    await handle.close().catch(() => { /* already closing */ });
+  }
+}
+
+
+const WALK_CONCURRENCY = 64;
+
+
+async function walkClass(
+  imageClass: ImageClass,
+  worker: (hash: string) => Promise<void>
+): Promise<void> {
+  const hashes = eachStoredHash(imageClass)[Symbol.asyncIterator]();
+  let stop = false;
+  await Promise.all(Array.from({ length: WALK_CONCURRENCY }, async () => {
+    for (;;) {
+      if (stop) return;
+      const next = await hashes.next();
+      if (next.done) return;
+      try {
+        await worker(next.value);
+      } catch (error: any) {
+        // One unreadable entry must not abandon the walk silently, and must not
+        // leave the other workers draining the iterator after the caller has
+        // already been handed a rejection.
+        stop = true;
+        logger.warn(`Walk of ${imageClass} stopped at ${next.value}: ${error?.message}`);
+        return;
+      }
+    }
+  }));
+}
+
+/** Walks a class subtree. Reads the tree rather than the index, so cold entries count. */
+async function* eachStoredHash(imageClass: ImageClass): AsyncGenerator<string> {
+  const classDir = path.join(getCacheDir(), imageClass);
+  let dir: fs.Dir;
+  try {
+    dir = await fsp.opendir(classDir, { recursive: true } as any);
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') {
+      logger.warn(`Could not walk ${classDir}: ${error?.message}`);
+    }
+    return;
+  }
+  for await (const dirent of dir) {
+    if (!dirent.isFile()) continue;
+    if (!/^[0-9a-f]{64}$/.test(dirent.name)) continue;
+    yield dirent.name;
+  }
+}
+
+export interface DomainPurgeResult {
+  success: boolean;
+  message: string;
+  domain: string;
+  removed: number;
+  freed_bytes: number;
+}
+
+
+export async function purgeDomain(domain: string): Promise<DomainPurgeResult> {
+  const target = (domain || '').trim().toLowerCase().replace(/^\.+/, '');
+  if (!target) {
+    // Guarded rather than treated as "match everything": that is `purge()`, and
+    // it should have to be asked for by name.
+    return { success: false, message: 'A domain is required', domain, removed: 0, freed_bytes: 0 };
+  }
+
+  let removed = 0;
+  let freed = 0;
+
+  for (const imageClass of IMAGE_CLASSES) {
+    await walkClass(imageClass, async (hash) => {
+      const identity = await readEntryIdentity(imageClass, hash);
+      if (!identity) return;
+      const host = hostFromKey(identity.key);
+      if (!host || (host !== target && !host.endsWith(`.${target}`))) return;
+
+      // `remove()` reports the indexed size, which is 0 for an entry the index
+      // never saw — the stat is what makes a cold purge account for itself.
+      const indexed = await remove(imageClass, hash);
+      freed += indexed || identity.size;
+      removed += 1;
+    });
+  }
+
+  logger.info(`Purged ${removed} entries for ${target} (${formatSize(freed)} freed)`);
+  return {
+    success: true,
+    message: `Purged ${removed} cached image${removed === 1 ? '' : 's'} for ${target}`,
+    domain: target,
+    removed,
+    freed_bytes: freed,
+  };
+}
+
+export interface DomainPurgeStatus {
+  domain: string;
+  running: boolean;
+  removed: number;
+  freed_bytes: number;
+  started_at: number;
+}
+
+let purgeState: DomainPurgeStatus | null = null;
+let purgeTask: Promise<void> | null = null;
+
+
+export function startDomainPurge(domain: string): DomainPurgeStatus {
+  const target = (domain || '').trim().toLowerCase().replace(/^\.+/, '');
+  if (!target) throw new Error('A domain is required');
+  if (purgeState?.running) return purgeState;
+
+  purgeState = { domain: target, running: true, removed: 0, freed_bytes: 0, started_at: Date.now() };
+  purgeTask = (async () => {
+    try {
+      const result = await purgeDomain(target);
+      purgeState = {
+        ...purgeState!, running: false, removed: result.removed, freed_bytes: result.freed_bytes,
+      };
+    } catch (error: any) {
+      logger.warn(`Domain purge for ${target} failed: ${error?.message}`);
+      purgeState = { ...purgeState!, running: false };
+    }
+  })();
+  return purgeState;
+}
+
+export function domainPurgeStatus(): DomainPurgeStatus | null {
+  return purgeState;
+}
+
+/** Test-only: settle the in-flight walk. */
+export function awaitDomainPurge(): Promise<void> {
+  return purgeTask ?? Promise.resolve();
+}
+
 export interface ClassStats {
   count: number;
   bytes: number;
   human: string;
+}
+
+/** The flat validity, unannotated. */
+function flatDefault(): string {
+  const days = getEntryTtlDays();
+  return days > 0 ? `${days}d` : 'never';
+}
+
+/** As reported on the dashboard card. */
+function describeTtl(): string {
+  const base = flatDefault();
+  return isInferTtlEnabled() ? `${base} (origin where inferable)` : base;
 }
 
 export function stats(): Record<string, any> {
@@ -555,7 +1013,8 @@ export function stats(): Record<string, any> {
     disk_usage: formatSize(bytes),
     disk_usage_bytes: bytes,
     max_size: getMaxSizeRaw(),
-    ttl: getEntryTtlDays() > 0 ? `${getEntryTtlDays()}d` : 'never',
+    ttl: describeTtl(),
+    ttl_days: getEntryTtlDays(),
     inactive: `${getInactiveDays()}d`,
     by_type: byType,
     scanning,
@@ -684,7 +1143,7 @@ export async function init(): Promise<void> {
   logger.info(
     `Built-in poster cache active at ${getCacheDir()} ` +
     `(disk ${getMaxSizeRaw()}, memory ${budget > 0 ? getMemorySizeRaw() : 'disabled — disk only'}, ` +
-    `ttl ${getEntryTtlDays() > 0 ? `${getEntryTtlDays()}d` : 'never expires'})`
+    `validity ${describeTtl()})`
   );
 }
 

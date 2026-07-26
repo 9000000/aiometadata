@@ -11,17 +11,32 @@ const logger = consola.withTag('Database');
 
 type DbType = 'sqlite' | 'postgres';
 
+function dbTypeFromUri(uri: string | undefined): DbType | null {
+  if (!uri) return null;
+  if (uri.startsWith('sqlite://')) return 'sqlite';
+  if (uri.startsWith('postgres://') || uri.startsWith('postgresql://')) return 'postgres';
+  return null;
+}
+
 class Database {
   db: any;
   readDb: any;
-  type: DbType | null;
+  private connectedType: DbType | null;
   initialized: boolean;
 
   constructor() {
     this.db = null;
     this.readDb = null;
-    this.type = null;
+    this.connectedType = null;
     this.initialized = false;
+  }
+
+  get type(): DbType | null {
+    return this.connectedType ?? dbTypeFromUri(process.env.DATABASE_URI);
+  }
+
+  set type(value: DbType | null) {
+    this.connectedType = value;
   }
 
   executeSQLiteStatement(statement: any, method: string, params: any = []) {
@@ -67,9 +82,10 @@ class Database {
       throw new Error('DATABASE_URI environment variable is required');
     }
 
-    if (databaseUri.startsWith('sqlite://')) {
+    const uriType = dbTypeFromUri(databaseUri);
+    if (uriType === 'sqlite') {
       await this.initializeSQLite(databaseUri);
-    } else if (databaseUri.startsWith('postgres://') || databaseUri.startsWith('postgresql://')) {
+    } else if (uriType === 'postgres') {
       await this.initializePostgreSQL(databaseUri);
     } else {
       throw new Error('Unsupported database URI format. Use sqlite:// or postgres://');

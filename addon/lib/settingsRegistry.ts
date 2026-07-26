@@ -1,4 +1,5 @@
 import { DEFAULT_CACHE_EPOCH } from './cacheEpoch';
+import { parseProviderPolicies } from './posterCache/config';
 
 export interface DisabledRule {
   settingKey: string;
@@ -1288,17 +1289,36 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'POSTER_CACHE_TTL_DAYS',
     envVar: 'POSTER_CACHE_TTL_DAYS',
     label: 'Image Cache Validity (Days)',
-    description: 'How long a cached image stays fresh before the next request refetches it from the source. Fractional values are allowed (0.5 = 12 hours). Set to 0 to never expire — images then live until they are evicted for space or swept as inactive. Clients are told the same lifetime.',
+    description: 'How long a cached image stays fresh. Fractional values are allowed (0.5 = 12 hours). Set to 0 to never expire, so images live until they are evicted for space or swept as inactive. Expiry does not mean a re-download: sources that send an ETag or Last-Modified are asked to confirm the stored copy instead. Individual providers can be given a shorter validity of their own below — worth doing for a rating poster service or a custom art URL pattern, whose URL names a slot rather than a file, so its bytes change while the URL does not.',
     category: 'Features',
     type: 'number',
     default: 30,
     min: 0,
   },
   {
+    key: 'POSTER_CACHE_INFER_TTL',
+    envVar: 'POSTER_CACHE_INFER_TTL',
+    label: 'Follow Each Source\'s Own Validity',
+    description: 'Derives each image\'s validity from the headers that source sent with it, instead of the flat value above. Where a source promises nothing we can act on, the flat value still applies. Expect a year for TMDB, days for MyAnimeList and metahub, and hours or less for rating services — which is the point: it uses what each source actually says rather than one number for all of them. A source asking not to be cached at all is then honoured too, and its image is served without being stored. Applies to every provider that does not have a rule of its own below.',
+    category: 'Features',
+    type: 'boolean',
+    default: false,
+  },
+  {
+    key: 'POSTER_CACHE_PROVIDER_POLICIES',
+    envVar: 'POSTER_CACHE_PROVIDER_POLICIES',
+    label: 'Per-Provider Cache Policies',
+    description: 'Overrides how one provider\'s images are cached, leaving every other provider alone. A JSON list of rules, each naming a domain and one of four policies: "default" uses the flat validity, "infer" follows what that provider\'s own headers promise, "custom" applies a fixed duration you give as "ttl" (12h, 30d, 1y), and "bypass" serves the provider\'s images without ever storing them. Example: [{"domain":"image.tmdb.org","policy":"infer"},{"domain":"api.ratingposterdb.com","policy":"custom","ttl":"6h"}]. A domain also covers its subdomains, so "elfhosted.com" matches "postersplus.elfhosted.com"; where two rules both match, the more specific one wins. A rule beats the follow-each-source toggle above, which in turn beats the flat validity. Switching a provider to "bypass" leaves whatever is already cached for it on disk — purge it explicitly if you want the space back.',
+    category: 'Features',
+    type: 'string',
+    default: '',
+    validate: (v: string) => parseProviderPolicies(v) !== null,
+  },
+  {
     key: 'POSTER_PROXY_MAX_AGE_DAYS',
     envVar: 'POSTER_PROXY_MAX_AGE_DAYS',
     label: 'Art Proxy Client Cache (Days)',
-    description: 'How long players and browsers may keep an image served by the /poster, /logo and /background proxy routes. Kept short by default because rating posters change as ratings do. Fractional values are allowed (0.25 = 6 hours); 0 means never expire. Applies with or without the built-in cache, and is capped by the cache validity when that is shorter.',
+    description: 'How long players and browsers may keep an image served by the /poster, /logo and /background proxy routes. Kept short by default because these routes revalidate on request parameters rather than bytes, so only expiry picks up changed art. Fractional values are allowed (0.25 = 6 hours); 0 means never expire. Applies with or without the built-in cache, and is capped by the served image\'s own remaining validity.',
     category: 'Features',
     type: 'number',
     default: 1,
@@ -1981,6 +2001,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: 30,
     min: 1,
   },
+  {
+    key: 'COLD_STORE_STATS_TTL',
+    envVar: 'COLD_STORE_STATS_TTL',
+    label: 'Cold Store Stats TTL',
+    description: 'How long the dashboard cold-store size figures are reused before recounting (0 disables)',
+    category: 'Cache',
+    type: 'string',
+    default: '30s',
+    validate: (v: string) => /^\s*\d+(\.\d+)?\s*(s|sec|m|min|h|hr|d|w|y)?\s*$/i.test(v),
+  },
 ];
 
 // Rules: when a setting has a certain value, other settings become disabled.
@@ -2029,6 +2059,7 @@ export const CONDITIONAL_RULES: ConditionalRule[] = [
         'POSTER_CACHE_LOGOS', 'POSTER_CACHE_THUMBNAILS',
         'POSTER_CACHE_PROCESSED_IMAGES', 'POSTER_CACHE_MAX_SIZE',
         'POSTER_CACHE_TTL_DAYS',
+        'POSTER_CACHE_INFER_TTL', 'POSTER_CACHE_PROVIDER_POLICIES',
         'POSTER_CACHE_INACTIVE_DAYS', 'POSTER_CACHE_MAX_OBJECT_BYTES',
         'POSTER_CACHE_DIR', 'POSTER_CACHE_IMPORT_NGINX_DIR',
         'POSTER_CACHE_FETCH_CONCURRENCY', 'POSTER_CACHE_STREAM_THRESHOLD',
@@ -2046,7 +2077,7 @@ export const CONDITIONAL_RULES: ConditionalRule[] = [
         'META_COLD_STORE_COMPRESSION',
         'COLD_TTL_FROZEN', 'COLD_TTL_STABLE',
         'SETTLE_MOVIE', 'SETTLE_SERIES', 'FROZEN_AGE',
-        'COLD_STORE_INACTIVE_DAYS',
+        'COLD_STORE_INACTIVE_DAYS', 'COLD_STORE_STATS_TTL',
       ],
     },
     reason: 'The meta cold store is disabled',

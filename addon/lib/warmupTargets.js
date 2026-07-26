@@ -1,0 +1,102 @@
+
+const { buildProxyArtUrl } = require('./posterCache/proxyArt.js');
+const posterCacheConfig = require('./posterCache/config.js');
+
+function extractIdsFromWarmerMeta(meta) {
+  const ids = {};
+  if (!meta) return ids;
+  const id = meta.id || '';
+  if (id) ids.id = id;
+  if (id.startsWith('tmdb:')) ids.tmdbId = id.slice(5);
+  else if (id.startsWith('tvdb:')) ids.tvdbId = id.slice(5);
+  else if (id.startsWith('kitsu:')) ids.kitsuId = id.slice(6);
+  else if (id.startsWith('mal:')) ids.malId = id.slice(4);
+  else if (id.startsWith('anilist:')) ids.anilistId = id.slice(8);
+  else if (id.startsWith('anidb:')) ids.anidbId = id.slice(6);
+  else if (id.startsWith('tt')) ids.imdbId = id;
+  if (meta.imdb_id) ids.imdbId = meta.imdb_id;
+  if (meta._tmdbId && !ids.tmdbId) ids.tmdbId = meta._tmdbId;
+  if (meta._tvdbId && !ids.tvdbId) ids.tvdbId = meta._tvdbId;
+  if (meta._imdbId && !ids.imdbId) ids.imdbId = meta._imdbId;
+  if (meta._malId && !ids.malId) ids.malId = meta._malId;
+  if (meta._kitsuId && !ids.kitsuId) ids.kitsuId = meta._kitsuId;
+  if (meta._anilistId && !ids.anilistId) ids.anilistId = meta._anilistId;
+  if (meta._anidbId && !ids.anidbId) ids.anidbId = meta._anidbId;
+  return ids;
+}
+
+/**
+ * `deps` exists so this can be exercised without `parseProps`, which reaches
+ * Redis, the TMDB/MAL/TVmaze agents and the rest of the metadata stack at require
+ * time. Production passes nothing and gets the real resolvers.
+ */
+function collectWarmupTargets(metas, config, fallbackType, warmBase, deps) {
+  const {
+    resolveCustomArtUrl,
+    resolvePosterPattern,
+    getPosterRatingApiKey,
+    isRatingPostersEnabled,
+  } = deps || require('../utils/parseProps');
+
+  const ratingPostersEnabled = isRatingPostersEnabled(config);
+  const posterPattern = ratingPostersEnabled ? resolvePosterPattern(config) : null;
+  const proxyApiKey = ratingPostersEnabled && config.usePosterProxy ? getPosterRatingApiKey(config) : null;
+  const addonHost = process.env.HOST_NAME
+    ? (process.env.HOST_NAME.startsWith('http') ? process.env.HOST_NAME : `https://${process.env.HOST_NAME}`)
+    : '';
+  const selfOrigin = posterCacheConfig.getSelfOrigin();
+  const metaFieldClasses = posterCacheConfig.META_FIELD_CLASSES;
+  const cacheThumbnails = posterCacheConfig.isClassEnabled('thumbnail');
+  const cacheableFields = new Set(posterCacheConfig.getCacheableFields());
+  if (cacheThumbnails) cacheableFields.add('thumbnail');
+
+  const targets = [];
+  const addThirdParty = (url, imageClass, field) => {
+    if (!url || typeof url !== 'string' || !/^https?:\/\//i.test(url)) return;
+    if (selfOrigin && url.startsWith(selfOrigin)) return;
+    if (!cacheableFields.has(field || imageClass)) return;
+    targets.push(posterCacheConfig.buildCachedUrl(warmBase, imageClass, url));
+  };
+
+  for (const meta of metas) {
+    const ids = extractIdsFromWarmerMeta(meta);
+    const type = meta.type || fallbackType;
+    const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
+
+    let posterWarmed = false;
+    if (posterPattern && proxyId) {
+      if (proxyApiKey) {
+        targets.push(buildProxyArtUrl({ base: addonHost, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, ratingKey: proxyApiKey, lang: config.language }));
+        posterWarmed = true;
+      } else {
+        const resolved = resolveCustomArtUrl(posterPattern, ids, type, config);
+        if (resolved) {
+          if (config.usePosterProxy) {
+            targets.push(buildProxyArtUrl({ base: addonHost, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, url: resolved }));
+          } else {
+            addThirdParty(resolved, 'poster', 'poster');
+          }
+          posterWarmed = true;
+        }
+      }
+    }
+    if (!posterWarmed && meta.poster) {
+      addThirdParty(meta.poster, 'poster', 'poster');
+    }
+
+    for (const [field, imageClass] of Object.entries(metaFieldClasses)) {
+      if (field === 'poster') continue;
+      if (meta[field]) addThirdParty(meta[field], imageClass, field);
+    }
+
+    if (cacheThumbnails && Array.isArray(meta.videos)) {
+      for (const video of meta.videos) {
+        if (video?.thumbnail) addThirdParty(video.thumbnail, 'thumbnail', 'thumbnail');
+      }
+    }
+  }
+
+  return targets;
+}
+
+module.exports = { collectWarmupTargets, extractIdsFromWarmerMeta };

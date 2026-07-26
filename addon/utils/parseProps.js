@@ -122,6 +122,10 @@ function resolvePattern(pattern, ids, type, config, extra) {
 
   let url = pattern;
   for (const [placeholder, value] of Object.entries(placeholders)) {
+    const optional = `${placeholder.slice(0, -1)}?}`;
+    if (url.includes(optional)) {
+      url = url.split(optional).join(value);
+    }
     if (url.includes(placeholder)) {
       if (!value) return null; // Referenced placeholder has no value — fall back
       url = url.split(placeholder).join(value);

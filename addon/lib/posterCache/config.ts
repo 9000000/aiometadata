@@ -1,4 +1,8 @@
 import * as path from 'node:path';
+import consola from 'consola';
+import { parseDurationMs } from './duration.js';
+
+const logger = consola.withTag('PosterCache');
 
 
 export type ImageClass = 'poster' | 'background' | 'landscape' | 'logo' | 'thumbnail' | 'processed';
@@ -71,7 +75,8 @@ export function getCacheableFields(): string[] {
 }
 
 export function buildCachedUrl(base: string, imageClass: ImageClass, url: string): string {
-  return isBuiltinPosterCacheEnabled() ? `${base}/${imageClass}/${url}` : `${base}/${url}`;
+  if (!isBuiltinPosterCacheEnabled()) return `${base}/${url}`;
+  return `${base}/${imageClass}/${url}`;
 }
 
 export function isValidImageClass(value: unknown): value is ImageClass {
@@ -172,27 +177,258 @@ export function getMemoryBudget(): number {
   return parsed === null ? parseSize(DEFAULT_MEMORY_SIZE)! : parsed;
 }
 
-export const DEFAULT_TTL_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-export function getEntryTtlDays(): number {
-  const raw = (process.env.POSTER_CACHE_TTL_DAYS ?? '').trim();
-  if (raw === '') return DEFAULT_TTL_DAYS;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_TTL_DAYS;
-  return parsed;
+export interface UpstreamCacheMeta {
+  maxAge?: number;
+  sMaxAge?: number;
+  age?: number;
+  date?: number;
+  expires?: number;
+  etag?: string;
+  lastModified?: string;
+  lastModifiedAt?: number;
+  immutable?: boolean;
+  noStore?: boolean;
+  noCache?: boolean;
 }
 
+export const DEFAULT_TTL_DAYS = 30;
+export const MAX_TTL_DAYS = 365;
+
+function ttlDaysFrom(raw: string | undefined, fallback: number): number {
+  const trimmed = (raw ?? '').trim();
+  if (trimmed === '') return fallback;
+  const parsed = Number(trimmed);
+  // Junk is not a configuration, so the shipped default stands.
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+/** The flat default, in days. `0` means never expire. */
+export function getEntryTtlDays(): number {
+  return ttlDaysFrom(process.env.POSTER_CACHE_TTL_DAYS, DEFAULT_TTL_DAYS);
+}
+
+/** The one flat validity. `0` means never expire. */
 export function getEntryTtlMs(): number {
   const days = getEntryTtlDays();
-  return days > 0 ? days * 24 * 60 * 60 * 1000 : Infinity;
+  return days > 0 ? days * DAY_MS : Infinity;
+}
+
+export function isInferTtlEnabled(): boolean {
+  return isTruthy(process.env.POSTER_CACHE_INFER_TTL);
+}
+
+export const DO_NOT_STORE = Symbol('do-not-store');
+
+export type InferredFreshness = number | null | typeof DO_NOT_STORE;
+
+const ONE_YEAR_MS = MAX_TTL_DAYS * DAY_MS;
+
+const HEURISTIC_MIN_ELAPSED_SECONDS = 10 * 24 * 60 * 60;
+
+function zero(upstream: UpstreamCacheMeta): number | null {
+  return (upstream.etag || upstream.lastModified) ? 0 : null;
+}
+
+// RFC 9111
+function heuristicSeconds(upstream: UpstreamCacheMeta): number | null {
+  if (upstream.lastModifiedAt === undefined || upstream.date === undefined) return null;
+  const elapsed = (upstream.date - upstream.lastModifiedAt) / 1000;
+  if (elapsed < HEURISTIC_MIN_ELAPSED_SECONDS) return null;
+  return elapsed * 0.10;
+}
+
+export function inferFreshnessMs(upstream?: UpstreamCacheMeta): InferredFreshness {
+  if (!upstream) return null;
+  if (upstream.noStore) return DO_NOT_STORE;
+  if (upstream.noCache) return zero(upstream);
+  if (upstream.immutable) return ONE_YEAR_MS;
+
+  const lifetimeSeconds =
+    // We are a shared cache, so `s-maxage` outranks `max-age`.
+    upstream.sMaxAge
+    ?? upstream.maxAge
+    ?? (upstream.expires !== undefined && upstream.date !== undefined
+      ? (upstream.expires - upstream.date) / 1000
+      : null)
+    ?? heuristicSeconds(upstream);
+
+  if (lifetimeSeconds === null) return null; // Nothing was promised at all.
+
+  const remaining = lifetimeSeconds - (upstream.age ?? 0); // The promise was already running.
+  if (remaining <= 0) return zero(upstream);
+  return Math.min(ONE_YEAR_MS, remaining * 1000);
+}
+
+// --- per-provider policy --------------------------------------------------
+
+export { parseDurationMs };
+
+export type TtlPolicy = 'default' | 'infer' | 'custom' | 'bypass';
+
+export interface ProviderPolicy {
+  domain: string;
+  policy: TtlPolicy;
+  ttl?: string;
+}
+
+export interface ResolvedPolicy {
+  policy: TtlPolicy;
+  /** Set only for `custom`. */
+  ttlMs?: number;
+}
+
+export const KNOWN_ART_PROVIDERS: ReadonlyArray<{ domain: string; group: 'source' | 'rating' }> = [
+  { domain: 'image.tmdb.org', group: 'source' },
+  { domain: 'artworks.thetvdb.com', group: 'source' },
+  { domain: 'cdn.myanimelist.net', group: 'source' },
+  { domain: 'media.kitsu.app', group: 'source' },
+  { domain: 'assets.fanart.tv', group: 'source' },
+  { domain: 'images.metahub.space', group: 'source' },
+  { domain: 'api.ratingposterdb.com', group: 'rating' },
+  { domain: 'api.top-posters.com', group: 'rating' },
+  { domain: 'btttr.cc', group: 'rating' },
+  { domain: 'extendedratings.com', group: 'rating' },
+  { domain: 'postersplus.elfhosted.com', group: 'rating' },
+];
+
+const TTL_POLICIES: TtlPolicy[] = ['default', 'infer', 'custom', 'bypass'];
+
+export function parseProviderPolicies(raw: unknown): ProviderPolicy[] | null {
+  const trimmed = typeof raw === 'string' ? raw.trim() : '';
+  if (trimmed === '') return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+
+  const rules: ProviderPolicy[] = [];
+  for (const candidate of parsed) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
+    const { domain, policy, ttl } = candidate as Record<string, unknown>;
+    if (typeof domain !== 'string' || domain.trim() === '') return null;
+    if (typeof policy !== 'string' || !TTL_POLICIES.includes(policy as TtlPolicy)) return null;
+    if (policy === 'custom' && parseDurationMs(ttl) === null) return null;
+    rules.push({
+      domain: domain.trim().toLowerCase().replace(/^\.+/, ''),
+      policy: policy as TtlPolicy,
+      ttl: typeof ttl === 'string' ? ttl : undefined,
+    });
+  }
+  return rules;
+}
+
+// Memoised per value: this is read on every cache read, and the parse is not.
+let policyRaw: string | null = null;
+let policyRules: ProviderPolicy[] = [];
+
+function activeRules(): ProviderPolicy[] {
+  const raw = process.env.POSTER_CACHE_PROVIDER_POLICIES ?? '';
+  if (raw === policyRaw) return policyRules;
+
+  policyRaw = raw;
+  const parsed = parseProviderPolicies(raw);
+  if (parsed === null) {
+    logger.warn(
+      'POSTER_CACHE_PROVIDER_POLICIES is not valid — ignoring it, so every provider falls back to its bucket default'
+    );
+    policyRules = [];
+  } else {
+    policyRules = parsed;
+  }
+  return policyRules;
+}
+
+export const KEY_PREFIXES: readonly string[] = ['rating-poster:', 'blur:', 'b2b:'];
+
+export function hostFromKey(key: string): string | null {
+  let candidate = key;
+  for (const prefix of KEY_PREFIXES) {
+    if (candidate.startsWith(prefix)) {
+      candidate = candidate.slice(prefix.length);
+      break;
+    }
+  }
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    return parsed.hostname.toLowerCase() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Exact host or dot-suffix, so `elfhosted.com` covers `postersplus.elfhosted.com`. */
+function ruleFor(host: string, rules: ProviderPolicy[]): ProviderPolicy | null {
+  let best: ProviderPolicy | null = null;
+  for (const rule of rules) {
+    if (host !== rule.domain && !host.endsWith(`.${rule.domain}`)) continue;
+    // Most specific wins, so the answer does not depend on how the list is ordered.
+    if (!best || rule.domain.length > best.domain.length) best = rule;
+  }
+  return best;
+}
+
+/** Most specific first: an operator's domain rule, then the global toggle, then the bucket. */
+export function resolvePolicyFor(key: string): ResolvedPolicy {
+  const rules = activeRules();
+  if (rules.length > 0) {
+    const host = hostFromKey(key);
+    const rule = host ? ruleFor(host, rules) : null;
+    if (rule) {
+      return rule.policy === 'custom'
+        ? { policy: 'custom', ttlMs: parseDurationMs(rule.ttl)! }
+        : { policy: rule.policy };
+    }
+  }
+  return { policy: isInferTtlEnabled() ? 'infer' : 'default' };
+}
+
+export function isBypassed(key: string): boolean {
+  if (!isBuiltinPosterCacheEnabled()) return false;
+  return resolvePolicyFor(key).policy === 'bypass';
+}
+
+export function resolveEntryTtlMs(key: string, upstream?: UpstreamCacheMeta): number {
+  const flatMs = getEntryTtlMs();
+  const { policy, ttlMs } = resolvePolicyFor(key);
+
+  if (policy === 'custom') return ttlMs!;
+  if (policy !== 'infer') return flatMs;
+
+  const inferred = inferFreshnessMs(upstream);
+  if (inferred === DO_NOT_STORE) return 0;
+  return inferred === null ? flatMs : inferred;
+}
+
+export function isNotStorable(key: string, upstream?: UpstreamCacheMeta): boolean {
+  return resolvePolicyFor(key).policy === 'infer' && inferFreshnessMs(upstream) === DO_NOT_STORE;
+}
+
+export function getEntryExpiry(key: string, storedAt: number, upstream?: UpstreamCacheMeta): number {
+  const ttl = resolveEntryTtlMs(key, upstream);
+  return Number.isFinite(ttl) ? storedAt + ttl : Infinity;
 }
 
 const MAX_BROWSER_MAX_AGE = 365 * 24 * 60 * 60;
 
+/** Client validity when no entry is in hand — passthrough and bypass responses. */
 export function getBrowserMaxAgeSeconds(): number {
   const ttl = getEntryTtlMs();
   if (!Number.isFinite(ttl)) return MAX_BROWSER_MAX_AGE;
   return Math.min(MAX_BROWSER_MAX_AGE, Math.max(60, Math.floor(ttl / 1000)));
+}
+
+/** Clients are told what is left of this entry's validity, so they revalidate when we do. */
+export function browserMaxAgeFor(expiresAt: number): number {
+  if (!Number.isFinite(expiresAt)) return MAX_BROWSER_MAX_AGE;
+  const remaining = Math.floor((expiresAt - Date.now()) / 1000);
+  return Math.min(MAX_BROWSER_MAX_AGE, Math.max(60, remaining));
 }
 
 export const DEFAULT_PROXY_MAX_AGE_DAYS = 1;
@@ -209,7 +445,7 @@ export function getProxyMaxAgeSeconds(): number {
     ? Math.min(MAX_BROWSER_MAX_AGE, Math.max(60, Math.floor(days * 24 * 60 * 60)))
     : MAX_BROWSER_MAX_AGE;
 
-  return isClassEnabled('processed') ? Math.min(seconds, getBrowserMaxAgeSeconds()) : seconds;
+  return seconds;
 }
 
 export function getInactiveDays(): number {

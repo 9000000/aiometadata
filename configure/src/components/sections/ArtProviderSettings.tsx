@@ -636,6 +636,11 @@ export function ArtProviderSettings() {
                 <strong>Language:</strong> <code>{'{language}'}</code> (e.g. fr-FR) <code>{'{language_short}'}</code> (e.g. fr) &nbsp;
                 <strong>Thumbnail:</strong> <code>{'{season}'}</code> <code>{'{episode}'}</code> <code>{'{blur}'}</code> <code>{'{thumbnail}'}</code>
               </p>
+              <p>
+                <strong>Optional IDs:</strong> add <code>?</code> before the closing brace (e.g. <code>{'{tvdb_id?}'}</code>) to blank a
+                placeholder instead of discarding the URL when that ID is unavailable. Useful for patterns carrying several IDs where only
+                one needs to be present.
+              </p>
               <p>RPDB/TOP patterns automatically fall back to alternative IDs when the primary one is unavailable.</p>
             </div>
           </CardContent>

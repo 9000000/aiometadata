@@ -24,6 +24,7 @@ const POLLING_INTERVALS = {
   PERFORMANCE: 60 * 1000,       // 60 seconds - timing data (aggregated stats, slow-changing)
   SYSTEM: 10 * 1000,            // 10 seconds - system config + activity
   OPERATIONS: 5 * 1000,         // 5 seconds - warming tasks need fast updates
+  COLD_STORE: 60 * 1000,        // 60 seconds - size gauge over a large table, not a live feed
   USERS: 15 * 1000,             // 15 seconds - user activity
   CONTENT: 60 * 1000,           // 60 seconds - slow-changing data
   LOGS: 2 * 1000,               // 2 seconds - live log streaming (backstop for the SSE stream)
@@ -736,17 +737,23 @@ export function usePurgePosterCache() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    // Omitting `type` purges every class, which is what the "Clear all" button sends.
-    mutationFn: async (type?: string) => {
+    // A string is an image class, which is what the per-type and "Clear all"
+    // buttons send. `{ domain }` purges one provider across every class instead,
+    // because a provider's art spans poster, background, logo and processed.
+    mutationFn: async (target?: string | { domain: string }) => {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (adminKey) {
         headers['x-admin-key'] = adminKey;
       }
 
+      let body: Record<string, string> = {};
+      if (typeof target === 'string') body = { type: target };
+      else if (target?.domain) body = { domain: target.domain };
+
       const response = await fetch('/api/dashboard/poster-cache/purge', {
         method: 'POST',
         headers,
-        body: JSON.stringify(type ? { type } : {}),
+        body: JSON.stringify(body),
       });
 
       if (response.status === 401) {
@@ -765,6 +772,14 @@ export function usePurgePosterCache() {
       queryClient.invalidateQueries({ queryKey: ['poster-cache-stats'] });
     },
   });
+}
+
+/** A rule as stored in POSTER_CACHE_PROVIDER_POLICIES. */
+export interface ProviderPolicyRule {
+  domain: string;
+  policy: 'default' | 'infer' | 'custom' | 'bypass';
+  /** Only for `custom`, and kept verbatim so editing cannot quietly rewrite it. */
+  ttl?: string;
 }
 
 /**
@@ -859,7 +874,7 @@ export function useColdStoreStats(options: DashboardQueryOptions = {}) {
       return response.json();
     },
     enabled: enabled && isAdmin && !!adminKey && isActiveTab,
-    refetchInterval: shouldPoll ? POLLING_INTERVALS.OPERATIONS : false,
+    refetchInterval: shouldPoll ? POLLING_INTERVALS.COLD_STORE : false,
     refetchIntervalInBackground: false,
   });
 }

@@ -30,6 +30,7 @@ import {
   RefreshCw,
   Settings,
   Shield,
+  Sliders,
   Square,
   Play,
   Trash2,
@@ -51,6 +52,7 @@ import {
   type DashboardTab,
 } from "@/hooks/useDashboardQueries";
 import { AnimatedNumber } from "../AnimatedNumber";
+import { ImageCachePolicyDialog } from "./ImageCachePolicyDialog";
 
 const formatBytes = (bytes: number): string => {
   if (!bytes || bytes === 0) return "0 MB";
@@ -283,6 +285,7 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
 
   const [purgingType, setPurgingType] = useState<string | null>(null);
   const [refreshUrl, setRefreshUrl] = useState("");
+  const [policyDialogOpen, setPolicyDialogOpen] = useState(false);
 
   const handleRefreshImage = () => {
     const url = refreshUrl.trim();
@@ -712,6 +715,14 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
                       </DialogContent>
                     </Dialog>
                   )}
+                  {/* Per-provider policies. Only offered for the built-in cache:
+                      a standalone nginx proxy has no per-host validity to set. */}
+                  {posterCacheStatsQuery.data.by_type && (
+                    <Button variant="outline" size="sm" onClick={() => setPolicyDialogOpen(true)}>
+                      <Sliders className="h-4 w-4 mr-1.5" />
+                      Advanced…
+                    </Button>
+                  )}
                   <Button
                     onClick={() => handlePurgePosterCache()}
                     variant="outline"
@@ -734,6 +745,7 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
               <p className="text-sm text-muted-foreground">Image cache not configured or unreachable.</p>
             )}
           </CardContent>
+          <ImageCachePolicyDialog open={policyDialogOpen} onOpenChange={setPolicyDialogOpen} />
         </Card>
       )}
 

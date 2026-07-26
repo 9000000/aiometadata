@@ -3,7 +3,16 @@ import * as net from 'node:net';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import axios from 'axios';
-import { getAllowedPrivateHosts, getFetchConcurrency, getMaxObjectBytes, getUpstreamTimeoutMs, isPrivateArtAllowed } from './config.js';
+import {
+  getAllowedPrivateHosts,
+  getConnectionCacheMax,
+  getConnectionCacheTtlMs,
+  getFetchConcurrency,
+  getMaxObjectBytes,
+  getUpstreamTimeoutMs,
+  isPrivateArtAllowed,
+  type UpstreamCacheMeta,
+} from './config.js';
 
 const buildInfo = require('../buildInfo.js');
 
@@ -63,8 +72,99 @@ export interface ResolveOptions {
   allowPrivateHost?: boolean;
 }
 
-/** Resolves the host; rejects private-space answers unless the host is allowlisted or vouched for. */
-export async function resolvePublicUrl(rawUrl: string, opts: ResolveOptions = {}): Promise<ValidatedUpstream> {
+/** Validators from a stored entry, sent back to the origin to ask "still this?". */
+export interface ConditionalValidators {
+  etag?: string;
+  lastModified?: string;
+}
+
+export interface FetchOptions extends ResolveOptions {
+  validators?: ConditionalValidators;
+}
+
+const MAX_AGE_RE = /(?:^|,)\s*max-age\s*=\s*"?(\d+)"?/;
+const SHARED_MAX_AGE_RE = /(?:^|,)\s*s-maxage\s*=\s*"?(\d+)"?/;
+const NO_STORE_RE = /(?:^|,)\s*no-store\s*(?:,|$)/;
+const NO_CACHE_RE = /(?:^|,)\s*no-cache\s*(?:,|$)/;
+const IMMUTABLE_RE = /(?:^|,)\s*immutable\s*(?:,|$)/;
+
+/** An HTTP date we cannot read is no date at all — never a NaN handed to the policy. */
+function parseHttpDate(value: unknown): number | undefined {
+  const raw = String(value ?? '').trim();
+  if (!raw) return undefined;
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/** Reads the freshness promise and validators off a response. Absent fields stay absent. */
+export function parseUpstreamCacheMeta(headers: Record<string, any> = {}): UpstreamCacheMeta {
+  const meta: UpstreamCacheMeta = {};
+
+  const cacheControl = String(headers['cache-control'] || '').toLowerCase();
+  if (cacheControl) {
+    // Two different answers: `no-store` refuses storage, `no-cache` only refuses
+    // reuse without revalidating first.
+    if (NO_STORE_RE.test(cacheControl)) meta.noStore = true;
+    if (NO_CACHE_RE.test(cacheControl)) meta.noCache = true;
+    if (IMMUTABLE_RE.test(cacheControl)) meta.immutable = true;
+    const shared = SHARED_MAX_AGE_RE.exec(cacheControl)?.[1];
+    if (shared !== undefined) meta.sMaxAge = Number(shared);
+    const seconds = MAX_AGE_RE.exec(cacheControl)?.[1];
+    if (seconds !== undefined) meta.maxAge = Number(seconds);
+  }
+
+  const age = Number.parseInt(String(headers['age'] ?? ''), 10);
+  if (Number.isFinite(age) && age >= 0) meta.age = age;
+
+  const date = parseHttpDate(headers['date']);
+  if (date !== undefined) meta.date = date;
+
+  const expires = parseHttpDate(headers['expires']);
+  if (expires !== undefined) meta.expires = expires;
+
+  const etag = String(headers['etag'] || '').trim();
+  if (etag) meta.etag = etag;
+
+  const lastModified = String(headers['last-modified'] || '').trim();
+  if (lastModified) {
+    meta.lastModified = lastModified;
+    const lastModifiedAt = parseHttpDate(lastModified);
+    if (lastModifiedAt !== undefined) meta.lastModifiedAt = lastModifiedAt;
+  }
+
+  return meta;
+}
+
+/**
+ * Folds a 304 into the promise we already had. A 304 only has to resend headers
+ * that changed, so absent fields keep their stored value — but `age` restarts,
+ * because the answer itself is fresh.
+ */
+export function mergeRevalidated(
+  previous: UpstreamCacheMeta | undefined,
+  fresh: UpstreamCacheMeta | undefined
+): UpstreamCacheMeta {
+  const merged: UpstreamCacheMeta = { ...(previous || {}) };
+  if (fresh) {
+    if (fresh.maxAge !== undefined) merged.maxAge = fresh.maxAge;
+    if (fresh.sMaxAge !== undefined) merged.sMaxAge = fresh.sMaxAge;
+    if (fresh.expires !== undefined) merged.expires = fresh.expires;
+    if (fresh.date !== undefined) merged.date = fresh.date;
+    if (fresh.immutable !== undefined) merged.immutable = fresh.immutable;
+    if (fresh.noStore !== undefined) merged.noStore = fresh.noStore;
+    if (fresh.noCache !== undefined) merged.noCache = fresh.noCache;
+    if (fresh.etag) merged.etag = fresh.etag;
+    if (fresh.lastModified) {
+      merged.lastModified = fresh.lastModified;
+      merged.lastModifiedAt = fresh.lastModifiedAt;
+    }
+  }
+  merged.age = fresh?.age ?? 0;
+  return merged;
+}
+
+/** Parses and validates the scheme; shared by the resolver and the connection cache. */
+function parseUpstreamUrl(rawUrl: string): URL {
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
@@ -75,6 +175,13 @@ export async function resolvePublicUrl(rawUrl: string, opts: ResolveOptions = {}
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new UpstreamRejected(`Unsupported protocol: ${parsed.protocol}`);
   }
+
+  return parsed;
+}
+
+/** Resolves the host; rejects private-space answers unless the host is allowlisted or vouched for. */
+export async function resolvePublicUrl(rawUrl: string, opts: ResolveOptions = {}): Promise<ValidatedUpstream> {
+  const parsed = parseUpstreamUrl(rawUrl);
 
   const host = parsed.hostname.replace(/^\[|\]$/g, '');
   const allowPrivate = (opts.allowPrivateHost === true && isPrivateArtAllowed())
@@ -109,7 +216,7 @@ export async function assertPublicUrl(rawUrl: string): Promise<URL> {
 }
 
 /** Pins DNS to already-validated addresses; the request still targets the hostname. */
-function pinnedAgents(addresses: string[]): { httpAgent: http.Agent; httpsAgent: https.Agent } {
+function pinnedAgents(addresses: string[], keepAlive: boolean): { httpAgent: http.Agent; httpsAgent: https.Agent } {
   const lookup = (_hostname: string, options: any, callback: any) => {
     const cb = typeof options === 'function' ? options : callback;
     const opts = typeof options === 'function' ? {} : (options || {});
@@ -120,15 +227,121 @@ function pinnedAgents(addresses: string[]): { httpAgent: http.Agent; httpsAgent:
     const address = addresses[0];
     cb(null, address, net.isIP(address));
   };
+  // Bound sockets per host so a burst cannot open an unbounded number of them.
+  const maxSockets = Math.max(1, getFetchConcurrency());
   return {
-    httpAgent: new http.Agent({ lookup } as any),
-    httpsAgent: new https.Agent({ lookup } as any),
+    httpAgent: new http.Agent({ lookup, keepAlive, maxSockets, maxFreeSockets: 32 } as any),
+    httpsAgent: new https.Agent({ lookup, keepAlive, maxSockets, maxFreeSockets: 32 } as any),
   };
+}
+
+export interface Connection {
+  url: URL;
+  httpAgent: http.Agent;
+  httpsAgent: https.Agent;
+}
+
+const DESTROY_GRACE_MS = 1_000;
+
+interface HostEntry {
+  addresses: string[];
+  httpAgent: http.Agent;
+  httpsAgent: https.Agent;
+  expiresAt: number;
+}
+
+const hostCache = new Map<string, HostEntry>();
+const resolving = new Map<string, Promise<HostEntry>>();
+
+function destroyEntry(entry: HostEntry): void {
+  entry.httpAgent.destroy();
+  entry.httpsAgent.destroy();
+}
+
+function scheduleDestroy(entry: HostEntry): void {
+  setTimeout(() => destroyEntry(entry), getUpstreamTimeoutMs() + DESTROY_GRACE_MS).unref();
+}
+
+function dropHost(host: string): void {
+  const entry = hostCache.get(host);
+  if (!entry) return;
+  hostCache.delete(host);
+  scheduleDestroy(entry);
+}
+
+function storeHost(host: string, entry: HostEntry): void {
+  dropHost(host); // Replace any existing entry.
+  hostCache.set(host, entry);
+  const max = getConnectionCacheMax();
+  while (hostCache.size > max) {
+    const oldest = hostCache.keys().next();
+    if (oldest.done) break;
+    dropHost(oldest.value); // Evict least-recently-added.
+  }
+}
+
+async function getHostEntry(host: string, rawUrl: string, opts: ResolveOptions): Promise<HostEntry> {
+  const cached = hostCache.get(host);
+  if (cached && cached.expiresAt > Date.now()) return cached;
+
+  const pending = resolving.get(host);
+  if (pending) return pending;
+
+  const task = (async (): Promise<HostEntry> => {
+    const { addresses } = await resolvePublicUrl(rawUrl, opts);
+    const agents = pinnedAgents(addresses, true);
+    const entry: HostEntry = { addresses, ...agents, expiresAt: Date.now() + getConnectionCacheTtlMs() };
+    storeHost(host, entry);
+    return entry;
+  })();
+  resolving.set(host, task);
+  try {
+    return await task;
+  } finally {
+    resolving.delete(host);
+  }
+}
+
+export async function resolveConnection(rawUrl: string, opts: ResolveOptions = {}): Promise<Connection> {
+  const parsed = parseUpstreamUrl(rawUrl);
+  const host = parsed.hostname.replace(/^\[|\]$/g, '');
+  const perRequestPrivate = opts.allowPrivateHost === true && isPrivateArtAllowed();
+
+  if (perRequestPrivate) {
+    const { url, addresses } = await resolvePublicUrl(rawUrl, opts);
+    return { url, ...pinnedAgents(addresses, false) };
+  }
+
+  const entry = await getHostEntry(host, rawUrl, opts);
+  return { url: parsed, httpAgent: entry.httpAgent, httpsAgent: entry.httpsAgent };
+}
+
+export function getConnectionCacheStats(): { size: number; max: number } {
+  return { size: hostCache.size, max: getConnectionCacheMax() };
+}
+
+export function _resetConnectionCache(): void {
+  for (const entry of hostCache.values()) destroyEntry(entry);
+  hostCache.clear();
+  resolving.clear();
 }
 
 export interface FetchedImage {
   body: Buffer;
   contentType: string;
+  upstream?: UpstreamCacheMeta;
+}
+
+/** The origin confirmed the bytes we already hold — there is no body to read. */
+export interface NotModifiedImage {
+  notModified: true;
+  upstream?: UpstreamCacheMeta;
+}
+
+export type FetchOutcome = FetchedImage | NotModifiedImage;
+
+export function isNotModified(outcome: FetchOutcome): outcome is NotModifiedImage {
+  return (outcome as NotModifiedImage).notModified === true;
 }
 
 
@@ -136,12 +349,20 @@ export class OversizeImage extends Error {
   stream: NodeJS.ReadableStream;
   contentType: string;
   declaredLength: number;
+  /** Carried so a `no-store` origin is still relayed honestly on the bypass path. */
+  upstream?: UpstreamCacheMeta;
 
-  constructor(stream: NodeJS.ReadableStream, contentType: string, declaredLength: number) {
+  constructor(
+    stream: NodeJS.ReadableStream,
+    contentType: string,
+    declaredLength: number,
+    upstream?: UpstreamCacheMeta
+  ) {
     super(`Image exceeds the cacheable size limit (${declaredLength} bytes)`);
     this.stream = stream;
     this.contentType = contentType;
     this.declaredLength = declaredLength;
+    this.upstream = upstream;
   }
 }
 
@@ -176,24 +397,48 @@ export function getQueuedCount(): number {
   return waiting.length;
 }
 
-export async function openImageStream(rawUrl: string, opts: ResolveOptions = {}): Promise<{ response: any; contentType: string }> {
+export interface UpstreamStream {
+  response: any;
+  contentType: string;
+  upstream: UpstreamCacheMeta;
+  /** True when the origin answered 304: `response.data` is empty and already destroyed. */
+  notModified: boolean;
+}
+
+export async function openImageStream(rawUrl: string, opts: FetchOptions = {}): Promise<UpstreamStream> {
   let current = rawUrl;
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const { url, addresses } = await resolvePublicUrl(current, hop === 0 ? opts : {});
-    const agents = pinnedAgents(addresses);
+    const { url, httpAgent, httpsAgent } = await resolveConnection(current, hop === 0 ? opts : {});
+
+    const headers: Record<string, string> = { 'User-Agent': `AIOMetadata/${buildInfo.version}` };
+    if (opts.validators?.etag) headers['If-None-Match'] = opts.validators.etag;
+    if (opts.validators?.lastModified) headers['If-Modified-Since'] = opts.validators.lastModified;
 
     const response = await axios.get(url.toString(), {
       responseType: 'stream',
       timeout: getUpstreamTimeoutMs(),
       maxRedirects: 0,
-      ...agents,
+      httpAgent,
+      httpsAgent,
       maxContentLength: Infinity,
       maxBodyLength: Infinity,
       decompress: true,
       validateStatus: (status: number) => (status >= 200 && status < 300) || (status >= 300 && status < 400),
-      headers: { 'User-Agent': `AIOMetadata/${buildInfo.version}` },
+      headers,
     });
+
+    // Before the redirect branch: a 304 sits in the 3xx range but carries no
+    // Location, and would otherwise be rejected as a broken redirect.
+    if (response.status === 304) {
+      response.data?.destroy?.();
+      return {
+        response,
+        contentType: '',
+        upstream: parseUpstreamCacheMeta(response.headers),
+        notModified: true,
+      };
+    }
 
     if (response.status >= 300 && response.status < 400) {
       response.data?.destroy?.();
@@ -211,29 +456,36 @@ export async function openImageStream(rawUrl: string, opts: ResolveOptions = {})
       throw new UpstreamRejected(`Upstream returned non-image content: ${contentType || 'unknown'}`, 502);
     }
 
-    return { response, contentType };
+    return { response, contentType, upstream: parseUpstreamCacheMeta(response.headers), notModified: false };
   }
 
   throw new UpstreamRejected('Too many redirects', 502);
 }
 
 
-export async function fetchImage(rawUrl: string, opts: ResolveOptions = {}): Promise<FetchedImage> {
+export async function fetchImage(rawUrl: string, opts: FetchOptions = {}): Promise<FetchOutcome> {
   const maxBytes = getMaxObjectBytes();
   await acquire();
 
   let response: any;
   let contentType: string;
+  let upstream: UpstreamCacheMeta;
+  let notModified: boolean;
   try {
-    ({ response, contentType } = await openImageStream(rawUrl, opts));
+    ({ response, contentType, upstream, notModified } = await openImageStream(rawUrl, opts));
   } catch (error) {
     release();
     throw error;
   }
 
+  if (notModified) {
+    release();
+    return { notModified: true, upstream };
+  }
+
   const declared = Number.parseInt(response.headers['content-length'] || '', 10);
   if (Number.isFinite(declared) && declared > maxBytes) {
-    const oversize = new OversizeImage(response.data, contentType, declared);
+    const oversize = new OversizeImage(response.data, contentType, declared, upstream);
     const finish = () => release();
     response.data.once('close', finish);
     response.data.once('error', finish);
@@ -258,5 +510,5 @@ export async function fetchImage(rawUrl: string, opts: ResolveOptions = {}): Pro
     release();
   }
 
-  return { body: Buffer.concat(chunks), contentType };
+  return { body: Buffer.concat(chunks), contentType, upstream };
 }

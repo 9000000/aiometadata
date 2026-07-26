@@ -177,7 +177,7 @@ async function runOne(target: WarmTarget): Promise<void> {
     return;
   }
 
-  await store.getOrFetch(target.imageClass, target.url, () => fetchImage(target.url));
+  await store.getOrFetch(target.imageClass, target.url, (validators) => fetchImage(target.url, { validators }));
   stats.warmed += 1;
 }
 

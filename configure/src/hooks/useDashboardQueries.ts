@@ -737,17 +737,23 @@ export function usePurgePosterCache() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    // Omitting `type` purges every class, which is what the "Clear all" button sends.
-    mutationFn: async (type?: string) => {
+    // A string is an image class, which is what the per-type and "Clear all"
+    // buttons send. `{ domain }` purges one provider across every class instead,
+    // because a provider's art spans poster, background, logo and processed.
+    mutationFn: async (target?: string | { domain: string }) => {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (adminKey) {
         headers['x-admin-key'] = adminKey;
       }
 
+      let body: Record<string, string> = {};
+      if (typeof target === 'string') body = { type: target };
+      else if (target?.domain) body = { domain: target.domain };
+
       const response = await fetch('/api/dashboard/poster-cache/purge', {
         method: 'POST',
         headers,
-        body: JSON.stringify(type ? { type } : {}),
+        body: JSON.stringify(body),
       });
 
       if (response.status === 401) {
@@ -766,6 +772,14 @@ export function usePurgePosterCache() {
       queryClient.invalidateQueries({ queryKey: ['poster-cache-stats'] });
     },
   });
+}
+
+/** A rule as stored in POSTER_CACHE_PROVIDER_POLICIES. */
+export interface ProviderPolicyRule {
+  domain: string;
+  policy: 'default' | 'infer' | 'custom' | 'bypass';
+  /** Only for `custom`, and kept verbatim so editing cannot quietly rewrite it. */
+  ttl?: string;
 }
 
 /**

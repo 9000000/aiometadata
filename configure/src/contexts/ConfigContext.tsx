@@ -176,7 +176,7 @@ const initialConfig: AppConfig = {
     enabled: true,
     ai_enabled: false,
     ai_provider: 'gemini',
-    ai_model: 'gemini-2.5-flash-lite',
+    ai_model: 'gemini-2.5-flash',
     ai_trigger_keyword: '',
     providers: {
       movie: 'tmdb.search',

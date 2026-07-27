@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { useConfig } from '@/contexts/ConfigContext';
@@ -10,8 +10,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Edit2, GripVertical, Star, Sparkles, AlertTriangle } from 'lucide-react';
 import { allSearchProviders } from '@/data/catalogs';
-import { GEMINI_MODELS, DEFAULT_GEMINI_MODEL, DEFAULT_OPENROUTER_MODEL } from '@/data/ai-models';
-import type { AIModel } from '@/data/ai-models';
+import { GEMINI_MODELS, DEFAULT_GEMINI_MODEL, DEFAULT_OPENROUTER_MODEL, resolveGeminiModel } from '@/data/ai-models';
+import { useOpenRouterModels } from '@/hooks/useOpenRouterModels';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { useSortable } from '@dnd-kit/sortable';
@@ -129,37 +129,7 @@ export function SearchSettings() {
   const hasGeminiKey = !!config.apiKeys?.gemini;
   const hasOpenRouterKey = !!config.apiKeys?.openrouter;
   const hasAnyAiKey = hasGeminiKey || hasOpenRouterKey;
-  const [openRouterModels, setOpenRouterModels] = useState<AIModel[]>([]);
-  const [openRouterModelsLoading, setOpenRouterModelsLoading] = useState(false);
-  const openRouterKeyRef = React.useRef(config.apiKeys?.openrouter);
-
-  // Fetch OpenRouter model list when key is available
-  useEffect(() => {
-    const key = config.apiKeys?.openrouter;
-    if (!key || key === openRouterKeyRef.current && openRouterModels.length > 0) {
-      if (!key) setOpenRouterModels([]);
-      openRouterKeyRef.current = key;
-      return;
-    }
-    openRouterKeyRef.current = key;
-    let cancelled = false;
-    setOpenRouterModelsLoading(true);
-    fetch('https://openrouter.ai/api/v1/models', {
-      headers: { 'Authorization': `Bearer ${key}` },
-    })
-      .then(res => res.json())
-      .then(data => {
-        if (cancelled) return;
-        const models: AIModel[] = (data?.data || [])
-          .filter((m: any) => m.id && m.name)
-          .map((m: any) => ({ id: m.id, name: m.name, grounding: false }))
-          .sort((a: AIModel, b: AIModel) => a.name.localeCompare(b.name));
-        setOpenRouterModels(models);
-      })
-      .catch(() => { if (!cancelled) setOpenRouterModels([]); })
-      .finally(() => { if (!cancelled) setOpenRouterModelsLoading(false); });
-    return () => { cancelled = true; };
-  }, [config.apiKeys?.openrouter]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { models: openRouterModels, loading: openRouterModelsLoading } = useOpenRouterModels(config.apiKeys?.openrouter);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -815,7 +785,7 @@ export function SearchSettings() {
                                         {(config.search.ai_provider || 'gemini') === 'openrouter'
                                             ? 'Any OpenRouter model ID'
                                             : (() => {
-                                                const selected = GEMINI_MODELS.find(m => m.id === config.search.ai_model);
+                                                const selected = GEMINI_MODELS.find(m => m.id === resolveGeminiModel(config.search.ai_model));
                                                 return (selected?.grounding || config.search.ai_web_search) ? 'with Web Search' : 'without Web Search';
                                             })()
                                         }
@@ -839,7 +809,7 @@ export function SearchSettings() {
                                     </>
                                 ) : (
                                     <Select
-                                        value={config.search.ai_model || DEFAULT_GEMINI_MODEL}
+                                        value={resolveGeminiModel(config.search.ai_model)}
                                         onValueChange={handleAiModelChange}
                                     >
                                         <SelectTrigger id="ai-model" className="w-full sm:w-[280px]">
@@ -901,7 +871,7 @@ export function SearchSettings() {
                             {(() => {
                                 const provider = config.search.ai_provider || 'gemini';
                                 if (provider !== 'gemini') return null;
-                                const selected = GEMINI_MODELS.find(m => m.id === config.search.ai_model);
+                                const selected = GEMINI_MODELS.find(m => m.id === resolveGeminiModel(config.search.ai_model));
                                 if (selected?.grounding) return null; // already has free grounding
 
                                 return (

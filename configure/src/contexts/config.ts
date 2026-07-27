@@ -228,6 +228,12 @@ export interface AppConfig {
   regexExclusionFilter?: string;
   exclusionGenres?: string;
   catalogSetupComplete?: boolean;
+  // AI Catalog Builder model, per provider. Unset falls back to the AI search
+  // model when its provider matches, then to the provider default.
+  ai_catalog?: {
+    gemini_model?: string;
+    openrouter_model?: string;
+  };
   searchEnabled: boolean;
   sessionId: string;
   timezone?: string;

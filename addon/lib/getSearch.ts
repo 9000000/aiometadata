@@ -12,7 +12,7 @@ const idMapper: any = require('./id-mapper');
 const kitsu: any = require('./kitsu');
 const { resolveAllIds }: any = require('./id-resolver');
 const { isAnime }: any = require("../utils/isAnime");
-const { performGeminiSearch }: any = require('../utils/gemini-service');
+const { performGeminiSearch, resolveGeminiModel }: any = require('../utils/gemini-service');
 const { performOpenRouterSearch }: any = require('../utils/openrouter-service');
 import consola from 'consola';
 const { cacheWrapMetaSmart }: any = require('./getCache');
@@ -1080,7 +1080,9 @@ async function matchAndEnrichFromTMDB(suggestion: { title: string; year: string 
 async function performAiSearch(query: string, language: string, config: any): Promise<any[]> {
   const startTime = Date.now();
   const aiProvider = config.search?.ai_provider || 'gemini';
-  const aiModel = config.search?.ai_model || (aiProvider === 'openrouter' ? 'google/gemini-2.5-flash' : 'gemini-2.5-flash-lite');
+  const aiModel = aiProvider === 'openrouter'
+    ? (config.search?.ai_model || 'google/gemini-2.5-flash')
+    : resolveGeminiModel(config.search?.ai_model);
   const aiWebSearch = config.search?.ai_web_search === true;
 
   logger.info(`Starting AI search for query: "${query}" (provider: ${aiProvider}, model: ${aiModel}, webSearch: ${aiProvider === 'openrouter' ? 'always' : aiWebSearch})`);

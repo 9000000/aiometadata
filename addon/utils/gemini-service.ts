@@ -4,7 +4,7 @@ const consola: any = require('consola');
 
 const logger: any = consola.withTag('AISearch');
 
-const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-lite';
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
 
 interface GeminiModel {
   id: string;
@@ -19,13 +19,26 @@ interface Suggestion {
 }
 
 const GEMINI_MODELS: GeminiModel[] = [
-  { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite', grounding: true },
   { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', grounding: true },
   { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', grounding: false },
   { id: 'gemini-3-flash', name: 'Gemini 3 Flash', grounding: false },
   { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', grounding: false },
   { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', grounding: false },
+  { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash Lite', grounding: false },
+  { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', grounding: false },
+  { id: 'gemini-3.6-flash', name: 'Gemini 3.6 Flash', grounding: false },
 ];
+
+// Retired by Google — rejected for API keys created after retirement.
+const RETIRED_GEMINI_MODELS: Record<string, string> = {
+  'gemini-2.5-flash-lite': DEFAULT_GEMINI_MODEL,
+  'gemini-2.5-flash-lite-preview-09-2025': DEFAULT_GEMINI_MODEL,
+};
+
+function resolveGeminiModel(model?: string | null): string {
+  if (!model) return DEFAULT_GEMINI_MODEL;
+  return RETIRED_GEMINI_MODELS[model] || model;
+}
 
 function supportsGrounding(model: string): boolean {
   const entry = GEMINI_MODELS.find(m => m.id === model);
@@ -40,7 +53,7 @@ async function performGeminiSearch(apiKey: string, query: string, type: string, 
     return [];
   }
 
-  const selectedModel = model || DEFAULT_GEMINI_MODEL;
+  const selectedModel = resolveGeminiModel(model);
   const useGrounding = forceGrounding || supportsGrounding(selectedModel);
   const timeout = useGrounding ? 45000 : 30000;
 
@@ -259,5 +272,5 @@ function validateAndFilterEntries(parsed: any[]): Suggestion[] {
   return validSuggestions;
 }
 
-export { performGeminiSearch, buildPrompt, parseAIResponse, GEMINI_MODELS, supportsGrounding, DEFAULT_GEMINI_MODEL };
-module.exports = { performGeminiSearch, buildPrompt, parseAIResponse, GEMINI_MODELS, supportsGrounding, DEFAULT_GEMINI_MODEL };
+export { performGeminiSearch, buildPrompt, parseAIResponse, GEMINI_MODELS, supportsGrounding, resolveGeminiModel, DEFAULT_GEMINI_MODEL };
+module.exports = { performGeminiSearch, buildPrompt, parseAIResponse, GEMINI_MODELS, supportsGrounding, resolveGeminiModel, DEFAULT_GEMINI_MODEL };

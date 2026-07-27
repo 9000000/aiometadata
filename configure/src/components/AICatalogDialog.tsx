@@ -4,6 +4,9 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
+import { GEMINI_MODELS, resolveCatalogModel } from '@/data/ai-models';
+import { useOpenRouterModels } from '@/hooks/useOpenRouterModels';
 import { Loader2, Sparkles, Check, AlertCircle } from 'lucide-react';
 import { toast } from "sonner";
 import { motion, AnimatePresence } from 'framer-motion';
@@ -87,6 +90,23 @@ export function AICatalogDialog({ isOpen, onClose, embedded, onCatalogsCreated }
   const defaultProvider = config.apiKeys?.openrouter ? 'openrouter' : 'gemini';
   const [provider, setProvider] = useState<'openrouter' | 'gemini'>(defaultProvider);
   const [generationMode, setGenerationMode] = useState<AICatalogGenerationMode>('auto');
+  const [model, setModel] = useState(() => resolveCatalogModel(config, defaultProvider));
+  const { models: openRouterModels, loading: openRouterModelsLoading } = useOpenRouterModels(config.apiKeys?.openrouter);
+
+  useEffect(() => {
+    setModel(resolveCatalogModel(config, provider));
+  }, [provider, isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleModelChange = (value: string) => {
+    setModel(value);
+    setConfig(prev => ({
+      ...prev,
+      ai_catalog: {
+        ...prev.ai_catalog,
+        [provider === 'openrouter' ? 'openrouter_model' : 'gemini_model']: value,
+      },
+    }));
+  };
 
   useEffect(() => {
     if (isOpen) {
@@ -122,6 +142,7 @@ export function AICatalogDialog({ isOpen, onClose, embedded, onCatalogsCreated }
           query: query.trim(),
           provider,
           generationMode,
+          model,
           geminiKey: config.apiKeys?.gemini || undefined,
           openrouterKey: config.apiKeys?.openrouter || undefined,
         }),
@@ -266,27 +287,67 @@ export function AICatalogDialog({ isOpen, onClose, embedded, onCatalogsCreated }
               </div>
             )}
 
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-muted-foreground">Mode</span>
-              <Select
-                value={generationMode}
-                onValueChange={(value) => {
-                  setGenerationMode(value as AICatalogGenerationMode);
-                  setExampleIndex(0);
-                }}
-                disabled={state === 'generating' || state === 'resolving'}
-              >
-                <SelectTrigger className="h-8 w-32 rounded-md text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {GENERATION_MODE_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-muted-foreground">Mode</span>
+                <Select
+                  value={generationMode}
+                  onValueChange={(value) => {
+                    setGenerationMode(value as AICatalogGenerationMode);
+                    setExampleIndex(0);
+                  }}
+                  disabled={state === 'generating' || state === 'resolving'}
+                >
+                  <SelectTrigger className="h-8 w-32 rounded-md text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {GENERATION_MODE_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-muted-foreground">Model</span>
+                {provider === 'openrouter' ? (
+                  <>
+                    <Input
+                      list="ai-catalog-openrouter-models"
+                      value={model}
+                      onChange={(e) => handleModelChange(e.target.value)}
+                      placeholder={openRouterModelsLoading ? 'Loading models...' : 'e.g. google/gemini-2.5-flash'}
+                      disabled={state === 'generating' || state === 'resolving'}
+                      className="h-8 w-48 rounded-md text-xs"
+                    />
+                    <datalist id="ai-catalog-openrouter-models">
+                      {openRouterModels.map(m => (
+                        <option key={m.id} value={m.id}>{m.name}</option>
+                      ))}
+                    </datalist>
+                  </>
+                ) : (
+                  <Select
+                    value={model}
+                    onValueChange={handleModelChange}
+                    disabled={state === 'generating' || state === 'resolving'}
+                  >
+                    <SelectTrigger className="h-8 w-48 rounded-md text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {GEMINI_MODELS.map(m => (
+                        <SelectItem key={m.id} value={m.id}>
+                          {m.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
             </div>
 
             <div className="flex items-center justify-between">

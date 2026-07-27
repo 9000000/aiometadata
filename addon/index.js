@@ -1957,7 +1957,7 @@ addon.get("/api/tvdb/discover/search/:entity", async (req, res) => {
 const aiCatalogRateLimit = new Map();
 addon.post("/api/ai/create-catalog", async (req, res) => {
   try {
-    const { userUUID, password, query, provider, generationMode, geminiKey: clientGeminiKey, openrouterKey: clientOpenrouterKey } = req.body;
+    const { userUUID, password, query, provider, generationMode, model: requestedModel, geminiKey: clientGeminiKey, openrouterKey: clientOpenrouterKey } = req.body;
 
     if (!userUUID || !password) {
       return res.status(400).json({ error: 'User UUID and password are required' });
@@ -2010,10 +2010,12 @@ addon.post("/api/ai/create-catalog", async (req, res) => {
 
     let rawText = null;
     const useOpenRouter = provider === 'gemini' ? (!geminiKey && !!openrouterKey) : !!openrouterKey;
+    const { resolveCatalogModel } = require('./utils/ai-model-resolver');
+    const activeProvider = useOpenRouter ? 'openrouter' : 'gemini';
+    const model = resolveCatalogModel({ config, provider: activeProvider, requestedModel });
 
     if (useOpenRouter) {
       const { generateContent } = require('./utils/openrouter-client');
-      const model = config.search?.ai_model || 'google/gemini-2.5-flash';
       const result = await generateContent({
         apiKey: openrouterKey,
         model,
@@ -2024,7 +2026,6 @@ addon.post("/api/ai/create-catalog", async (req, res) => {
       rawText = result.text;
     } else {
       const { generateContent } = require('./utils/gemini-client');
-      const model = config.search?.ai_model || 'gemini-2.5-flash';
       const result = await generateContent({
         apiKey: geminiKey,
         model,

@@ -24,7 +24,10 @@ function getImageWarmDetail() {
       concurrency: live.offered > 0 ? live.concurrency : 0,
       lagMs: live.offered > 0 ? live.lagMs : 0,
       resolved,
-      progress: source.offered > 0 ? resolved / source.offered : 0,
+      peakOutstanding: source.peakOutstanding || 0,
+      drained: source.peakOutstanding > 0
+        ? Math.min(1, (source.peakOutstanding - outstanding) / source.peakOutstanding)
+        : 1,
       outstanding,
       isActive: live.offered > 0 && (live.depth + live.concurrency) > 0,
       fromLastRun: live.offered === 0,

@@ -34,6 +34,7 @@ interface Stats {
   failed: number;
   dropped: number;
   atCapacity: number;
+  peakOutstanding: number;
 }
 
 const queue: WarmTarget[] = [];
@@ -123,8 +124,13 @@ function classifyFailure(error: any): string {
 
 const stats: Stats = {
   offered: 0, skipped: 0, queued: 0, warmed: 0, alreadyFresh: 0, rendered: 0,
-  failed: 0, dropped: 0, atCapacity: 0,
+  failed: 0, dropped: 0, atCapacity: 0, peakOutstanding: 0,
 };
+
+function notePeak(): void {
+  const outstanding = depth() + active;
+  if (outstanding > stats.peakOutstanding) stats.peakOutstanding = outstanding;
+}
 
 const LAG_INTERVAL_MS = 250;
 
@@ -248,6 +254,7 @@ export function offer(targets: WarmTarget[]): void {
   }
 
   if (depth() > 0) {
+    notePeak();
     cancelIdleReport();
     startLagProbe();
     pump();
@@ -283,6 +290,7 @@ function pump(): void {
     compact();
     active += 1;
     draining = true;
+    notePeak();
 
     runOne(target)
       .catch((error: any) => {

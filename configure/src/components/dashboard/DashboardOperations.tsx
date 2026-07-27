@@ -1433,7 +1433,8 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
                       </div>
                     );
                   }
-                  const pct = Math.round(img.progress * 100);
+                  const showBar = img.outstanding > 0 && img.peakOutstanding > 0;
+                  const pct = Math.round((img.drained ?? 1) * 100);
                   return (
                     <div className="mt-3 pt-3 border-t">
                       <div className="rounded-lg p-3 bg-violet-500/10 border border-violet-500/20">
@@ -1452,18 +1453,22 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
                             </span>
                           </div>
                           <span className="text-xs tabular-nums">
-                            <AnimatedNumber value={img.resolved} /> / {img.offered}
+                            {showBar
+                              ? <><AnimatedNumber value={img.outstanding} /> to go</>
+                              : <><AnimatedNumber value={img.offered} /> images seen</>}
                           </span>
                         </div>
 
-                        <div className="relative h-2 w-full overflow-hidden rounded-full bg-black/20">
-                          <div
-                            className="h-full rounded-full transition-all duration-700 ease-out bg-gradient-to-r from-violet-500 to-fuchsia-400"
-                            style={{ width: `${pct}%` }}
-                          />
-                        </div>
+                        {showBar && (
+                          <div className="relative h-2 w-full overflow-hidden rounded-full bg-black/20">
+                            <div
+                              className="h-full rounded-full transition-all duration-700 ease-out bg-gradient-to-r from-violet-500 to-fuchsia-400"
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                        )}
 
-                        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground tabular-nums">
+                        <div className={`${showBar ? 'mt-2 ' : ''}flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground tabular-nums`}>
                           <span>{img.warmed} fetched</span>
                           <span>{img.skipped} already cached</span>
                           {img.rendered > 0 && <span>{img.rendered} rendered</span>}

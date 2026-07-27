@@ -126,7 +126,7 @@ class ConfigCache {
 const configCache = new ConfigCache();
 
 if (redis) {
-  logger.info(`ConfigCache backed by Redis, TTL=${CONFIG_CACHE_TTL_SEC()}s`);
+  logger.debug(`ConfigCache backed by Redis, TTL=${CONFIG_CACHE_TTL_SEC()}s`);
 } else {
   logger.warn('ConfigCache: Redis unavailable, falling through to loader on every call');
 }

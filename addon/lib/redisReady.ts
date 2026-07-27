@@ -1,71 +1,122 @@
 import redis from './redisClient';
 
-const DEFAULT_REDIS_READY_TIMEOUT_MS = parseInt(process.env.REDIS_READY_TIMEOUT_MS || '15000', 10);
+const READY_EVENT_TIMEOUT_MS = parseInt(process.env.REDIS_READY_TIMEOUT_MS || '15000', 10);
+const MAX_RETRY_DELAY_MS = 5_000;
 
-function removeListeners(target, listeners) {
-  for (const [eventName, listener] of listeners) {
-    target.off(eventName, listener);
+export interface WaitingInfo {
+  attempt: number;
+  elapsedMs: number;
+  status: string;
+  reason: string;
+}
+
+export interface WaitOptions {
+  readyTimeoutMs?: number;
+  retryDelayMs?: (attempt: number) => number;
+  onWaiting?: (info: WaitingInfo) => void;
+  signal?: AbortSignal;
+}
+
+const defaultRetryDelay = (attempt: number): number =>
+  Math.min(MAX_RETRY_DELAY_MS, 250 * 2 ** (attempt - 1));
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new Error('Redis wait aborted');
   }
 }
 
-export async function waitForRedisReady(timeoutMs = DEFAULT_REDIS_READY_TIMEOUT_MS): Promise<boolean> {
-  if (!redis) {
-    return false;
-  }
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('Redis wait aborted'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
-  if (String(redis.status) === 'ready') {
-    return true;
-  }
+/** Resolves on `ready`; rejects (retryably) on `end` or when the attempt budget runs out. */
+function waitForReadyEvent(client: any, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let timer: NodeJS.Timeout | undefined;
 
-  if (redis.status === 'wait' || redis.status === 'end' || redis.status === 'close') {
-    try {
-      await redis.connect();
-    } catch (error: any) {
-      const message = error?.message || '';
-      const isAlreadyConnecting =
-        message.includes('Redis is already connecting') ||
-        message.includes('Redis is already connected');
-
-      if (!isAlreadyConnecting && String(redis.status) !== 'ready') {
-        throw error;
-      }
-    }
-  }
-
-  if (String(redis.status) === 'ready') {
-    return true;
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    const listeners: Array<[string, (...args: any[]) => void]> = [];
-    let timeoutHandle: NodeJS.Timeout | undefined;
-
-    const finish = (callback: () => void) => {
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle);
-      }
-      removeListeners(redis, listeners);
-      callback();
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      client.off('ready', onReady);
+      client.off('end', onEnd);
+      signal?.removeEventListener('abort', onAbort);
     };
 
-    const onReady = () => finish(resolve);
-    const onEnd = () => finish(() => reject(new Error('Redis connection ended before becoming ready')));
-    const onClose = () => {
-      if (String(redis.status) === 'ready') {
-        finish(resolve);
-      }
-    };
+    const onReady = () => { cleanup(); resolve(); };
+    const onEnd = () => { cleanup(); reject(new Error('Redis connection ended before becoming ready')); };
+    const onAbort = () => { cleanup(); reject(new Error('Redis wait aborted')); };
 
-    listeners.push(['ready', onReady], ['end', onEnd], ['close', onClose]);
+    client.on('ready', onReady);
+    client.on('end', onEnd);
+    signal?.addEventListener('abort', onAbort, { once: true });
 
-    for (const [eventName, listener] of listeners) {
-      redis.on(eventName, listener);
-    }
-
-    timeoutHandle = setTimeout(() => {
-      finish(() => reject(new Error(`Timed out waiting for Redis to become ready after ${timeoutMs}ms (last status: ${redis.status})`)));
+    timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Redis did not become ready within ${timeoutMs}ms (status: ${client.status})`));
     }, timeoutMs);
   });
+}
 
-  return true;
+const isBenignConnectError = (message: string): boolean =>
+  message.includes('Redis is already connecting') || message.includes('Redis is already connected');
+
+export async function waitForClientReady(client: any, options: WaitOptions = {}): Promise<void> {
+  const readyTimeoutMs = options.readyTimeoutMs ?? READY_EVENT_TIMEOUT_MS;
+  const retryDelayMs = options.retryDelayMs ?? defaultRetryDelay;
+  const startedAt = Date.now();
+  let attempt = 0;
+
+  for (;;) {
+    throwIfAborted(options.signal);
+
+    if (String(client.status) === 'ready') {
+      return;
+    }
+
+    attempt++;
+    try {
+      if (['wait', 'end', 'close'].includes(String(client.status))) {
+        try {
+          await client.connect();
+        } catch (error: any) {
+          if (!isBenignConnectError(error?.message || '')) {
+            throw error;
+          }
+        }
+      }
+
+      if (String(client.status) === 'ready') {
+        return;
+      }
+
+      await waitForReadyEvent(client, readyTimeoutMs, options.signal);
+      return;
+    } catch (error: any) {
+      throwIfAborted(options.signal);
+
+      options.onWaiting?.({
+        attempt,
+        elapsedMs: Date.now() - startedAt,
+        status: String(client.status),
+        reason: error?.message || String(error)
+      });
+
+      await sleep(retryDelayMs(attempt), options.signal);
+    }
+  }
+}
+
+/** Waits for the shared client. Resolves only when Redis is usable. */
+export function waitForRedisReady(options: WaitOptions = {}): Promise<void> {
+  return waitForClientReady(redis, options);
 }

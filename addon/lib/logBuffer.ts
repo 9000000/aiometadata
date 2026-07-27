@@ -49,8 +49,6 @@ const LEVEL_LABEL_TO_NUM: Record<string, number> = {
   verbose: 5,
 };
 
-// Dual-bounded: byte cap keeps memory predictable regardless of log volume, the
-// entry cap is a secondary ceiling. Oldest entries are evicted when either is hit.
 const MAX_ENTRIES = parseInt(process.env.LOG_BUFFER_MAX_ENTRIES || process.env.LOG_BUFFER_SIZE || '100000', 10);
 const MAX_BYTES = parseInt(process.env.LOG_BUFFER_MAX_BYTES || String(64 * 1024 * 1024), 10);
 const ARG_DETAIL_MAX = 20000;
@@ -307,15 +305,40 @@ function handleLogObj(logObj: any): void {
   pushEntry(entry);
 }
 
+export interface SuppressedCounts {
+  suppressed: number;
+  /** Entries at warn or worse — a subsystem degrading quietly still shows up. */
+  warnings: number;
+}
+
+let quietWindow: SuppressedCounts | null = null;
+
+export function beginQuietWindow(): void {
+  quietWindow = { suppressed: 0, warnings: 0 };
+}
+
+export function endQuietWindow(): SuppressedCounts {
+  const window = quietWindow;
+  quietWindow = null;
+  return window ?? { suppressed: 0, warnings: 0 };
+}
+
 export function installLogReporter(): void {
   refreshSecrets();
-  // Patch the prototype so ALL consola instances (including withTag children
-  // created before this runs) route through our buffer. addReporter() only
-  // works for the root instance — child loggers snapshot reporters at creation.
   const proto = Object.getPrototypeOf(consola);
   const original = proto._log;
   proto._log = function patchedLog(logObj: any) {
     handleLogObj(logObj);
+
+    if (quietWindow) {
+      quietWindow.suppressed += 1;
+      // LEVEL_MAP: 0 error, 1 warn — anything below that is routine chatter.
+      if (typeof logObj?.level === 'number' && logObj.level <= 1) {
+        quietWindow.warnings += 1;
+      }
+      return undefined;
+    }
+
     return original.call(this, logObj);
   };
 }

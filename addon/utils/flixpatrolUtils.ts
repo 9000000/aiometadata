@@ -1,4 +1,4 @@
-import { httpGet } from "./httpClient.js";
+import { httpGet, BOOTSTRAP_HTTP_OPTIONS } from "./httpClient.js";
 import { cacheWrapGlobal, cacheWrapMetaSmart } from "../lib/getCache.js";
 import { getMeta } from "../lib/getMeta.js";
 import { UserConfig } from "../types/index.js";
@@ -132,7 +132,8 @@ let availabilityFetchedAt = 0;
 let availabilityInFlight: Promise<void> | null = null;
 
 async function fetchAvailabilityIndex(): Promise<FlixPatrolAvailability | null> {
-  const response: any = await httpGet(AVAILABILITY_URL);
+  // Startup index fetch; a blip here disables availability for the whole run.
+  const response: any = await httpGet(AVAILABILITY_URL, BOOTSTRAP_HTTP_OPTIONS);
   const data = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
   if (!data || typeof data !== 'object' || !data.regions) {
     logger.warn(`Availability index at ${AVAILABILITY_URL} has no "regions" field — ignoring`);

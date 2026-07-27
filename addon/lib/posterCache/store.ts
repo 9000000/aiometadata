@@ -25,6 +25,7 @@ import {
   type UpstreamCacheMeta,
 } from './config.js';
 import { isNotModified, mergeRevalidated, type ConditionalValidators, type FetchOutcome } from './upstream.js';
+import { walkFiles, pruneEmptyDirs } from './walk.js';
 
 const logger = consola.withTag('PosterCache');
 
@@ -99,6 +100,18 @@ let memoryHits = 0;
 
 let initialized = false;
 let scanning = false;
+
+/**
+ * Settles when the initial index scan has finished. Resolved up front so a
+ * disabled or never-initialized cache cannot leave a waiter hanging, and the
+ * scan promise is pre-caught so a failed scan resolves rather than rejects.
+ */
+let indexed: Promise<void> = Promise.resolve();
+
+/** Await before trusting index-derived answers such as isCachedFresh(). */
+export function whenIndexed(): Promise<void> {
+  return indexed;
+}
 let idIndexing = false;
 let idIndexBuilt = false;
 
@@ -680,7 +693,11 @@ async function refreshStoredEntry(
 async function remove(imageClass: ImageClass, hash: string): Promise<number> {
   const freed = removeFromIndex(imageClass, hash);
   memoryDrop(indexKey(imageClass, hash));
-  await fsp.unlink(entryPath(imageClass, hash)).catch(() => { /* already gone */ });
+  const file = entryPath(imageClass, hash);
+  await fsp.unlink(file).catch(() => { /* already gone */ });
+  // Without this the sharded directories outlive their entries, and every scan
+  // pays to walk a tree of directories that hold nothing.
+  await pruneEmptyDirs(path.dirname(file), path.join(getCacheDir(), imageClass));
   return freed;
 }
 
@@ -948,19 +965,12 @@ async function walkClass(
 /** Walks a class subtree. Reads the tree rather than the index, so cold entries count. */
 async function* eachStoredHash(imageClass: ImageClass): AsyncGenerator<string> {
   const classDir = path.join(getCacheDir(), imageClass);
-  let dir: fs.Dir;
-  try {
-    dir = await fsp.opendir(classDir, { recursive: true } as any);
-  } catch (error: any) {
-    if (error?.code !== 'ENOENT') {
-      logger.warn(`Could not walk ${classDir}: ${error?.message}`);
-    }
-    return;
-  }
-  for await (const dirent of dir) {
-    if (!dirent.isFile()) continue;
-    if (!/^[0-9a-f]{64}$/.test(dirent.name)) continue;
-    yield dirent.name;
+  const files = walkFiles(classDir, {
+    onError: (error: any, dir: string) => logger.warn(`Could not walk ${dir}: ${error?.message}`)
+  });
+  for await (const file of files) {
+    if (!/^[0-9a-f]{64}$/.test(file.name)) continue;
+    yield file.name;
   }
 }
 
@@ -1153,23 +1163,14 @@ async function scan(): Promise<void> {
 
   for (const imageClass of IMAGE_CLASSES) {
     const classDir = path.join(root, imageClass);
-    let dir: fs.Dir;
-    try {
-      dir = await fsp.opendir(classDir, { recursive: true } as any);
-    } catch (error: any) {
-      if (error?.code !== 'ENOENT') {
-        logger.warn(`Could not scan ${classDir}: ${error?.message}`);
-      }
-      continue;
-    }
+    const files = walkFiles(classDir, {
+      onError: (error: any, dir: string) => logger.warn(`Could not scan ${dir}: ${error?.message}`)
+    });
 
-    for await (const dirent of dir) {
-      if (!dirent.isFile()) continue;
-      const name = dirent.name;
+    for await (const { name, dir } of files) {
       if (name.endsWith('.tmp')) {
         // Interrupted write from a previous run.
-        await fsp.unlink(path.join((dirent as any).parentPath || (dirent as any).path || classDir, name))
-          .catch(() => { /* best effort */ });
+        await fsp.unlink(path.join(dir, name)).catch(() => { /* best effort */ });
         continue;
       }
       if (!/^[0-9a-f]{64}$/.test(name)) continue;
@@ -1195,12 +1196,6 @@ async function scan(): Promise<void> {
   scheduleEviction();
 }
 
-/**
- * Backfills the id tokens for entries indexed by the size scan, which only
- * stats files. Runs on first use rather than at startup — most instances never
- * clear art by id — and reads concurrently, since one header at a time leaves
- * the thread pool idle.
- */
 async function backfillIds(): Promise<void> {
   if (idIndexing || idIndexBuilt) return;
   idIndexing = true;
@@ -1292,8 +1287,7 @@ export async function init(): Promise<void> {
     logger.warn(`Could not create cache dir: ${error?.message}`);
   });
 
-  // Non-blocking: reads work against the filesystem, so startup need not wait.
-  scan().catch((error: any) => logger.warn(`Initial scan failed: ${error?.message}`));
+  indexed = scan().catch((error: any) => logger.warn(`Initial scan failed: ${error?.message}`));
 
   if (!sweepTimer) {
     sweepTimer = setInterval(() => {

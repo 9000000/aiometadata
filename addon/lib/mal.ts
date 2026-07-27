@@ -85,7 +85,7 @@ if (!malDispatcher) {
     }
   } else {
     malDispatcher = new Agent({ allowH2: false, connect: { timeout: 30000 } });
-    logger.info('undici agent is enabled for direct connections.');
+    logger.debug('undici agent is enabled for direct connections.');
   }
 }
 

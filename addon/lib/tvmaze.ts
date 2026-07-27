@@ -2,6 +2,8 @@ import { httpGet } from '../utils/httpClient.js';
 import { cacheWrapTvmazeApi } from './getCache.js';
 const buildInfo = require('./buildInfo');
 import { Agent, ProxyAgent } from 'undici';
+import consola from 'consola';
+const consolaLogger = consola.withTag('TVmaze');
 const TVMAZE_API_URL = 'https://api.tvmaze.com';
 const DEFAULT_TIMEOUT = 15000; // 15-second timeout for all requests
 const MAX_RETRIES = 3;
@@ -32,7 +34,7 @@ if (HTTP_PROXY_URL) {
     connections: 2,
     keepAliveTimeout: 10 * 1000,
   });
-  console.log('[TVmaze] undici agent is enabled for direct connections (2 max connections to avoid IP blocking).');
+  consolaLogger.debug('[TVmaze] undici agent is enabled for direct connections (2 max connections to avoid IP blocking).');
 }
 
 // Default HTTP client config with User-Agent as recommended by TVmaze

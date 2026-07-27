@@ -1102,6 +1102,14 @@ class ComprehensiveCatalogWarmer {
       this.log('info', 'Auto-warmup on cache epoch change: enabled');
     }
 
+    // The image cache index is rebuilt from disk in the background at startup.
+    // Until it lands, isCachedFresh() reports false for entries that are in fact
+    // on disk, so warming now would re-download art we already have.
+    const imageStore = require('./posterCache/store.js');
+    const waitedFrom = Date.now();
+    await imageStore.whenIndexed();
+    this.log('info', `Image cache index ready after ${Date.now() - waitedFrom}ms; starting warmup`);
+
     const epochWarmupRan = await this.checkEpochAndWarmIfNeeded();
     
     // If version warmup ran, we still want to schedule the next regular warmup

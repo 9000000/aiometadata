@@ -65,7 +65,7 @@ if (!mdblistDispatcher) {
     }
   } else {
     mdblistDispatcher = new Agent({ allowH2: false, connect: { timeout: 30000 } });
-    logger.info('[MDBList] undici agent is enabled for direct connections.');
+    logger.debug('[MDBList] undici agent is enabled for direct connections.');
   }
 }
 

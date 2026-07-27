@@ -182,6 +182,30 @@ addon.use((req, res, next) => {
   next();
 });
 
+const { readiness } = require('./lib/lifecycle/runtime.js');
+const { createReadinessGate } = require('./lib/lifecycle/readiness.js');
+
+addon.get('/health/live', (req, res) => {
+  res.status(200).json({
+    status: 'alive',
+    timestamp: new Date().toISOString(),
+    version: ADDON_VERSION,
+  });
+});
+
+addon.get('/health/ready', (req, res) => {
+  const snapshot = readiness.snapshot();
+  res.status(snapshot.ready ? 200 : 503).json({
+    status: snapshot.ready ? 'ready' : 'starting',
+    ready: snapshot.ready,
+    components: snapshot.components,
+    timestamp: new Date().toISOString(),
+    version: ADDON_VERSION,
+  });
+});
+
+addon.use(createReadinessGate(readiness, { allowPaths: ['/health'] }));
+
 // Add request tracking middleware
 addon.use(requestTracker.middleware());
 
@@ -280,50 +304,53 @@ function applyImageCachePrefix(data) {
   }
 }
 
-// Initialize cache warming for public instances (enabled by default)
-const ENABLE_CACHE_WARMING = process.env.ENABLE_CACHE_WARMING !== 'false';
-const CACHE_WARMING_INTERVAL = parseInt(process.env.CACHE_WARMING_INTERVAL || '720', 10);
+const isCacheWarmingEnabled = () => process.env.ENABLE_CACHE_WARMING !== 'false';
 
-if (ENABLE_CACHE_WARMING) {
-  consola.info(`[API Cache Warming] Initializing API cache warming (interval: ${CACHE_WARMING_INTERVAL} minutes)`);
+/** Called by the startup sequence once settings are loaded. */
+function startEssentialWarmingSchedules() {
+  const CACHE_WARMING_INTERVAL = parseInt(process.env.CACHE_WARMING_INTERVAL || '720', 10);
 
-  // Schedule periodic warming (non-blocking)
-  scheduleEssentialWarming(CACHE_WARMING_INTERVAL);  
-  // Schedule popular content warming based on CACHE_WARM_INTERVAL_HOURS env (default 24h, minimum 12h)
-  const POPULAR_WARM_INTERVAL_HOURS = Math.max(12, parseInt(process.env.CACHE_WARM_INTERVAL_HOURS || '24', 10));
-  const POPULAR_WARM_CHECK_INTERVAL = 15 * 60 * 1000; // Check every 15 minutes
+  if (isCacheWarmingEnabled()) {
+    consola.info(`[API Cache Warming] Initializing API cache warming (interval: ${CACHE_WARMING_INTERVAL} minutes)`);
+
+    // Schedule periodic warming (non-blocking)
+    scheduleEssentialWarming(CACHE_WARMING_INTERVAL);  
+    // Schedule popular content warming based on CACHE_WARM_INTERVAL_HOURS env (default 24h, minimum 12h)
+    const POPULAR_WARM_INTERVAL_HOURS = Math.max(12, parseInt(process.env.CACHE_WARM_INTERVAL_HOURS || '24', 10));
+    const POPULAR_WARM_CHECK_INTERVAL = 15 * 60 * 1000; // Check every 15 minutes
   
-  consola.info(`[Cache Warming] Scheduling popular content warming (interval: ${POPULAR_WARM_INTERVAL_HOURS}h, check every 15min)`);
+    consola.info(`[Cache Warming] Scheduling popular content warming (interval: ${POPULAR_WARM_INTERVAL_HOURS}h, check every 15min)`);
   
-  // Check immediately on startup
-  warmPopularContent().catch(error => {
-    consola.warn('[Cache Warming] Initial popular content warming check failed:', error.message);
-  });
-  
-  // Then check periodically (the function itself will decide if warming is needed)
-  setInterval(async () => {
-    await warmPopularContent().catch(error => {
-      consola.warn('[Cache Warming] Popular content warming check failed:', error.message);
+    // Check immediately on startup
+    warmPopularContent().catch(error => {
+      consola.warn('[Cache Warming] Initial popular content warming check failed:', error.message);
     });
-  }, POPULAR_WARM_CHECK_INTERVAL);
-} else {
-  consola.info('[Cache Warming] Cache warming disabled or cache disabled');
+  
+    // Then check periodically (the function itself will decide if warming is needed)
+    setInterval(async () => {
+      await warmPopularContent().catch(error => {
+        consola.warn('[Cache Warming] Popular content warming check failed:', error.message);
+      });
+    }, POPULAR_WARM_CHECK_INTERVAL);
+  } else {
+    consola.info('[Cache Warming] Cache warming disabled or cache disabled');
+  }
 }
 
-// Scheduled MovieLens rating re-sync
-const ENABLE_MOVIELENS_SYNC = process.env.ENABLE_MOVIELENS_SYNC !== 'false';
-if (ENABLE_MOVIELENS_SYNC && process.env.MOVIELENS_CRED_KEY) {
-  const MOVIELENS_SYNC_INTERVAL_HOURS = Math.max(1, parseInt(process.env.MOVIELENS_SYNC_INTERVAL_HOURS || '24', 10));
-  const intervalMs = MOVIELENS_SYNC_INTERVAL_HOURS * 60 * 60 * 1000;
-  consola.info(`[MovieLens] Scheduling rating re-sync every ${MOVIELENS_SYNC_INTERVAL_HOURS}h`);
-  setInterval(() => {
-    require('./lib/movielensSync').syncAllMovieLensAccounts().catch(error => {
-      consola.warn('[MovieLens] Scheduled re-sync failed:', error.message);
-    });
-  }, intervalMs);
+/** Called by the startup sequence once settings are loaded. */
+function startMovieLensSyncSchedule() {
+  const ENABLE_MOVIELENS_SYNC = process.env.ENABLE_MOVIELENS_SYNC !== 'false';
+  if (ENABLE_MOVIELENS_SYNC && process.env.MOVIELENS_CRED_KEY) {
+    const MOVIELENS_SYNC_INTERVAL_HOURS = Math.max(1, parseInt(process.env.MOVIELENS_SYNC_INTERVAL_HOURS || '24', 10));
+    const intervalMs = MOVIELENS_SYNC_INTERVAL_HOURS * 60 * 60 * 1000;
+    consola.info(`[MovieLens] Scheduling rating re-sync every ${MOVIELENS_SYNC_INTERVAL_HOURS}h`);
+    setInterval(() => {
+      require('./lib/movielensSync').syncAllMovieLensAccounts().catch(error => {
+        consola.warn('[MovieLens] Scheduled re-sync failed:', error.message);
+      });
+    }, intervalMs);
+  }
 }
-
-
 
 const getCacheHeaders = function (opts) {
   opts = opts || {};
@@ -3411,7 +3438,7 @@ addon.get("/api/cache/status", (req, res) => {
   
   res.json({
     cacheEnabled: true,
-    warmingEnabled: ENABLE_CACHE_WARMING,
+    warmingEnabled: isCacheWarmingEnabled(),
     warmingInterval: CACHE_WARMING_INTERVAL,
     initialWarmingComplete: isInitialWarmingComplete(),
     addonVersion: ADDON_VERSION
@@ -7122,7 +7149,7 @@ addon.post('/api/dashboard/restart', (req, res) => {
 
 // Blocking startup function that waits for cache warming
 async function startServerWithCacheWarming() {
-  if (ENABLE_CACHE_WARMING) {
+  if (isCacheWarmingEnabled()) {
     consola.info('[Server Startup] Waiting for initial cache warming to complete...');
     const { warmEssentialContent } = require("./lib/cacheWarmer");
     
@@ -7139,4 +7166,7 @@ async function startServerWithCacheWarming() {
   return addon;
 }
 
-module.exports = { addon, startServerWithCacheWarming, getDashboardAPI, applyImageCachePrefix };
+module.exports = {
+  addon, startServerWithCacheWarming, getDashboardAPI, applyImageCachePrefix,
+  startEssentialWarmingSchedules, startMovieLensSyncSchedule,
+};

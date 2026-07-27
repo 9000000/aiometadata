@@ -113,7 +113,7 @@ if (!dispatcher) {
     }
   } else {
     dispatcher = new Agent({ allowH2: false, connect: { timeout: 10000 } });
-    console.log('[TMDB] undici agent is enabled for direct connections.');
+    consola.debug('[TMDB] undici agent is enabled for direct connections.');
   }
 }
 

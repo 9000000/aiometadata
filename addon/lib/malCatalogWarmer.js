@@ -1,6 +1,7 @@
 const jikan = require('./mal');
 const { cacheWrapJikanApi, cacheWrapCatalog } = require('./getCache');
 const { parseAnimeCatalogMetaBatch } = require('../utils/parseProps');
+const malWarmerLogger = (require('consola').default || require('consola')).withTag('MAL Warmer');
 
 // Environment variable configuration with sensible defaults
 const warmupMode = () => process.env.CACHE_WARMUP_MODE || 'essential'; // 'essential', 'comprehensive'
@@ -56,7 +57,7 @@ class MALCatalogWarmer {
       nextRun: null
     };
     this.intervalHandle = null;
-    this.log('info', `MAL Catalog Warmer initialized with config:`, {
+    this.log('debug', `MAL Catalog Warmer initialized with config:`, {
       enabled: WARMUP_CONFIG.enabled,
       intervalHours: WARMUP_CONFIG.intervalHours,
       quietHours: WARMUP_CONFIG.quietHoursEnabled ? WARMUP_CONFIG.quietHoursRange : 'disabled',
@@ -97,11 +98,11 @@ class MALCatalogWarmer {
     // Normal mode - only info and errors
     if (logLevel === 'normal' && level === 'debug') return;
     
-    const prefix = '[MAL Warmer]';
+    const write = malWarmerLogger[level === 'debug' ? 'debug' : 'info'];
     if (data) {
-      console.log(`${prefix} ${message}`, data);
+      write(message, data);
     } else {
-      console.log(`${prefix} ${message}`);
+      write(message);
     }
   }
 

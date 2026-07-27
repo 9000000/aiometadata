@@ -1,8 +1,7 @@
 // Initialize global HTTP proxy before any other imports that use undici
 import './utils/httpClient.js';
 
-import * as express from 'express';
-import { startServerWithCacheWarming } from './index.js';
+import { addon, startServerWithCacheWarming } from './index.js';
 import { initializeMapper } from './lib/id-mapper.js';
 import { initializeAnimeListMapper } from './lib/anime-list-mapper.js';
 import { initializeMappings } from './lib/wiki-mapper.js';
@@ -13,226 +12,287 @@ import { runCacheCleanup } from './cache-cleanup.js';
 import { runCachePathMigration } from './lib/cache-path-migration.js';
 import { performEpochCleanup } from './lib/epochCleanup.js';
 import { waitForRedisReady } from './lib/redisReady.js';
+import redis from './lib/redisClient.js';
 import database from './lib/database.js';
 import consola from 'consola';
-import { installLogReporter } from './lib/logBuffer.js';
+import { installLogReporter, beginQuietWindow, endQuietWindow } from './lib/logBuffer.js';
 import { initializeSettings } from './lib/settingsService.js';
 import { getPosterProxyPrefix, isBuiltinPosterCacheEnabled } from './lib/posterCache/config.js';
 import { runNginxImport } from './lib/posterCache/nginxImport.js';
 import * as posterCacheStore from './lib/posterCache/store.js';
-import * as imageWarmQueue from './lib/posterCache/warmQueue.js';
+import { readiness, shutdownSequence } from './lib/lifecycle/runtime.js';
+import { mapWithConcurrency } from './utils/concurrency.js';
 
 installLogReporter();
 
 const PORT: number = parseInt(process.env.PORT || '3232', 10);
- 
+
+/** How many initializers may download and parse at once. */
+const BOOTSTRAP_CONCURRENCY = 3;
+
+const buildInfo = require('./lib/buildInfo.js');
+
+const LABEL_WIDTH = 19;
+
+function bootLine(glyph: string, name: string, detail: string): void {
+  process.stdout.write(`${glyph} ${name.padEnd(LABEL_WIDTH)}${detail}\n`);
+}
+
+const ok = (name: string, detail = 'ready') => bootLine('[32m✔[39m', name, detail);
+const warn = (name: string, detail: string) => bootLine('[33m⚠[39m', name, detail);
+
+/** Reads a task's own counters; never lets a broken getter fail the boot. */
+function describe(task: InitTask): string {
+  if (!task.summary) return 'ready';
+  try {
+    return task.summary() || 'ready';
+  } catch {
+    return 'ready';
+  }
+}
+
+/** Aborts in-flight startup waits (e.g. the Redis retry loop) when we are stopping. */
+const bootAbort = new AbortController();
+let shuttingDown = false;
+
+async function shutdownAndExit(code: number, reason: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  endQuietWindow(); // a shutdown mid-boot must still be able to speak
+  consola.info(`Shutting down (${reason})...`);
+  bootAbort.abort();
+
+  const result = await shutdownSequence.run();
+  if (result.closed.length > 0) {
+    consola.success(`Closed: ${result.closed.join(', ')}.`);
+  }
+  if (result.failed.length > 0) {
+    consola.warn(`Did not close cleanly: ${result.failed.join(', ')}.`);
+  }
+
+  process.exit(code);
+}
+
+process.on('SIGTERM', () => { void shutdownAndExit(0, 'SIGTERM'); });
+process.on('SIGINT', () => { void shutdownAndExit(0, 'SIGINT'); });
+
+process.on('uncaughtException', (error: Error) => {
+  consola.error('--- UNCAUGHT EXCEPTION ---');
+  consola.error(error);
+  void shutdownAndExit(1, 'uncaughtException');
+});
+
+process.on('unhandledRejection', (reason: unknown) => {
+  consola.error('--- UNHANDLED PROMISE REJECTION ---');
+  consola.error(reason);
+});
+
+function closeHttpServer(server: any): Promise<void> {
+  return new Promise<void>((resolve) => {
+    server.close(() => resolve());
+    server.closeIdleConnections?.();
+  });
+}
+
+interface InitTask {
+  key: string;
+  timeoutMs: number;
+  run: () => Promise<unknown>;
+  summary?: () => string;
+}
+
+/** Bounded so a slow index cannot hold readiness open forever. */
+function withTimeout<T>(label: string, ms: number, work: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms — will retry on first use`)), ms);
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
+
+const initializationTasks: InitTask[] = [
+  {
+    key: 'idMapper',
+    timeoutMs: 180_000,
+    run: () => initializeMapper()
+  },
+  {
+    key: 'animeListMapper',
+    timeoutMs: 180_000,
+    run: () => initializeAnimeListMapper()
+  },
+  {
+    key: 'wikiMappings',
+    timeoutMs: 120_000,
+    run: () => initializeMappings(),
+    summary: () => {
+      const { getWikiMapperStats } = require('./lib/wiki-mapper.js');
+      return `${getWikiMapperStats().totalCount.toLocaleString()} mappings`;
+    }
+  },
+  {
+    key: 'imdbRatings',
+    timeoutMs: 300_000,
+    run: () => initializeRatings(),
+    summary: () => {
+      const { getImdbRatingsStatsForDashboard } = require('./lib/imdbRatings.js');
+      return `${getImdbRatingsStatsForDashboard().count.toLocaleString()} ratings`;
+    }
+  },
+  {
+    key: 'tmdbNetworkIndex',
+    timeoutMs: 30_000,
+    run: () => initializeTmdbNetworkIndex()
+  },
+  {
+    key: 'tmdbKeywordIndex',
+    timeoutMs: 30_000,
+    run: () => initializeTmdbKeywordIndex()
+  },
+  {
+    key: 'cacheCleanup',
+    timeoutMs: 120_000,
+    run: () => runCacheCleanup()
+  },
+  {
+    key: 'flixpatrolIndex',
+    timeoutMs: 60_000,
+    run: () => {
+      const { initializeFlixPatrolAvailability } = require('./utils/flixpatrolUtils.js');
+      return initializeFlixPatrolAvailability();
+    }
+  }
+];
+
 async function startServer(): Promise<void> {
-  consola.info('--- Addon Starting Up ---');
- 
-  process.on('uncaughtException', (error: Error) => {
-    consola.error('--- UNCAUGHT EXCEPTION ---');
-    consola.error('Error:', error.message);
-    consola.error('Stack:', error.stack);
-    consola.error('This error was not caught and could crash the application.');
+  const startedAt = Date.now();
+  beginQuietWindow();
+  process.stdout.write(`
+--- AIOMetadata ${buildInfo.version} starting ---
+`);
+
+  readiness.register('database', 'required');
+  readiness.register('settings', 'required');
+  readiness.register('redis', 'required');
+  for (const task of initializationTasks) {
+    readiness.register(task.key, 'degradable');
+  }
+  readiness.register('cacheWarming', 'deferred');
+
+  // Bind the port first. the addon answers /health/live and /health/ready and 503s everything else,
+  // instead of refusing connections outright.
+  const server = addon.listen(PORT, () => {
+    ok('listening', `:${PORT} (initializing)`);
   });
-  
-  process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
-    consola.error('--- UNHANDLED PROMISE REJECTION ---');
-    consola.error('Reason:', reason);
-    consola.error('Promise:', promise);
-    consola.error('This rejection was not handled and could crash the application.');
-  });
- 
-  // Database must initialize first
-  consola.info('Initializing Database...');
+  shutdownSequence.register('http server', () => closeHttpServer(server), { phase: 'traffic' });
+
+  // Storage
   await database.initialize();
-  consola.success('Database initialization complete.');
+  shutdownSequence.register('database', () => database.close());
+  readiness.markReady('database');
+  ok('database');
 
   await initializeSettings();
+  readiness.markReady('settings');
+  ok('settings');
 
-  // After initializeSettings(), so a cache enabled from the dashboard (stored in
-  // the DB rather than the environment) is picked up on the next start.
   if (isBuiltinPosterCacheEnabled()) {
+    readiness.register('posterCacheIndex', 'deferred');
+
     await posterCacheStore.init();
-    await imageWarmQueue.loadSummary();
-    if (!getPosterProxyPrefix()) {
-      consola.warn(
-        '[PosterCache] Enabled, but no public URL could be derived: set HOST_NAME (or POSTER_PROXY_PREFIX_URL). ' +
-        'Images will be served directly from upstream and nothing will be cached.'
-      );
+    posterCacheStore.whenIndexed()
+      .then(() => readiness.markReady('posterCacheIndex'))
+      .catch((error: any) => readiness.markDegraded('posterCacheIndex', error));
+    if (getPosterProxyPrefix()) {
+      ok('posterCache');
+    } else {
+      warn('posterCache', 'no public URL — set HOST_NAME, nothing will be cached');
     }
-    // Background: importing a large nginx cache must not delay serving.
     runNginxImport().catch((e: any) => consola.warn('[PosterCache] nginx import failed:', e?.message));
   }
 
   const metaColdStore = require('./lib/metaColdStore');
   if (metaColdStore.isEnabled()) {
     metaColdStore.init();
+    shutdownSequence.register('meta cold store', async () => {
+      await metaColdStore.flushNow();
+      metaColdStore.close();
+    });
     setInterval(() => {
       try { metaColdStore.sweep(); } catch (e: any) { consola.warn('[ColdStore] sweep failed:', e?.message); }
     }, 60 * 60 * 1000).unref?.();
+    ok('metaColdStore');
   }
 
-  const redisReady = await waitForRedisReady();
-  if (redisReady) {
-    consola.success('Redis ready.');
-  } else {
-    consola.info('Redis caching disabled.');
-  }
-  
+  // Redis
+  await waitForRedisReady({
+    signal: bootAbort.signal,
+    onWaiting: ({ attempt, elapsedMs }) => {
+      warn('redis', `not ready yet — attempt ${attempt}, ${Math.round(elapsedMs / 1000)}s elapsed`);
+    }
+  });
+  shutdownSequence.register('redis', () => redis.quit().then(() => undefined));
+  readiness.markReady('redis');
+  ok('redis');
+
   // Cache path migration
-  consola.info('Running cache path migration...');
   await runCachePathMigration();
-  consola.success('Cache path migration complete.');
-  
-  consola.info('Initializing Mappers, Ratings, and Cache Cleanup...');
+  ok('cachePathMigration');
 
+  // Mappers, ratings and indexes
   performEpochCleanup().catch((error: any) => {
     consola.error('Background epoch cleanup failed:', error.message);
   });
-  
-  const initializationTasks = [
-    {
-      name: 'ID Mapper (anime-list.json)',
-      task: async () => {
-        consola.info('Initializing ID Mapper...');
-        await initializeMapper();
-      },
-      critical: true
-    },
-    {
-      name: 'Anime List Mapper (anime-list.xml)',
-      task: async () => {
-        consola.info('Initializing Anime List Mapper...');
-        await initializeAnimeListMapper();
-      },
-      critical: true
-    },
-    {
-      name: 'Wiki Mappings',
-      task: async () => {
-        consola.info('Initializing Wiki Mappings...');
-        await initializeMappings();
-      },
-      critical: true
-    },
-    {
-      name: 'IMDb Ratings',
-      task: async () => {
-        consola.info('Initializing IMDb Ratings...');
-        await initializeRatings();
-      },
-      critical: true
-    },
-    {
-      name: 'TMDB Network Index',
-      task: async () => {
-        consola.info('Initializing TMDB Network Index...');
-        const timeout = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('TMDB Network Index init timed out after 30s — will retry on first use')), 30000)
-        );
-        await Promise.race([initializeTmdbNetworkIndex(), timeout]);
-      },
-      critical: false
-    },
-    {
-      name: 'TMDB Keyword Index',
-      task: async () => {
-        consola.info('Initializing TMDB Keyword Index...');
-        const timeout = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('TMDB Keyword Index init timed out after 30s — will retry on first use')), 30000)
-        );
-        await Promise.race([initializeTmdbKeywordIndex(), timeout]);
-      },
-      critical: false
-    },
-    {
-      name: 'Cache Cleanup Check',
-      task: async () => {
-        consola.info('Checking for one-time cache cleanup...');
-        await runCacheCleanup();
-      },
-      critical: false
-    },
-    {
-      name: 'FlixPatrol Availability Index',
-      task: async () => {
-        consola.info('Initializing FlixPatrol Availability Index...');
-        const { initializeFlixPatrolAvailability } = require('./utils/flixpatrolUtils.js');
-        await initializeFlixPatrolAvailability();
-      },
-      critical: false
-    }
-  ];
-  
-  // Execute all tasks in parallel
-  const results = await Promise.allSettled(
-    initializationTasks.map(({ task }) => task())
-  );
-  
-  // Check results and log appropriately
-  const failures: string[] = [];
-  results.forEach((result, index) => {
-    const { name, critical } = initializationTasks[index];
-    if (result.status === 'fulfilled') {
-      consola.success(`${name} initialization complete.`);
-    } else {
-      consola.error(`${name} failed to initialize:`, result.reason);
-      if (critical) {
-        failures.push(name);
-      }
+
+  await mapWithConcurrency(initializationTasks, BOOTSTRAP_CONCURRENCY, async (task) => {
+    try {
+      await withTimeout(task.key, task.timeoutMs, Promise.resolve().then(task.run));
+      readiness.markReady(task.key);
+      ok(task.key, describe(task));
+    } catch (error: any) {
+      readiness.markDegraded(task.key, error);
+      warn(task.key, `degraded — ${error?.message || error}`);
     }
   });
-  
-  // Abort startup if any critical tasks failed
-  if (failures.length > 0) {
-    throw new Error(`Critical initialization failures: ${failures.join(', ')}`);
-  }
-  
-  consola.success('All initializations complete.');
-  
-  // PHASE 3: Start server with cache warming
-  consola.info('Starting server with cache warming...');
-  const addon: any = await startServerWithCacheWarming();
-  
-  // PHASE 4: Start background catalog warming (after server initialization)
+
+  // Deferred work - never on the path to serving traffic
+  startServerWithCacheWarming()
+    .then(() => readiness.markReady('cacheWarming'))
+    .catch((error: any) => {
+      readiness.markDegraded('cacheWarming', error);
+      consola.error('Cache warming failed:', error?.message || error);
+    });
+
   const { startMALWarmup } = require('./lib/malCatalogWarmer.js');
   startMALWarmup();
-  
+
   const { startComprehensiveCatalogWarming } = require('./lib/comprehensiveCatalogWarmer.js');
   startComprehensiveCatalogWarming();
-  
-  // PHASE 5: Start cache cleanup scheduler
-  consola.info('Starting cache cleanup scheduler...');
+
   const { startCacheCleanupScheduler } = require('./lib/cacheCleanupScheduler.js');
-  
   const indexModule = require('./index.js');
-  const dashboardApi = indexModule.getDashboardAPI();
-  startCacheCleanupScheduler(dashboardApi);
-  
-  const server = addon.listen(PORT, () => {
-    consola.success(`Addon active and listening on port ${PORT}.`);
-    consola.info(`Open http://127.0.0.1:${PORT} in your browser.`);
-  });
+  startCacheCleanupScheduler(indexModule.getDashboardAPI());
 
-  const shutdown = () => {
-    consola.info('Received shutdown signal, closing server...');
-    server.close(() => {
-      consola.success('Server closed.');
-      process.exit(0);
-    });
-    setTimeout(() => {
-      consola.warn('Forceful shutdown after timeout.');
-      process.exit(1);
-    }, 10000);
-  };
+  indexModule.startEssentialWarmingSchedules();
+  indexModule.startMovieLensSyncSchedule();
 
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
+  const { warnings } = endQuietWindow();
+  const snapshot = readiness.snapshot();
+  const states = Object.values(snapshot.components);
+  const degraded = states.filter((c: any) => c.state === 'degraded').length;
+  const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+
+  const notes = [`${states.length - degraded} ready`];
+  if (degraded > 0) notes.push(`${degraded} degraded`);
+  if (warnings > 0) notes.push(`${warnings} warnings`);
+  ok('ready', `in ${seconds}s on :${PORT} — ${notes.join(', ')}`);
+  process.stdout.write('\n');
 }
- 
+
 startServer().catch((error: Error) => {
+  endQuietWindow();
   consola.error('--- FATAL STARTUP ERROR ---');
   consola.error(error);
-  process.exit(1);
+  void shutdownAndExit(1, 'startup failure');
 });

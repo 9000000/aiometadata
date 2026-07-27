@@ -3,6 +3,8 @@ import path from 'path';
 const { parse } = require('csv-parse/sync');
 const redis = require('./redisClient');
 const { request } = require('undici');
+import consola from 'consola';
+const logger = consola.withTag('Wiki Mapper');
 
 const REMOTE_SERIES_URL = 'https://raw.githubusercontent.com/0xConstant1/Wikidata-Fetcher/refs/heads/main/data/tv_mappings.csv';
 const REMOTE_MOVIES_URL = 'https://raw.githubusercontent.com/0xConstant1/Wikidata-Fetcher/refs/heads/main/data/movie_mappings.csv';
@@ -49,37 +51,36 @@ async function downloadCsv(
             const remoteEtag = headers.etag;
             if (savedEtag === remoteEtag) {
               if (skipReloadOnUnchangedEtag && isInitialized) {
-                console.log(`[Wiki Mapper] No changes detected during scheduled refresh. Keeping existing in-memory data for ${cachePath}`);
+                logger.info(`No changes detected during scheduled refresh. Keeping existing in-memory data for ${cachePath}`);
                 return null;
               }
-              console.log(`[Wiki Mapper] Using cache: ${cachePath}`);
               return fs.readFileSync(cachePath, 'utf8');
             }
           } else if (statusCode === 429) {
             // Rate limited on HEAD request, use cached data
-            console.warn(`[Wiki Mapper] Rate limited (429) on ETag check, using cached data: ${cachePath}`);
+            logger.warn(`Rate limited (429) on ETag check, using cached data: ${cachePath}`);
             return fs.readFileSync(cachePath, 'utf8');
           }
         } catch (error: any) {
           // If HEAD request fails (e.g., network error, 429), check if we have cached data to use
           const statusCode = error.statusCode || (error.response && error.response.statusCode);
           if (statusCode === 429 || error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.code?.startsWith('UND_ERR_')) {
-            console.warn(`[Wiki Mapper] ETag check failed (${statusCode || error.code}), attempting to use cached data`);
+            logger.warn(`ETag check failed (${statusCode || error.code}), attempting to use cached data`);
             if (fs.existsSync(cachePath)) {
               try {
                 const cachedData = fs.readFileSync(cachePath, 'utf8');
-                console.log(`[Wiki Mapper] Using cached data due to download error: ${cachePath}`);
+                logger.info(`Using cached data due to download error: ${cachePath}`);
                 return cachedData;
               } catch (cacheError: any) {
-                console.warn(`[Wiki Mapper] Cached data unreadable: ${cacheError.message}`);
+                logger.warn(`Cached data unreadable: ${cacheError.message}`);
               }
             }
           }
-          console.warn(`[Wiki Mapper] ETag check failed: ${error.message}`);
+          logger.warn(`ETag check failed: ${error.message}`);
         }
       }
     } catch (error: any) {
-      console.warn(`[Wiki Mapper] ETag check failed: ${error.message}`);
+      logger.warn(`ETag check failed: ${error.message}`);
     }
   }
 
@@ -91,10 +92,10 @@ async function downloadCsv(
       if (attempt > 0) {
         // Exponential backoff: 1s, 2s, 4s, 8s... (capped at 30s)
         const delay = Math.min(1000 * Math.pow(2, attempt - 1), 30000);
-        console.log(`[Wiki Mapper] Retrying download (attempt ${attempt + 1}/${maxRetries + 1}) after ${delay}ms: ${url}`);
+        logger.info(`Retrying download (attempt ${attempt + 1}/${maxRetries + 1}) after ${delay}ms: ${url}`);
         await new Promise(resolve => setTimeout(resolve, delay));
       } else {
-        console.log(`[Wiki Mapper] Downloading: ${url}`);
+        logger.info(`Downloading: ${url}`);
       }
       
       const { statusCode, headers, body } = await request(url);
@@ -106,14 +107,14 @@ async function downloadCsv(
           continue;
         }
         // Last attempt failed with 429, try to use cache
-        console.warn(`[Wiki Mapper] Rate limited (429) after ${maxRetries + 1} attempts, falling back to cache`);
+        logger.warn(`Rate limited (429) after ${maxRetries + 1} attempts, falling back to cache`);
         if (fs.existsSync(cachePath)) {
           try {
             const cachedData = fs.readFileSync(cachePath, 'utf8');
-            console.log(`[Wiki Mapper] Using cached data after rate limit: ${cachePath}`);
+            logger.info(`Using cached data after rate limit: ${cachePath}`);
             return cachedData;
           } catch (cacheError: any) {
-            console.error(`[Wiki Mapper] Cached data unreadable: ${cacheError.message}`);
+            logger.error(`Cached data unreadable: ${cacheError.message}`);
             throw lastError;
           }
         }
@@ -152,11 +153,11 @@ async function downloadCsv(
       // If it's not a 429 or we're out of retries, try to use cached data
       if (fs.existsSync(cachePath)) {
         try {
-          console.warn(`[Wiki Mapper] Download failed (${error.message}), falling back to cached data: ${cachePath}`);
+          logger.warn(`Download failed (${error.message}), falling back to cached data: ${cachePath}`);
           const cachedData = fs.readFileSync(cachePath, 'utf8');
           return cachedData;
         } catch (cacheError: any) {
-          console.error(`[Wiki Mapper] Cached data also unreadable: ${cacheError.message}`);
+          logger.error(`Cached data also unreadable: ${cacheError.message}`);
         }
       }
       
@@ -186,25 +187,22 @@ function loadMappings(csvData: string, maps: { imdb: Map<string, IdMap>, tvdb: M
 
     // Validate IMDB ID (should start with 'tt' followed by numbers)
     if (row.imdbId && !/^tt\d+$/.test(row.imdbId)) {
-      console.warn(`[Wiki Mapper] Invalid IMDB ID: ${row.imdbId}`);
       isValid = false;
     }
 
     // Validate TMDB ID (should be only numbers)
     if (row.tmdbId && !/^\d+$/.test(row.tmdbId)) {
-      console.warn(`[Wiki Mapper] Invalid TMDB ID: ${row.tmdbId}`);
       isValid = false;
     }
 
     // Validate TVDB ID (should be only numbers)
     if (row.tvdbId && !/^\d+$/.test(row.tvdbId)) {
-      console.warn(`[Wiki Mapper] Invalid TVDB ID: ${row.tvdbId}`);
       isValid = false;
     }
 
     // Validate TVMaze ID (can be numbers or numbers/title format like "31454/velvet-coleccion")
     if (row.tvmazeId && !/^\d+(\/.*)?$/.test(row.tvmazeId)) {
-      console.warn(`[Wiki Mapper] Invalid TVMaze ID: ${row.tvmazeId}`);
+      logger.warn(`Invalid TVMaze ID: ${row.tvmazeId}`);
       isValid = false;
     }
 
@@ -237,7 +235,7 @@ function loadMappings(csvData: string, maps: { imdb: Map<string, IdMap>, tvdb: M
     }
   }
   
-  console.log(`[Wiki Mapper] Loaded ${validCount} valid mappings, skipped ${invalidCount} invalid entries`);
+  logger.info(`Loaded ${validCount} valid mappings, skipped ${invalidCount} invalid entries`);
 }
 
 async function refreshMappings(): Promise<void> {
@@ -269,7 +267,7 @@ async function refreshMappingsForScheduledRun(): Promise<void> {
   }
 
   if (!seriesCsv && !moviesCsv) {
-    console.log('[Wiki Mapper] Scheduled refresh found no changes. Skipping in-memory rebuild.');
+    logger.info('Scheduled refresh found no changes. Skipping in-memory rebuild.');
   }
 
   if (redis && redis.status === 'ready') {
@@ -289,22 +287,22 @@ async function initialize() {
     if (!updateInterval) {
       const intervalMs = UPDATE_INTERVAL_HOURS * 60 * 60 * 1000;
       updateInterval = setInterval(async () => {
-        console.log(`[Wiki Mapper] Running scheduled update (every ${UPDATE_INTERVAL_HOURS} hours)...`);
+        logger.info(`Running scheduled update (every ${UPDATE_INTERVAL_HOURS} hours)...`);
         try {
           await refreshMappingsForScheduledRun();
-          console.log('[Wiki Mapper] Scheduled update completed successfully.');
+          logger.info('Scheduled update completed successfully.');
         } catch (error: any) {
-          console.error(`[Wiki Mapper] Scheduled update failed: ${error.message}`);
+          logger.error(`Scheduled update failed: ${error.message}`);
         }
       }, intervalMs);
 
-      console.log(`[Wiki Mapper] Scheduled periodic updates every ${UPDATE_INTERVAL_HOURS} hours.`);
+      logger.info(`Scheduled periodic updates every ${UPDATE_INTERVAL_HOURS} hours.`);
     }
 
-    console.log('[Wiki Mapper] Initialization complete');
+    logger.info('Initialization complete');
   } catch (error: any) {
     const errorMessage = error?.message || String(error);
-    console.error(`[Wiki Mapper] Initialization failed: ${errorMessage}`);
+    logger.error(`Initialization failed: ${errorMessage}`);
     throw new Error(`Wiki Mappings failed to initialize: ${errorMessage}`);
   }
 }
@@ -418,7 +416,7 @@ export const mappings = {
  * @returns {Promise<Object>} Result object with success, message, and counts
  */
 export async function forceUpdateWikiMappings(): Promise<{ success: boolean; message: string; seriesCount: number; moviesCount: number }> {
-  console.log('[Wiki Mapper] Force update requested...');
+  logger.info('Force update requested...');
   
   // Reset initialization flag to force re-download
   isInitialized = false;
@@ -429,7 +427,7 @@ export async function forceUpdateWikiMappings(): Promise<{ success: boolean; mes
       await redis.del('tv_mappings_etag');
       await redis.del('movie_mappings_etag');
     } catch (error: any) {
-      console.warn(`[Wiki Mapper] Failed to clear ETags: ${error.message}`);
+      logger.warn(`Failed to clear ETags: ${error.message}`);
     }
   }
   
@@ -452,7 +450,7 @@ export async function forceUpdateWikiMappings(): Promise<{ success: boolean; mes
     const seriesCount = seriesImdbToAll.size;
     const moviesCount = moviesImdbToAll.size;
     
-    console.log(`[Wiki Mapper] Force update completed: ${seriesCount} series, ${moviesCount} movies`);
+    logger.info(`Force update completed: ${seriesCount} series, ${moviesCount} movies`);
     return { 
       success: true, 
       message: `Updated successfully (${seriesCount.toLocaleString()} series, ${moviesCount.toLocaleString()} movies)`,
@@ -460,7 +458,7 @@ export async function forceUpdateWikiMappings(): Promise<{ success: boolean; mes
       moviesCount
     };
   } catch (error: any) {
-    console.error(`[Wiki Mapper] Force update failed: ${error.message}`);
+    logger.error(`Force update failed: ${error.message}`);
     return { 
       success: false, 
       message: `Force update failed: ${error.message}`,

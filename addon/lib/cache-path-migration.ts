@@ -1,6 +1,8 @@
 const fs: any = require('fs').promises;
 const path: any = require('path');
 const redis: any = require('./redisClient');
+import consola from 'consola';
+const logger = consola.withTag('Cache Migration');
 
 const MIGRATION_VERSION = 'cache-path-fix-v1';
 const MIGRATION_KEY = `migration:${MIGRATION_VERSION}`;
@@ -24,19 +26,18 @@ const ETAG_KEYS = [
 ];
 
 async function runCachePathMigration(): Promise<void> {
-  console.log('[Cache Migration] Checking for cache path migration...');
 
   try {
     try {
       const flagContent = await fs.readFile(MIGRATION_FLAG_FILE, 'utf-8');
       const flagData = JSON.parse(flagContent);
       if (flagData.version === MIGRATION_VERSION && flagData.completed === true) {
-        console.log('[Cache Migration] Migration already completed (flag file exists), skipping.');
+        logger.debug('Migration already completed (flag file exists), skipping.');
         return;
       }
     } catch (error: any) {
       if (error.code !== 'ENOENT') {
-        console.warn('[Cache Migration] Error reading migration flag:', error.message);
+        logger.warn('Error reading migration flag:', error.message);
       }
     }
 
@@ -44,7 +45,7 @@ async function runCachePathMigration(): Promise<void> {
       try {
         const migrationCompleted = await redis.get(MIGRATION_KEY);
         if (migrationCompleted === 'completed') {
-          console.log('[Cache Migration] Migration already completed (Redis flag exists), skipping.');
+          logger.info('Migration already completed (Redis flag exists), skipping.');
           await fs.writeFile(MIGRATION_FLAG_FILE, JSON.stringify({
             version: MIGRATION_VERSION,
             completed: true,
@@ -53,7 +54,7 @@ async function runCachePathMigration(): Promise<void> {
           return;
         }
       } catch (error: any) {
-        console.warn('[Cache Migration] Redis check failed:', error.message);
+        logger.warn('Redis check failed:', error.message);
       }
     }
 
@@ -68,10 +69,10 @@ async function runCachePathMigration(): Promise<void> {
 
         await fs.unlink(filePath);
         filesDeleted++;
-        console.log(`[Cache Migration] Deleted old cache file: ${cacheFile} (last modified: ${stats.mtime.toISOString()})`);
+        logger.info(`Deleted old cache file: ${cacheFile} (last modified: ${stats.mtime.toISOString()})`);
       } catch (error: any) {
         if (error.code !== 'ENOENT') {
-          console.warn(`[Cache Migration] Error checking ${cacheFile}:`, error.message);
+          logger.warn(`Error checking ${cacheFile}:`, error.message);
         }
       }
     }
@@ -80,16 +81,16 @@ async function runCachePathMigration(): Promise<void> {
       for (const etagKey of ETAG_KEYS) {
         try {
           await redis.del(etagKey);
-          console.log(`[Cache Migration] Cleared ETag: ${etagKey}`);
+          logger.info(`Cleared ETag: ${etagKey}`);
         } catch (error: any) {
-          console.warn(`[Cache Migration] Error clearing ETag ${etagKey}:`, error.message);
+          logger.warn(`Error clearing ETag ${etagKey}:`, error.message);
         }
       }
 
       try {
         await redis.set(MIGRATION_KEY, 'completed', 'EX', 86400 * 365);
       } catch (error: any) {
-        console.warn('[Cache Migration] Failed to set Redis flag:', error.message);
+        logger.warn('Failed to set Redis flag:', error.message);
       }
     }
 
@@ -100,23 +101,23 @@ async function runCachePathMigration(): Promise<void> {
         timestamp: new Date().toISOString(),
         filesDeleted: filesDeleted
       }), 'utf-8');
-      console.log('[Cache Migration] Created migration flag file.');
+      logger.info('Created migration flag file.');
     } catch (error: any) {
-      console.error('[Cache Migration] CRITICAL: Failed to create migration flag file:', error.message);
-      console.error('[Cache Migration] Migration may run again on next restart!');
+      logger.error('CRITICAL: Failed to create migration flag file:', error.message);
+      logger.error('Migration may run again on next restart!');
     }
 
-    console.log(`[Cache Migration] Migration completed. Deleted ${filesDeleted} cache files and cleared ${ETAG_KEYS.length} ETags.`);
+    logger.info(`Migration completed. Deleted ${filesDeleted} cache files and cleared ${ETAG_KEYS.length} ETags.`);
 
     if (filesFound) {
-      console.log('[Cache Migration] Fresh data will be downloaded on next initialization.');
+      logger.info('Fresh data will be downloaded on next initialization.');
     } else {
-      console.log('[Cache Migration] No old cache files found.');
+      logger.info('No old cache files found.');
     }
 
   } catch (error: any) {
-    console.error('[Cache Migration] Migration failed:', error.message);
-    console.error('[Cache Migration] Continuing startup anyway...');
+    logger.error('Migration failed:', error.message);
+    logger.error('Continuing startup anyway...');
   }
 }
 

@@ -1,4 +1,6 @@
 import Redis from 'ioredis';
+import consola from 'consola';
+const logger = consola.withTag('Redis');
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 
@@ -11,12 +13,14 @@ const redis: Redis | null = new Redis(REDIS_URL, {
 
 if (redis) {
   redis.on('error', (err: Error) => {
-    console.error('Redis Client Error:', err);
+    logger.error('Redis Client Error:', err);
   });
-  redis.on('connect', () => console.log('Redis client connected.'));
-  redis.on('ready', () => console.log('Redis client ready.'));
-  redis.on('close', () => console.log('Redis client connection closed.'));
-  redis.on('reconnecting', () => console.log('Redis client reconnecting...'));
+  // Routine lifecycle: startup reports Redis readiness itself, and a genuine
+  // failure surfaces through the 'error' handler above.
+  redis.on('connect', () => logger.debug('Redis client connected.'));
+  redis.on('ready', () => logger.debug('Redis client ready.'));
+  redis.on('close', () => logger.debug('Redis client connection closed.'));
+  redis.on('reconnecting', () => logger.debug('Redis client reconnecting...'));
 }
 
 export default redis;

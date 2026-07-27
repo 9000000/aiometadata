@@ -18,11 +18,12 @@ RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh && \
     chmod +x /usr/local/bin/entrypoint.sh
 
 ENV UV_THREADPOOL_SIZE=16
+ENV DOTENV_CONFIG_QUIET=true
 
 ARG PORT=3232
 EXPOSE ${PORT}
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD sh -c 'wget --no-verbose --tries=1 --spider http://localhost:${PORT:-3232}/health || exit 1'
+  CMD sh -c 'wget --no-verbose --tries=1 --spider http://localhost:${PORT:-3232}/health/live || exit 1'
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

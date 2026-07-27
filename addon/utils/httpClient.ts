@@ -1,5 +1,9 @@
+const net = require('node:net');
 const { request, Agent, setGlobalDispatcher, ProxyAgent } = require("undici");
 const buildInfo = require('../lib/buildInfo');
+const { withRetries, isRetryableNetworkError } = require('./retry');
+
+net.setDefaultAutoSelectFamilyAttemptTimeout(1_000);
 
 const getProxyUrl = (): string | null => {
   const proxy = process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY;
@@ -21,6 +25,16 @@ if (proxyUrl) {
   setGlobalDispatcher(new Agent({ allowH2: false }));
 }
 
+const DEFAULT_RETRY_ATTEMPTS = 1;
+const BOOTSTRAP_CONNECT_TIMEOUT_MS = 3_000;
+
+const bootstrapDispatcher = proxyUrl
+  ? new ProxyAgent({ uri: proxyUrl, allowH2: false, connect: { timeout: BOOTSTRAP_CONNECT_TIMEOUT_MS } })
+  : new Agent({ allowH2: false, connect: { timeout: BOOTSTRAP_CONNECT_TIMEOUT_MS } });
+
+/** Spread into startup downloads that must survive a transient network blip. */
+export const BOOTSTRAP_HTTP_OPTIONS = { retryAttempts: 3, dispatcher: bootstrapDispatcher };
+
 interface HttpRequestOptions {
   method?: string;
   data?: any;
@@ -28,6 +42,7 @@ interface HttpRequestOptions {
   timeout?: number;
   dispatcher?: any;
   params?: Record<string, string>;
+  retryAttempts?: number;
 }
 
 interface HttpResponse {
@@ -67,7 +82,7 @@ export async function httpRequest(url: string, options: HttpRequestOptions = {})
     },
     bodyTimeout: timeout,
     headersTimeout: timeout,
-    connectTimeout: timeout,
+    // No connectTimeout here: undici only honours it on the dispatcher.
     dispatcher: dispatcher || undefined,
   };
 
@@ -123,11 +138,21 @@ export async function httpRequest(url: string, options: HttpRequestOptions = {})
   }
 }
 
-export async function httpGet(url: string, options: HttpRequestOptions = {}): Promise<HttpResponse> {
+const MAX_REDIRECTS = 3;
+
+async function requestFollowingRedirects(
+  url: string,
+  options: HttpRequestOptions,
+  method: string,
+  data?: any
+): Promise<HttpResponse> {
   let currentUrl = url;
-  for (let i = 0; i < 3; i++) {
+  // Only override options.data when a body was actually supplied.
+  const overrides = data === undefined ? { method } : { method, data };
+
+  for (let i = 0; i < MAX_REDIRECTS; i++) {
     try {
-      return await httpRequest(currentUrl, { ...options, method: 'GET' });
+      return await httpRequest(currentUrl, { ...options, ...overrides });
     } catch (error: any) {
       const status = error?.response?.status;
       const locationHeader = error?.response?.headers?.location || error?.response?.headers?.Location;
@@ -139,43 +164,43 @@ export async function httpGet(url: string, options: HttpRequestOptions = {}): Pr
       throw error;
     }
   }
-  return httpRequest(currentUrl, { ...options, method: 'GET' });
+
+  return httpRequest(currentUrl, { ...options, ...overrides });
 }
 
-export async function httpPost(url: string, data: any, options: HttpRequestOptions = {}): Promise<HttpResponse> {
-  let currentUrl = url;
-  for (let i = 0; i < 3; i++) {
-    try {
-      return await httpRequest(currentUrl, { ...options, method: 'POST', data });
-    } catch (error: any) {
-      const status = error?.response?.status;
-      const locationHeader = error?.response?.headers?.location || error?.response?.headers?.Location;
-      const isRedirect = status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
-      if (isRedirect && locationHeader) {
-        currentUrl = new URL(locationHeader, currentUrl).toString();
-        continue;
-      }
-      throw error;
+/**
+ * Retries only transport faults, never HTTP statuses: a 404 is an answer, a
+ * dropped connection is not. Redirect following happens inside each attempt.
+ */
+function withTransportRetries(
+  url: string,
+  attempts: number,
+  work: () => Promise<HttpResponse>
+): Promise<HttpResponse> {
+  return withRetries(work, {
+    attempts,
+    shouldRetry: isRetryableNetworkError,
+    onRetry: ({ attempt, delayMs, error }: any) => {
+      console.warn(`[HTTP] ${url} failed (${error?.code || error?.message}); retry ${attempt} in ${delayMs}ms`);
     }
-  }
-  return httpRequest(currentUrl, { ...options, method: 'POST', data });
+  });
+}
+
+export async function httpGet(url: string, options: HttpRequestOptions = {}): Promise<HttpResponse> {
+  return withTransportRetries(url, options.retryAttempts ?? DEFAULT_RETRY_ATTEMPTS, () =>
+    requestFollowingRedirects(url, options, 'GET'));
+}
+
+// Only ever retried when a caller opts in: POST is not assumed idempotent.
+export async function httpPost(url: string, data: any, options: HttpRequestOptions = {}): Promise<HttpResponse> {
+  return withTransportRetries(url, options.retryAttempts ?? DEFAULT_RETRY_ATTEMPTS, () =>
+    requestFollowingRedirects(url, options, 'POST', data));
 }
 
 export async function httpHead(url: string, options: HttpRequestOptions = {}): Promise<HttpResponse> {
-  let currentUrl = url;
-  for (let i = 0; i < 3; i++) {
-    try {
-      return await httpRequest(currentUrl, { ...options, method: 'HEAD' });
-    } catch (error: any) {
-      const status = error?.response?.status;
-      const locationHeader = error?.response?.headers?.location || error?.response?.headers?.Location;
-      const isRedirect = status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
-      if (isRedirect && locationHeader) {
-        currentUrl = new URL(locationHeader, currentUrl).toString();
-        continue;
-      }
-      throw error;
-    }
-  }
-  return httpRequest(currentUrl, { ...options, method: 'HEAD' });
+  return withTransportRetries(url, options.retryAttempts ?? DEFAULT_RETRY_ATTEMPTS, () =>
+    requestFollowingRedirects(url, options, 'HEAD'));
 }
+
+/** Exposed so the opt-in policy is pinned by a test rather than by convention. */
+export const retryPolicy = { defaultAttempts: DEFAULT_RETRY_ATTEMPTS };

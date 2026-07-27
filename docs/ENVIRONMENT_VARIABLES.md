@@ -654,10 +654,10 @@ Powers personalized recommendation catalogs backed by a user's own MovieLens acc
 ## TMDB Image Renditions
 
 TMDB serves `/t/p/original` as the file the uploader supplied, which is usually far
-larger than any client renders. These two toggles request a sized rendition instead.
-Both are also dashboard toggles and apply without a restart.
+larger than any client renders. These three toggles request a sized rendition
+instead. All are also dashboard toggles and apply without a restart.
 
-Neither flag rewrites meta that is already cached — those payloads carry the URLs
+None of them rewrite meta that is already cached — those payloads carry the URLs
 they were built with until `META_TTL` / `CATALOG_TTL` expire, which spreads the
 changeover out rather than stranding the whole cache at once. Raise `CACHE_EPOCH` to
 apply a change immediately. Superseded images stay on disk unreferenced; because both
@@ -674,6 +674,11 @@ thing dropped. No manual purge is needed.
 - **Default**: `false`
 - **Description**: Request TMDB backgrounds and landscape posters at `w1280` rather than `original`. Measured across 120 popular titles this is a 5.1x reduction (836 KB to 165 KB mean). Off by default because it is a genuine quality trade: the median original backdrop is 3700px wide and roughly half are true 4K, so a client rendering the background full-screen on a 4K display will be upscaling. Turn it on if disk or bandwidth matters more than background sharpness.
 - **Example**: `PREFER_SMALLER_BACKDROPS_TMDB=true`
+
+### `PREFER_SMALLER_LANDSCAPE_TMDB`
+- **Default**: `true`
+- **Description**: Request TMDB landscape posters at `w780` rather than `original` — around an 11x reduction. Independent of `PREFER_SMALLER_BACKDROPS_TMDB`, and on by default, because the two are rendered very differently: a landscape poster is a backdrop chosen for the preferred language, but clients show it as a catalog tile a few hundred pixels wide rather than full-screen, so it never needed the original in the first place. Set to `false` to keep originals.
+- **Example**: `PREFER_SMALLER_LANDSCAPE_TMDB=false`
 
 ---
 

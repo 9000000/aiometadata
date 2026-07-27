@@ -18,6 +18,7 @@ export const TMDB_POSTER_SIZE = 'w600_and_h900_bestv2';
 const ORIGINAL = 'original';
 const SMALL_LOGO = 'w500';
 const SMALL_BACKDROP = 'w1280';
+const SMALL_LANDSCAPE = 'w780';
 
 function isTruthy(value: string | undefined): boolean {
   return /^(1|true|yes|on)$/i.test((value || '').trim());
@@ -43,6 +44,15 @@ export function tmdbBackdropSize(): string {
   return isTruthy(process.env.PREFER_SMALLER_BACKDROPS_TMDB) ? SMALL_BACKDROP : ORIGINAL;
 }
 
+/**
+ * Defaults ON. A landscape poster is a backdrop selected with a language
+ * preference, but it is rendered as a catalog tile a few hundred px wide rather
+ * than full-screen, so it does not need the caution `tmdbBackdropSize` applies.
+ */
+export function tmdbLandscapeSize(): string {
+  return isExplicitlyDisabled(process.env.PREFER_SMALLER_LANDSCAPE_TMDB) ? ORIGINAL : SMALL_LANDSCAPE;
+}
+
 /** `filePath` is TMDB's `file_path`, which always carries its own leading slash. */
 export function tmdbImageUrl(size: string, filePath: string): string {
   return `${TMDB_IMAGE_HOST}/${size}${filePath}`;
@@ -53,5 +63,6 @@ module.exports = {
   TMDB_POSTER_SIZE,
   tmdbLogoSize,
   tmdbBackdropSize,
+  tmdbLandscapeSize,
   tmdbImageUrl,
 };

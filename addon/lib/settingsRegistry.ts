@@ -1246,6 +1246,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: false,
   },
   {
+    key: 'PREFER_SMALLER_LANDSCAPE_TMDB',
+    envVar: 'PREFER_SMALLER_LANDSCAPE_TMDB',
+    label: 'Prefer Smaller TMDB Landscape Posters',
+    description: 'Request TMDB landscape posters at w780 instead of the original — around 11x smaller. On by default. A landscape poster is a backdrop chosen for the preferred language, but clients render it as a catalog tile a few hundred px wide rather than full-screen, so it does not need the caution the background setting applies. Independent of Prefer Smaller TMDB Backdrops.',
+    category: 'Features',
+    type: 'boolean',
+    default: true,
+  },
+  {
     key: 'POSTER_PROXY_ALLOW_PRIVATE',
     envVar: 'POSTER_PROXY_ALLOW_PRIVATE',
     label: 'Allow Private Art Hosts',

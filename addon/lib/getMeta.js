@@ -12,7 +12,7 @@ const idMapper = require('./id-mapper');
 const { resolveAnidbEpisodeFromTvdbEpisode } = require('./anime-list-mapper');
 const fanart = require('../utils/fanart');
 const { isAnime: isAnimeFunc } = require('../utils/isAnime');
-const { tmdbImageUrl, tmdbLogoSize, tmdbBackdropSize } = require('../utils/tmdbImageSize');
+const { tmdbImageUrl, tmdbLogoSize, tmdbBackdropSize, tmdbLandscapeSize } = require('../utils/tmdbImageSize');
 const e = require("express");
 const { resolveAllIds } = require('./id-resolver');
 const { cacheWrapMeta, cacheWrapJikanApi, cacheWrapGlobal } = require('./getCache');
@@ -1405,7 +1405,7 @@ async function buildTmdbMovieResponse(stremioId, movieData, language, config, us
     || images?.backdrops?.find(b => b.iso_639_1 === langCode)
     || images?.backdrops?.[0];
   const selectedLandscapePoster = Utils.selectTmdbImageByLang(images?.backdrops, config, 'iso_639_1', originalLanguage);
-  const tmdbLandscapePosterUrl = selectedLandscapePoster?.file_path ? tmdbImageUrl(tmdbBackdropSize(), selectedLandscapePoster?.file_path) : null;
+  const tmdbLandscapePosterUrl = selectedLandscapePoster?.file_path ? tmdbImageUrl(tmdbLandscapeSize(), selectedLandscapePoster?.file_path) : null;
   const tmdbBackgroundUrl = selectedBg?.file_path ? tmdbImageUrl(tmdbBackdropSize(), selectedBg?.file_path) : backdrop_path ? tmdbImageUrl(tmdbBackdropSize(), backdrop_path) : null;
   const selectedLogo = Utils.selectTmdbImageByLang(images?.logos, config, 'iso_639_1', originalLanguage);
   let tmdbLogoUrl = selectedLogo?.file_path ? tmdbImageUrl(tmdbLogoSize(), selectedLogo?.file_path) : null;
@@ -1538,7 +1538,7 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
     || images?.backdrops?.find(b => b.iso_639_1 === langCode)
     || images?.backdrops?.[0];
   const selectedLandscapePoster = Utils.selectTmdbImageByLang(images?.backdrops, config, 'iso_639_1', originalLanguage);
-  const tmdbLandscapePosterUrl = selectedLandscapePoster?.file_path ? tmdbImageUrl(tmdbBackdropSize(), selectedLandscapePoster?.file_path) : null;
+  const tmdbLandscapePosterUrl = selectedLandscapePoster?.file_path ? tmdbImageUrl(tmdbLandscapeSize(), selectedLandscapePoster?.file_path) : null;
   const tmdbBackgroundUrl = selectedBg?.file_path ? tmdbImageUrl(tmdbBackdropSize(), selectedBg?.file_path) : backdrop_path ? tmdbImageUrl(tmdbBackdropSize(), backdrop_path) : null;
   const selectedLogo = Utils.selectTmdbImageByLang(images?.logos, config, 'iso_639_1', originalLanguage);
   let tmdbLogoUrl = selectedLogo?.file_path ? tmdbImageUrl(tmdbLogoSize(), selectedLogo?.file_path) : null;

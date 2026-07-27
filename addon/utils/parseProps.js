@@ -10,7 +10,7 @@ const jikan = require('../lib/mal');
 const { resolveAllIds } = require('../lib/id-resolver');
 const idMapper = require('../lib/id-mapper');
 const { selectFanartImageByLang } = require('./fanart');
-const { tmdbImageUrl, tmdbLogoSize, tmdbBackdropSize } = require('./tmdbImageSize');
+const { tmdbImageUrl, tmdbLogoSize, tmdbBackdropSize, tmdbLandscapeSize } = require('./tmdbImageSize');
 const { getImdbRating } = require('../lib/getImdbRating');
 const consola = require('consola');
 const { cacheWrapMetaSmart, cacheWrapGlobal } = require('../lib/getCache');
@@ -2581,7 +2581,7 @@ async function getTmdbMovieArtBatch(tmdbId, config, isLandscape = false, origina
       || res.backdrops?.[0];
       }
       const background = backgroundImg?.file_path
-        ? tmdbImageUrl(tmdbBackdropSize(), backgroundImg.file_path)
+        ? tmdbImageUrl(isLandscape ? tmdbLandscapeSize() : tmdbBackdropSize(), backgroundImg.file_path)
         : null;
 
       const logoImg = selectTmdbImageByLang(res.logos, config, 'iso_639_1', originalLanguage);
@@ -2698,7 +2698,7 @@ async function getMoviePoster({ tmdbId, tvdbId, imdbId, metaProvider, fallbackPo
 /**
  * Get movie background with art provider preference
  */
-async function getMovieBackground({ tmdbId, tvdbId, imdbId, metaProvider, fallbackBackgroundUrl, originalLanguage }, config) {
+async function getMovieBackground({ tmdbId, tvdbId, imdbId, metaProvider, fallbackBackgroundUrl, originalLanguage }, config, isLandscape = false) {
   const artProvider = resolveArtProvider('movie', 'background', config);
   
   if (artProvider === 'tvdb' && metaProvider != 'tvdb') {
@@ -2753,7 +2753,7 @@ async function getMovieBackground({ tmdbId, tvdbId, imdbId, metaProvider, fallba
   if (artProvider === 'tmdb' && metaProvider != 'tmdb') {
     try {
       if(tmdbId) {
-        const batchArt = await getTmdbMovieArtBatch(tmdbId, config, false, originalLanguage);
+        const batchArt = await getTmdbMovieArtBatch(tmdbId, config, isLandscape, originalLanguage);
         if (batchArt.background) {
           return batchArt.background;
         }
@@ -2762,7 +2762,7 @@ async function getMovieBackground({ tmdbId, tvdbId, imdbId, metaProvider, fallba
         if(!tvdbId) return fallbackBackgroundUrl;
         const mappedIds = await resolveAllIds(`tvdb:${tvdbId}`, 'movie', config);
         if(mappedIds.tmdbId) {
-          const batchArt = await getTmdbMovieArtBatch(mappedIds.tmdbId, config, false, originalLanguage);
+          const batchArt = await getTmdbMovieArtBatch(mappedIds.tmdbId, config, isLandscape, originalLanguage);
           if (batchArt.background) {
             return batchArt.background;
           }
@@ -2928,7 +2928,7 @@ async function getTmdbSeriesArtBatch(tmdbId, config, isLandscape = false, origin
         || res.backdrops?.[0];
       }
       const background = backgroundImg?.file_path
-        ? tmdbImageUrl(tmdbBackdropSize(), backgroundImg.file_path)
+        ? tmdbImageUrl(isLandscape ? tmdbLandscapeSize() : tmdbBackdropSize(), backgroundImg.file_path)
         : null;
 
       const logoImg = selectTmdbImageByLang(res.logos, config, 'iso_639_1', originalLanguage);

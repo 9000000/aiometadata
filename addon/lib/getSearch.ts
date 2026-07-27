@@ -15,6 +15,7 @@ const { isAnime }: any = require("../utils/isAnime");
 const { performGeminiSearch, resolveGeminiModel }: any = require('../utils/gemini-service');
 const { performOpenRouterSearch }: any = require('../utils/openrouter-service');
 import consola from 'consola';
+import { tmdbImageUrl, tmdbLogoSize, tmdbBackdropSize, TMDB_POSTER_SIZE } from '../utils/tmdbImageSize';
 const { cacheWrapMetaSmart }: any = require('./getCache');
 const wikiMappings: any = require('./wiki-mapper');
 
@@ -608,8 +609,8 @@ async function performTmdbSearch(type: string, query: string, language: string, 
         const selectedLogo = Utils.selectTmdbImageByLang(details.images?.logos, config, 'iso_639_1', originalLanguage);
         const selectedPoster = Utils.selectTmdbImageByLang(details.images?.posters, config, 'iso_639_1', originalLanguage);
         const fallbackImage = `${host}/missing_poster.png`;
-        logoUrl = selectedLogo?.file_path ? `https://image.tmdb.org/t/p/original${selectedLogo?.file_path}` : null;
-        backgroundUrl = selectedBg?.file_path ? `https://image.tmdb.org/t/p/original${selectedBg?.file_path}` : details.backdrop_path ? `https://image.tmdb.org/t/p/original${details.backdrop_path}` : null;
+        logoUrl = selectedLogo?.file_path ? tmdbImageUrl(tmdbLogoSize(), selectedLogo?.file_path) : null;
+        backgroundUrl = selectedBg?.file_path ? tmdbImageUrl(tmdbBackdropSize(), selectedBg?.file_path) : details.backdrop_path ? tmdbImageUrl(tmdbBackdropSize(), details.backdrop_path) : null;
         posterUrl = selectedPoster?.file_path ? `https://image.tmdb.org/t/p/original${selectedPoster?.file_path}` : details.poster_path ? `https://image.tmdb.org/t/p/original${details.poster_path}` : fallbackImage;
 
         const imdbRating = allIds.imdbId ? await getImdbRating(allIds.imdbId, mediaType) : null;
@@ -871,7 +872,7 @@ async function performTmdbPeopleSearch(type: string, query: string, language: st
           ? `https://image.tmdb.org/t/p/original${media.poster_path}`
           : fallbackImage;
         const backgroundPath = media.backdrop_path
-          ? `https://image.tmdb.org/t/p/original${media.backdrop_path}`
+          ? tmdbImageUrl(tmdbBackdropSize(), media.backdrop_path)
           : null;
 
         let stremioId = `tmdb:${media.id}`;
@@ -1021,9 +1022,9 @@ async function matchAndEnrichFromTMDB(suggestion: { title: string; year: string 
     const selectedPoster = Utils.selectTmdbImageByLang(details.images?.posters, config, 'iso_639_1', originalLanguage);
 
     const fallbackImage = `${host}/missing_poster.png`;
-    const logoUrl = selectedLogo?.file_path ? `https://image.tmdb.org/t/p/original${selectedLogo.file_path}` : null;
-    const backgroundUrl = selectedBg?.file_path ? `https://image.tmdb.org/t/p/original${selectedBg.file_path}`
-      : details.backdrop_path ? `https://image.tmdb.org/t/p/original${details.backdrop_path}` : null;
+    const logoUrl = selectedLogo?.file_path ? tmdbImageUrl(tmdbLogoSize(), selectedLogo.file_path) : null;
+    const backgroundUrl = selectedBg?.file_path ? tmdbImageUrl(tmdbBackdropSize(), selectedBg.file_path)
+      : details.backdrop_path ? tmdbImageUrl(tmdbBackdropSize(), details.backdrop_path) : null;
     const posterUrl = selectedPoster?.file_path ? `https://image.tmdb.org/t/p/original${selectedPoster.file_path}`
       : details.poster_path ? `https://image.tmdb.org/t/p/original${details.poster_path}` : fallbackImage;
 

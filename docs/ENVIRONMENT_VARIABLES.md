@@ -651,6 +651,32 @@ Powers personalized recommendation catalogs backed by a user's own MovieLens acc
 
 ---
 
+## TMDB Image Renditions
+
+TMDB serves `/t/p/original` as the file the uploader supplied, which is usually far
+larger than any client renders. These two toggles request a sized rendition instead.
+Both are also dashboard toggles and apply without a restart.
+
+Neither flag rewrites meta that is already cached — those payloads carry the URLs
+they were built with until `META_TTL` / `CATALOG_TTL` expire, which spreads the
+changeover out rather than stranding the whole cache at once. Raise `CACHE_EPOCH` to
+apply a change immediately. Superseded images stay on disk unreferenced; because both
+reclaim paths (`POSTER_CACHE_MAX_SIZE` eviction and `POSTER_CACHE_INACTIVE_DAYS`
+sweeping) order by last access, they sort ahead of every live entry and are the first
+thing dropped. No manual purge is needed.
+
+### `PREFER_SMALLER_LOGOS_TMDB`
+- **Default**: `true`
+- **Description**: Request TMDB logos at `w500` rather than `original`. Originals are lossless PNGs with a median width of 1683px — some over 4000px — for artwork Stremio renders at roughly 200px. Measured across 120 popular titles this is a 12x reduction (890 KB to 74 KB mean) with no visible difference. Set to `false` only if you serve logos to something that renders them very large.
+- **Example**: `PREFER_SMALLER_LOGOS_TMDB=false`
+
+### `PREFER_SMALLER_BACKDROPS_TMDB`
+- **Default**: `false`
+- **Description**: Request TMDB backgrounds and landscape posters at `w1280` rather than `original`. Measured across 120 popular titles this is a 5.1x reduction (836 KB to 165 KB mean). Off by default because it is a genuine quality trade: the median original backdrop is 3700px wide and roughly half are true 4K, so a client rendering the background full-screen on a 4K display will be upscaling. Turn it on if disk or bandwidth matters more than background sharpness.
+- **Example**: `PREFER_SMALLER_BACKDROPS_TMDB=true`
+
+---
+
 ## Built-in Image Cache
 
 Caches artwork on disk and serves it from `/poster-cache` on the addon's own port — no extra container, port, or volume. Images live under `addon/data/poster-cache`, inside the data volume that is already mounted.

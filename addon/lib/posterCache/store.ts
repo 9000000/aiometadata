@@ -73,6 +73,7 @@ interface IndexEntry {
   lastAccess: number;
   storedAt: number;
   inferredMs: number | null;
+  ids?: string[];
 }
 
 interface ClassTotals {
@@ -98,6 +99,32 @@ let memoryHits = 0;
 
 let initialized = false;
 let scanning = false;
+let idIndexing = false;
+let idIndexBuilt = false;
+
+
+const ID_PATTERNS: RegExp[] = [
+  /\b(tt\d{7,10})\b/gi,
+  /[?&](?:tmdb_id|tmdbid)=(\d+)/gi,
+  /[?&](?:tvdb_id|tvdbid)=(\d+)/gi,
+  /\btmdb[:/](\d+)/gi,
+  /\btvdb[:/](\d+)/gi,
+];
+
+export function extractIdTokens(url: string): string[] {
+  const found = new Set<string>();
+  for (const pattern of ID_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(url)) !== null) {
+      const raw = match[1];
+      if (!raw) continue;
+      found.add(/^tt/i.test(raw) ? raw.toLowerCase() : raw);
+    }
+  }
+  return [...found];
+}
+
 let evicting = false;
 let sweepTimer: NodeJS.Timeout | null = null;
 
@@ -405,6 +432,7 @@ async function readBuffered(
 interface StoredFacts {
   storedAt: number;
   inferredMs: number | null;
+  ids?: string[];
 }
 
 function touch(
@@ -480,6 +508,7 @@ export async function put(
     lastAccess: Date.now(),
     storedAt: header.storedAt,
     inferredMs: inferredTtlMsFor(header.upstream),
+    ids: extractIdTokens(key),
   });
   memoryPut(indexKey(imageClass, hash), body, header.contentType, header.storedAt, bodyHash, header.upstream);
   scheduleEviction();
@@ -1164,6 +1193,95 @@ async function scan(): Promise<void> {
   scanning = false;
   logger.info(`Indexed ${found} cached images (${formatSize(totalBytes())}) in ${Date.now() - started}ms`);
   scheduleEviction();
+}
+
+/**
+ * Backfills the id tokens for entries indexed by the size scan, which only
+ * stats files. Runs on first use rather than at startup — most instances never
+ * clear art by id — and reads concurrently, since one header at a time leaves
+ * the thread pool idle.
+ */
+async function backfillIds(): Promise<void> {
+  if (idIndexing || idIndexBuilt) return;
+  idIndexing = true;
+  const started = Date.now();
+  let read = 0;
+
+  try {
+    const pending = [...index].filter(([, entry]) => entry.ids === undefined);
+    const width = 16;
+    for (let i = 0; i < pending.length; i += width) {
+      await Promise.all(pending.slice(i, i + width).map(async ([, entry]) => {
+        const file = entryPath(entry.imageClass, entry.hash);
+        const stored = await readStoredHeader(entry.imageClass, entry.hash, file);
+        entry.ids = stored?.header?.key ? extractIdTokens(stored.header.key) : [];
+        read += 1;
+      }));
+      if (i % (width * 32) === 0) await new Promise((resolve) => setImmediate(resolve));
+    }
+    idIndexBuilt = true;
+    const searchable = [...index.values()].filter((e) => (e.ids?.length ?? 0) > 0).length;
+    logger.info(
+      `Read ids from ${read} images in ${Date.now() - started}ms — ${searchable} carry a media id`
+    );
+  } finally {
+    idIndexing = false;
+  }
+}
+
+export interface IdSearchability {
+  total: number;
+  searchable: number;
+  unsearchable: number;
+  unsearchableByClass: Record<string, number>;
+}
+
+export function idSearchability(): IdSearchability {
+  const byClass: Record<string, number> = {};
+  let searchable = 0;
+  let unsearchable = 0;
+  for (const entry of index.values()) {
+    if ((entry.ids?.length ?? 0) > 0) {
+      searchable += 1;
+    } else {
+      unsearchable += 1;
+      byClass[entry.imageClass] = (byClass[entry.imageClass] || 0) + 1;
+    }
+  }
+  return { total: index.size, searchable, unsearchable, unsearchableByClass: byClass };
+}
+
+export interface InvalidateByIdResult {
+  id: string;
+  removed: number;
+  freed_bytes: number;
+  clearedByClass: Record<string, number>;
+  searchability: IdSearchability;
+}
+
+export async function invalidateByMediaId(rawId: string): Promise<InvalidateByIdResult> {
+  const token = /^tt/i.test(rawId.trim()) ? rawId.trim().toLowerCase() : rawId.trim();
+  await backfillIds();
+
+  const doomed: IndexEntry[] = [];
+  for (const entry of index.values()) {
+    if (entry.ids && entry.ids.includes(token)) doomed.push(entry);
+  }
+
+  const clearedByClass: Record<string, number> = {};
+  let freed = 0;
+  for (const entry of doomed) {
+    freed += await remove(entry.imageClass, entry.hash);
+    clearedByClass[entry.imageClass] = (clearedByClass[entry.imageClass] || 0) + 1;
+  }
+
+  return {
+    id: token,
+    removed: doomed.length,
+    freed_bytes: freed,
+    clearedByClass,
+    searchability: idSearchability(),
+  };
 }
 
 export async function init(): Promise<void> {

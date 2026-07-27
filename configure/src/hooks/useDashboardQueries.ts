@@ -820,6 +820,53 @@ export function useInvalidateCachedImage() {
   });
 }
 
+export interface ClearArtByIdResult {
+  id: string;
+  removed: number;
+  freed_bytes: number;
+  clearedByClass: Record<string, number>;
+  searchability: {
+    total: number;
+    searchable: number;
+    unsearchable: number;
+    unsearchableByClass: Record<string, number>;
+  };
+}
+
+export function useClearArtById() {
+  const { adminKey, logout } = useAdmin();
+  const queryClient = useQueryClient();
+
+  return useMutation<ClearArtByIdResult, Error, string>({
+    mutationFn: async (id: string) => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (adminKey) {
+        headers['x-admin-key'] = adminKey;
+      }
+
+      const response = await fetch('/api/dashboard/poster-cache/invalidate-by-id', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ id }),
+      });
+
+      if (response.status === 401) {
+        logout();
+        throw new Error('Session expired. Please log in again.');
+      }
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to clear art for that ID');
+      }
+      return result;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['poster-cache-stats'] });
+    },
+  });
+}
+
 export interface ColdStoreTierStats {
   tier: string;
   count: number;

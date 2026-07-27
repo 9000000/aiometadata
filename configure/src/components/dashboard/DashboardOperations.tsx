@@ -45,6 +45,8 @@ import {
   usePurgePosterCache,
   usePosterCacheStats,
   useInvalidateCachedImage,
+  useClearArtById,
+  type ClearArtByIdResult,
   useClearCacheById,
   useColdStoreStats,
   usePurgeColdStore,
@@ -115,6 +117,7 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
   const purgePosterCacheMutation = usePurgePosterCache();
   const posterCacheStatsQuery = usePosterCacheStats({ activeTab });
   const invalidateImageMutation = useInvalidateCachedImage();
+  const clearArtByIdMutation = useClearArtById();
 
   const coldStoreStatsQuery = useColdStoreStats({ activeTab });
   const purgeColdStoreMutation = usePurgeColdStore();
@@ -126,6 +129,9 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
   // of the resting layout. Each closes on a successful action (see the handlers).
   const [clearByIdOpen, setClearByIdOpen] = useState(false);
   const [refreshImageOpen, setRefreshImageOpen] = useState(false);
+  const [clearArtOpen, setClearArtOpen] = useState(false);
+  const [clearArtId, setClearArtId] = useState("");
+  const [clearArtResult, setClearArtResult] = useState<ClearArtByIdResult | null>(null);
   const [dropTitleOpen, setDropTitleOpen] = useState(false);
 
   // Each clear defaults to hitting both tiers — clearing only one leaves the
@@ -305,6 +311,16 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
       onError: (error) => {
         toast.error("Refresh Failed", { description: error.message });
       },
+    });
+  };
+
+  const handleClearArtById = () => {
+    const id = clearArtId.trim();
+    if (!id) return;
+    setClearArtResult(null);
+    clearArtByIdMutation.mutate(id, {
+      onSuccess: (result) => setClearArtResult(result),
+      onError: (error) => toast.error("Clear Failed", { description: error.message }),
     });
   };
 
@@ -710,6 +726,100 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
                             ) : (
                               "Refresh"
                             )}
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+                  )}
+                  {posterCacheStatsQuery.data.by_type && (
+                    <Dialog open={clearArtOpen} onOpenChange={(open) => {
+                      setClearArtOpen(open);
+                      if (!open) { setClearArtId(""); setClearArtResult(null); }
+                    }}>
+                      <DialogTrigger asChild>
+                        <Button variant="outline" size="sm">
+                          <Image className="h-4 w-4 mr-1.5" />
+                          Clear art by ID…
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Clear cached art for a title</DialogTitle>
+                          <DialogDescription>
+                            Finds cached art whose URL carries the ID and drops it. Providers
+                            that serve content-hash filenames — TMDB, TVDB, MAL, fanart —
+                            cannot be matched this way and are left alone.
+                          </DialogDescription>
+                        </DialogHeader>
+                        <Input
+                          autoFocus
+                          placeholder="tt1234567, tmdb:278, tvdb:81189"
+                          value={clearArtId}
+                          onChange={(e) => { setClearArtId(e.target.value); setClearArtResult(null); }}
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleClearArtById(); }}
+                          disabled={clearArtByIdMutation.isPending}
+                        />
+                        {clearArtId.trim() && !looksLikeMediaId(clearArtId) && !clearArtResult && (
+                          <p className="text-xs text-amber-400/80">
+                            That does not look like a media ID — expected something like
+                            <code className="mx-1">tt1234567</code> or <code>tmdb:278</code>.
+                          </p>
+                        )}
+                        {clearArtByIdMutation.isPending && (
+                          <p className="text-xs text-muted-foreground">
+                            Reading stored image URLs — the first search after a restart takes a moment.
+                          </p>
+                        )}
+                        {clearArtResult && (
+                          <div className="rounded-lg border p-3 space-y-2 text-xs">
+                            {clearArtResult.removed > 0 ? (
+                              <div>
+                                <span className="font-medium">
+                                  Cleared {clearArtResult.removed} image{clearArtResult.removed !== 1 ? 's' : ''}
+                                </span>
+                                <span className="text-muted-foreground">
+                                  {' '}({formatSize(clearArtResult.freed_bytes)})
+                                </span>
+                                <div className="mt-1 flex flex-wrap gap-x-3 text-muted-foreground tabular-nums">
+                                  {Object.entries(clearArtResult.clearedByClass).map(([cls, n]) => (
+                                    <span key={cls}>{n} {IMAGE_TYPE_LABELS[cls] || cls}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="text-muted-foreground">
+                                No cached art carries that ID in its URL.
+                              </div>
+                            )}
+                            {clearArtResult.searchability.unsearchable > 0 && (
+                              <div className="pt-2 border-t text-muted-foreground">
+                                <span className="text-amber-400/80">
+                                  {clearArtResult.searchability.unsearchable} of{' '}
+                                  {clearArtResult.searchability.total} cached images could not be searched
+                                </span>
+                                <div className="mt-1 flex flex-wrap gap-x-3 tabular-nums">
+                                  {Object.entries(clearArtResult.searchability.unsearchableByClass).map(([cls, n]) => (
+                                    <span key={cls}>{n} {IMAGE_TYPE_LABELS[cls] || cls}</span>
+                                  ))}
+                                </div>
+                                <p className="mt-1">
+                                  Their URLs are content hashes with no ID in them. Use
+                                  {' '}<em>Refresh an image…</em> with the URL, or clear the whole type.
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        <DialogFooter>
+                          <Button variant="ghost" size="sm" onClick={() => setClearArtOpen(false)}
+                            disabled={clearArtByIdMutation.isPending}>
+                            Close
+                          </Button>
+                          <Button onClick={handleClearArtById} variant="outline" size="sm"
+                            disabled={!clearArtId.trim() || clearArtByIdMutation.isPending}>
+                            {clearArtByIdMutation.isPending ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : "Clear"}
                           </Button>
                         </DialogFooter>
                       </DialogContent>

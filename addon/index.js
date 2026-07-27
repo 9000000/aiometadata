@@ -6373,6 +6373,25 @@ addon.post("/api/dashboard/poster-cache/purge", requireDashboardAdmin, async (re
   }
 });
 
+addon.post("/api/dashboard/poster-cache/invalidate-by-id", requireDashboardAdmin, async (req, res) => {
+  if (!posterCacheConfig.isBuiltinPosterCacheEnabled()) {
+    return res.status(400).json({ error: 'The built-in image cache is not enabled' });
+  }
+
+  const id = typeof req.body?.id === 'string' ? req.body.id.trim() : '';
+  if (!id) {
+    return res.status(400).json({ error: 'A media id is required' });
+  }
+
+  try {
+    const posterCacheStore = require('./lib/posterCache/store.js');
+    res.json(await posterCacheStore.invalidateByMediaId(id));
+  } catch (error) {
+    consola.error('[Poster cache] Invalidate by id failed:', error.message);
+    res.status(500).json({ error: 'Failed to clear art for that id' });
+  }
+});
+
 addon.post("/api/dashboard/poster-cache/invalidate", requireDashboardAdmin, async (req, res) => {
   if (!posterCacheConfig.isBuiltinPosterCacheEnabled()) {
     return res.status(400).json({ error: 'The built-in image cache is not enabled' });

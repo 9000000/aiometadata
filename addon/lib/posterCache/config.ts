@@ -406,12 +406,32 @@ export function resolveEntryTtlMs(key: string, upstream?: UpstreamCacheMeta): nu
   return inferred === null ? flatMs : inferred;
 }
 
+export function inferredTtlMsFor(upstream?: UpstreamCacheMeta): number | null {
+  const inferred = inferFreshnessMs(upstream);
+  return inferred === DO_NOT_STORE ? 0 : inferred;
+}
+
+export function resolveEntryTtlMsFrom(key: string, inferredMs: number | null): number {
+  const flatMs = getEntryTtlMs();
+  const { policy, ttlMs } = resolvePolicyFor(key);
+
+  if (policy === 'custom') return ttlMs!;
+  if (policy !== 'infer') return flatMs;
+  return inferredMs === null ? flatMs : inferredMs;
+}
+
 export function isNotStorable(key: string, upstream?: UpstreamCacheMeta): boolean {
   return resolvePolicyFor(key).policy === 'infer' && inferFreshnessMs(upstream) === DO_NOT_STORE;
 }
 
 export function getEntryExpiry(key: string, storedAt: number, upstream?: UpstreamCacheMeta): number {
   const ttl = resolveEntryTtlMs(key, upstream);
+  return Number.isFinite(ttl) ? storedAt + ttl : Infinity;
+}
+
+/** `getEntryExpiry` from a kept inference. See `resolveEntryTtlMsFrom`. */
+export function getEntryExpiryFrom(key: string, storedAt: number, inferredMs: number | null): number {
+  const ttl = resolveEntryTtlMsFrom(key, inferredMs);
   return Number.isFinite(ttl) ? storedAt + ttl : Infinity;
 }
 

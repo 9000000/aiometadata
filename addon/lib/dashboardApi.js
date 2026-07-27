@@ -3,6 +3,39 @@ const process = require("process");
 const consola = require('consola');
 const logger = consola.withTag('DashboardAPI');
 
+function getImageWarmDetail() {
+  try {
+    const { isBuiltinPosterCacheEnabled } = require('./posterCache/config.js');
+    if (!isBuiltinPosterCacheEnabled()) return null;
+
+    const live = require('./posterCache/warmQueue.js').getStats();
+    const source = live.offered > 0 ? live : live.lastRun;
+    if (!source) {
+      return { hasData: false, isActive: false, fromLastRun: false, offered: 0 };
+    }
+    const outstanding = live.offered > 0
+      ? live.depth + live.concurrency
+      : (source.outstanding || 0);
+    const resolved = Math.max(0, source.offered - outstanding);
+    return {
+      hasData: true,
+      ...source,
+      depth: live.offered > 0 ? live.depth : 0,
+      concurrency: live.offered > 0 ? live.concurrency : 0,
+      lagMs: live.offered > 0 ? live.lagMs : 0,
+      resolved,
+      progress: source.offered > 0 ? resolved / source.offered : 0,
+      outstanding,
+      isActive: live.offered > 0 && (live.depth + live.concurrency) > 0,
+      fromLastRun: live.offered === 0,
+      at: source.at || null,
+    };
+  } catch (error) {
+    logger.debug('Image warm stats unavailable:', error.message);
+    return null;
+  }
+}
+
 const { getCacheHealth, getMemoryStats: getCacheMemoryStats } = require('./getCache');
 
 /** System keys that must survive any cache clear. */
@@ -1838,6 +1871,7 @@ class DashboardAPI {
               uuid: uuid.slice(0, 8),
               ...(catalogStats.uuidStats?.[uuid] || {}),
             })),
+            images: getImageWarmDetail(),
           },
         });
       } catch (error) {

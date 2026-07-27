@@ -1,15 +1,18 @@
+import * as fsp from 'node:fs/promises';
+import * as path from 'node:path';
 import consola from 'consola';
 import {
   formatSize,
   getWarmConcurrencyMax,
   getWarmConcurrencyMin,
+  getCacheDir,
   getWarmQueueMax,
   getWarmTargetLagMs,
   isWarmQueueEnabled,
   type ImageClass,
 } from './config.js';
 import * as store from './store.js';
-import { fetchImage } from './upstream.js';
+import { OversizeImage, UpstreamRejected, fetchImage } from './upstream.js';
 
 const logger = consola.withTag('ImageWarm');
 
@@ -45,6 +48,78 @@ let lastTick = 0;
 let observedLag = 0;
 let capacityWarned = false;
 let idleTimer: NodeJS.Timeout | null = null;
+
+export interface WarmSummary extends Stats {
+  at: number;
+  outstanding: number;
+  failures: Record<string, number>;
+}
+
+let lastRun: WarmSummary | null = null;
+let loaded = false;
+let lastPersistAt = 0;
+let persisting = false;
+
+const PERSIST_THROTTLE_MS = 30000;
+
+function summaryFile(): string {
+  return path.join(getCacheDir(), 'warm-summary.json');
+}
+
+export async function loadSummary(): Promise<void> {
+  if (loaded) return;
+  loaded = true;
+  try {
+    const raw = await fsp.readFile(summaryFile(), 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.at === 'number') lastRun = parsed;
+  } catch {
+    lastRun = null;
+  }
+}
+
+function persist(force: boolean): void {
+  const now = Date.now();
+  if (!force && (persisting || now - lastPersistAt < PERSIST_THROTTLE_MS)) return;
+  if (stats.offered === 0) return;
+  persisting = true;
+  lastPersistAt = now;
+  const snapshot: WarmSummary = {
+    ...stats,
+    at: now,
+    outstanding: depth() + active,
+    failures: Object.fromEntries(failureReasons),
+  };
+  lastRun = snapshot;
+  const file = summaryFile();
+  fsp.mkdir(path.dirname(file), { recursive: true })
+    .then(() => fsp.writeFile(`${file}.tmp`, JSON.stringify(snapshot)))
+    .then(() => fsp.rename(`${file}.tmp`, file))
+    .catch((error: any) => logger.debug(`Could not persist warm summary: ${error?.message}`))
+    .finally(() => { persisting = false; });
+}
+
+const failureReasons = new Map<string, number>();
+
+function classifyFailure(error: any): string {
+  if (error?.name === 'AbortError' || error?.code === 'ECONNABORTED') return 'timeout';
+
+  // Our own guard, not the origin — reported separately so a refusal to fetch
+  // is never mistaken for the provider answering.
+  if (error instanceof UpstreamRejected) {
+    const message = String(error.message || '').toLowerCase();
+    if (message.includes('private address')) return 'blocked: private host';
+    if (message.includes('could not resolve')) return 'unresolvable host';
+    if (message.includes('protocol')) return 'bad url';
+    return 'rejected upstream';
+  }
+
+  if (error instanceof OversizeImage) return 'too large';
+  const status = error?.response?.status;
+  if (typeof status === 'number') return `http ${status}`;
+  if (error?.code) return String(error.code).toLowerCase();
+  return 'other';
+}
 
 const stats: Stats = {
   offered: 0, skipped: 0, queued: 0, warmed: 0, alreadyFresh: 0, rendered: 0,
@@ -95,7 +170,8 @@ function stopLagProbe(): void {
   lagTimer = null;
 }
 
-const IDLE_SETTLE_MS = 15000;
+const IDLE_SETTLE_MS = 60000;
+let lastReported = -1;
 
 function scheduleIdleReport(): void {
   if (idleTimer) return;
@@ -104,10 +180,17 @@ function scheduleIdleReport(): void {
     if (depth() > 0 || active > 0) return;
     draining = false;
     stopLagProbe();
+    persist(true);
+    const done = stats.warmed + stats.rendered;
+    if (done === lastReported) return;
+    lastReported = done;
     logger.info(
       `Image warming idle — ${stats.warmed} fetched, ${stats.skipped} skipped, ` +
       `${stats.alreadyFresh} already fresh, ${stats.rendered} rendered, ` +
-      `${stats.failed} failed, ${stats.dropped} dropped, ${stats.atCapacity} over capacity`
+      `${stats.failed} failed, ${stats.dropped} dropped, ${stats.atCapacity} over capacity` +
+      (failureReasons.size > 0
+        ? ` — failures: ${[...failureReasons].sort((a, b) => b[1] - a[1]).map(([r, n]) => `${n} ${r}`).join(', ')}`
+        : '')
     );
   }, IDLE_SETTLE_MS);
   idleTimer.unref?.();
@@ -202,10 +285,15 @@ function pump(): void {
     draining = true;
 
     runOne(target)
-      .catch(() => { stats.failed += 1; })
+      .catch((error: any) => {
+        stats.failed += 1;
+        const reason = classifyFailure(error);
+        failureReasons.set(reason, (failureReasons.get(reason) || 0) + 1);
+      })
       .finally(() => {
         pending.delete(keyOf(target));
         active -= 1;
+        persist(false);
         if (depth() > 0) {
           pump();
         } else if (active === 0 && draining) {
@@ -215,8 +303,14 @@ function pump(): void {
   }
 }
 
-export function getStats(): Stats & { depth: number; concurrency: number; lagMs: number } {
-  return { ...stats, depth: depth(), concurrency: active, lagMs: observedLag };
+export function getStats(): Stats & {
+  depth: number; concurrency: number; lagMs: number;
+  failures: Record<string, number>; lastRun: WarmSummary | null;
+} {
+  return {
+    ...stats, depth: depth(), concurrency: active, lagMs: observedLag,
+    failures: Object.fromEntries(failureReasons), lastRun,
+  };
 }
 
 export function reset(): void {
@@ -224,6 +318,8 @@ export function reset(): void {
   head = 0;
   pending.clear();
   capacityWarned = false;
+  lastReported = -1;
+  failureReasons.clear();
   for (const key of Object.keys(stats) as (keyof Stats)[]) stats[key] = 0;
 }
 

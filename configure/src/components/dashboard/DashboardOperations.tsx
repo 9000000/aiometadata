@@ -1416,6 +1416,92 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
                     </div>
                   ) : null
                 )}
+
+                {task.warmingDetail?.images && (() => {
+                  const img = task.warmingDetail.images;
+                  if (!img.hasData) {
+                    return (
+                      <div className="mt-3 pt-3 border-t">
+                        <div className="rounded-lg p-3 bg-violet-500/5 border border-violet-500/10">
+                          <div className="flex items-center gap-2">
+                            <div className="w-2.5 h-2.5 rounded-full bg-violet-500/30" />
+                            <span className="text-xs text-muted-foreground">
+                              No image warming recorded yet — populates on the next run
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+                  const pct = Math.round(img.progress * 100);
+                  return (
+                    <div className="mt-3 pt-3 border-t">
+                      <div className="rounded-lg p-3 bg-violet-500/10 border border-violet-500/20">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            {img.isActive ? (
+                              <div className="relative flex h-2.5 w-2.5">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
+                                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-violet-500" />
+                              </div>
+                            ) : (
+                              <div className="w-2.5 h-2.5 rounded-full bg-violet-500/40" />
+                            )}
+                            <span className="text-xs font-medium">
+                              {img.isActive ? 'Warming images' : (img.fromLastRun ? 'Images — last run' : 'Images warmed')}
+                            </span>
+                          </div>
+                          <span className="text-xs tabular-nums">
+                            <AnimatedNumber value={img.resolved} /> / {img.offered}
+                          </span>
+                        </div>
+
+                        <div className="relative h-2 w-full overflow-hidden rounded-full bg-black/20">
+                          <div
+                            className="h-full rounded-full transition-all duration-700 ease-out bg-gradient-to-r from-violet-500 to-fuchsia-400"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+
+                        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground tabular-nums">
+                          <span>{img.warmed} fetched</span>
+                          <span>{img.skipped} already cached</span>
+                          {img.rendered > 0 && <span>{img.rendered} rendered</span>}
+                          {img.alreadyFresh > 0 && <span>{img.alreadyFresh} still fresh</span>}
+                          {img.outstanding > 0 && (
+                            <span className={img.fromLastRun ? 'text-amber-400/80' : 'text-violet-300'}>
+                              {img.outstanding} {img.fromLastRun ? 'left unwarmed' : 'pending'}
+                            </span>
+                          )}
+                          {img.failed > 0 && (
+                            <span className="text-amber-400/80" title={
+                              img.failures && Object.keys(img.failures).length > 0
+                                ? Object.entries(img.failures).map(([r, n]) => `${n} ${r}`).join(', ')
+                                : undefined
+                            }>
+                              {img.failed} failed
+                              {img.failures && Object.keys(img.failures).length > 0 && (
+                                <> ({Object.entries(img.failures)
+                                  .sort((a: any, b: any) => b[1] - a[1])
+                                  .slice(0, 2)
+                                  .map(([r, n]) => `${n} ${r}`)
+                                  .join(', ')})</>
+                              )}
+                            </span>
+                          )}
+                          {img.dropped > 0 && <span className="text-amber-400/80">{img.dropped} dropped</span>}
+                          {img.atCapacity > 0 && <span className="text-red-400/80">{img.atCapacity} over capacity</span>}
+                        </div>
+
+                        {img.isActive && (
+                          <div className="mt-1 text-[11px] text-muted-foreground tabular-nums">
+                            {img.concurrency} in flight · {img.lagMs}ms loop lag
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             ))}
           </div>

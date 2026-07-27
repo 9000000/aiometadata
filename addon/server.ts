@@ -20,6 +20,7 @@ import { initializeSettings } from './lib/settingsService.js';
 import { getPosterProxyPrefix, isBuiltinPosterCacheEnabled } from './lib/posterCache/config.js';
 import { runNginxImport } from './lib/posterCache/nginxImport.js';
 import * as posterCacheStore from './lib/posterCache/store.js';
+import * as imageWarmQueue from './lib/posterCache/warmQueue.js';
 
 installLogReporter();
 
@@ -53,6 +54,7 @@ async function startServer(): Promise<void> {
   // the DB rather than the environment) is picked up on the next start.
   if (isBuiltinPosterCacheEnabled()) {
     await posterCacheStore.init();
+    await imageWarmQueue.loadSummary();
     if (!getPosterProxyPrefix()) {
       consola.warn(
         '[PosterCache] Enabled, but no public URL could be derived: set HOST_NAME (or POSTER_PROXY_PREFIX_URL). ' +

@@ -611,7 +611,7 @@ async function performTmdbSearch(type: string, query: string, language: string, 
         const fallbackImage = `${host}/missing_poster.png`;
         logoUrl = selectedLogo?.file_path ? tmdbImageUrl(tmdbLogoSize(), selectedLogo?.file_path) : null;
         backgroundUrl = selectedBg?.file_path ? tmdbImageUrl(tmdbBackdropSize(), selectedBg?.file_path) : details.backdrop_path ? tmdbImageUrl(tmdbBackdropSize(), details.backdrop_path) : null;
-        posterUrl = selectedPoster?.file_path ? `https://image.tmdb.org/t/p/original${selectedPoster?.file_path}` : details.poster_path ? `https://image.tmdb.org/t/p/original${details.poster_path}` : fallbackImage;
+        posterUrl = selectedPoster?.file_path ? tmdbImageUrl(TMDB_POSTER_SIZE, selectedPoster?.file_path) : details.poster_path ? tmdbImageUrl(TMDB_POSTER_SIZE, details.poster_path) : fallbackImage;
 
         const imdbRating = allIds.imdbId ? await getImdbRating(allIds.imdbId, mediaType) : null;
 
@@ -869,7 +869,7 @@ async function performTmdbPeopleSearch(type: string, query: string, language: st
         if (!title) return null;
 
         const posterPath = media.poster_path
-          ? `https://image.tmdb.org/t/p/original${media.poster_path}`
+          ? tmdbImageUrl(TMDB_POSTER_SIZE, media.poster_path)
           : fallbackImage;
         const backgroundPath = media.backdrop_path
           ? tmdbImageUrl(tmdbBackdropSize(), media.backdrop_path)
@@ -1025,8 +1025,8 @@ async function matchAndEnrichFromTMDB(suggestion: { title: string; year: string 
     const logoUrl = selectedLogo?.file_path ? tmdbImageUrl(tmdbLogoSize(), selectedLogo.file_path) : null;
     const backgroundUrl = selectedBg?.file_path ? tmdbImageUrl(tmdbBackdropSize(), selectedBg.file_path)
       : details.backdrop_path ? tmdbImageUrl(tmdbBackdropSize(), details.backdrop_path) : null;
-    const posterUrl = selectedPoster?.file_path ? `https://image.tmdb.org/t/p/original${selectedPoster.file_path}`
-      : details.poster_path ? `https://image.tmdb.org/t/p/original${details.poster_path}` : fallbackImage;
+    const posterUrl = selectedPoster?.file_path ? tmdbImageUrl(TMDB_POSTER_SIZE, selectedPoster.file_path)
+      : details.poster_path ? tmdbImageUrl(TMDB_POSTER_SIZE, details.poster_path) : fallbackImage;
 
     const validPosterUrl = posterUrl && posterUrl !== 'null' && !posterUrl.includes('undefined')
       ? posterUrl : fallbackImage;

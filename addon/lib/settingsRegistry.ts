@@ -1353,7 +1353,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     type: 'number',
     default: 60000,
     min: 1,
-    envOnly: true,
   },
   {
     key: 'POSTER_CACHE_AGENT_MAX',
@@ -1364,7 +1363,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     type: 'number',
     default: 512,
     min: 1,
-    envOnly: true,
   },
   {
     key: 'POSTER_CACHE_LOG_REQUESTS',

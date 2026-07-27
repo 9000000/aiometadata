@@ -10,6 +10,7 @@ const jikan = require('../lib/mal');
 const { resolveAllIds } = require('../lib/id-resolver');
 const idMapper = require('../lib/id-mapper');
 const { selectFanartImageByLang } = require('./fanart');
+const { tmdbImageUrl, tmdbLogoSize, tmdbBackdropSize } = require('./tmdbImageSize');
 const { getImdbRating } = require('../lib/getImdbRating');
 const consola = require('consola');
 const { cacheWrapMetaSmart, cacheWrapGlobal } = require('../lib/getCache');
@@ -661,7 +662,7 @@ function parseMedia(el, type, genreList = [], config = {}) {
     name: name,
     genres: genres,
     poster: el.poster_path ? `https://image.tmdb.org/t/p/w500${el.poster_path}` : null,
-    background: el.backdrop_path ? `https://image.tmdb.org/t/p/original${el.backdrop_path}` : null,
+    background: el.backdrop_path ? tmdbImageUrl(tmdbBackdropSize(), el.backdrop_path) : null,
     posterShape: "regular",
     imdbRating: el.vote_average ? el.vote_average.toFixed(1) : 'N/A',
     year: type === 'movie' ? (el.release_date?.substring(0, 4) || '') : (el.first_air_date?.substring(0, 4) || ''),
@@ -2580,12 +2581,12 @@ async function getTmdbMovieArtBatch(tmdbId, config, isLandscape = false, origina
       || res.backdrops?.[0];
       }
       const background = backgroundImg?.file_path
-        ? `https://image.tmdb.org/t/p/original${backgroundImg.file_path}`
+        ? tmdbImageUrl(tmdbBackdropSize(), backgroundImg.file_path)
         : null;
 
       const logoImg = selectTmdbImageByLang(res.logos, config, 'iso_639_1', originalLanguage);
       const logo = logoImg?.file_path
-        ? `https://image.tmdb.org/t/p/original${logoImg.file_path}`
+        ? tmdbImageUrl(tmdbLogoSize(), logoImg.file_path)
         : null;
 
       return { poster, background, logo };
@@ -2927,12 +2928,12 @@ async function getTmdbSeriesArtBatch(tmdbId, config, isLandscape = false, origin
         || res.backdrops?.[0];
       }
       const background = backgroundImg?.file_path
-        ? `https://image.tmdb.org/t/p/original${backgroundImg.file_path}`
+        ? tmdbImageUrl(tmdbBackdropSize(), backgroundImg.file_path)
         : null;
 
       const logoImg = selectTmdbImageByLang(res.logos, config, 'iso_639_1', originalLanguage);
       const logo = logoImg?.file_path
-        ? `https://image.tmdb.org/t/p/original${logoImg.file_path}`
+        ? tmdbImageUrl(tmdbLogoSize(), logoImg.file_path)
         : null;
 
       return { poster, background, logo };

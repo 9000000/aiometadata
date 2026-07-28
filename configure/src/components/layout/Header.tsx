@@ -57,10 +57,11 @@ export function Header() {
       const pathParts = window.location.pathname.split('/');
       const stremioIndex = pathParts.findIndex(p => p === 'stremio');
       if (stremioIndex !== -1 && pathParts[stremioIndex + 1]) {
-        const potentialUUID = pathParts[stremioIndex + 1];
-        if (potentialUUID.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
-          setUuidFromUrl(potentialUUID);
-          setUuidInput(potentialUUID);
+        // May be a UUID or a user alias.
+        const potentialId = pathParts[stremioIndex + 1];
+        if (/^[A-Za-z0-9_-]{3,}$/.test(potentialId)) {
+          setUuidFromUrl(potentialId);
+          setUuidInput(potentialId);
         }
       }
     } catch {}
@@ -95,7 +96,7 @@ export function Header() {
   }, []);
 
   useEffect(() => {
-    if (uuidInput && uuidInput.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+    if (uuidInput && /^[A-Za-z0-9_-]{3,}$/.test(uuidInput)) {
       fetch(`/api/config/is-trusted/${encodeURIComponent(uuidInput)}`)
         .then(res => res.json())
         .then(data => {
@@ -146,7 +147,9 @@ export function Header() {
           customDescriptionBlurb: prev.apiKeys.customDescriptionBlurb,
         },
       }));
-      setAuth({ authenticated: true, userUUID: uuidInput, password: passwordInput });
+      // Prefer the canonical UUID the server resolved, so an alias typed at
+      // login does not propagate into later update calls and OAuth redirects.
+      setAuth({ authenticated: true, userUUID: result.userUUID || uuidInput, password: passwordInput });
       toast.success('Configuration loaded');
       setIsLoginOpen(false);
       setUuidInput('');

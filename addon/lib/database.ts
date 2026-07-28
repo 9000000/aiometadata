@@ -193,6 +193,12 @@ class Database {
         user_uuid TEXT UNIQUE NOT NULL,
         trusted_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )`,
+      `CREATE TABLE IF NOT EXISTS user_aliases (
+        alias_lower TEXT PRIMARY KEY,
+        alias TEXT NOT NULL,
+        user_uuid TEXT UNIQUE NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`,
       `CREATE TABLE IF NOT EXISTS oauth_tokens (
         id TEXT PRIMARY KEY,
         provider TEXT NOT NULL,
@@ -247,6 +253,12 @@ class Database {
       `CREATE TABLE IF NOT EXISTS trusted_uuids (
         user_uuid VARCHAR(255) UNIQUE NOT NULL,
         trusted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE TABLE IF NOT EXISTS user_aliases (
+        alias_lower VARCHAR(64) PRIMARY KEY,
+        alias VARCHAR(64) NOT NULL,
+        user_uuid VARCHAR(255) UNIQUE NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`,
       `CREATE TABLE IF NOT EXISTS oauth_tokens (
         id VARCHAR(255) PRIMARY KEY,
@@ -565,6 +577,11 @@ class Database {
         : 'DELETE FROM trusted_uuids WHERE user_uuid = $1';
       await this.runQuery(deleteTrustedQuery, [userUUID]);
 
+      const deleteAliasQuery = this.type === 'sqlite'
+        ? 'DELETE FROM user_aliases WHERE user_uuid = ?'
+        : 'DELETE FROM user_aliases WHERE user_uuid = $1';
+      await this.runQuery(deleteAliasQuery, [userUUID]);
+
       logger.info(`Successfully deleted user ${userUUID} and all associated data`);
       return userDeleted;
     } catch (error) {
@@ -623,6 +640,59 @@ class Database {
       ? 'DELETE FROM trusted_uuids WHERE user_uuid = ?'
       : 'DELETE FROM trusted_uuids WHERE user_uuid = $1';
     await this.runQuery(query, [userUUID]);
+  }
+
+  async getAllUserAliases(): Promise<Array<{ alias: string; alias_lower: string; user_uuid: string }>> {
+    try {
+      return await this.allQuery('SELECT alias, alias_lower, user_uuid FROM user_aliases');
+    } catch (error) {
+      logger.error('Error loading user aliases:', error);
+      return [];
+    }
+  }
+
+  async setUserAlias(userUUID: string, alias: string, aliasLower: string): Promise<void> {
+    // Check the alias is free BEFORE touching this user's existing row. Without
+    // this, claiming a taken alias would delete the user's current alias and
+    // then fail on the insert, leaving them with no alias at all.
+    const ownerQuery = this.type === 'sqlite'
+      ? 'SELECT user_uuid FROM user_aliases WHERE alias_lower = ?'
+      : 'SELECT user_uuid FROM user_aliases WHERE alias_lower = $1';
+    const owner = await this.getQuery(ownerQuery, [aliasLower]);
+    if (owner && owner.user_uuid !== userUUID) {
+      const error: any = new Error(`UNIQUE constraint failed: alias "${alias}" is already taken`);
+      error.code = 'ALIAS_TAKEN';
+      throw error;
+    }
+
+    // One alias per user: drop any existing row for this user before claiming
+    // the new alias, so reassigning does not leave the old alias resolvable.
+    const deleteQuery = this.type === 'sqlite'
+      ? 'DELETE FROM user_aliases WHERE user_uuid = ?'
+      : 'DELETE FROM user_aliases WHERE user_uuid = $1';
+    await this.runQuery(deleteQuery, [userUUID]);
+
+    if (this.type === 'sqlite') {
+      await this.runQuery(
+        `INSERT INTO user_aliases (alias_lower, alias, user_uuid, created_at)
+         VALUES (?, ?, ?, CURRENT_TIMESTAMP)`,
+        [aliasLower, alias, userUUID]
+      );
+    } else {
+      await this.runQuery(
+        `INSERT INTO user_aliases (alias_lower, alias, user_uuid, created_at)
+         VALUES ($1, $2, $3, CURRENT_TIMESTAMP)`,
+        [aliasLower, alias, userUUID]
+      );
+    }
+  }
+
+  async deleteUserAlias(userUUID: string): Promise<boolean> {
+    const query = this.type === 'sqlite'
+      ? 'DELETE FROM user_aliases WHERE user_uuid = ?'
+      : 'DELETE FROM user_aliases WHERE user_uuid = $1';
+    const result = await this.runQuery(query, [userUUID]);
+    return this.type === 'sqlite' ? result.changes > 0 : result.rowCount > 0;
   }
 
   async pruneAllIdMappings(): Promise<void> {
@@ -731,34 +801,39 @@ class Database {
     try {
       const query = this.type === 'sqlite'
         ? `SELECT
-             user_uuid,
-             created_at,
-             updated_at,
-             CASE WHEN json_extract(config_data, '$.apiKeys.tmdb') IS NOT NULL
-                    OR json_extract(config_data, '$.apiKeys.tvdb') IS NOT NULL
-                    OR json_extract(config_data, '$.apiKeys.imdb') IS NOT NULL
-                    OR json_extract(config_data, '$.apiKeys.kitsu') IS NOT NULL
+             u.user_uuid,
+             u.created_at,
+             u.updated_at,
+             a.alias AS alias,
+             CASE WHEN json_extract(u.config_data, '$.apiKeys.tmdb') IS NOT NULL
+                    OR json_extract(u.config_data, '$.apiKeys.tvdb') IS NOT NULL
+                    OR json_extract(u.config_data, '$.apiKeys.imdb') IS NOT NULL
+                    OR json_extract(u.config_data, '$.apiKeys.kitsu') IS NOT NULL
                THEN 1 ELSE 0 END AS has_api_keys,
-             CASE WHEN updated_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END AS is_active
-           FROM user_configs
-           ORDER BY created_at DESC`
+             CASE WHEN u.updated_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END AS is_active
+           FROM user_configs u
+           LEFT JOIN user_aliases a ON a.user_uuid = u.user_uuid
+           ORDER BY u.created_at DESC`
         : `SELECT
-             user_uuid,
-             created_at,
-             updated_at,
-             CASE WHEN (config_data::jsonb->'apiKeys'->>'tmdb') IS NOT NULL
-                    OR (config_data::jsonb->'apiKeys'->>'tvdb') IS NOT NULL
-                    OR (config_data::jsonb->'apiKeys'->>'imdb') IS NOT NULL
-                    OR (config_data::jsonb->'apiKeys'->>'kitsu') IS NOT NULL
+             u.user_uuid,
+             u.created_at,
+             u.updated_at,
+             a.alias AS alias,
+             CASE WHEN (u.config_data::jsonb->'apiKeys'->>'tmdb') IS NOT NULL
+                    OR (u.config_data::jsonb->'apiKeys'->>'tvdb') IS NOT NULL
+                    OR (u.config_data::jsonb->'apiKeys'->>'imdb') IS NOT NULL
+                    OR (u.config_data::jsonb->'apiKeys'->>'kitsu') IS NOT NULL
                THEN true ELSE false END AS has_api_keys,
-             CASE WHEN updated_at >= NOW() - INTERVAL '7 days' THEN true ELSE false END AS is_active
-           FROM user_configs
-           ORDER BY created_at DESC`;
+             CASE WHEN u.updated_at >= NOW() - INTERVAL '7 days' THEN true ELSE false END AS is_active
+           FROM user_configs u
+           LEFT JOIN user_aliases a ON a.user_uuid = u.user_uuid
+           ORDER BY u.created_at DESC`;
 
       const rows = await this.allQuery(query);
 
       return rows.map(row => ({
         uuid: row.user_uuid,
+        alias: row.alias || null,
         created_at: row.created_at,
         last_updated: row.updated_at,
         last_activity: null,
@@ -895,6 +970,10 @@ class Database {
         : 'DELETE FROM user_configs WHERE updated_at < $1';
 
       const result = await this.runQuery(query, [cutoffDateStr]);
+
+      await this.runQuery(
+        'DELETE FROM user_aliases WHERE user_uuid NOT IN (SELECT user_uuid FROM user_configs)'
+      );
 
       return this.type === 'sqlite' ? result.changes : result.rowCount;
     } catch (error) {

@@ -46,6 +46,14 @@ const consola = require('consola');
 const logger = consola.withTag('ConfigApi');
 // Import the config cache
 const configCache = require('./configCache');
+const { getAliasForUuid, isAliasFeatureEnabled } = require('./aliasResolver');
+
+// The alias is purely cosmetic here — the middleware resolves either spelling —
+// but showing it is the point of the feature.
+function manifestIdentifier(userUUID) {
+  if (!isAliasFeatureEnabled()) return userUUID;
+  return getAliasForUuid(userUUID) || userUUID;
+}
 const {
   sanitizeAiTriggerKeyword,
   MIN_AI_TRIGGER_KEYWORD_LENGTH,
@@ -525,7 +533,7 @@ class ConfigApi {
         ? (hostEnv.startsWith('http') ? hostEnv : `https://${hostEnv}`)
         : `https://${req.get('host')}`;
 
-      const installUrl = `${baseUrl}/stremio/${userUUID}/manifest.json`;
+      const installUrl = `${baseUrl}/stremio/${manifestIdentifier(userUUID)}/manifest.json`;
 
       res.json({
         success: true,
@@ -890,7 +898,7 @@ class ConfigApi {
       res.json({
         success: true,
         userUUID,
-        installUrl: `${baseUrl2}/stremio/${userUUID}/manifest.json`,
+        installUrl: `${baseUrl2}/stremio/${manifestIdentifier(userUUID)}/manifest.json`,
         message: 'Configuration updated successfully'
       });
     } catch (error) {
@@ -931,7 +939,7 @@ class ConfigApi {
       res.json({
         success: true,
         userUUID,
-        installUrl: `${baseUrl3}/stremio/${userUUID}/manifest.json`,
+        installUrl: `${baseUrl3}/stremio/${manifestIdentifier(userUUID)}/manifest.json`,
         message: 'Migration completed successfully'
       });
     } catch (error) {

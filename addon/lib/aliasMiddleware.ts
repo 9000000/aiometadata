@@ -6,6 +6,7 @@ const ALIAS_PATH_PREFIXES = new Set([
   'api/config/update',
   'api/config/is-trusted',
   'api/config/delete-user',
+  'api/config/clear-cache',
   'api/movielens/sync',
   'api/movielens/lists',
   'api/cache/invalidate-user',
@@ -64,8 +65,7 @@ export function createAliasResolutionMiddleware({
         if (queryAlias && looksLikeAlias(queryAlias)) {
           const userUUID = resolve(queryAlias.toLowerCase());
           if (userUUID) {
-            params.set('userUUID', userUUID);
-            nextSearch = params.toString();
+            nextSearch = search.replace(/(^|&)userUUID=[^&]*/, `$1userUUID=${userUUID}`);
           }
         }
       }

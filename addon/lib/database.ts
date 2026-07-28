@@ -580,7 +580,7 @@ class Database {
       const deleteAliasQuery = this.type === 'sqlite'
         ? 'DELETE FROM user_aliases WHERE user_uuid = ?'
         : 'DELETE FROM user_aliases WHERE user_uuid = $1';
-      await this.runQuery(deleteAliasQuery, [userUUID]);
+      await this.runAliasCleanup(deleteAliasQuery, [userUUID]);
 
       logger.info(`Successfully deleted user ${userUUID} and all associated data`);
       return userDeleted;
@@ -640,6 +640,14 @@ class Database {
       ? 'DELETE FROM trusted_uuids WHERE user_uuid = ?'
       : 'DELETE FROM trusted_uuids WHERE user_uuid = $1';
     await this.runQuery(query, [userUUID]);
+  }
+
+  private async runAliasCleanup(query: string, params: any[] = []): Promise<void> {
+    try {
+      await this.runQuery(query, params);
+    } catch (error: any) {
+      logger.warn(`Alias cleanup skipped: ${error.message}`);
+    }
   }
 
   async getAllUserAliases(): Promise<Array<{ alias: string; alias_lower: string; user_uuid: string }>> {
@@ -801,39 +809,38 @@ class Database {
     try {
       const query = this.type === 'sqlite'
         ? `SELECT
-             u.user_uuid,
-             u.created_at,
-             u.updated_at,
-             a.alias AS alias,
-             CASE WHEN json_extract(u.config_data, '$.apiKeys.tmdb') IS NOT NULL
-                    OR json_extract(u.config_data, '$.apiKeys.tvdb') IS NOT NULL
-                    OR json_extract(u.config_data, '$.apiKeys.imdb') IS NOT NULL
-                    OR json_extract(u.config_data, '$.apiKeys.kitsu') IS NOT NULL
+             user_uuid,
+             created_at,
+             updated_at,
+             CASE WHEN json_extract(config_data, '$.apiKeys.tmdb') IS NOT NULL
+                    OR json_extract(config_data, '$.apiKeys.tvdb') IS NOT NULL
+                    OR json_extract(config_data, '$.apiKeys.imdb') IS NOT NULL
+                    OR json_extract(config_data, '$.apiKeys.kitsu') IS NOT NULL
                THEN 1 ELSE 0 END AS has_api_keys,
-             CASE WHEN u.updated_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END AS is_active
-           FROM user_configs u
-           LEFT JOIN user_aliases a ON a.user_uuid = u.user_uuid
-           ORDER BY u.created_at DESC`
+             CASE WHEN updated_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END AS is_active
+           FROM user_configs
+           ORDER BY created_at DESC`
         : `SELECT
-             u.user_uuid,
-             u.created_at,
-             u.updated_at,
-             a.alias AS alias,
-             CASE WHEN (u.config_data::jsonb->'apiKeys'->>'tmdb') IS NOT NULL
-                    OR (u.config_data::jsonb->'apiKeys'->>'tvdb') IS NOT NULL
-                    OR (u.config_data::jsonb->'apiKeys'->>'imdb') IS NOT NULL
-                    OR (u.config_data::jsonb->'apiKeys'->>'kitsu') IS NOT NULL
+             user_uuid,
+             created_at,
+             updated_at,
+             CASE WHEN (config_data::jsonb->'apiKeys'->>'tmdb') IS NOT NULL
+                    OR (config_data::jsonb->'apiKeys'->>'tvdb') IS NOT NULL
+                    OR (config_data::jsonb->'apiKeys'->>'imdb') IS NOT NULL
+                    OR (config_data::jsonb->'apiKeys'->>'kitsu') IS NOT NULL
                THEN true ELSE false END AS has_api_keys,
-             CASE WHEN u.updated_at >= NOW() - INTERVAL '7 days' THEN true ELSE false END AS is_active
-           FROM user_configs u
-           LEFT JOIN user_aliases a ON a.user_uuid = u.user_uuid
-           ORDER BY u.created_at DESC`;
+             CASE WHEN updated_at >= NOW() - INTERVAL '7 days' THEN true ELSE false END AS is_active
+           FROM user_configs
+           ORDER BY created_at DESC`;
 
       const rows = await this.allQuery(query);
 
+      const aliasRows = await this.getAllUserAliases();
+      const aliasByUuid = new Map(aliasRows.map(row => [row.user_uuid, row.alias]));
+
       return rows.map(row => ({
         uuid: row.user_uuid,
-        alias: row.alias || null,
+        alias: aliasByUuid.get(row.user_uuid) || null,
         created_at: row.created_at,
         last_updated: row.updated_at,
         last_activity: null,
@@ -971,7 +978,7 @@ class Database {
 
       const result = await this.runQuery(query, [cutoffDateStr]);
 
-      await this.runQuery(
+      await this.runAliasCleanup(
         'DELETE FROM user_aliases WHERE user_uuid NOT IN (SELECT user_uuid FROM user_configs)'
       );
 

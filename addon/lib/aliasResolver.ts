@@ -44,7 +44,10 @@ function maybeRefresh(): void {
   if (Date.now() - loadedAtMs < refreshIntervalMs()) return;
 
   refreshInFlight = loadAliasMap()
-    .catch((error: any) => logger.warn(`Alias map refresh failed: ${error.message}`))
+    .catch((error: any) => {
+      loadedAtMs = Date.now();
+      logger.warn(`Alias map refresh failed: ${error.message}`);
+    })
     .finally(() => { refreshInFlight = null; });
 }
 

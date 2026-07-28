@@ -268,7 +268,8 @@ async function testKeysRateLimitMiddleware(req, res, next) {
 }
 
 function CONFIG_LOAD_RATE_LIMIT_PER_MIN() {
-  return parseInt(process.env.CONFIG_LOAD_RATE_LIMIT_PER_MIN || '20', 10);
+  const parsed = parseInt(require('./lib/settingsService').getSetting('CONFIG_LOAD_RATE_LIMIT_PER_MIN'), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 20;
 }
 
 async function configLoadRateLimitMiddleware(req, res, next) {
@@ -5546,12 +5547,7 @@ addon.post('/api/admin/users/:userUUID/reset-password', async (req, res) => {
 });
 
 // Set a user's alias
-addon.put('/api/admin/users/:userUUID/alias', async (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
+addon.put('/api/admin/users/:userUUID/alias', requireDashboardAdmin, async (req, res) => {
   const { isAliasFeatureEnabled, setAliasForUser } = require('./lib/aliasResolver.js');
   if (!isAliasFeatureEnabled()) {
     return res.status(403).json({ error: 'User aliases are disabled on this instance (USER_ALIASES_ENABLED).' });
@@ -5574,12 +5570,7 @@ addon.put('/api/admin/users/:userUUID/alias', async (req, res) => {
 });
 
 // Remove a user's alias
-addon.delete('/api/admin/users/:userUUID/alias', async (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
+addon.delete('/api/admin/users/:userUUID/alias', requireDashboardAdmin, async (req, res) => {
   const { isAliasFeatureEnabled, clearAliasForUser } = require('./lib/aliasResolver.js');
   if (!isAliasFeatureEnabled()) {
     return res.status(403).json({ error: 'User aliases are disabled on this instance (USER_ALIASES_ENABLED).' });

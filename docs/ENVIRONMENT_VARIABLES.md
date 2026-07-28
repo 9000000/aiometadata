@@ -69,7 +69,7 @@ cp .env.example .env
 - **Default**: `true`
 - **Description**: Whether to run schema creation (`CREATE TABLE IF NOT EXISTS …`) on startup. Set to `false` on replica-region instances so they boot without attempting DDL; run migrations once against the primary.
 
-> **Note:** with `RUN_MIGRATIONS=false`, create the `user_aliases` table by hand before enabling `USER_ALIASES_ENABLED`:
+> **Note:** with `RUN_MIGRATIONS=false`, create the `user_aliases` table by hand before enabling `USER_ALIASES_ENABLED`. Without it aliases simply never resolve; the rest of the addon, including the user list and user deletion, is unaffected.
 > ```sql
 > CREATE TABLE IF NOT EXISTS user_aliases (
 >   alias_lower VARCHAR(64) PRIMARY KEY,
@@ -542,12 +542,12 @@ These caps bound the per-process heap used by module-level caches. The defaults 
 
 ### `USER_ALIASES_ENABLED`
 - **Default**: `false`
-- **Description**: Allow a human-readable alias to be used anywhere a user UUID is accepted — manifest URLs (`/stremio/Cedya/manifest.json`), the configure-page login, and the internal API. Aliases resolve to the canonical UUID before routing, so cache entries and metrics are shared between an alias and its UUID rather than duplicated. Aliases are guessable where UUIDs are not, so an alias makes an account enumerable; leave this off on public instances unless you also tighten `CONFIG_LOAD_RATE_LIMIT_PER_MIN`.
+- **Description**: Allow a human-readable alias to be used anywhere a user UUID is accepted — manifest URLs (`/stremio/Cedya/manifest.json`), the configure-page login, and the internal API. Aliases resolve to the canonical UUID before routing, so cache entries and metrics are shared between an alias and its UUID rather than duplicated. Aliases are guessable where UUIDs are not, so an alias makes an account enumerable; leave this off on public instances unless you also tighten `CONFIG_LOAD_RATE_LIMIT_PER_MIN`. Assigning and removing aliases goes through the admin API, so `ADMIN_KEY` must be set. An alias is part of the URL users install, so removing one breaks their installation and reassigning one points it at the new holder's catalogs.
 - **Example**: `USER_ALIASES_ENABLED=true`
 
 ### `USER_ALIASES`
 - **Required**: No
-- **Description**: Comma-separated `alias=uuid` pairs applied at every startup. Aliases must be 3–32 characters of letters, numbers, hyphens or underscores, are matched case-insensitively, are unique across the instance, and cannot be UUID-shaped or a reserved word (`configure`, `catalog`, `meta`, `export`, …). One alias per user; setting a new one replaces the old. Entries here take precedence over aliases set from the dashboard and are reapplied on every boot. Invalid entries are logged and skipped — they never block startup. Env-only; cannot be changed from the dashboard.
+- **Description**: Comma-separated `alias=uuid` pairs applied at every startup. Aliases must be 3–32 characters of letters, numbers, hyphens or underscores, are matched case-insensitively, are unique across the instance, and cannot be UUID-shaped or a reserved word (`configure`, `catalog`, `meta`, `export`, …). One alias per user; setting a new one replaces the old. Entries here take precedence over aliases set from the dashboard and are reapplied on every boot, including reassigning an alias away from whoever currently holds it. Invalid entries are logged and skipped — they never block startup.
 - **Example**: `USER_ALIASES=Cedya=3f8b2c1a-4d5e-6f70-8a9b-0c1d2e3f4a5b,mum=11111111-2222-3333-4444-555555555555`
 
 ### `USER_ALIAS_REFRESH_SEC`

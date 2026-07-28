@@ -391,7 +391,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'Features',
     type: 'string',
     default: '',
-    envOnly: true,
     requiresRestart: true,
   },
   {

@@ -78,7 +78,7 @@ export function ConfigurationManager({ children }: ConfigurationManagerProps) {
   }, [auth.userUUID, auth.authenticated]);
 
   useEffect(() => {
-    if (savedConfig?.userUUID && savedConfig.userUUID.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+    if (savedConfig?.userUUID && /^[A-Za-z0-9_-]{3,}$/.test(savedConfig.userUUID)) {
       fetch(`/api/config/is-trusted/${encodeURIComponent(savedConfig.userUUID)}`)
         .then(res => res.json())
         .then(data => {

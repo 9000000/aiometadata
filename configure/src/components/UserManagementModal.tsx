@@ -48,10 +48,12 @@ import {
   Activity,
   Settings,
   AlertTriangle,
+  Tag,
 } from "lucide-react";
 
 interface User {
   uuid: string;
+  alias?: string | null;
   created_at: string;
   last_updated: string;
   last_activity?: string;
@@ -97,17 +99,24 @@ export function UserManagementModal({ isOpen, onClose, adminKey }: UserManagemen
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
   const [userToResetPassword, setUserToResetPassword] = useState<User | null>(null);
   const [newPasswordInput, setNewPasswordInput] = useState("");
+  const [showAliasDialog, setShowAliasDialog] = useState(false);
+  const [userToAlias, setUserToAlias] = useState<User | null>(null);
+  const [aliasInput, setAliasInput] = useState("");
+  const [aliasesEnabled, setAliasesEnabled] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
       fetchUsers();
+      fetchAliasesEnabled();
     }
   }, [isOpen]);
 
   useEffect(() => {
+    const term = searchTerm.toLowerCase();
     const filtered = users.filter(user =>
-      user.uuid.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.created_at.toLowerCase().includes(searchTerm.toLowerCase())
+      user.uuid.toLowerCase().includes(term) ||
+      (user.alias || '').toLowerCase().includes(term) ||
+      user.created_at.toLowerCase().includes(term)
     );
     setFilteredUsers(filtered);
   }, [users, searchTerm]);
@@ -139,6 +148,58 @@ export function UserManagementModal({ isOpen, onClose, adminKey }: UserManagemen
       console.error('Error fetching users:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchAliasesEnabled = async () => {
+    try {
+      const headers: Record<string, string> = {};
+      if (adminKey) headers['x-admin-key'] = adminKey;
+
+      const response = await fetch('/api/dashboard/settings', { headers });
+      if (!response.ok) return;
+
+      const data = await response.json();
+      const setting = (data.settings || []).find((s: { key: string }) => s.key === 'USER_ALIASES_ENABLED');
+      setAliasesEnabled(String(setting?.value) === 'true');
+    } catch {
+      setAliasesEnabled(false);
+    }
+  };
+
+  const saveAlias = async (uuid: string, alias: string) => {
+    const trimmed = alias.trim();
+
+    if (!trimmed && !userToAlias?.alias) {
+      setShowAliasDialog(false);
+      setUserToAlias(null);
+      return;
+    }
+
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (adminKey) headers['x-admin-key'] = adminKey;
+
+      const response = await fetch(`/api/admin/users/${uuid}/alias`, {
+        method: trimmed ? 'PUT' : 'DELETE',
+        headers,
+        body: trimmed ? JSON.stringify({ alias: trimmed }) : undefined,
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        toast.error(data.error || 'Failed to update alias');
+        return;
+      }
+
+      toast.success(trimmed ? `Alias set to ${data.alias}` : 'Alias removed');
+      setShowAliasDialog(false);
+      setUserToAlias(null);
+      fetchUsers();
+    } catch (error) {
+      toast.error('Error updating alias');
+      console.error('Error updating alias:', error);
     }
   };
 
@@ -364,6 +425,7 @@ export function UserManagementModal({ isOpen, onClose, adminKey }: UserManagemen
                 <TableHeader>
                   <TableRow>
                     <TableHead>UUID</TableHead>
+                    {aliasesEnabled && <TableHead>Alias</TableHead>}
                     <TableHead>Created</TableHead>
                     <TableHead>Last Updated</TableHead>
                     <TableHead>Requests</TableHead>
@@ -375,14 +437,14 @@ export function UserManagementModal({ isOpen, onClose, adminKey }: UserManagemen
                 <TableBody>
                   {loading ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-center py-8">
+                      <TableCell colSpan={aliasesEnabled ? 8 : 7} className="text-center py-8">
                         <RefreshCw className="h-6 w-6 animate-spin mx-auto mb-2" />
                         Loading users...
                       </TableCell>
                     </TableRow>
                   ) : filteredUsers.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={aliasesEnabled ? 8 : 7} className="text-center py-8 text-muted-foreground">
                         No users found
                       </TableCell>
                     </TableRow>
@@ -392,6 +454,13 @@ export function UserManagementModal({ isOpen, onClose, adminKey }: UserManagemen
                         <TableCell className="font-mono text-sm">
                           {user.uuid.substring(0, 8)}...
                         </TableCell>
+                        {aliasesEnabled && (
+                          <TableCell className="font-mono text-sm">
+                            {user.alias
+                              ? <Badge variant="secondary">{user.alias}</Badge>
+                              : <span className="text-muted-foreground">—</span>}
+                          </TableCell>
+                        )}
                         <TableCell>
                           <div className="flex items-center gap-2">
                             <Calendar className="h-3 w-3 text-muted-foreground" />
@@ -427,6 +496,16 @@ export function UserManagementModal({ isOpen, onClose, adminKey }: UserManagemen
                                 <Eye className="h-4 w-4 mr-2" />
                                 View Details
                               </DropdownMenuItem>
+                              {aliasesEnabled && (
+                                <DropdownMenuItem onClick={() => {
+                                  setUserToAlias(user);
+                                  setAliasInput(user.alias || "");
+                                  setShowAliasDialog(true);
+                                }}>
+                                  <Tag className="h-4 w-4 mr-2" />
+                                  {user.alias ? 'Edit Alias' : 'Set Alias'}
+                                </DropdownMenuItem>
+                              )}
                               <DropdownMenuItem onClick={() => {
                                 setUserToResetPassword(user);
                                 setNewPasswordInput("");
@@ -470,7 +549,9 @@ export function UserManagementModal({ isOpen, onClose, adminKey }: UserManagemen
                 filteredUsers.map((user) => (
                   <div key={user.uuid} className="p-3 border rounded-lg">
                     <div className="flex items-center justify-between mb-2">
-                      <span className="font-mono text-sm">{user.uuid.substring(0, 8)}...</span>
+                      <span className="font-mono text-sm">
+                        {user.alias || `${user.uuid.substring(0, 8)}...`}
+                      </span>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button variant="ghost" size="sm">
@@ -482,6 +563,16 @@ export function UserManagementModal({ isOpen, onClose, adminKey }: UserManagemen
                             <Eye className="h-4 w-4 mr-2" />
                             View Details
                           </DropdownMenuItem>
+                          {aliasesEnabled && (
+                            <DropdownMenuItem onClick={() => {
+                              setUserToAlias(user);
+                              setAliasInput(user.alias || "");
+                              setShowAliasDialog(true);
+                            }}>
+                              <Tag className="h-4 w-4 mr-2" />
+                              {user.alias ? 'Edit Alias' : 'Set Alias'}
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuItem onClick={() => {
                             setUserToResetPassword(user);
                             setNewPasswordInput("");
@@ -625,6 +716,62 @@ export function UserManagementModal({ isOpen, onClose, adminKey }: UserManagemen
       </AlertDialog>
 
       {/* Reset Password Dialog */}
+      <Dialog open={showAliasDialog} onOpenChange={(open) => {
+        setShowAliasDialog(open);
+        if (!open) { setUserToAlias(null); setAliasInput(""); }
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Tag className="h-5 w-5" />
+              {userToAlias?.alias ? 'Edit Alias' : 'Set Alias'}
+            </DialogTitle>
+            <DialogDescription>
+              Alias for user <span className="font-mono">{userToAlias?.uuid.substring(0, 8)}...</span>
+              {' '}— 3–32 characters, letters, numbers, hyphens and underscores. Leave empty to remove it.
+              The alias works anywhere the UUID does, including the manifest URL and the configure-page login.
+            </DialogDescription>
+            {userToAlias?.alias && (
+              <div className="flex gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+                <span>
+                  Anyone who installed the addon from an alias URL is pointed at whoever holds that alias.
+                  Removing it breaks their installation; giving it to another user hands them that user's catalogs.
+                </span>
+              </div>
+            )}
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="alias-input">Alias</Label>
+              <Input
+                id="alias-input"
+                placeholder="e.g. Cedya"
+                value={aliasInput}
+                onChange={(e) => setAliasInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && userToAlias) {
+                    saveAlias(userToAlias.uuid, aliasInput);
+                  }
+                }}
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => {
+              setShowAliasDialog(false);
+              setUserToAlias(null);
+              setAliasInput("");
+            }}>
+              Cancel
+            </Button>
+            <Button onClick={() => { if (userToAlias) saveAlias(userToAlias.uuid, aliasInput); }}>
+              Save
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={showPasswordDialog} onOpenChange={(open) => {
         setShowPasswordDialog(open);
         if (!open) setNewPasswordInput("");

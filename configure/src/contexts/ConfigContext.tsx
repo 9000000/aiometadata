@@ -59,14 +59,12 @@ function initializeConfigFromSources(): AppConfig | null {
     const pathParts = window.location.pathname.split('/');
     const configStringIndex = pathParts.findIndex(p => p.toLowerCase() === 'configure');
     
-    // Only load config from URL if it's NOT a Stremio UUID-based URL
-    // Stremio UUID URLs should require authentication
-    const isStremioUUIDUrl = pathParts.includes('stremio') && 
-                            configStringIndex > 1 && 
-                            pathParts[configStringIndex - 2] && 
-                            pathParts[configStringIndex - 2].match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
-    
-    if (configStringIndex > 0 && pathParts[configStringIndex - 1] && !isStremioUUIDUrl) {
+    const stremioIndex = pathParts.findIndex(p => p.toLowerCase() === 'stremio');
+    const isStremioUserUrl = stremioIndex !== -1 &&
+                            (configStringIndex === stremioIndex + 2 ||
+                             configStringIndex === stremioIndex + 3);
+
+    if (configStringIndex > 0 && pathParts[configStringIndex - 1] && !isStremioUserUrl) {
       const decompressed = decompressFromEncodedURIComponent(pathParts[configStringIndex - 1]);
       if (decompressed) {
         console.log('[Config] Initializing from URL.');
@@ -477,4 +475,3 @@ export const useConfig = () => {
 export type { AppConfig };
 
 export type { CatalogConfig };
-

@@ -206,6 +206,13 @@ addon.get('/health/ready', (req, res) => {
 
 addon.use(createReadinessGate(readiness, { allowPaths: ['/health'] }));
 
+const { createAliasResolutionMiddleware } = require('./lib/aliasMiddleware.js');
+const { resolveAliasSync, isAliasFeatureEnabled } = require('./lib/aliasResolver.js');
+addon.use(createAliasResolutionMiddleware({
+  resolve: resolveAliasSync,
+  isEnabled: isAliasFeatureEnabled,
+}));
+
 // Add request tracking middleware
 addon.use(requestTracker.middleware());
 
@@ -255,6 +262,36 @@ async function testKeysRateLimitMiddleware(req, res, next) {
     }
   } catch (error) {
     consola.warn('[Rate Limit] /api/test-keys limiter failed, allowing request:', error.message);
+  }
+
+  next();
+}
+
+function CONFIG_LOAD_RATE_LIMIT_PER_MIN() {
+  const parsed = parseInt(require('./lib/settingsService').getSetting('CONFIG_LOAD_RATE_LIMIT_PER_MIN'), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 20;
+}
+
+async function configLoadRateLimitMiddleware(req, res, next) {
+  if (!redis) {
+    return next();
+  }
+
+  try {
+    const minuteBucket = Math.floor(Date.now() / 60000);
+    const target = req.params.userUUID || 'unknown';
+    const rateKey = `rate-limit:config-load:${target}:${minuteBucket}`;
+    const currentCount = await redis.incr(rateKey);
+
+    if (currentCount === 1) {
+      await redis.expire(rateKey, 70);
+    }
+
+    if (currentCount > CONFIG_LOAD_RATE_LIMIT_PER_MIN()) {
+      return res.status(429).json({ error: 'Too many login attempts. Please try again shortly.' });
+    }
+  } catch (error) {
+    consola.warn('[Rate Limit] /api/config/load limiter failed, allowing request:', error.message);
   }
 
   next();
@@ -517,7 +554,7 @@ const respond = function (req, res, data, opts) {
 
 // --- Configuration Database API Routes ---
 addon.post("/api/config/save", configApi.saveConfig.bind(configApi));
-addon.post("/api/config/load/:userUUID", configApi.loadConfig.bind(configApi));
+addon.post("/api/config/load/:userUUID", configLoadRateLimitMiddleware, configApi.loadConfig.bind(configApi));
 addon.put("/api/config/update/:userUUID", configApi.updateConfig.bind(configApi));
 addon.post("/api/config/migrate", configApi.migrateFromLocalStorage.bind(configApi));
 addon.get('/api/config/is-trusted/:uuid', configApi.isTrusted.bind(configApi));
@@ -2857,8 +2894,7 @@ addon.post("/anilist/disconnect", async (req, res) => {
   }
 });
 
-// GET /anilist/status/:userUUID - Get AniList connection status
-addon.get("/anilist/status/:userUUID", async (req, res) => {
+addon.get("/anilist/status/:userUUID", requireDashboardAdmin, async (req, res) => {
   try {
     const { userUUID } = req.params;
     
@@ -3105,8 +3141,7 @@ addon.post("/mal/disconnect", async (req, res) => {
   }
 });
 
-// GET /mal/status/:userUUID - Get MyAnimeList connection status
-addon.get("/mal/status/:userUUID", async (req, res) => {
+addon.get("/mal/status/:userUUID", requireDashboardAdmin, async (req, res) => {
   try {
     const { userUUID } = req.params;
 
@@ -5511,6 +5546,51 @@ addon.post('/api/admin/users/:userUUID/reset-password', async (req, res) => {
   }
 });
 
+// Set a user's alias
+addon.put('/api/admin/users/:userUUID/alias', requireDashboardAdmin, async (req, res) => {
+  const { isAliasFeatureEnabled, setAliasForUser } = require('./lib/aliasResolver.js');
+  if (!isAliasFeatureEnabled()) {
+    return res.status(403).json({ error: 'User aliases are disabled on this instance (USER_ALIASES_ENABLED).' });
+  }
+
+  try {
+    const { userUUID } = req.params;
+    const { alias } = req.body || {};
+    const result = await setAliasForUser(userUUID, alias);
+
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error });
+    }
+
+    res.json({ success: true, alias: result.alias });
+  } catch (error) {
+    consola.error('[Admin API] Error setting alias:', error);
+    res.status(500).json({ error: 'Failed to set alias' });
+  }
+});
+
+// Remove a user's alias
+addon.delete('/api/admin/users/:userUUID/alias', requireDashboardAdmin, async (req, res) => {
+  const { isAliasFeatureEnabled, clearAliasForUser } = require('./lib/aliasResolver.js');
+  if (!isAliasFeatureEnabled()) {
+    return res.status(403).json({ error: 'User aliases are disabled on this instance (USER_ALIASES_ENABLED).' });
+  }
+
+  try {
+    const { userUUID } = req.params;
+    const removed = await clearAliasForUser(userUUID);
+
+    if (!removed) {
+      return res.status(404).json({ error: 'User has no alias' });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    consola.error('[Admin API] Error clearing alias:', error);
+    res.status(500).json({ error: 'Failed to clear alias' });
+  }
+});
+
 // Delete user
 addon.delete('/api/admin/users/:userUUID', async (req, res) => {
   const adminKey = process.env.ADMIN_KEY;
@@ -5568,8 +5648,7 @@ addon.post('/api/admin/users/bulk-delete-inactive', async (req, res) => {
   }
 });
 
-// Debug endpoint to help troubleshoot catalog issues
-addon.get("/api/debug/catalogs/:userUUID", async function (req, res) {
+addon.get("/api/debug/catalogs/:userUUID", requireDashboardAdmin, async function (req, res) {
   const { userUUID } = req.params;
   try {
     const config = await database.getUserConfig(userUUID);
@@ -5822,7 +5901,7 @@ addon.get('/api/cache/test-essential', async (req, res) => {
   }
 });
 
-addon.get('/api/cache/invalidation-status/:userUUID', async (req, res) => {
+addon.get('/api/cache/invalidation-status/:userUUID', requireDashboardAdmin, async (req, res) => {
   try {
     const { userUUID } = req.params;
     

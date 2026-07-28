@@ -69,6 +69,16 @@ cp .env.example .env
 - **Default**: `true`
 - **Description**: Whether to run schema creation (`CREATE TABLE IF NOT EXISTS …`) on startup. Set to `false` on replica-region instances so they boot without attempting DDL; run migrations once against the primary.
 
+> **Note:** with `RUN_MIGRATIONS=false`, create the `user_aliases` table by hand before enabling `USER_ALIASES_ENABLED`. Without it aliases simply never resolve; the rest of the addon, including the user list and user deletion, is unaffected.
+> ```sql
+> CREATE TABLE IF NOT EXISTS user_aliases (
+>   alias_lower VARCHAR(64) PRIMARY KEY,
+>   alias VARCHAR(64) NOT NULL,
+>   user_uuid VARCHAR(255) UNIQUE NOT NULL,
+>   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+> );
+> ```
+
 > **Geo-redundancy note:** the database is the source of truth and the sync layer — there is no separate config-sync mechanism. Run one shared primary plus a local read replica per region, point `DATABASE_URI` at the primary everywhere and `DATABASE_READ_URI` at each region's replica. Config saves prime the local Redis cache directly, so the user who made a change reads it back immediately even before replication catches up. Cache (`REDIS_URL`) can be regional; cross-region invalidation is bounded by `CONFIG_CACHE_TTL_SEC`.
 
 ---
@@ -529,6 +539,26 @@ These caps bound the per-process heap used by module-level caches. The defaults 
 - **Default**: `true`
 - **Description**: Enable streaming service catalogs
 - **Example**: `ENABLE_STREAMING_CATALOGS=false`
+
+### `USER_ALIASES_ENABLED`
+- **Default**: `false`
+- **Description**: Allow a human-readable alias to be used anywhere a user UUID is accepted — manifest URLs (`/stremio/Cedya/manifest.json`), the configure-page login, and the internal API. Aliases resolve to the canonical UUID before routing, so cache entries and metrics are shared between an alias and its UUID rather than duplicated. Aliases are guessable where UUIDs are not, so an alias makes an account enumerable; leave this off on public instances unless you also tighten `CONFIG_LOAD_RATE_LIMIT_PER_MIN`. Assigning and removing aliases goes through the admin API, so `ADMIN_KEY` must be set. An alias is part of the URL users install, so removing one breaks their installation and reassigning one points it at the new holder's catalogs.
+- **Example**: `USER_ALIASES_ENABLED=true`
+
+### `USER_ALIASES`
+- **Required**: No
+- **Description**: Comma-separated `alias=uuid` pairs applied at every startup. Aliases must be 3–32 characters of letters, numbers, hyphens or underscores, are matched case-insensitively, are unique across the instance, and cannot be UUID-shaped or a reserved word (`configure`, `catalog`, `meta`, `export`, …). One alias per user; setting a new one replaces the old. Entries here take precedence over aliases set from the dashboard and are reapplied on every boot, including reassigning an alias away from whoever currently holds it. Invalid entries are logged and skipped — they never block startup.
+- **Example**: `USER_ALIASES=Cedya=3f8b2c1a-4d5e-6f70-8a9b-0c1d2e3f4a5b,mum=11111111-2222-3333-4444-555555555555`
+
+### `USER_ALIAS_REFRESH_SEC`
+- **Default**: `30`
+- **Description**: How often each process refreshes its in-memory alias map from the database. Resolution is served from memory so the hot path does no I/O. Only relevant when running more than one replica against a shared database: an alias created on one replica becomes resolvable on the others within this window.
+- **Example**: `USER_ALIAS_REFRESH_SEC=15`
+
+### `CONFIG_LOAD_RATE_LIMIT_PER_MIN`
+- **Default**: `20`
+- **Description**: Maximum configure-page login attempts (`POST /api/config/load/:id`) per **account** per minute. Bucketed per account rather than per client IP, because `trust proxy` is disabled — a per-IP bucket would throttle every user behind the reverse proxy at once. An alias and its UUID share one bucket. Requires Redis; without Redis the limiter is skipped. Matters most with `USER_ALIASES_ENABLED=true`.
+- **Example**: `CONFIG_LOAD_RATE_LIMIT_PER_MIN=10`
 
 ---
 

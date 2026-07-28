@@ -655,14 +655,14 @@ Powers personalized recommendation catalogs backed by a user's own MovieLens acc
 
 TMDB serves `/t/p/original` as the file the uploader supplied, which is usually far
 larger than any client renders. These three toggles request a sized rendition
-instead. All are also dashboard toggles and apply without a restart.
+instead. All three are **off by default**, so artwork is unchanged until you opt in.
+All are also dashboard toggles and apply without a restart.
 
 A sized rendition is only requested when the asset is actually larger than that
 size. TMDB *upscales* rather than refusing when asked for more than an asset has — a
 350px logo requested at `w500` comes back re-encoded at 500px and roughly 1.8x the
 bytes of the original — so the addon falls back to `original` whenever TMDB reports
-the asset at or below the target width. SVG assets are unaffected either way: TMDB
-does not resize vectors and returns identical bytes at every size.
+the asset at or below the target width.
 
 None of them rewrite meta that is already cached — those payloads carry the URLs
 they were built with until `META_TTL` / `CATALOG_TTL` expire, which spreads the
@@ -673,19 +673,19 @@ sweeping) order by last access, they sort ahead of every live entry and are the 
 thing dropped. No manual purge is needed.
 
 ### `PREFER_SMALLER_LOGOS_TMDB`
-- **Default**: `true`
-- **Description**: Request TMDB logos at `w500` rather than `original`. Originals are lossless PNGs with a median width of 1683px — some over 4000px — for artwork Stremio renders at roughly 200px. Measured across 120 popular titles this is a 12x reduction (890 KB to 74 KB mean) with no visible difference. Set to `false` only if you serve logos to something that renders them very large.
-- **Example**: `PREFER_SMALLER_LOGOS_TMDB=false`
+- **Default**: `false`
+- **Description**: Request TMDB logos at `w500` rather than `original`. Originals are lossless PNGs with a median width of 1683px — some over 4000px — for artwork clients render far smaller, so this is the largest saving of the three at roughly 12x less data (890 KB to 74 KB mean, measured across 120 popular titles) with the least visible drawback. Leave it off if you serve logos to something that renders them very large.
+- **Example**: `PREFER_SMALLER_LOGOS_TMDB=true`
 
 ### `PREFER_SMALLER_BACKDROPS_TMDB`
 - **Default**: `false`
-- **Description**: Request TMDB backgrounds and landscape posters at `w1280` rather than `original`. Measured across 120 popular titles this is a 5.1x reduction (836 KB to 165 KB mean). Off by default because it is a genuine quality trade: the median original backdrop is 3700px wide and roughly half are true 4K, so a client rendering the background full-screen on a 4K display will be upscaling. Turn it on if disk or bandwidth matters more than background sharpness.
+- **Description**: Request TMDB backgrounds at `w1280` rather than `original` — a 5.1x reduction (836 KB to 165 KB mean). This is the one with a genuine quality trade: the median original backdrop is 3700px wide and roughly half are true 4K, so a client rendering the background full-screen on a 4K display will be upscaling. Turn it on if disk or bandwidth matters more than background sharpness.
 - **Example**: `PREFER_SMALLER_BACKDROPS_TMDB=true`
 
 ### `PREFER_SMALLER_LANDSCAPE_TMDB`
-- **Default**: `true`
-- **Description**: Request TMDB landscape posters at `w780` rather than `original` — around an 11x reduction. Independent of `PREFER_SMALLER_BACKDROPS_TMDB`, and on by default, because the two are rendered very differently: a landscape poster is a backdrop chosen for the preferred language, but clients show it as a catalog tile a few hundred pixels wide rather than full-screen, so it never needed the original in the first place. Set to `false` to keep originals.
-- **Example**: `PREFER_SMALLER_LANDSCAPE_TMDB=false`
+- **Default**: `false`
+- **Description**: Request TMDB landscape posters at `w780` rather than `original` — an 11.6x reduction. Independent of `PREFER_SMALLER_BACKDROPS_TMDB` even though both draw on TMDB's backdrops: a landscape poster is a backdrop chosen for the preferred language, and clients render it as a catalog tile a few hundred pixels wide rather than full-screen, so it tolerates a smaller rendition than a background does.
+- **Example**: `PREFER_SMALLER_LANDSCAPE_TMDB=true`
 
 ---
 
@@ -1186,4 +1186,3 @@ MAL_WARMUP_LOG_LEVEL=silent
 For more information, see:
 - [MAL Warmup Documentation](./MAL_WARMUP.md)
 - [Main README](../README.md)
-

@@ -39,7 +39,6 @@ interface TmdbImage {
   iso_3166_1?: string | null;
   file_path: string;
   vote_average: number;
-  /** Native pixel width. Used to avoid requesting a rendition larger than the asset. */
   width?: number;
   height?: number;
 }

@@ -142,6 +142,16 @@ Custom art URLs are passed through unchanged rather than rendered, so they count
 
 The memory tier is on top of the addon's own footprint, so budget roughly `baseline + POSTER_CACHE_MEMORY_SIZE`. It skips both the disk read and the per-request allocation, which lowers GC pressure — set it to `0` on memory-constrained hosts.
 
+**Smaller TMDB renditions.** The other lever on storage is asking TMDB for less in the first place. TMDB serves `/t/p/original` as the file the uploader supplied — a median 3700px backdrop, and logos that are frequently lossless PNGs over 1600px wide — which is far more than any client renders. These work whether or not the image cache is on, and all three are off by default:
+
+| Variable | Default | Requests | Saving |
+|----------|---------|----------|--------|
+| `PREFER_SMALLER_LOGOS_TMDB` | `false` | Logos at `w500` | ~12× — the safest of the three, since logos are rendered small |
+| `PREFER_SMALLER_LANDSCAPE_TMDB` | `false` | Landscape posters at `w780` | ~11.6× — clients draw these as catalog tiles, not full-screen |
+| `PREFER_SMALLER_BACKDROPS_TMDB` | `false` | Backgrounds at `w1280` | ~5.1× — the only genuine quality trade; leave it off if backgrounds are rendered full-screen on a 4K display |
+
+A sized rendition is only requested when the asset is actually larger than that size. TMDB upscales rather than refusing, so asking for more than an asset has would make it both blurrier and bigger — the addon falls back to `original` in that case. Toggling any of these does not rewrite meta already in the cache; those payloads keep their existing URLs until `META_TTL` expires, and the superseded images are reclaimed as they age out.
+
 **Validity.** `POSTER_CACHE_TTL_DAYS` (default `30`) sets how long a cached image stays fresh. Fractional values work, and `0` means never expire. `POSTER_CACHE_INFER_TTL` swaps that flat number for whatever each source's own headers promise, and `POSTER_CACHE_PROVIDER_POLICIES` overrides one provider at a time — `default`, `infer`, a `custom` duration, or `bypass` to serve without storing. `POSTER_PROXY_MAX_AGE_DAYS` (default `1`) is the matching client-side lifetime for the `/poster`, `/logo` and `/background` proxy routes. `POSTER_CACHE_INACTIVE_DAYS` (default `30`) drops images nobody has requested, and `POSTER_CACHE_DIR` moves the cache elsewhere.
 
 > **Using a rating poster service or a custom art URL pattern?** Give its domain a shorter rule — under **Advanced…** on the dashboard's Image Cache card, or in `POSTER_CACHE_PROVIDER_POLICIES`. Those URLs name a slot rather than a file, so the provider serves whatever it holds for that ID now and the bytes change while the URL does not; on the flat 30-day default a stale rating sits there until it expires. The rating services are `api.ratingposterdb.com`, `api.top-posters.com`, `btttr.cc`, `extendedratings.com` and `postersplus.elfhosted.com`.

@@ -36,8 +36,12 @@ const NON_RETRYABLE_CODES = new Set([400, 401, 403, 404, 422]);
 
 interface TmdbImage {
   iso_639_1: string | null;
+  iso_3166_1?: string | null;
   file_path: string;
   vote_average: number;
+  /** Native pixel width. Used to avoid requesting a rendition larger than the asset. */
+  width?: number;
+  height?: number;
 }
 
 /**
@@ -940,7 +944,7 @@ export async function getTmdbMovieBackground(tmdbId: string, config: UserConfig)
     if (images && images.backdrops && images.backdrops.length > 0) {
       const backdrop = selectTmdbImageByLang(images.backdrops, config);
       if (backdrop) {
-        return tmdbImageUrl(tmdbBackdropSize(), backdrop.file_path);
+        return tmdbImageUrl(tmdbBackdropSize(backdrop.width), backdrop.file_path);
       }
     }
     
@@ -961,7 +965,7 @@ export async function getTmdbSeriesBackground(tmdbId: string, config: UserConfig
     if (images && images.backdrops && images.backdrops.length > 0) {
       const backdrop = selectTmdbImageByLang(images.backdrops, config);
       if (backdrop) {
-        return tmdbImageUrl(tmdbBackdropSize(), backdrop.file_path);
+        return tmdbImageUrl(tmdbBackdropSize(backdrop.width), backdrop.file_path);
       }
     }
     
@@ -982,7 +986,7 @@ export async function getTmdbMovieLogo(tmdbId: string, config: UserConfig) {
     if (images && images.logos && images.logos.length > 0) {
       const logo = selectTmdbImageByLang(images.logos, config);
       if (logo) {
-        return tmdbImageUrl(tmdbLogoSize(), logo.file_path);
+        return tmdbImageUrl(tmdbLogoSize(logo.width), logo.file_path);
       }
     }
 
@@ -1003,7 +1007,7 @@ export async function getTmdbSeriesLogo(tmdbId: string, config: UserConfig) {
     if (images && images.logos && images.logos.length > 0) {
       const logo = selectTmdbImageByLang(images.logos, config);
       if (logo) {
-        return tmdbImageUrl(tmdbLogoSize(), logo.file_path);
+        return tmdbImageUrl(tmdbLogoSize(logo.width), logo.file_path);
       }
     }
 

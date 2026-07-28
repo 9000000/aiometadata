@@ -657,6 +657,13 @@ TMDB serves `/t/p/original` as the file the uploader supplied, which is usually 
 larger than any client renders. These three toggles request a sized rendition
 instead. All are also dashboard toggles and apply without a restart.
 
+A sized rendition is only requested when the asset is actually larger than that
+size. TMDB *upscales* rather than refusing when asked for more than an asset has — a
+350px logo requested at `w500` comes back re-encoded at 500px and roughly 1.8x the
+bytes of the original — so the addon falls back to `original` whenever TMDB reports
+the asset at or below the target width. SVG assets are unaffected either way: TMDB
+does not resize vectors and returns identical bytes at every size.
+
 None of them rewrite meta that is already cached — those payloads carry the URLs
 they were built with until `META_TTL` / `CATALOG_TTL` expire, which spreads the
 changeover out rather than stranding the whole cache at once. Raise `CACHE_EPOCH` to

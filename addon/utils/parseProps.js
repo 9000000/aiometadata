@@ -2581,12 +2581,12 @@ async function getTmdbMovieArtBatch(tmdbId, config, isLandscape = false, origina
       || res.backdrops?.[0];
       }
       const background = backgroundImg?.file_path
-        ? tmdbImageUrl(isLandscape ? tmdbLandscapeSize() : tmdbBackdropSize(), backgroundImg.file_path)
+        ? tmdbImageUrl(isLandscape ? tmdbLandscapeSize(backgroundImg.width) : tmdbBackdropSize(backgroundImg.width), backgroundImg.file_path)
         : null;
 
       const logoImg = selectTmdbImageByLang(res.logos, config, 'iso_639_1', originalLanguage);
       const logo = logoImg?.file_path
-        ? tmdbImageUrl(tmdbLogoSize(), logoImg.file_path)
+        ? tmdbImageUrl(tmdbLogoSize(logoImg.width), logoImg.file_path)
         : null;
 
       return { poster, background, logo };
@@ -2928,12 +2928,12 @@ async function getTmdbSeriesArtBatch(tmdbId, config, isLandscape = false, origin
         || res.backdrops?.[0];
       }
       const background = backgroundImg?.file_path
-        ? tmdbImageUrl(isLandscape ? tmdbLandscapeSize() : tmdbBackdropSize(), backgroundImg.file_path)
+        ? tmdbImageUrl(isLandscape ? tmdbLandscapeSize(backgroundImg.width) : tmdbBackdropSize(backgroundImg.width), backgroundImg.file_path)
         : null;
 
       const logoImg = selectTmdbImageByLang(res.logos, config, 'iso_639_1', originalLanguage);
       const logo = logoImg?.file_path
-        ? tmdbImageUrl(tmdbLogoSize(), logoImg.file_path)
+        ? tmdbImageUrl(tmdbLogoSize(logoImg.width), logoImg.file_path)
         : null;
 
       return { poster, background, logo };

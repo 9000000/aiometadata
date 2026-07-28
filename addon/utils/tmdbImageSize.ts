@@ -29,19 +29,36 @@ function isExplicitlyDisabled(value: string | undefined): boolean {
 }
 
 /**
+ * TMDB *upscales* when the requested width exceeds the asset's own: a 350px logo
+ * asked for at `w500` comes back as a re-encoded 500px file roughly 1.8x the
+ * bytes of the original. Asking for a sized rendition is therefore only a saving
+ * when the asset is actually bigger than the size we want.
+ *
+ * `nativeWidth` is the `width` TMDB reports on the image object. When it is
+ * missing — a bare `poster_path`/`backdrop_path` carries no dimensions — assume
+ * the asset is large, which is true of anything TMDB serves as `original`.
+ */
+function requestSize(nativeWidth: number | undefined, target: number, sized: string): string {
+  const known = typeof nativeWidth === 'number' && nativeWidth > 0;
+  return known && nativeWidth <= target ? ORIGINAL : sized;
+}
+
+/**
  * Defaults ON. `w500` against a ~200px render target is not a visible change,
  * and originals are lossless PNGs around 12x the size.
  */
-export function tmdbLogoSize(): string {
-  return isExplicitlyDisabled(process.env.PREFER_SMALLER_LOGOS_TMDB) ? ORIGINAL : SMALL_LOGO;
+export function tmdbLogoSize(nativeWidth?: number): string {
+  if (isExplicitlyDisabled(process.env.PREFER_SMALLER_LOGOS_TMDB)) return ORIGINAL;
+  return requestSize(nativeWidth, 500, SMALL_LOGO);
 }
 
 /**
  * Defaults OFF. The median original backdrop is 3700px wide and many are true
  * 4K, so `w1280` is a real downscale a full-screen client can show.
  */
-export function tmdbBackdropSize(): string {
-  return isTruthy(process.env.PREFER_SMALLER_BACKDROPS_TMDB) ? SMALL_BACKDROP : ORIGINAL;
+export function tmdbBackdropSize(nativeWidth?: number): string {
+  if (!isTruthy(process.env.PREFER_SMALLER_BACKDROPS_TMDB)) return ORIGINAL;
+  return requestSize(nativeWidth, 1280, SMALL_BACKDROP);
 }
 
 /**
@@ -49,8 +66,9 @@ export function tmdbBackdropSize(): string {
  * preference, but it is rendered as a catalog tile a few hundred px wide rather
  * than full-screen, so it does not need the caution `tmdbBackdropSize` applies.
  */
-export function tmdbLandscapeSize(): string {
-  return isExplicitlyDisabled(process.env.PREFER_SMALLER_LANDSCAPE_TMDB) ? ORIGINAL : SMALL_LANDSCAPE;
+export function tmdbLandscapeSize(nativeWidth?: number): string {
+  if (isExplicitlyDisabled(process.env.PREFER_SMALLER_LANDSCAPE_TMDB)) return ORIGINAL;
+  return requestSize(nativeWidth, 780, SMALL_LANDSCAPE);
 }
 
 /** `filePath` is TMDB's `file_path`, which always carries its own leading slash. */

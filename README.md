@@ -426,7 +426,9 @@ Set this on the `aiometadata` service (in its `.env`). When both containers shar
 
 #### Compose stack
 
-Jikan needs four services (MongoDB stores data, Redis caches, Typesense powers search). Save as `apps/jikan-rest/compose.yaml` (or merge into your stack):
+Jikan needs four services (MongoDB stores data, Redis caches, Typesense is the default search engine). This stack runs search on MongoDB instead, see [Search-path patches](#search-path-patches-required). Typesense still starts but stays idle.
+
+Save as `apps/jikan-rest/compose.yaml` (or merge into your stack):
 
 ```yaml
 secrets:
@@ -445,7 +447,14 @@ services:
     user: "10001:10001"
     restart: unless-stopped
     env_file: [ .env.compose ]
+    environment:
+      # Keep the inner quotes. Laravel coerces a bare `null` to PHP null and
+      # getSearchIndexDriver() crash-loops on it; the string "null" is what works.
+      SCOUT_DRIVER: '"null"'
     secrets: [ jikan_db_username, jikan_db_password, jikan_redis_password, jikan_typesense_api_key ]
+    volumes:
+      - ./MongoSearchService.php:/app/app/Services/MongoSearchService.php:ro
+      - ./RepositoryQuery.php:/app/app/Support/RepositoryQuery.php:ro
     expose: [ 8080 ]
     healthcheck:
       test: ["CMD-SHELL", "wget --spider -q 'http://127.0.0.1:2114/health?plugin=http'"]
@@ -523,7 +532,7 @@ DB_DATABASE=jikan
 DB_USERNAME__FILE=/run/secrets/jikan_db_username
 DB_ADMIN__FILE=/run/secrets/jikan_db_username
 DB_PASSWORD__FILE=/run/secrets/jikan_db_password
-SCOUT_DRIVER=typesense
+# SCOUT_DRIVER goes in compose.yaml, not here. Compose strips quotes from env_file values.
 SCOUT_QUEUE=false
 TYPESENSE_HOST=jikan_typesense
 TYPESENSE_PORT=8108
@@ -531,6 +540,8 @@ TYPESENSE_API_KEY__FILE=/run/secrets/jikan_typesense_api_key
 CORS_MIDDLEWARE=true
 MICROCACHING=true
 MICROCACHING_EXPIRE=60
+# Only needed if you raise MAL_PAGE_SIZE on the addon. Both default to 25.
+MAX_RESULTS_PER_PAGE=50
 ```
 
 Save the MongoDB init script as `apps/jikan-rest/mongo-init.js`:
@@ -543,6 +554,108 @@ db.createUser({ user: userToCreate, pwd: userPassword, roles: [{ role: "readWrit
 db = db.getSiblingDB("jikan");
 db.createUser({ user: userToCreate, pwd: userPassword, roles: [{ role: "readWrite", db: "jikan" }] });
 ```
+
+#### Search-path patches (required)
+
+Genre, theme, and demographic catalogs (`mal.genres` and friends) return one short page or nothing at all on a stock jikan-rest image. Three fixes are needed.
+
+**1. Typesense filtering.** Its index omits `themes` and `demographics` while the query scopes filter on dotted paths like `genres.mal_id`, which Typesense 404s on. `SCOUT_DRIVER: '"null"'` in the compose file above sends search to Mongo instead.
+
+**2. `$text` on filter-only queries.** Requests with no `?q=` still get a `$text` clause, which drops matches. Save as `apps/jikan-rest/MongoSearchService.php`:
+
+```php
+<?php
+
+namespace App\Services;
+
+use Jenssegers\Mongodb\Query\Builder as MongoBuilder;
+
+final class MongoSearchService extends SearchServiceBase
+{
+    public function search(string $searchTerms, ?string $orderByFields = null, bool $sortDirectionDescending = false): \Laravel\Scout\Builder|\Illuminate\Database\Eloquent\Builder
+    {
+        /**
+         * @var MongoBuilder $query
+         */
+        $query = $this->query();
+
+        // Filter-only requests (?genres=, ?type=, ... with no ?q=) arrive here with an
+        // empty term. Applying $text then requires a text index and silently drops
+        // matches, so skip it and let the filters run on their own.
+        if (trim($searchTerms) === '') {
+            $builder = $query;
+
+            if ($orderByFields !== null) {
+                $order = explode(",", $orderByFields);
+                foreach ($order as $o) {
+                    $builder = $builder->orderBy($o, $sortDirectionDescending ? 'desc' : 'asc');
+                }
+            }
+
+            return $builder;
+        }
+
+        /** @noinspection PhpParamsInspection */
+        $builder = $query->whereRaw([
+            '$text' => [
+                '$search' => $searchTerms
+            ],
+        ], [
+            'textMatchScore' => [
+                '$meta' => 'textScore'
+            ]
+        ])->orderBy('textMatchScore', 'desc');
+
+        if ($orderByFields !== null) {
+            $order = explode(",", $orderByFields);
+            foreach ($order as $o) {
+                $builder = $builder->orderBy($o, $sortDirectionDescending ? 'desc' : 'asc');
+            }
+        }
+
+        return $builder;
+    }
+}
+```
+
+**3. Query builder state leaking between requests.** `queryable()` memoises its builder on a singleton repository, and RoadRunner workers outlive requests, so a worker ANDs together the `where` clauses of everything it has served. Symptom is identical URLs returning different counts. Save as `apps/jikan-rest/RepositoryQuery.php`:
+
+```php
+<?php
+
+namespace App\Support;
+
+use App\Contracts\RepositoryQuery as RepositoryQueryContract;
+use Illuminate\Contracts\Database\Query\Builder;
+use Illuminate\Support\Collection;
+use Laravel\Scout\Builder as ScoutBuilder;
+
+class RepositoryQuery extends RepositoryQueryBase implements RepositoryQueryContract
+{
+    public function filter(Collection $params): Builder|ScoutBuilder
+    {
+        // queryable() memoises the builder. Repositories are singletons that outlive
+        // a request under RoadRunner, so the memoised instance accumulates every
+        // previous request's where clauses (genre A AND genre B AND ... => 0 results).
+        // Always start from a fresh builder.
+        return $this->queryable(true)->filter($params);
+    }
+
+    public function search(string $keywords, ?\Closure $callback = null): ScoutBuilder
+    {
+        return $this->searchable($keywords, $callback, true);
+    }
+
+    public function where(string $key, mixed $value): Builder
+    {
+        return $this->queryable(true)->where($key, $value);
+    }
+}
+```
+
+A `sfw=true` that returns zero results is this same bug, not the sfw scope.
+
+Create both files before the first `docker compose up -d`, otherwise Docker creates directories at those mount paths.
 
 Generate the secret files (note the `chmod 644` — Mongo and the app run as non-root and must be able to read the bind-mounted secrets):
 
@@ -558,6 +671,48 @@ chmod 644 secrets/*.txt
 ```
 
 Then start it: `docker compose up -d`
+
+#### MongoDB indexes
+
+The migration that creates the `anime` indexes does not reliably run on a fresh install, leaving only `_id_`. Queries then fall back to collection scans and filtered genre requests time out once the catalog is seeded. Check the count:
+
+```bash
+docker exec jikan_mongo mongosh "mongodb://<admin_user>:<admin_pass>@localhost/admin" \
+  --quiet --eval 'print(db.getSiblingDB("jikan").anime.getIndexes().length)'
+```
+
+You want 29. If it says 1, save this as `apps/jikan-rest/jikan-indexes.js`:
+
+```js
+// Mirrors database/migrations/2022_12_04_210448_squash.php. Safe to re-run.
+const d = db.getSiblingDB("jikan");
+const fields = [
+  "aired", "airing", "episodes", "members", "favorites", "popularity", "rank",
+  "rating", "score", "scored_by", "status", "type", "source",
+  "title", "title_english", "title_japanese", "title_synonyms",
+  "demographics.mal_id", "explicit_genres.mal_id", "genres.mal_id",
+  "licensors.mal_id", "producers.mal_id", "studios.mal_id", "themes.mal_id",
+  "aired.from", "aired.to",
+];
+fields.forEach(f => d.anime.createIndex({ [f]: 1 }, { name: f }));
+d.anime.createIndex({ mal_id: 1 }, { name: "mal_id", unique: true });
+d.anime.createIndex(
+  { title: "text", title_japanese: "text" },
+  { name: "search", weights: { title: 50, title_japanese: 5 } }
+);
+print("anime indexes: " + d.anime.getIndexes().length);
+```
+
+and pipe it in:
+
+```bash
+cd apps/jikan-rest
+docker exec -i jikan_mongo mongosh \
+  "mongodb://$(cat secrets/db_admin_username.txt):$(cat secrets/db_admin_password.txt)@localhost/admin" \
+  --quiet < jikan-indexes.js
+```
+
+Run it before the full catalog indexer if you can, it is cheaper on an empty collection.
 
 #### Seeding the index
 

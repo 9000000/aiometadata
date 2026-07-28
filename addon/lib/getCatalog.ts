@@ -1624,10 +1624,6 @@ function sanitizeTmdbDiscoverParams(
     }
   }
 
-  if (sanitized.sort_by === 'vote_average.desc' && sanitized['vote_count.gte'] === undefined) {
-    sanitized['vote_count.gte'] = 50;
-  }
-
   // Certification filters should be sent as a pair
   const hasCertValue = !!sanitized.certification || !!sanitized['certification.gte'] || !!sanitized['certification.lte'];
   if (!!sanitized.certification && !sanitized.certification_country) {

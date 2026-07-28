@@ -674,17 +674,17 @@ thing dropped. No manual purge is needed.
 
 ### `PREFER_SMALLER_LOGOS_TMDB`
 - **Default**: `false`
-- **Description**: Request TMDB logos at `w500` rather than `original`. Originals are lossless PNGs with a median width of 1683px — some over 4000px — for artwork clients render far smaller, so this is the largest saving of the three at roughly 12x less data (890 KB to 74 KB mean, measured across 120 popular titles) with the least visible drawback. Leave it off if you serve logos to something that renders them very large.
+- **Description**: Request TMDB logos at `w500` rather than `original`. Originals are lossless PNGs with a median width of 1683px — some over 4000px — for artwork clients render far smaller, so this is the largest saving of the three at roughly 12x less data with the least visible drawback. Leave it off if you serve logos to something that renders them very large.
 - **Example**: `PREFER_SMALLER_LOGOS_TMDB=true`
 
 ### `PREFER_SMALLER_BACKDROPS_TMDB`
 - **Default**: `false`
-- **Description**: Request TMDB backgrounds at `w1280` rather than `original` — a 5.1x reduction (836 KB to 165 KB mean). This is the one with a genuine quality trade: the median original backdrop is 3700px wide and roughly half are true 4K, so a client rendering the background full-screen on a 4K display will be upscaling. Turn it on if disk or bandwidth matters more than background sharpness.
+- **Description**: Request TMDB backgrounds at `w1280` rather than `original` — an average of 5.1x reduction in data. This is the one with a genuine quality trade: the median original backdrop is 3700px wide and roughly half are true 4K, so a client rendering the background full-screen on a 4K display will be upscaling. Turn it on if disk or bandwidth matters more than background sharpness.
 - **Example**: `PREFER_SMALLER_BACKDROPS_TMDB=true`
 
 ### `PREFER_SMALLER_LANDSCAPE_TMDB`
 - **Default**: `false`
-- **Description**: Request TMDB landscape posters at `w780` rather than `original` — an 11.6x reduction. Independent of `PREFER_SMALLER_BACKDROPS_TMDB` even though both draw on TMDB's backdrops: a landscape poster is a backdrop chosen for the preferred language, and clients render it as a catalog tile a few hundred pixels wide rather than full-screen, so it tolerates a smaller rendition than a background does.
+- **Description**: Request TMDB landscape posters at `w780` rather than `original` an average of 11.6x reduction. Independent of `PREFER_SMALLER_BACKDROPS_TMDB` even though both draw on TMDB's backdrops: a landscape poster is a backdrop chosen for the preferred language, and clients render it as a catalog tile a few hundred pixels wide rather than full-screen, so it tolerates a smaller rendition than a background does.
 - **Example**: `PREFER_SMALLER_LANDSCAPE_TMDB=true`
 
 ---

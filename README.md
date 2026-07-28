@@ -142,7 +142,7 @@ Custom art URLs are passed through unchanged rather than rendered, so they count
 
 The memory tier is on top of the addon's own footprint, so budget roughly `baseline + POSTER_CACHE_MEMORY_SIZE`. It skips both the disk read and the per-request allocation, which lowers GC pressure — set it to `0` on memory-constrained hosts.
 
-**Smaller TMDB renditions.** The other lever on storage is asking TMDB for less in the first place. TMDB serves `/t/p/original` as the file the uploader supplied — a median 3700px backdrop, and logos that are frequently lossless PNGs over 1600px wide — which is far more than any client renders. These work whether or not the image cache is on, and all three are off by default:
+**Smaller TMDB renditions.** The other lever on storage is asking TMDB for less in the first place. TMDB serves `/t/p/original` as the file the uploader supplied — like logos that are frequently lossless PNGs and overly large, far more than any client renders. These work whether or not the image cache is on, and all three are off by default:
 
 | Variable | Default | Requests | Saving |
 |----------|---------|----------|--------|
@@ -818,7 +818,3 @@ GPL-3.0 — see [LICENSE](LICENSE).
 ## ⚠️ Disclaimer
 
 This addon aggregates metadata from third-party sources. Data accuracy and availability are not guaranteed.
-
-
-
- 

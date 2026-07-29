@@ -3,8 +3,11 @@ import { toast } from 'sonner';
 import {
   AlertTriangle,
   Check,
+  ChevronDown,
+  ChevronUp,
   Copy,
   Download,
+  Folder,
   FolderPlus,
   GripVertical,
   Layers,
@@ -303,6 +306,47 @@ function entrySourceCount(entry: BuilderEntry): number {
   return entry.folders.reduce((total, folder) => total + folder.sources.length, 0);
 }
 
+// ---- Reordering ----
+
+function ReorderArrows({
+  label,
+  canMoveUp,
+  canMoveDown,
+  onMove,
+}: {
+  label: string;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMove: (delta: number) => void;
+}) {
+  const buttonClass =
+    'flex h-3.5 w-4 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-25';
+  return (
+    <div className="flex shrink-0 flex-col">
+      <button
+        type="button"
+        className={buttonClass}
+        disabled={!canMoveUp}
+        onClick={() => onMove(-1)}
+        title={`Move ${label} up`}
+        aria-label={`Move ${label} up`}
+      >
+        <ChevronUp className="h-3 w-3" />
+      </button>
+      <button
+        type="button"
+        className={buttonClass}
+        disabled={!canMoveDown}
+        onClick={() => onMove(1)}
+        title={`Move ${label} down`}
+        aria-label={`Move ${label} down`}
+      >
+        <ChevronDown className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
+
 // ---- Entry rail ----
 
 function SortableEntryRow({
@@ -310,6 +354,9 @@ function SortableEntryRow({
   isActive,
   excluded,
   hasUnknown,
+  canMoveUp,
+  canMoveDown,
+  onMove,
   onSelect,
   onDelete,
 }: {
@@ -319,6 +366,9 @@ function SortableEntryRow({
   excluded: boolean;
   /** True when it points at a catalog that is not in the user's setup. */
   hasUnknown: boolean;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMove: (delta: number) => void;
   onSelect: () => void;
   onDelete: () => void;
 }) {
@@ -343,6 +393,12 @@ function SortableEntryRow({
       }`}
       title={excluded ? 'Not exported for the selected target' : undefined}
     >
+      <ReorderArrows
+        label={entry.title || 'this'}
+        canMoveUp={canMoveUp}
+        canMoveDown={canMoveDown}
+        onMove={onMove}
+      />
       <button type="button" className="cursor-grab touch-none text-muted-foreground" {...attributes} {...listeners}>
         <GripVertical className="h-4 w-4" />
       </button>
@@ -612,6 +668,73 @@ function SourceRow({
   );
 }
 
+// ---- Folder rail ----
+
+function SortableFolderRow({
+  folder,
+  hasUnknown,
+  placeholder,
+  isActive,
+  canMoveUp,
+  canMoveDown,
+  onMove,
+  onSelect,
+  onDelete,
+}: {
+  folder: FolderDraft;
+  hasUnknown: boolean;
+  placeholder: string;
+  isActive: boolean;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMove: (delta: number) => void;
+  onSelect: () => void;
+  onDelete: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: folder.id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 50 : 'auto',
+  };
+  const count = folder.sources.length;
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`flex items-center gap-1.5 rounded-md border px-1.5 py-1.5 text-sm transition-colors ${
+        isActive ? 'border-primary bg-primary/10' : 'border-border hover:bg-accent/50'
+      }`}
+    >
+      <ReorderArrows
+        label={folder.title || 'this'}
+        canMoveUp={canMoveUp}
+        canMoveDown={canMoveDown}
+        onMove={onMove}
+      />
+      <button type="button" className="cursor-grab touch-none text-muted-foreground" {...attributes} {...listeners}>
+        <GripVertical className="h-4 w-4" />
+      </button>
+      <button type="button" onClick={onSelect} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+        <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate">{folder.title || placeholder}</span>
+        {hasUnknown && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />}
+        <span
+          className={`shrink-0 rounded-full px-1.5 text-[10px] font-medium ${
+            count === 0 ? 'bg-amber-800/60 text-amber-200' : 'bg-muted text-muted-foreground'
+          }`}
+        >
+          {count}
+        </span>
+      </button>
+      <button type="button" onClick={onDelete} className="text-muted-foreground hover:text-destructive">
+        <Trash2 className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
 // ---- Folder card ----
 
 function FolderCard({
@@ -636,23 +759,14 @@ function FolderCard({
   onAddByTag: (tag: string) => void;
 }) {
   const terms = TERMS[target];
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: folder.id });
   const [showExtras, setShowExtras] = useState(false);
   const nuvioArtVisible = target === 'nuvio' || hasNuvioFolderArt(folder);
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    zIndex: isDragging ? 50 : 'auto',
-  };
 
   const update = (patch: Partial<FolderDraft>) => onChange({ ...folder, ...patch });
 
   return (
-    <div ref={setNodeRef} style={style} className="space-y-3 rounded-lg border p-3">
+    <div className="space-y-3 rounded-lg border p-3">
       <div className="flex items-center gap-2">
-        <button type="button" className="cursor-grab touch-none text-muted-foreground" {...attributes} {...listeners}>
-          <GripVertical className="h-4 w-4" />
-        </button>
         <Input
           value={folder.title}
           onChange={event => update({ title: event.target.value })}
@@ -850,6 +964,12 @@ function CollectionEditor({
 
   const update = (patch: Partial<CollectionDraft>) => onChange({ ...entry, ...patch });
 
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+  const activeIndex = Math.max(entry.folders.findIndex(folder => folder.id === selectedFolderId), 0);
+  const activeFolder = entry.folders[activeIndex] ?? null;
+
+  const knownKeys = useMemo(() => new Set(catalogs.map(catalogKey)), [catalogs]);
+
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
@@ -857,6 +977,18 @@ function CollectionEditor({
     const to = entry.folders.findIndex(folder => folder.id === over.id);
     if (from < 0 || to < 0) return;
     update({ folders: arrayMove(entry.folders, from, to) });
+  };
+
+  const moveFolder = (index: number, delta: number) => {
+    const to = index + delta;
+    if (to < 0 || to >= entry.folders.length) return;
+    update({ folders: arrayMove(entry.folders, index, to) });
+  };
+
+  const addFolder = () => {
+    const folder = createFolderDraft();
+    setSelectedFolderId(folder.id);
+    update({ folders: [...entry.folders, folder] });
   };
 
   return (
@@ -940,41 +1072,57 @@ function CollectionEditor({
 
       <div className="flex items-center justify-between border-t pt-3">
         <Label className="text-sm font-medium">{terms.children}</Label>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => update({ folders: [...entry.folders, createFolderDraft()] })}
-        >
+        <Button variant="outline" size="sm" onClick={addFolder}>
           <FolderPlus className="mr-1.5 h-4 w-4" /> {terms.addChild}
         </Button>
       </div>
 
-      {entry.folders.length === 0 && (
+      {entry.folders.length === 0 ? (
         <p className="rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground">
           Use &ldquo;{terms.addChild}&rdquo;, then point it at one or more of your catalogs.
         </p>
-      )}
+      ) : (
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,13rem)_minmax(0,1fr)]">
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={entry.folders.map(folder => folder.id)} strategy={verticalListSortingStrategy}>
+              <div className="max-h-48 space-y-1.5 overflow-y-auto pr-1 lg:max-h-none lg:overflow-visible lg:pr-0">
+                {entry.folders.map((folder, index) => (
+                  <SortableFolderRow
+                    key={folder.id}
+                    folder={folder}
+                    placeholder={`Untitled ${terms.child.toLowerCase()}`}
+                    hasUnknown={folder.sources.some(source => !knownKeys.has(catalogKey(source)))}
+                    isActive={index === activeIndex}
+                    canMoveUp={index > 0}
+                    canMoveDown={index < entry.folders.length - 1}
+                    onMove={delta => moveFolder(index, delta)}
+                    onSelect={() => setSelectedFolderId(folder.id)}
+                    onDelete={() => update({ folders: entry.folders.filter((_, i) => i !== index) })}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
 
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <SortableContext items={entry.folders.map(folder => folder.id)} strategy={verticalListSortingStrategy}>
-          <div className="space-y-3">
-            {entry.folders.map((folder, index) => (
+          <div className="min-w-0">
+            {activeFolder && (
               <FolderCard
-                key={folder.id}
-                folder={folder}
+                key={activeFolder.id}
+                folder={activeFolder}
                 catalogs={catalogs}
                 target={target}
-                onChange={next => update({ folders: entry.folders.map((f, i) => (i === index ? next : f)) })}
-                onRemove={() => update({ folders: entry.folders.filter((_, i) => i !== index) })}
-                onAddSource={() => onAddSource(folder.id)}
-                onReplaceSource={index => onReplaceSource(folder.id, index)}
+                onChange={next =>
+                  update({ folders: entry.folders.map((f, i) => (i === activeIndex ? next : f)) })}
+                onRemove={() => update({ folders: entry.folders.filter((_, i) => i !== activeIndex) })}
+                onAddSource={() => onAddSource(activeFolder.id)}
+                onReplaceSource={index => onReplaceSource(activeFolder.id, index)}
                 tagOptions={tagOptions}
-                onAddByTag={tag => onAddByTag(folder.id, tag)}
+                onAddByTag={tag => onAddByTag(activeFolder.id, tag)}
               />
-            ))}
+            )}
           </div>
-        </SortableContext>
-      </DndContext>
+        </div>
+      )}
     </div>
   );
 }
@@ -1255,6 +1403,14 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       const to = prev.findIndex(entry => entry.id === over.id);
       if (from < 0 || to < 0) return prev;
       return arrayMove(prev, from, to);
+    });
+  };
+
+  const moveEntry = (index: number, delta: number) => {
+    setEntries(prev => {
+      const to = index + delta;
+      if (to < 0 || to >= prev.length) return prev;
+      return arrayMove(prev, index, to);
     });
   };
 
@@ -1540,13 +1696,16 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleRailDragEnd}>
                 <SortableContext items={entries.map(entry => entry.id)} strategy={verticalListSortingStrategy}>
                   <div className="max-h-56 space-y-1.5 overflow-y-auto pr-1 lg:max-h-none lg:overflow-visible lg:pr-0">
-                    {entries.map(entry => (
+                    {entries.map((entry, index) => (
                       <SortableEntryRow
                         key={entry.id}
                         entry={entry}
                         excluded={target === 'nuvio' && entry.kind === 'classicRow'}
                         hasUnknown={entryHasUnknownSource(entry, sourceList.catalogs)}
                         isActive={entry.id === selectedId}
+                        canMoveUp={index > 0}
+                        canMoveDown={index < entries.length - 1}
+                        onMove={delta => moveEntry(index, delta)}
                         onSelect={() => setSelectedId(entry.id)}
                         onDelete={() => removeEntry(entry.id)}
                       />

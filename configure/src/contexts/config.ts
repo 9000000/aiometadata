@@ -1,3 +1,5 @@
+import type { BuilderEntry } from '@shared/types';
+
 export type TagColorKey =
   | 'blue' | 'green' | 'red' | 'violet' | 'amber' | 'cyan'
   | 'pink' | 'emerald' | 'orange' | 'indigo' | 'rose' | 'slate';
@@ -239,6 +241,8 @@ export interface AppConfig {
   timezone?: string;
   catalogs: CatalogConfig[];
   deletedCatalogs?: string[];
+  /** Collections and rows built in the Collections editor, exported as Nuvio or Fusion JSON */
+  collections?: BuilderEntry[];
   search: {
     enabled: boolean; 
     // This is the switch for the AI layer.

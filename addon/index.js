@@ -3605,6 +3605,8 @@ addon.get("/manifest.json", function (req, res) {
 });
 
 // --- Database-Only Manifest Route ---
+require('./lib/collectionExportRoutes').register(addon);
+
 addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
     const { userUUID } = req.params;
     try {

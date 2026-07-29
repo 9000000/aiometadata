@@ -1,0 +1,258 @@
+import {
+  MANIFEST_PLACEHOLDER,
+  type AddonIdentity,
+  type BuilderEntry,
+  type ExportNote,
+  type ExportResult,
+  type FolderDraft,
+  type FusionAddonCatalogSource,
+  type FusionCollectionItem,
+  type FusionLayout,
+  type FusionWidget,
+  type FusionWidgetsConfig,
+  type SourceDraft,
+  type TileShape,
+} from './types';
+
+function trimmed(value: unknown): string {
+  return String(value ?? '').trim();
+}
+
+const LAYOUT_BY_SHAPE: Record<TileShape, FusionLayout> = {
+  LANDSCAPE: 'Wide',
+  POSTER: 'Poster',
+  SQUARE: 'Square',
+};
+
+/**
+ * Fusion addresses a catalog as `<type>::<id>`, and its importers normalise both
+ * halves before comparing. We reproduce that normalisation so an import leaves
+ * our files untouched. The rules are behavioural requirements of the format, not
+ * preferences: changing one silently breaks round-tripping, so they are kept as
+ * data and covered by an equivalence test.
+ */
+
+/** Spellings of a media type that mean the same thing. */
+const TYPE_ALIASES: Record<string, string> = {
+  movies: 'movie',
+  show: 'series',
+  shows: 'series',
+  tv: 'series',
+};
+
+function normalizeFusionCatalogType(value: unknown): string {
+  const normalized = trimmed(value).toLowerCase();
+  return TYPE_ALIASES[normalized] ?? normalized;
+}
+
+/** `<prefix>::` on an id already states the type. */
+const PREFIX_TYPES: Record<string, string> = {
+  movie: 'movie',
+  movies: 'movie',
+  series: 'series',
+  shows: 'series',
+};
+
+/**
+ * Combined-type catalogs that only ever yield series, so `all::` must not be
+ * carried through for them.
+ */
+const SERIES_OVERRIDES: ((id: string) => boolean)[] = [
+  id => id.startsWith('all::trakt.list.'),
+  id => id.startsWith('all::mdblist.') && id.includes('.unified'),
+  id => !id.startsWith('all::') && id.includes('mdblist.upnext'),
+];
+
+function resolveFusionCatalogType(catalogId: string, currentType?: string): string {
+  const id = catalogId.toLowerCase();
+  const declared = normalizeFusionCatalogType(currentType);
+
+  if (SERIES_OVERRIDES.some(matches => matches(id))) return 'series';
+
+  // A combined catalog keeps its breadth unless the caller says otherwise.
+  if (id.startsWith('all::')) {
+    return declared && declared !== 'all' ? declared : 'all';
+  }
+
+  const prefix = id.slice(0, Math.max(id.indexOf('::'), 0));
+  return PREFIX_TYPES[prefix] ?? (declared || 'movie');
+}
+
+function normalizeCatalogId(catalogId: string, catalogType: string): string {
+  const value = catalogId.trim();
+  if (!value) return '';
+
+  const separator = value.indexOf('::');
+  if (separator < 0) {
+    const resolved = resolveFusionCatalogType(value, catalogType).toLowerCase();
+    return `${resolved}::${value}`;
+  }
+
+  const declaredPrefix = value.slice(0, separator);
+  const rest = value.slice(separator + 2);
+  const prefix = normalizeFusionCatalogType(declaredPrefix) || declaredPrefix.toLowerCase();
+  return `${prefix}::${rest}`;
+}
+
+function resolveAddonId(identity: AddonIdentity, usePlaceholder: boolean): string {
+  if (usePlaceholder) return MANIFEST_PLACEHOLDER;
+  return trimmed(identity.manifestUrl) || MANIFEST_PLACEHOLDER;
+}
+
+function toDataSource(
+  source: SourceDraft,
+  addonId: string
+): FusionAddonCatalogSource | null {
+  const plainId = trimmed(source.catalogId);
+  const manifestType = trimmed(source.type);
+  if (!plainId || !manifestType) return null;
+
+  const composite = `${manifestType}::${plainId}`;
+  const catalogType = resolveFusionCatalogType(composite, manifestType);
+  return {
+    sourceType: 'aiometadata',
+    kind: 'addonCatalog',
+    payload: {
+      addonId,
+      catalogId: normalizeCatalogId(composite, catalogType),
+      catalogType,
+    },
+  };
+}
+
+function toCollectionItem(
+  folder: FolderDraft,
+  addonId: string,
+  collectionTitle: string,
+  notes: ExportNote[]
+): FusionCollectionItem | null {
+  const id = trimmed(folder.id);
+  const name = trimmed(folder.title);
+  if (!id || !name) {
+    notes.push({
+      entryId: folder.id,
+      entryTitle: collectionTitle,
+      message: 'A folder without a title was skipped.',
+    });
+    return null;
+  }
+
+  const dataSources: FusionAddonCatalogSource[] = [];
+  for (const source of folder.sources) {
+    const mapped = toDataSource(source, addonId);
+    if (!mapped) {
+      notes.push({
+        entryId: folder.id,
+        entryTitle: name,
+        message: `Source "${trimmed(source.name) || trimmed(source.catalogId) || 'unnamed'}" is missing a catalog id or type and was skipped.`,
+      });
+      continue;
+    }
+    if (trimmed(source.genre)) {
+      notes.push({
+        entryId: folder.id,
+        entryTitle: name,
+        message: `Genre "${trimmed(source.genre)}" on "${trimmed(source.name) || plainLabel(source)}" is dropped. Fusion widgets have no genre field.`,
+      });
+    }
+    dataSources.push(mapped);
+  }
+
+  if (dataSources.length === 0) {
+    notes.push({
+      entryId: folder.id,
+      entryTitle: name,
+      message: `Folder "${name}" has no usable sources and was skipped.`,
+    });
+    return null;
+  }
+
+  return {
+    id,
+    name,
+    hideTitle: Boolean(folder.hideTitle),
+    layout: LAYOUT_BY_SHAPE[folder.shape],
+    backgroundImageURL: trimmed(folder.coverImageUrl),
+    dataSources,
+  };
+}
+
+function plainLabel(source: SourceDraft): string {
+  return trimmed(source.catalogId) || 'unnamed';
+}
+
+export function toFusionWidgets(
+  entries: BuilderEntry[],
+  identity: AddonIdentity,
+  options: { usePlaceholder?: boolean } = {}
+): ExportResult<FusionWidgetsConfig> {
+  const notes: ExportNote[] = [];
+  const widgets: FusionWidget[] = [];
+  const addonId = resolveAddonId(identity, options.usePlaceholder === true);
+
+  for (const entry of entries) {
+    const id = trimmed(entry.id);
+    const title = trimmed(entry.title);
+    if (!id || !title) {
+      notes.push({
+        entryId: entry.id,
+        entryTitle: entry.title,
+        message: 'An entry without a title was skipped.',
+      });
+      continue;
+    }
+
+    if (entry.kind === 'collection') {
+      const items = entry.folders
+        .map(folder => toCollectionItem(folder, addonId, title, notes))
+        .filter((item): item is FusionCollectionItem => item !== null);
+
+      widgets.push({
+        id,
+        title,
+        hideTitle: Boolean(entry.hideTitle),
+        type: 'collection.row',
+        dataSource: { kind: 'collection', payload: { items } },
+      });
+      continue;
+    }
+
+    const dataSource = entry.source ? toDataSource(entry.source, addonId) : null;
+    if (!dataSource) {
+      notes.push({
+        entryId: entry.id,
+        entryTitle: title,
+        message: `Row "${title}" has no catalog selected and was skipped.`,
+      });
+      continue;
+    }
+    if (entry.source && trimmed(entry.source.genre)) {
+      notes.push({
+        entryId: entry.id,
+        entryTitle: title,
+        message: `Genre "${trimmed(entry.source.genre)}" is dropped. Fusion widgets have no genre field.`,
+      });
+    }
+
+    widgets.push({
+      id,
+      title,
+      hideTitle: Boolean(entry.hideTitle),
+      type: 'row.classic',
+      cacheTTL: entry.cacheTTL,
+      limit: entry.limit,
+      presentation: {
+        aspectRatio: entry.aspectRatio,
+        cardStyle: entry.cardStyle,
+        badges: { providers: Boolean(entry.badges.providers), ratings: Boolean(entry.badges.ratings) },
+        backgroundImageURL: trimmed(entry.backgroundImageURL),
+      },
+      dataSource,
+    });
+  }
+
+  return {
+    output: { exportType: 'fusionWidgets', exportVersion: 1, widgets },
+    notes,
+  };
+}

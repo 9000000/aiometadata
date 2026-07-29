@@ -15,6 +15,7 @@ export default defineConfig(({ mode }) => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./configure/src"),
+      "@shared": path.resolve(__dirname, "./addon/lib/collectionBuilder"),
     },
   },
 }));

@@ -544,7 +544,7 @@ MICROCACHING_EXPIRE=60
 MAX_RESULTS_PER_PAGE=50
 ```
 
-Save the MongoDB init script as `apps/jikan-rest/mongo-init.js`:
+Save the MongoDB init script as `apps/jikan-rest/mongo-init.js`. It creates the app user and the `anime` indexes the squash migration is supposed to create but does not reliably apply. Building them here means they exist before the indexer inserts its first row, so `mal_id` stays unique and queries never fall back to collection scans:
 
 ```js
 const userToCreate = fs.readFileSync('/run/secrets/jikan_db_username', 'utf8').trim();
@@ -553,7 +553,26 @@ db = db.getSiblingDB("admin");
 db.createUser({ user: userToCreate, pwd: userPassword, roles: [{ role: "readWrite", db: "jikan" }] });
 db = db.getSiblingDB("jikan");
 db.createUser({ user: userToCreate, pwd: userPassword, roles: [{ role: "readWrite", db: "jikan" }] });
+
+// Mirrors database/migrations/2022_12_04_210448_squash.php.
+const fields = [
+  "aired", "airing", "episodes", "members", "favorites", "popularity", "rank",
+  "rating", "score", "scored_by", "status", "type", "source",
+  "title", "title_english", "title_japanese", "title_synonyms",
+  "demographics.mal_id", "explicit_genres.mal_id", "genres.mal_id",
+  "licensors.mal_id", "producers.mal_id", "studios.mal_id", "themes.mal_id",
+  "aired.from", "aired.to",
+];
+fields.forEach(f => db.anime.createIndex({ [f]: 1 }, { name: f }));
+db.anime.createIndex({ mal_id: 1 }, { name: "mal_id", unique: true });
+db.anime.createIndex(
+  { title: "text", title_japanese: "text" },
+  { name: "search", weights: { title: 50, title_japanese: 5 } }
+);
+print("anime indexes created: " + db.anime.getIndexes().length);
 ```
+
+This only runs when the data directory is empty, so it covers new stacks. Existing ones need the [manual pass](#mongodb-indexes) below.
 
 #### Search-path patches (required)
 
@@ -674,7 +693,7 @@ Then start it: `docker compose up -d`
 
 #### MongoDB indexes
 
-The migration that creates the `anime` indexes does not reliably run on a fresh install, leaving only `_id_`. Queries then fall back to collection scans and filtered genre requests time out once the catalog is seeded. Check the count:
+New stacks get these from `mongo-init.js` above and can skip this section. Stacks built before that ran are likely sitting on a single `_id_` index, which means collection scans and genre requests that time out once the catalog is seeded. `mongo-init.js` will not fix them, since it only fires on an empty data directory. Check the count:
 
 ```bash
 docker exec jikan_mongo mongosh "mongodb://<admin_user>:<admin_pass>@localhost/admin" \
@@ -695,7 +714,11 @@ const fields = [
   "aired.from", "aired.to",
 ];
 fields.forEach(f => d.anime.createIndex({ [f]: 1 }, { name: f }));
-d.anime.createIndex({ mal_id: 1 }, { name: "mal_id", unique: true });
+try {
+  d.anime.createIndex({ mal_id: 1 }, { name: "mal_id", unique: true });
+} catch (e) {
+  print("mal_id index failed, see the duplicate cleanup below: " + e.codeName);
+}
 d.anime.createIndex(
   { title: "text", title_japanese: "text" },
   { name: "search", weights: { title: 50, title_japanese: 5 } }
@@ -713,6 +736,32 @@ docker exec -i jikan_mongo mongosh \
 ```
 
 Run it before the full catalog indexer if you can, it is cheaper on an empty collection.
+
+If it prints 28 and the `mal_id` line reported `DuplicateKey`, the indexer stored the same anime twice, which it can do freely while no unique index exists. Save this as `apps/jikan-rest/jikan-dedupe.js` to delete the extra copies and retry the index:
+
+```js
+const d = db.getSiblingDB("jikan");
+d.anime.aggregate([
+  { $group: { _id: "$mal_id", ids: { $push: "$_id" }, n: { $sum: 1 } } },
+  { $match: { n: { $gt: 1 } } }
+], { allowDiskUse: true }).forEach(g => {
+  g.ids.slice(1).forEach(id => d.anime.deleteOne({ _id: id }));
+  print("mal_id " + g._id + ": removed " + (g.n - 1));
+});
+d.anime.createIndex({ mal_id: 1 }, { name: "mal_id", unique: true });
+print("anime indexes: " + d.anime.getIndexes().length);
+```
+
+Pipe it in the same way:
+
+```bash
+cd apps/jikan-rest
+docker exec -i jikan_mongo mongosh \
+  "mongodb://$(cat secrets/db_admin_username.txt):$(cat secrets/db_admin_password.txt)@localhost/admin" \
+  --quiet < jikan-dedupe.js
+```
+
+It keeps the first copy of each and drops the rest. The unique index then stops the indexer creating more.
 
 #### Seeding the index
 

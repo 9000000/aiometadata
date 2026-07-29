@@ -7,6 +7,7 @@ import { MovieLensIntegration } from './MovieLensIntegration';
 import { PublicMetaDBIntegration } from './PublicMetaDBIntegration';
 import { TMDBIntegration } from './TMDBIntegration';
 import { DiscoverBuilderDialog } from './DiscoverBuilderDialog';
+import { CollectionBuilderDialog } from './CollectionBuilderDialog';
 import { LetterboxdIntegration } from './LetterboxdIntegration';
 import { AniListIntegration } from './AniListIntegration';
 import { MALIntegration } from './MALIntegration';
@@ -333,23 +334,7 @@ function reconcileMergedReferences(catalogs: CatalogConfig[]): CatalogConfig[] {
   return next;
 }
 
-const sourceBadgeStyles = {
-  tmdb: "bg-blue-800/80 text-blue-200 border-blue-600/50 hover:bg-blue-800",
-  tvdb: "bg-green-800/80 text-green-200 border-green-600/50 hover:bg-green-800",
-  mal: "bg-indigo-800/80 text-indigo-200 border-indigo-600/50 hover:bg-indigo-800",
-  tvmaze: "bg-orange-800/80 text-orange-200 border-orange-600/50 hover:bg-orange-800",
-  mdblist: "bg-yellow-800/80 text-yellow-200 border-yellow-600/50 hover:bg-yellow-800",
-  stremthru: "bg-purple-800/80 text-purple-200 border-purple-600/50 hover:bg-purple-800",
-  custom: "bg-pink-800/80 text-pink-200 border-pink-600/50 hover:bg-pink-800",
-  trakt: "bg-red-800/80 text-red-200 border-red-600/50 hover:bg-red-800",
-  anilist: "bg-cyan-800/80 text-cyan-200 border-cyan-600/50 hover:bg-cyan-800",
-  flixpatrol: "bg-emerald-800/80 text-emerald-200 border-emerald-600/50 hover:bg-emerald-800",
-  merged: "bg-violet-800/80 text-violet-200 border-violet-600/50 hover:bg-violet-800",
-};
-
-const sourceBadgeLabels: Record<string, string> = {
-  flixpatrol: 'TOP 10',
-};
+import { sourceBadgeStyles, sourceBadgeLabels } from '@/lib/sourceBadges';
 
 
 
@@ -3488,6 +3473,7 @@ function CatalogsSettingsContent({
   const [isPublicMetaDBOpen, setIsPublicMetaDBOpen] = useState(false);
   const [isTmdbListOpen, setIsTmdbListOpen] = useState(false);
   const [isTmdbDiscoverBuilderOpen, setIsTmdbDiscoverBuilderOpen] = useState(false);
+  const [isCollectionBuilderOpen, setIsCollectionBuilderOpen] = useState(false);
   const [editingDiscoverCatalog, setEditingDiscoverCatalog] = useState<CatalogConfig | null>(null);
   const [customizeTemplate, setCustomizeTemplate] = useState<CustomizeTemplate | null>(null);
   const [isLetterboxdOpen, setIsLetterboxdOpen] = useState(false);
@@ -4558,6 +4544,10 @@ function CatalogsSettingsContent({
               <Wand2 className="h-4 w-4 mr-2" />
               Build Your Catalog
             </Button>
+            <Button onClick={() => setIsCollectionBuilderOpen(true)} size="sm" variant="outline">
+              <Layers className="h-4 w-4 mr-2" />
+              Collections
+            </Button>
             {(config.apiKeys?.openrouter || config.apiKeys?.gemini) && (
               <Button onClick={() => setIsAICatalogOpen(true)} size="sm" variant="outline">
                 <Sparkles className="h-4 w-4 mr-2" />
@@ -4999,6 +4989,10 @@ function CatalogsSettingsContent({
       <AICatalogDialog
         isOpen={isAICatalogOpen}
         onClose={() => setIsAICatalogOpen(false)}
+      />
+      <CollectionBuilderDialog
+        isOpen={isCollectionBuilderOpen}
+        onClose={() => setIsCollectionBuilderOpen(false)}
       />
       <DiscoverBuilderDialog
         isOpen={isTmdbDiscoverBuilderOpen}

@@ -21,9 +21,10 @@
     "noFallthroughCasesInSwitch": false,
 
     "paths": {
-      "@/*": ["./configure/src/*"]
+      "@/*": ["./configure/src/*"],
+      "@shared/*": ["./addon/lib/collectionBuilder/*"]
     },
     "types": ["vite/client", "react", "react-dom"]
   },
-  "include": ["configure/src"]
+  "include": ["configure/src", "addon/lib/collectionBuilder"]
 }

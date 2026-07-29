@@ -202,9 +202,19 @@ function genreOptions(entry: any): string[] | undefined {
   if (!Array.isArray(genre?.options)) return undefined;
   // When genre is required, getManifest prepends "None" as the unfiltered choice,
   // so it has to stay. Otherwise it is just noise.
-  const options = genre.isRequired
-    ? genre.options.filter((option: any) => trimmed(option))
-    : genre.options.filter((option: any) => trimmed(option) && option !== 'None');
+  const keep = genre.isRequired
+    ? (option: any) => Boolean(trimmed(option))
+    : (option: any) => Boolean(trimmed(option)) && option !== 'None';
+
+  // Options can repeat, so dedupe: they become React keys in the genre picker.
+  const seen = new Set<string>();
+  const options = genre.options.filter((option: any) => {
+    if (!keep(option)) return false;
+    const key = String(option);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   return options.length > 0 ? options : undefined;
 }
 

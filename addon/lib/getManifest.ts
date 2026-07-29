@@ -1285,6 +1285,24 @@ async function getManifest(config: any, opts: { tag?: string } = {}): Promise<an
   }
 
 
+  // Several branches prepend "None" to the genre list for catalogs that are not
+  // on home, and some providers ship a genre of their own literally called
+  // "None" (Trakt shows, for one), so the option can end up listed twice.
+  // Deduplicate once here rather than in every branch that builds options.
+  for (const catalog of catalogs as any[]) {
+    if (!Array.isArray(catalog?.extra)) continue;
+    for (const extra of catalog.extra) {
+      if (extra?.name !== 'genre' || !Array.isArray(extra.options)) continue;
+      const seen = new Set<string>();
+      extra.options = extra.options.filter((option: any) => {
+        const key = String(option);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+  }
+
   const isSearchEnabled = config.search?.enabled ?? true;
   const engineEnabled = config.search?.engineEnabled || {};
   const searchProviders = config.search?.providers || {};

@@ -478,7 +478,7 @@ function CatalogPicker({
                   </span>
                 )}
                 <span className="min-w-0 flex-1 truncate">{catalog.name}</span>
-                {isAdded && <span className="shrink-0 text-[10px] text-muted-foreground">added</span>}
+                {isAdded && <span className="hidden shrink-0 text-[10px] text-muted-foreground sm:inline">added</span>}
                 {catalog.pendingSave && (
                   <Badge
                     variant="outline"
@@ -499,7 +499,7 @@ function CatalogPicker({
                 >
                   {getSourceBadgeLabel(catalog.source)}
                 </Badge>
-                <Badge variant="outline" className="shrink-0 text-[10px]">
+                <Badge variant="outline" className="hidden shrink-0 text-[10px] sm:inline-flex">
                   {catalog.type}
                 </Badge>
               </button>
@@ -549,10 +549,11 @@ function SourceRow({
 
   return (
     <div
-      className={`flex flex-wrap items-center gap-2 rounded-md border px-2 py-2 ${
+      className={`flex flex-col gap-2 rounded-md border px-2 py-2 sm:flex-row sm:flex-wrap sm:items-center ${
         unknown ? 'border-amber-600/60 bg-amber-950/20' : 'bg-muted/30'
       }`}
     >
+      <div className="flex min-w-0 flex-1 items-center gap-2">
       {unknown && <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />}
       <span
         className="min-w-0 flex-1 truncate text-sm"
@@ -584,13 +585,15 @@ function SourceRow({
           {getSourceBadgeLabel(match?.source)}
         </Badge>
       )}
-      <Badge variant="outline" className="text-[10px]">{source.type}</Badge>
+        <Badge variant="outline" className="shrink-0 text-[10px]">{source.type}</Badge>
+      </div>
+      <div className="flex min-w-0 items-center gap-2 sm:shrink-0">
       {genres.length > 0 && (
         <Select
           value={source.genre || '__all__'}
           onValueChange={value => onChange({ ...source, genre: value === '__all__' ? null : value })}
         >
-          <SelectTrigger className={`h-8 w-40 ${genreRequired && !source.genre ? 'border-amber-500' : ''}`}>
+          <SelectTrigger className={`h-8 min-w-0 flex-1 sm:w-40 sm:flex-none ${genreRequired && !source.genre ? 'border-amber-500' : ''}`}>
             <SelectValue placeholder={genreRequired ? 'Pick a genre' : 'All genres'} />
           </SelectTrigger>
           <SelectContent>
@@ -601,9 +604,10 @@ function SourceRow({
           </SelectContent>
         </Select>
       )}
-      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onRemove}>
+      <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={onRemove}>
         <Trash2 className="h-4 w-4" />
       </Button>
+      </div>
     </div>
   );
 }
@@ -653,7 +657,7 @@ function FolderCard({
           value={folder.title}
           onChange={event => update({ title: event.target.value })}
           placeholder={terms.childTitle}
-          className="h-9 flex-1"
+          className="h-9 min-w-0 flex-1"
         />
         <Button variant="ghost" size="icon" className="h-9 w-9" onClick={onRemove}>
           <Trash2 className="h-4 w-4" />
@@ -675,7 +679,7 @@ function FolderCard({
                 key={shape}
                 type="button"
                 onClick={() => update({ shape })}
-                className={`flex flex-1 items-center justify-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors ${
+                className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-colors ${
                   active ? 'bg-primary/15 text-foreground ring-1 ring-primary/50' : 'text-muted-foreground hover:bg-accent/50'
                 }`}
               >
@@ -684,7 +688,7 @@ function FolderCard({
                     active ? 'border-primary bg-primary/40' : 'border-muted-foreground/50'
                   }`}
                 />
-                {SHAPE_LABELS[shape]}
+                <span className="truncate">{SHAPE_LABELS[shape]}</span>
               </button>
             );
           })}
@@ -705,9 +709,9 @@ function FolderCard({
       </div>
 
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <Label className="text-xs">{terms.sources}</Label>
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             {tagOptions.length > 0 && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -1067,7 +1071,7 @@ function ClassicRowEditor({
                   key={value}
                   type="button"
                   onClick={() => update({ aspectRatio: value })}
-                  className={`flex flex-1 items-center justify-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors ${
+                  className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-colors ${
                     active ? 'bg-primary/15 text-foreground ring-1 ring-primary/50' : 'text-muted-foreground hover:bg-accent/50'
                   }`}
                 >
@@ -1076,7 +1080,7 @@ function ClassicRowEditor({
                       active ? 'border-primary bg-primary/40' : 'border-muted-foreground/50'
                     }`}
                   />
-                  {SHAPE_LABELS[shape]}
+                  <span className="truncate">{SHAPE_LABELS[shape]}</span>
                 </button>
               );
             })}
@@ -1128,6 +1132,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const { config, setConfig, auth } = useConfig();
 
   const [entries, setEntries] = useState<BuilderEntry[]>([]);
+  /** Entries as they stood when opened or last applied, to spot real edits. */
+  const [baseline, setBaseline] = useState('[]');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [target, setTarget] = useState<Target>('nuvio');
   const [manifestUrl, setManifestUrl] = useState('');
@@ -1152,6 +1158,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     if (!isOpen) return;
     const saved = clone(config.collections || []) as BuilderEntry[];
     setEntries(saved);
+    setBaseline(JSON.stringify(saved));
     setSelectedId(saved[0]?.id ?? null);
     setManifestUrl(buildManifestUrl(auth.userUUID));
   }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1171,8 +1178,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   useEffect(() => {
     if (sourceList.catalogs.length === 0) return;
-    setEntries(prev => healSourceNames(prev, sourceList.catalogs));
-  }, [sourceList.catalogs]);
+    const healed = healSourceNames(entries, sourceList.catalogs);
+    if (healed === entries) return;
+    setEntries(healed);
+    // Only carry the baseline along if nothing else had been edited yet,
+    // otherwise healing would quietly mark real work as saved.
+    if (JSON.stringify(entries) === baseline) setBaseline(JSON.stringify(healed));
+  }, [sourceList.catalogs, entries, baseline]);
 
   const identity = useMemo(
     () => buildIdentity(config, manifestUrl, manifestIdentity),
@@ -1198,6 +1210,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     [entries, sourceList.catalogs]
   );
   const [confirmApply, setConfirmApply] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
   const [remapOpen, setRemapOpen] = useState(false);
   const [remapChoices, setRemapChoices] = useState<Record<string, SourceDraft>>({});
   const [remapPickFor, setRemapPickFor] = useState<string | null>(null);
@@ -1299,6 +1312,16 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     );
   };
 
+  const isDirty = useMemo(() => JSON.stringify(entries) !== baseline, [entries, baseline]);
+
+  const requestClose = () => {
+    if (isDirty) {
+      setConfirmClose(true);
+      return;
+    }
+    onClose();
+  };
+
   const handlePick = (picked: ManifestCatalog[]) => {
     if (!pickerTarget || picked.length === 0) return;
     const sources: SourceDraft[] = picked.map(catalog => ({
@@ -1345,6 +1368,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   const applyToConfig = () => {
     setConfig(prev => ({ ...prev, collections: clone(entries) }));
+    setBaseline(JSON.stringify(entries));
     toast.success(
       entries.length === 1
         ? '1 entry applied. Save your configuration to store it.'
@@ -1439,7 +1463,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   return (
     <>
-      <Dialog open={isOpen} onOpenChange={open => !open && onClose()}>
+      <Dialog open={isOpen} onOpenChange={open => !open && requestClose()}>
         <DialogContent
           className="max-w-6xl max-h-[90vh] overflow-y-auto"
           onInteractOutside={event => event.preventDefault()}
@@ -1515,7 +1539,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleRailDragEnd}>
                 <SortableContext items={entries.map(entry => entry.id)} strategy={verticalListSortingStrategy}>
-                  <div className="space-y-1.5">
+                  <div className="max-h-56 space-y-1.5 overflow-y-auto pr-1 lg:max-h-none lg:overflow-visible lg:pr-0">
                     {entries.map(entry => (
                       <SortableEntryRow
                         key={entry.id}
@@ -1587,7 +1611,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       {target === 'nuvio' ? 'Nuvio collections' : 'Fusion widgets'}
                     </Badge>
                     <span className="text-[11px] text-muted-foreground">switch target in the header</span>
-                    <div className="flex-1" />
+                    <div className="ml-auto flex items-center gap-2">
                     <Button size="sm" variant="outline" onClick={handleCopy}>
                       {copied ? <Check className="mr-1.5 h-4 w-4" /> : <Copy className="mr-1.5 h-4 w-4" />}
                       Copy
@@ -1595,6 +1619,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                     <Button size="sm" variant="outline" onClick={handleDownload}>
                       <Download className="mr-1.5 h-4 w-4" /> Download
                     </Button>
+                    </div>
                   </div>
 
                   <div className="space-y-1.5">
@@ -1693,10 +1718,10 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-2 border-t pt-4">
+          <div className="flex flex-col gap-2 border-t pt-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
             {unknownSources.length > 0 ? (
               <>
-                <p className="mr-auto flex items-start gap-1.5 text-[11px] text-amber-500">
+                <p className="flex items-start gap-1.5 text-[11px] text-amber-500 sm:mr-auto">
                   <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
                   {unknownSources.length === 1
                     ? '1 source points at a catalog you do not have.'
@@ -1708,12 +1733,12 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 </Button>
               </>
             ) : (
-              <p className="mr-auto text-[11px] text-muted-foreground">
+              <p className="text-[11px] text-muted-foreground sm:mr-auto">
                 Applying puts this in your configuration. It is only stored once you save the configuration
                 itself on the Config tab.
               </p>
             )}
-            <Button variant="ghost" onClick={onClose}>Close</Button>
+            <Button variant="ghost" onClick={requestClose}>Close</Button>
             <Button onClick={handleSave}>Apply to config</Button>
           </div>
         </DialogContent>
@@ -1828,7 +1853,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             </div>
           )}
 
-          <div className="flex justify-end gap-2 border-t pt-3">
+          <div className="flex flex-wrap justify-end gap-2 border-t pt-3">
             <Button variant="ghost" onClick={() => { setImportOpen(false); setImportText(''); setImportPreview(null); }}>
               Cancel
             </Button>
@@ -1922,8 +1947,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             })}
           </div>
 
-          <div className="flex items-center justify-end gap-2 border-t pt-3">
-            <span className="mr-auto text-[11px] text-muted-foreground">
+          <div className="flex flex-col gap-2 border-t pt-3 sm:flex-row sm:items-center sm:justify-end">
+            <span className="text-[11px] text-muted-foreground sm:mr-auto">
               {Object.keys(remapChoices).length} of {missingGroups.length} matched. Anything left unmatched stays
               as it is.
             </span>
@@ -1955,6 +1980,39 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
         }}
         onClose={() => setRemapPickFor(null)}
       />
+
+      <Dialog open={confirmClose} onOpenChange={open => !open && setConfirmClose(false)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              Keep your changes?
+            </DialogTitle>
+            <DialogDescription>
+              You have edits that are not in your configuration yet. Closing now loses them.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-wrap justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={() => setConfirmClose(false)}>Keep editing</Button>
+            <Button
+              variant="outline"
+              className="text-destructive hover:text-destructive"
+              onClick={() => { setConfirmClose(false); onClose(); }}
+            >
+              Discard
+            </Button>
+            <Button
+              onClick={() => {
+                applyToConfig();
+                setConfirmClose(false);
+                onClose();
+              }}
+            >
+              Apply and close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <ConfirmDialog
         isOpen={confirmApply}

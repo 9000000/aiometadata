@@ -783,7 +783,7 @@ export function SearchSettings() {
                                     <Label htmlFor="ai-model" className="text-sm font-medium">Model</Label>
                                     <p className="text-xs text-muted-foreground">
                                         {(config.search.ai_provider || 'gemini') === 'openrouter'
-                                            ? 'Any OpenRouter model ID'
+                                            ? `Any OpenRouter model ID, ${config.search.ai_openrouter_web_search !== false ? 'with Web Search' : 'without Web Search'}`
                                             : (() => {
                                                 const selected = GEMINI_MODELS.find(m => m.id === resolveGeminiModel(config.search.ai_model));
                                                 return (selected?.grounding || config.search.ai_web_search) ? 'with Web Search' : 'without Web Search';
@@ -866,8 +866,44 @@ export function SearchSettings() {
                                 </div>
                             )}
 
+                            {(() => {
+                                const provider = config.search.ai_provider || 'gemini';
+                                if (provider !== 'openrouter') return null;
+                                const enabled = config.search.ai_openrouter_web_search !== false;
+
+                                return (
+                                    <>
+                                        <div className="flex items-center justify-between gap-4">
+                                            <div className="min-w-0 flex-1">
+                                                <Label htmlFor="ai-openrouter-web-search" className="text-sm font-medium">Web Search</Label>
+                                                <p className="text-xs text-muted-foreground">
+                                                    Adds <span className="font-mono">:online</span> so the model sees live results. Billed by
+                                                    OpenRouter at roughly $0.005 per search, on top of the model.
+                                                </p>
+                                            </div>
+                                            <Switch
+                                                id="ai-openrouter-web-search"
+                                                className="shrink-0"
+                                                checked={enabled}
+                                                onCheckedChange={(checked) => setConfig(prev => ({
+                                                    ...prev,
+                                                    search: { ...prev.search, ai_openrouter_web_search: checked },
+                                                }))}
+                                            />
+                                        </div>
+                                        {enabled && (
+                                            <div className="flex items-start gap-2 p-3 rounded-md bg-yellow-500/10 border border-yellow-500/20">
+                                                <AlertTriangle className="h-4 w-4 text-yellow-500 mt-0.5 shrink-0" />
+                                                <p className="text-xs text-yellow-600 dark:text-yellow-400">
+                                                    Needs credits even on <span className="font-mono">:free</span> models. Turn it off to run on a zero balance.
+                                                </p>
+                                            </div>
+                                        )}
+                                    </>
+                                );
+                            })()}
+
                             {/* Web Search toggle (Gemini non-free-grounding models only) */}
-                            {/* OpenRouter always uses :online — no toggle needed */}
                             {(() => {
                                 const provider = config.search.ai_provider || 'gemini';
                                 if (provider !== 'gemini') return null;

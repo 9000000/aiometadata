@@ -1499,6 +1499,7 @@ async function cacheWrapSearch(userUUID: string, searchKey: string, method: () =
     aiProvider: config.search?.ai_provider || 'gemini',
     aiModel: config.search?.ai_model || '',
     aiWebSearch: config.search?.ai_web_search || false,
+    aiOpenrouterWebSearch: config.search?.ai_openrouter_web_search !== false,
   };
 
   const searchConfigString = JSON.stringify(searchConfig);

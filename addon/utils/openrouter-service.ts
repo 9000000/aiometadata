@@ -70,6 +70,12 @@ async function performOpenRouterSearch(apiKey: string, query: string, type: 'mov
     if (error.statusCode) {
       logger.error(`HTTP status: ${error.statusCode}`);
     }
+    if (error.statusCode === 402 && hasWebSearch) {
+      logger.error(
+        'OpenRouter refused the request for lack of credits. Web search is billed even on :free models '
+        + '(about $0.005 per search), so either add credits or turn Web Search off in Search settings.'
+      );
+    }
     logger.debug("Stack trace:", error.stack);
     return [];
   }

@@ -60,6 +60,14 @@ function toCardStyle(value: unknown): FusionCardStyle {
   return 'medium';
 }
 
+function looksLikeFusionTile(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const hasLabel = 'name' in value || 'title' in value;
+  const hasArt = 'layout' in value || 'imageAspect' in value
+    || 'backgroundImageURL' in value || 'imageURL' in value;
+  return hasLabel && hasArt && !('folders' in value) && !('type' in value);
+}
+
 export function detectFormat(input: unknown): ImportFormat {
   if (Array.isArray(input)) {
     if (input.length === 0) return 'nuvio';
@@ -68,6 +76,7 @@ export function detectFormat(input: unknown): ImportFormat {
       return 'builder';
     }
     if (isRecord(first) && 'folders' in first) return 'nuvio';
+    if (looksLikeFusionTile(first)) return 'fusion';
     return 'unknown';
   }
   if (isRecord(input)) {
@@ -189,7 +198,7 @@ function fusionSource(raw: unknown, label: string, notes: string[]): SourceDraft
     return null;
   }
   const payload = isRecord(raw.payload) ? raw.payload : {};
-  const split = splitCatalogId(trimmed(payload.catalogId), trimmed(payload.catalogType));
+  const split = splitCatalogId(trimmed(payload.catalogId), trimmed(payload.type || payload.catalogType));
   if (!split) {
     notes.push(`"${label}": skipped a source with no catalog id.`);
     return null;
@@ -197,14 +206,18 @@ function fusionSource(raw: unknown, label: string, notes: string[]): SourceDraft
   return { catalogId: split.catalogId, type: split.type, name: split.catalogId, genre: null };
 }
 
+/** Widget files spell a tile title/imageAspect/imageURL, collection files name/layout/backgroundImageURL. */
 function fusionItem(raw: unknown, notes: string[]): FolderDraft | null {
   if (!isRecord(raw)) return null;
-  const title = trimmed(raw.name || raw.title);
+  const title = trimmed(raw.title || raw.name);
   if (!title) {
     notes.push('Skipped an item with no name.');
     return null;
   }
-  const sources = (Array.isArray(raw.dataSources) ? raw.dataSources : [])
+  const rawSources = Array.isArray(raw.dataSources)
+    ? raw.dataSources
+    : isRecord(raw.dataSource) ? [raw.dataSource] : [];
+  const sources = rawSources
     .map((source: unknown) => fusionSource(source, title, notes))
     .filter((source): source is SourceDraft => source !== null);
 
@@ -212,14 +225,22 @@ function fusionItem(raw: unknown, notes: string[]): FolderDraft | null {
     ...createFolderDraft(title),
     id: trimmed(raw.id) || newId(),
     title,
-    shape: toShape(raw.layout),
+    shape: toShape(raw.imageAspect || raw.layout),
     hideTitle: Boolean(raw.hideTitle),
-    coverImageUrl: trimmed(raw.backgroundImageURL),
+    coverImageUrl: trimmed(raw.imageURL || raw.backgroundImageURL),
     sources,
   };
 }
 
 export function fromFusionWidgets(input: unknown, notes: string[]): BuilderEntry[] {
+  if (Array.isArray(input) && input.some(looksLikeFusionTile)) {
+    const folders = input
+      .map((tile: unknown) => fusionItem(tile, notes))
+      .filter((folder): folder is FolderDraft => folder !== null);
+    notes.push('This is a collection file, which holds tiles but no row. They were put in one collection you can rename.');
+    return [{ ...createCollectionDraft('Imported collection'), folders }];
+  }
+
   const widgets = isRecord(input) && Array.isArray(input.widgets)
     ? input.widgets
     : Array.isArray(input) ? input : [];
@@ -233,7 +254,7 @@ export function fromFusionWidgets(input: unknown, notes: string[]): BuilderEntry
       continue;
     }
 
-    if (raw.type === 'row.classic') {
+    if (trimmed(raw.type).startsWith('row.classic')) {
       const source = fusionSource(raw.dataSource, title, notes);
       const presentation = isRecord(raw.presentation) ? raw.presentation : {};
       const badges = isRecord(presentation.badges) ? presentation.badges : {};
@@ -249,6 +270,7 @@ export function fromFusionWidgets(input: unknown, notes: string[]): BuilderEntry
         cardStyle: toCardStyle(presentation.cardStyle),
         badges: { providers: Boolean(badges.providers), ratings: badges.ratings !== false },
         backgroundImageURL: trimmed(presentation.backgroundImageURL),
+        numbered: trimmed(raw.type) === 'row.classic.numbered',
       };
       entries.push(row);
       continue;

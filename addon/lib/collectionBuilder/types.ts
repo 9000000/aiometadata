@@ -1,6 +1,5 @@
 export type TileShape = 'POSTER' | 'LANDSCAPE' | 'SQUARE';
 export type CollectionViewMode = 'TABBED_GRID' | 'ROWS' | 'FOLLOW_LAYOUT';
-export type FusionLayout = 'Wide' | 'Poster' | 'Square';
 export type FusionAspectRatio = 'poster' | 'wide' | 'square';
 export type FusionCardStyle = 'small' | 'medium' | 'large';
 
@@ -54,6 +53,7 @@ export interface ClassicRowDraft {
   cardStyle: FusionCardStyle;
   badges: { providers: boolean; ratings: boolean };
   backgroundImageURL?: string;
+  numbered?: boolean;
 }
 
 export type BuilderEntry = CollectionDraft | ClassicRowDraft;
@@ -125,21 +125,20 @@ export interface NuvioCollection {
 // ---- Fusion output (src/lib/types/widget.ts) ----
 
 export interface FusionAddonCatalogSource {
-  sourceType: 'aiometadata';
   kind: 'addonCatalog';
   payload: {
     addonId: string;
     catalogId: string;
-    catalogType: string;
+    type: string;
   };
 }
 
 export interface FusionCollectionItem {
   id: string;
-  name: string;
+  title: string;
   hideTitle: boolean;
-  layout: FusionLayout;
-  backgroundImageURL: string;
+  imageAspect: FusionAspectRatio;
+  imageURL?: string;
   dataSources: FusionAddonCatalogSource[];
 }
 
@@ -158,7 +157,7 @@ export interface FusionRowClassicWidget {
   id: string;
   title: string;
   hideTitle?: boolean;
-  type: 'row.classic';
+  type: 'row.classic' | 'row.classic.numbered';
   cacheTTL: number;
   limit: number;
   presentation: {
@@ -288,5 +287,6 @@ export function createClassicRowDraft(title = 'New Row'): ClassicRowDraft {
     cardStyle: CLASSIC_ROW_DEFAULTS.cardStyle,
     badges: { ...CLASSIC_ROW_DEFAULTS.badges },
     backgroundImageURL: '',
+    numbered: false,
   };
 }

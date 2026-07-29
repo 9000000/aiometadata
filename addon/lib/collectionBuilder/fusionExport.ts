@@ -6,8 +6,8 @@ import {
   type ExportResult,
   type FolderDraft,
   type FusionAddonCatalogSource,
+  type FusionAspectRatio,
   type FusionCollectionItem,
-  type FusionLayout,
   type FusionWidget,
   type FusionWidgetsConfig,
   type SourceDraft,
@@ -18,10 +18,10 @@ function trimmed(value: unknown): string {
   return String(value ?? '').trim();
 }
 
-const LAYOUT_BY_SHAPE: Record<TileShape, FusionLayout> = {
-  LANDSCAPE: 'Wide',
-  POSTER: 'Poster',
-  SQUARE: 'Square',
+const ASPECT_BY_SHAPE: Record<TileShape, FusionAspectRatio> = {
+  LANDSCAPE: 'wide',
+  POSTER: 'poster',
+  SQUARE: 'square',
 };
 
 /**
@@ -110,12 +110,11 @@ function toDataSource(
   const composite = `${manifestType}::${plainId}`;
   const catalogType = resolveFusionCatalogType(composite, manifestType);
   return {
-    sourceType: 'aiometadata',
     kind: 'addonCatalog',
     payload: {
       addonId,
       catalogId: normalizeCatalogId(composite, catalogType),
-      catalogType,
+      type: catalogType,
     },
   };
 }
@@ -167,18 +166,24 @@ function toCollectionItem(
     return null;
   }
 
+  const imageURL = trimmed(folder.coverImageUrl);
   return {
     id,
-    name,
+    title: name,
     hideTitle: Boolean(folder.hideTitle),
-    layout: LAYOUT_BY_SHAPE[folder.shape],
-    backgroundImageURL: trimmed(folder.coverImageUrl),
+    imageAspect: ASPECT_BY_SHAPE[folder.shape],
+    ...(imageURL ? { imageURL } : {}),
     dataSources,
   };
 }
 
 function plainLabel(source: SourceDraft): string {
   return trimmed(source.catalogId) || 'unnamed';
+}
+
+/** Fusion namespaces widget ids by kind: `collection.<id>` and `catalog.<id>`. */
+function prefixedId(id: string, prefix: string): string {
+  return id.startsWith(prefix) ? id : `${prefix}${id}`;
 }
 
 export function toFusionWidgets(
@@ -208,9 +213,9 @@ export function toFusionWidgets(
         .filter((item): item is FusionCollectionItem => item !== null);
 
       widgets.push({
-        id,
+        id: prefixedId(id, 'collection.'),
         title,
-        hideTitle: Boolean(entry.hideTitle),
+        ...(entry.hideTitle ? { hideTitle: true } : {}),
         type: 'collection.row',
         dataSource: { kind: 'collection', payload: { items } },
       });
@@ -235,17 +240,17 @@ export function toFusionWidgets(
     }
 
     widgets.push({
-      id,
+      id: prefixedId(id, 'catalog.'),
       title,
-      hideTitle: Boolean(entry.hideTitle),
-      type: 'row.classic',
+      ...(entry.hideTitle ? { hideTitle: true } : {}),
+      type: entry.numbered ? 'row.classic.numbered' : 'row.classic',
       cacheTTL: entry.cacheTTL,
       limit: entry.limit,
       presentation: {
         aspectRatio: entry.aspectRatio,
         cardStyle: entry.cardStyle,
         badges: { providers: Boolean(entry.badges.providers), ratings: Boolean(entry.badges.ratings) },
-        backgroundImageURL: trimmed(entry.backgroundImageURL),
+        ...(trimmed(entry.backgroundImageURL) ? { backgroundImageURL: trimmed(entry.backgroundImageURL) } : {}),
       },
       dataSource,
     });

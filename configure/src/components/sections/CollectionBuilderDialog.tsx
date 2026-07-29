@@ -12,6 +12,7 @@ import {
   GripVertical,
   Layers,
   Link as LinkIcon,
+  ListOrdered,
   Replace,
   Tags,
   Upload,
@@ -379,7 +380,7 @@ function SortableEntryRow({
     zIndex: isDragging ? 50 : 'auto',
   };
   const isCollection = entry.kind === 'collection';
-  const Icon = isCollection ? Layers : Rows3;
+  const Icon = isCollection ? Layers : entry.numbered ? ListOrdered : Rows3;
   const count = entrySourceCount(entry);
 
   return (
@@ -1251,6 +1252,11 @@ function ClassicRowEditor({
       </div>
 
       <div className="flex flex-wrap gap-x-6 gap-y-2">
+        <div className="flex items-center gap-2">
+          <Switch checked={Boolean(entry.numbered)} onCheckedChange={value => update({ numbered: value })} />
+          <Label className="text-xs">Numbered ranking</Label>
+          <span className="text-[10px] text-muted-foreground">1, 2, 3 … over each card</span>
+        </div>
         <div className="flex items-center gap-2">
           <Switch checked={Boolean(entry.hideTitle)} onCheckedChange={value => update({ hideTitle: value })} />
           <Label className="text-xs">Hide title</Label>

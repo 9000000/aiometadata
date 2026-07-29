@@ -16,6 +16,8 @@ export interface ManifestCatalog {
   genreRequired?: boolean;
   /** In the local config but not yet in the manifest, so the config needs saving. */
   pendingSave?: boolean;
+  /** Profile tags from the user's config. The manifest does not carry these. */
+  tags?: string[];
 }
 
 export type CatalogListOrigin = 'manifest' | 'derived';
@@ -78,6 +80,7 @@ export function deriveManifestCatalog(catalog: CatalogConfig): ManifestCatalog {
     type,
     name: catalog.name,
     source: catalog.source,
+    tags: catalog.tags,
     genres,
     // getManifest sets `isRequired: showInHome ? false : true` on every branch.
     // Only worth flagging when we also have genres to offer, which locally means
@@ -118,11 +121,22 @@ export async function loadCatalogSources(
       throw new Error('Manifest contains no catalogs');
     }
 
+    // With showPrefix on, every manifest catalog name is "<addon> - <name>".
+    // That prefix is the same on every row here and only adds noise, and the
+    // derived fallback does not carry it, so strip it for consistency.
+    const namePrefix = config.showPrefix
+      ? `${(trimmed(config.addonName) || 'AIOMetadata')} - `
+      : '';
+    const stripPrefix = (value: string) =>
+      namePrefix && value.startsWith(namePrefix) ? value.slice(namePrefix.length) : value;
+
     const genresById = new Map<string, string[] | undefined>();
     const sourceById = new Map<string, string | undefined>();
+    const tagsById = new Map<string, string[] | undefined>();
     for (const catalog of derived) {
       genresById.set(`${catalog.id}:${catalog.type}`, catalog.genres);
       sourceById.set(`${catalog.id}:${catalog.type}`, catalog.source);
+      tagsById.set(`${catalog.id}:${catalog.type}`, catalog.tags);
     }
 
     const catalogs: ManifestCatalog[] = entries
@@ -133,8 +147,9 @@ export async function loadCatalogSources(
         return {
           id: trimmed(entry.id),
           type: trimmed(entry.type),
-          name: trimmed(entry.name) || trimmed(entry.id),
+          name: stripPrefix(trimmed(entry.name)) || trimmed(entry.id),
           source: sourceById.get(key),
+          tags: tagsById.get(key),
           genres: genreOptions(entry) ?? genresById.get(key),
           genreRequired: isGenreRequired(entry),
         };
@@ -221,6 +236,58 @@ export function entryHasUnknownSource(
   catalogs: ManifestCatalog[]
 ): boolean {
   return findUnknownSources([entry], catalogs).length > 0;
+}
+
+/**
+ * Imported files carry whatever the author's setup called a catalog, and Fusion
+ * files carry no name at all. Where the catalog is one of ours, prefer our own
+ * name so the editor shows what the user recognises instead of a raw id.
+ */
+export function healSourceNames(
+  entries: BuilderEntry[],
+  catalogs: ManifestCatalog[]
+): BuilderEntry[] {
+  const byKey = new Map(catalogs.map(catalog => [catalogKey(catalog), catalog]));
+
+  const heal = (source: SourceDraft): SourceDraft => {
+    const match = byKey.get(catalogKey(source));
+    return match && match.name && match.name !== source.name
+      ? { ...source, name: match.name }
+      : source;
+  };
+
+  let changed = false;
+
+  const next = entries.map((entry): BuilderEntry => {
+    if (entry.kind === 'classicRow') {
+      if (!entry.source) return entry;
+      const healed = heal(entry.source);
+      if (healed === entry.source) return entry;
+      changed = true;
+      return { ...entry, source: healed };
+    }
+
+    let entryChanged = false;
+    const folders = entry.folders.map(folder => {
+      let folderChanged = false;
+      const sources = folder.sources.map(source => {
+        const healed = heal(source);
+        if (healed !== source) folderChanged = true;
+        return healed;
+      });
+      if (!folderChanged) return folder;
+      entryChanged = true;
+      return { ...folder, sources };
+    });
+
+    if (!entryChanged) return entry;
+    changed = true;
+    return { ...entry, folders };
+  });
+
+  // Same reference when nothing needed healing, so callers can use this in an
+  // effect without re-triggering themselves.
+  return changed ? next : entries;
 }
 
 export interface SourceIssue {

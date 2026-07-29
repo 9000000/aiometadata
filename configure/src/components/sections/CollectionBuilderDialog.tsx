@@ -10,6 +10,7 @@ import {
   Layers,
   Link as LinkIcon,
   Replace,
+  Tags,
   Upload,
   Plus,
   Rows3,
@@ -49,6 +50,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useConfig } from '@/contexts/ConfigContext';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { getSourceBadgeLabel, getSourceBadgeStyle } from '@/lib/sourceBadges';
+import { getTagColor } from '@/lib/tagColors';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 import {
   createClassicRowDraft,
@@ -81,6 +89,7 @@ import {
   entryHasUnknownSource,
   findSourceIssues,
   findUnknownSources,
+  healSourceNames,
   loadCatalogSources,
   stripManifestSuffix,
   type CatalogSourceList,
@@ -119,6 +128,12 @@ const NUVIO_CHIP = 'bg-cyan-800/70 text-cyan-200 border-cyan-600/50';
 const FUSION_CHIP = 'bg-violet-800/70 text-violet-200 border-violet-600/50';
 
 type Target = 'nuvio' | 'fusion';
+
+interface TagOption {
+  name: string;
+  color: string;
+  count: number;
+}
 
 /**
  * The same draft feeds both apps, but each names the pieces differently.
@@ -539,7 +554,12 @@ function SourceRow({
       }`}
     >
       {unknown && <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />}
-      <span className="min-w-0 flex-1 truncate text-sm">{source.name || source.catalogId}</span>
+      <span
+        className="min-w-0 flex-1 truncate text-sm"
+        title={`${source.catalogId} (${source.type})`}
+      >
+        {match?.name || source.name || source.catalogId}
+      </span>
       {unknown ? (
         <>
           <span className="shrink-0 text-[10px] text-amber-500" title={`${source.catalogId} (${source.type})`}>
@@ -598,6 +618,8 @@ function FolderCard({
   onRemove,
   onAddSource,
   onReplaceSource,
+  tagOptions,
+  onAddByTag,
 }: {
   folder: FolderDraft;
   catalogs: ManifestCatalog[];
@@ -606,6 +628,8 @@ function FolderCard({
   onRemove: () => void;
   onAddSource: () => void;
   onReplaceSource: (index: number) => void;
+  tagOptions: TagOption[];
+  onAddByTag: (tag: string) => void;
 }) {
   const terms = TERMS[target];
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: folder.id });
@@ -683,9 +707,29 @@ function FolderCard({
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <Label className="text-xs">{terms.sources}</Label>
-          <Button variant="outline" size="sm" className="h-7" onClick={onAddSource}>
-            <Plus className="mr-1 h-3.5 w-3.5" /> Add catalog
-          </Button>
+          <div className="flex items-center gap-1.5">
+            {tagOptions.length > 0 && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="h-7">
+                    <Tags className="mr-1 h-3.5 w-3.5" /> Add by tag
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {tagOptions.map(tag => (
+                    <DropdownMenuItem key={tag.name} onClick={() => onAddByTag(tag.name)}>
+                      <span className={`mr-2 h-2.5 w-2.5 shrink-0 rounded-full ${getTagColor(tag.color).swatch}`} />
+                      <span className="flex-1 truncate">{tag.name}</span>
+                      <span className="ml-2 text-xs text-muted-foreground">{tag.count}</span>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+            <Button variant="outline" size="sm" className="h-7" onClick={onAddSource}>
+              <Plus className="mr-1 h-3.5 w-3.5" /> Add catalog
+            </Button>
+          </div>
         </div>
         {folder.sources.length === 0 && (
           <p className="rounded-md border border-dashed px-2 py-3 text-center text-xs text-muted-foreground">
@@ -774,6 +818,8 @@ function CollectionEditor({
   onChange,
   onAddSource,
   onReplaceSource,
+  tagOptions,
+  onAddByTag,
 }: {
   entry: CollectionDraft;
   catalogs: ManifestCatalog[];
@@ -781,6 +827,8 @@ function CollectionEditor({
   onChange: (next: CollectionDraft) => void;
   onAddSource: (folderId: string) => void;
   onReplaceSource: (folderId: string, index: number) => void;
+  tagOptions: TagOption[];
+  onAddByTag: (folderId: string, tag: string) => void;
 }) {
   const terms = TERMS[target];
   const [showNuvioBox, setShowNuvioBox] = useState(target === 'nuvio');
@@ -916,6 +964,8 @@ function CollectionEditor({
                 onRemove={() => update({ folders: entry.folders.filter((_, i) => i !== index) })}
                 onAddSource={() => onAddSource(folder.id)}
                 onReplaceSource={index => onReplaceSource(folder.id, index)}
+                tagOptions={tagOptions}
+                onAddByTag={tag => onAddByTag(folder.id, tag)}
               />
             ))}
           </div>
@@ -1119,6 +1169,11 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     };
   }, [isOpen, manifestUrl, config.catalogs]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (sourceList.catalogs.length === 0) return;
+    setEntries(prev => healSourceNames(prev, sourceList.catalogs));
+  }, [sourceList.catalogs]);
+
   const identity = useMemo(
     () => buildIdentity(config, manifestUrl, manifestIdentity),
     [config, manifestUrl, manifestIdentity]
@@ -1199,6 +1254,50 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     const folder = entry.folders.find(item => item.id === pickerTarget.folderId);
     return folder ? folder.sources.map(catalogKey) : [];
   }, [pickerTarget, entries]);
+
+  /** Only tags that actually cover a catalog the user can use. */
+  const tagOptions: TagOption[] = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const catalog of sourceList.catalogs) {
+      for (const tag of catalog.tags ?? []) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+    return (config.tags ?? [])
+      .filter(tag => counts.has(tag.name))
+      .map(tag => ({ name: tag.name, color: tag.color, count: counts.get(tag.name) ?? 0 }));
+  }, [sourceList.catalogs, config.tags]);
+
+  const addSourcesByTag = (entryId: string, folderId: string, tag: string) => {
+    const matching = sourceList.catalogs.filter(catalog => (catalog.tags ?? []).includes(tag));
+    if (matching.length === 0) return;
+
+    let added = 0;
+    setEntries(prev => prev.map(entry => {
+      if (entry.id !== entryId || entry.kind !== 'collection') return entry;
+      return {
+        ...entry,
+        folders: entry.folders.map(folder => {
+          if (folder.id !== folderId) return folder;
+          const existing = new Set(folder.sources.map(catalogKey));
+          const incoming = matching
+            .filter(catalog => !existing.has(catalogKey(catalog)))
+            .map(catalog => ({
+              catalogId: catalog.id,
+              type: catalog.type,
+              name: catalog.name,
+              genre: catalog.genreRequired ? catalog.genres?.[0] ?? null : null,
+            }));
+          added = incoming.length;
+          return { ...folder, sources: [...folder.sources, ...incoming] };
+        }),
+      };
+    }));
+
+    const skipped = matching.length - added;
+    toast.success(
+      `${added} ${added === 1 ? 'catalog' : 'catalogs'} added from "${tag}"` +
+      (skipped > 0 ? `, ${skipped} already there` : '')
+    );
+  };
 
   const handlePick = (picked: ManifestCatalog[]) => {
     if (!pickerTarget || picked.length === 0) return;
@@ -1289,7 +1388,10 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   const applyImport = (mode: 'replace' | 'merge') => {
     if (!importPreview || importPreview.entries.length === 0) return;
-    const incoming = clone(importPreview.entries) as BuilderEntry[];
+    const incoming = healSourceNames(
+      clone(importPreview.entries) as BuilderEntry[],
+      sourceList.catalogs
+    );
     setEntries(prev => {
       const next = mode === 'replace' ? incoming : [...prev, ...incoming];
       setSelectedId(next[0]?.id ?? null);
@@ -1461,6 +1563,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       onAddSource={folderId => setPickerTarget({ entryId: selected.id, folderId })}
                       onReplaceSource={(folderId, index) =>
                         setPickerTarget({ entryId: selected.id, folderId, replaceIndex: index })}
+                      tagOptions={tagOptions}
+                      onAddByTag={(folderId, tag) => addSourcesByTag(selected.id, folderId, tag)}
                     />
                   )}
                   {selected?.kind === 'classicRow' && (

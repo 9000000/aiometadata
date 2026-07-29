@@ -101,6 +101,8 @@ import {
 } from '@/lib/collectionBuilder/manifestSources';
 import type { AddonIdentity } from '@shared/types';
 
+const SETTINGS_LAYOUT_NAVIGATE_EVENT = 'settings-layout:navigate';
+
 interface CollectionBuilderDialogProps {
   isOpen: boolean;
   onClose: () => void;
@@ -1364,6 +1366,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     [entries, sourceList.catalogs]
   );
   const [confirmApply, setConfirmApply] = useState(false);
+  const [pendingNavigate, setPendingNavigate] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const [remapOpen, setRemapOpen] = useState(false);
   const [remapChoices, setRemapChoices] = useState<Record<string, SourceDraft>>({});
@@ -1528,9 +1531,19 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setPickerTarget(null);
   };
 
-  const applyToConfig = () => {
+  const applyToConfig = (thenGoToConfiguration = false) => {
     setConfig(prev => ({ ...prev, collections: clone(entries) }));
     setBaseline(JSON.stringify(entries));
+    if (thenGoToConfiguration) {
+      toast.success('Applied. Save your configuration to store it.');
+      onClose();
+      window.dispatchEvent(
+        new CustomEvent(SETTINGS_LAYOUT_NAVIGATE_EVENT, {
+          detail: { tab: 'configuration', scrollToTop: true },
+        })
+      );
+      return;
+    }
     toast.success(
       entries.length === 1
         ? '1 entry applied. Save your configuration to store it.'
@@ -1538,18 +1551,18 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     );
   };
 
-  const handleSave = () => {
+  const handleSave = (thenGoToConfiguration = false) => {
     // Unknown catalogs render as empty rows rather than breaking anything, so
     // this asks rather than refuses.
     if (unknownSources.length > 0) {
+      setPendingNavigate(thenGoToConfiguration);
       setConfirmApply(true);
       return;
     }
-    applyToConfig();
+    applyToConfig(thenGoToConfiguration);
   };
 
-  // The endpoint reads the saved config, so a dirty draft would be served stale.
-  const hasUnsavedEntries = useMemo(
+  const hasUnappliedEntries = useMemo(
     () => JSON.stringify(entries) !== JSON.stringify(config.collections || []),
     [entries, config.collections]
   );
@@ -1815,14 +1828,14 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                             {copiedUrl ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                           </Button>
                         </div>
-                        {hasUnsavedEntries && (
-                          <p className="flex items-start gap-1.5 text-[11px] text-amber-500">
-                            <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
-                            This link serves your last saved version. Hit Save to publish the changes you just made.
-                          </p>
-                        )}
+                        <p className="flex items-start gap-1.5 text-[11px] text-amber-500">
+                          <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+                          {hasUnappliedEntries
+                            ? 'The link serves what is saved on the server, which is not these edits yet. Apply to config, then save the configuration on the Config tab.'
+                            : 'The link serves what is saved on the server. Save the configuration on the Config tab, or it will still serve the version from before you opened this.'}
+                        </p>
                         <p className="text-[11px] text-muted-foreground">
-                          It rebuilds on every request, so re-importing after a Save picks up your edits. Anyone with
+                          It rebuilds on every request, so re-importing after saving picks up your edits. Anyone with
                           the link can read it, same as your manifest URL{target === 'fusion' && usePlaceholder
                             ? ', and it always carries your real URL rather than the placeholder'
                             : ''}.
@@ -1904,7 +1917,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               </p>
             )}
             <Button variant="ghost" onClick={requestClose}>Close</Button>
-            <Button onClick={handleSave}>Apply to config</Button>
+            <Button variant="outline" onClick={() => handleSave()}>Apply to config</Button>
+            <Button onClick={() => handleSave(true)}>Apply and go save</Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -2181,8 +2195,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
       <ConfirmDialog
         isOpen={confirmApply}
-        onClose={() => setConfirmApply(false)}
-        onConfirm={applyToConfig}
+        onClose={() => { setConfirmApply(false); setPendingNavigate(false); }}
+        onConfirm={() => applyToConfig(pendingNavigate)}
         variant="default"
         title="Some catalogs are missing"
         confirmText="Apply anyway"

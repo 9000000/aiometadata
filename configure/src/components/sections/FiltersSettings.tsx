@@ -73,7 +73,7 @@ export function FiltersSettings() {
           </CardHeader>
           <CardContent>
               <Select value={config.ageRating} onValueChange={handleAgeRatingChange}>
-                <SelectTrigger className="w-full">
+                <SelectTrigger className="w-full" data-setting="age-rating" aria-label="Maximum content rating">
                   <SelectValue placeholder="Select a rating" />
                 </SelectTrigger>
                 <SelectContent>

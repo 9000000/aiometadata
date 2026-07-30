@@ -11,6 +11,8 @@ import { Download, Upload, FileText, Shield, AlertCircle, Loader2, Trash2, Lock 
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { exportConfigFile } from "@/lib/exportConfigFile";
+import { CollapsibleSettingCard } from "@/components/settings/CollapsibleSettingCard";
+import { SettingRow } from "@/components/settings/SettingRow";
 
 export function ConfigImportExport() {
   const { config, setConfig, resetConfig: resetConfigFromContext, auth, setAuth } = useConfig();
@@ -338,55 +340,52 @@ export function ConfigImportExport() {
         </Card>
       </div>
 
-      {/* Danger Zone */}
-      <Card className="border-destructive/20">
-        <CardHeader>
-          <CardTitle className="text-destructive">Danger Zone</CardTitle>
-          <CardDescription>
-            Irreversible actions that will affect your configuration and account.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div>
-            <Button 
-              onClick={resetConfig} 
-              variant="destructive"
-              className="w-full"
-            >
-              Reset to Defaults
-            </Button>
-            <p className="text-xs text-muted-foreground mt-1">
-              Reset your configuration to default values. This action cannot be undone.
-            </p>
-          </div>
-          
-          {auth.authenticated && auth.userUUID && (
-            <div>
-              <Button 
-                onClick={deleteUserRecords}
-                disabled={isDeleting}
-                variant="destructive"
-                className="w-full"
+      <CollapsibleSettingCard
+        title="Danger Zone"
+        description="Reset your configuration, or permanently delete your account."
+      >
+        <div className="divide-y">
+          <SettingRow
+            label="Reset to Defaults"
+            description="Returns every setting to its default. Anything you have not saved is lost; a saved configuration can be loaded again."
+            control={
+              <Button
+                onClick={resetConfig}
+                variant="outline"
+                className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
               >
-                {isDeleting ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Deleting...
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    Delete User Records
-                  </>
-                )}
+                Reset
               </Button>
-              <p className="text-xs text-muted-foreground mt-1">
-                Permanently delete your user account and all associated data. This action cannot be undone.
-              </p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            }
+          />
+
+          {auth.authenticated && auth.userUUID ? (
+            <SettingRow
+              label="Delete User Records"
+              description="Permanently deletes your saved configuration and your account. This cannot be undone."
+              control={
+                <Button
+                  onClick={deleteUserRecords}
+                  disabled={isDeleting}
+                  variant="destructive"
+                >
+                  {isDeleting ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Deleting...
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Delete User Records
+                    </>
+                  )}
+                </Button>
+              }
+            />
+          ) : null}
+        </div>
+      </CollapsibleSettingCard>
 
       {/* Confirmation Dialogs */}
       <ConfirmDialog

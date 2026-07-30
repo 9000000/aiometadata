@@ -373,13 +373,13 @@ export function GeneralSettings() {
             <CardDescription>Control how content is presented in your addon.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-1">
-            <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="mr-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="min-w-[12rem] flex-1">
                 <Label htmlFor="language" className="font-medium">Display Language</Label>
                 <p className="text-sm text-muted-foreground">Language for titles and descriptions.</p>
               </div>
               <Select value={config.language} onValueChange={handleLanguageChange}>
-                <SelectTrigger id="language" className="w-[200px] shrink-0">
+                <SelectTrigger id="language" className="w-full sm:w-[200px] shrink-0">
                   <SelectValue placeholder="Select language" />
                 </SelectTrigger>
                 <SelectContent>
@@ -390,13 +390,13 @@ export function GeneralSettings() {
               </Select>
             </div>
 
-            <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="mr-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="min-w-[12rem] flex-1">
                 <Label htmlFor="timezone" className="font-medium">Timezone</Label>
                 <p className="text-sm text-muted-foreground">For calendar-based features (e.g., Trakt Calendar).</p>
               </div>
               <Select value={config.timezone || 'UTC'} onValueChange={handleTimezoneChange}>
-                <SelectTrigger id="timezone" className="w-[240px] shrink-0">
+                <SelectTrigger id="timezone" className="w-full sm:w-[240px] shrink-0">
                   <SelectValue placeholder="Select timezone" />
                 </SelectTrigger>
                 <SelectContent>
@@ -407,13 +407,13 @@ export function GeneralSettings() {
               </Select>
             </div>
 
-            <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="mr-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="min-w-[12rem] flex-1">
                 <Label htmlFor="cast-count" className="font-medium">Cast Members</Label>
                 <p className="text-sm text-muted-foreground">Number of cast members on details page.</p>
               </div>
               <Select value={String(config.castCount ?? -1)} onValueChange={handleCastCountChange}>
-                <SelectTrigger id="cast-count" className="w-[160px] shrink-0">
+                <SelectTrigger id="cast-count" className="w-full sm:w-[160px] shrink-0">
                   <SelectValue placeholder="Select count" />
                 </SelectTrigger>
                 <SelectContent>
@@ -424,24 +424,24 @@ export function GeneralSettings() {
               </Select>
             </div>
 
-            <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="mr-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="min-w-[12rem] flex-1">
                 <Label htmlFor="show-prefix" className="font-medium">Show Prefix</Label>
                 <p className="text-sm text-muted-foreground">Add "{config.addonName || 'AIOMetadata'} - " prefix to catalogs.</p>
               </div>
               <Switch id="show-prefix" checked={config.showPrefix} onCheckedChange={handleShowPrefixChange} />
             </div>
 
-            <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="mr-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="min-w-[12rem] flex-1">
                 <Label htmlFor="show-meta-provider-attribution" className="font-medium">Meta Attribution</Label>
                 <p className="text-sm text-muted-foreground">Show "[Meta provided by Provider]" in overview.</p>
               </div>
               <Switch id="show-meta-provider-attribution" checked={config.showMetaProviderAttribution} onCheckedChange={handleShowMetaProviderAttributionChange} />
             </div>
 
-            <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="mr-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="min-w-[12rem] flex-1">
                 <Label htmlFor="display-age-rating" className="font-medium">Display Age Rating</Label>
                 <p className="text-sm text-muted-foreground">Show rating/certification in genres.</p>
               </div>
@@ -456,32 +456,32 @@ export function GeneralSettings() {
             <CardDescription>Manage adult content, spoilers, and poster settings.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-1">
-            <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="mr-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="min-w-[12rem] flex-1">
                 <Label htmlFor="adult-content" className="font-medium">Include Adult Content</Label>
                 <p className="text-sm text-muted-foreground">Show NSFW content in catalogs and search.</p>
               </div>
               <Switch id="adult-content" checked={config.includeAdult} onCheckedChange={handleIncludeAdultChange} />
             </div>
 
-            <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="mr-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="min-w-[12rem] flex-1">
                 <Label htmlFor="blur-thumbs" className="font-medium">Hide Episode Spoilers</Label>
                 <p className="text-sm text-muted-foreground">Blur episode thumbnails to avoid spoilers.</p>
               </div>
               <Switch id="blur-thumbs" checked={config.blurThumbs} onCheckedChange={handleBlurThumbsChange} />
             </div>
 
-            <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="mr-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="min-w-[12rem] flex-1">
                 <Label htmlFor="show-rate-me-button" className="font-medium">Show Rate Me Button</Label>
                 <p className="text-sm text-muted-foreground">Display a rating button in meta pages.</p>
               </div>
               <Switch id="show-rate-me-button" checked={!!config.showRateMeButton} onCheckedChange={handleShowRateMeButtonChange} />
             </div>
 
-            <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="mr-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="min-w-[12rem] flex-1">
                 <Label htmlFor="enable-rating-posters-for-library" className="font-medium">Rating Posters for Library</Label>
                 <p className="text-sm text-muted-foreground">Keep rating posters for Continue Watching and Library items.</p>
               </div>
@@ -498,48 +498,48 @@ export function GeneralSettings() {
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
-            <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="mr-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="min-w-[12rem] flex-1">
                 <Label htmlFor="trakt-watch-tracking" className="font-medium">Trakt Checkin</Label>
                 <p className="text-sm text-muted-foreground">{getWatchTrackingMediaTypeSummary(config, 'trakt')}</p>
               </div>
               {renderWatchTrackingControls('trakt', 'trakt-watch-tracking', !!config.traktWatchTracking, handleTraktTrackingChange)}
             </div>
 
-            <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="mr-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="min-w-[12rem] flex-1">
                 <Label htmlFor="simkl-watch-tracking" className="font-medium">Simkl Checkin</Label>
                 <p className="text-sm text-muted-foreground">{getWatchTrackingMediaTypeSummary(config, 'simkl')}</p>
               </div>
               {renderWatchTrackingControls('simkl', 'simkl-watch-tracking', !!config.simklWatchTracking, handleSimklTrackingChange)}
             </div>
 
-            <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="mr-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="min-w-[12rem] flex-1">
                 <Label htmlFor="anilist-watch-tracking" className="font-medium">AniList Tracking</Label>
                 <p className="text-sm text-muted-foreground">{getWatchTrackingMediaTypeSummary(config, 'anilist')}</p>
               </div>
               {renderWatchTrackingControls('anilist', 'anilist-watch-tracking', !!config.anilistWatchTracking, handleAniListTrackingChange)}
             </div>
 
-            <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="mr-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="min-w-[12rem] flex-1">
                 <Label htmlFor="mal-watch-tracking" className="font-medium">MyAnimeList Tracking</Label>
                 <p className="text-sm text-muted-foreground">{getWatchTrackingMediaTypeSummary(config, 'mal')}</p>
               </div>
               {renderWatchTrackingControls('mal', 'mal-watch-tracking', !!config.malWatchTracking, handleMalTrackingChange)}
             </div>
 
-            <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="mr-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="min-w-[12rem] flex-1">
                 <Label htmlFor="mdblist-watch-tracking" className="font-medium">MDBList Tracking</Label>
                 <p className="text-sm text-muted-foreground">{getWatchTrackingMediaTypeSummary(config, 'mdblist')}</p>
               </div>
               {renderWatchTrackingControls('mdblist', 'mdblist-watch-tracking', !!config.mdblistWatchTracking, handleMDBListTrackingChange)}
             </div>
 
-            <div className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="mr-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="min-w-[12rem] flex-1">
                 <Label htmlFor="publicmetadb-watch-tracking" className="font-medium">PublicMetaDB Tracking</Label>
                 <p className="text-sm text-muted-foreground">{getWatchTrackingMediaTypeSummary(config, 'publicmetadb')}</p>
               </div>

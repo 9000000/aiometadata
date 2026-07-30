@@ -4176,7 +4176,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
             break;
           }
           case 'mal.genres': {
-            const mediaType = type_filter || 'series';
+            const mediaType = type_filter || null;
             const allAnimeGenres = await cacheWrapJikanApi('anime-genres', async () => {
               return await jikan.getAnimeGenres();
             }, null);
@@ -4185,7 +4185,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
               const selectedGenre = allAnimeGenres.find(g => g.name === genreNameToFetch);
               if (selectedGenre) {
                 const genreId = selectedGenre.mal_id;
-                const animeResults = await cacheWrapJikanApi(`mal-genre-${genreId}-${mediaType}-${page}-${config.sfw}`, async () => {
+                const animeResults = await cacheWrapJikanApi(`mal-genre-${genreId}-${mediaType || 'all'}-${page}-${config.sfw}`, async () => {
                   return await jikan.getAnimeByGenre(genreId, mediaType, page, config);
                 }, null);
                 metas = await parseAnimeCatalogMetaBatch(animeResults, config, language);

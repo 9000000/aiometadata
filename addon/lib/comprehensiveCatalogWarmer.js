@@ -386,7 +386,7 @@ class ComprehensiveCatalogWarmer {
       }
 
       case 'mal.genres': {
-        const mediaType = type_filter || 'series';
+        const mediaType = type_filter || null;
         const allAnimeGenres = await cacheWrapJikanApi('anime-genres', async () => {
           this.log('debug', 'Fetching anime genre list from Jikan...');
           return await jikan.getAnimeGenres();
@@ -396,7 +396,7 @@ class ComprehensiveCatalogWarmer {
           const selectedGenre = allAnimeGenres.find(g => g.name === genreNameToFetch);
           if (selectedGenre) {
             const genreId = selectedGenre.mal_id;
-            const animeResults = await cacheWrapJikanApi(`mal-genre-${genreId}-${mediaType}-${page}-${config.sfw}`, async () => {
+            const animeResults = await cacheWrapJikanApi(`mal-genre-${genreId}-${mediaType || 'all'}-${page}-${config.sfw}`, async () => {
               return await jikan.getAnimeByGenre(genreId, mediaType, page, config);
             }, null);
             metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, true);

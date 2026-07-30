@@ -309,7 +309,7 @@ async function getMalCatalog(
       }
     }
   } else if (catalogId === 'mal.genres') {
-    const mediaType = 'series';
+    const mediaType = null;
     const allAnimeGenres = await cacheWrapJikanApi('anime-genres', async () => {
       return await jikan.getAnimeGenres();
     }, null);
@@ -318,7 +318,7 @@ async function getMalCatalog(
       const selectedGenre = allAnimeGenres.find((g: any) => g.name === genreNameToFetch);
       if (selectedGenre) {
         const genreId = selectedGenre.mal_id;
-        animeResults = await cacheWrapJikanApi(`mal-genre-${genreId}-${mediaType}-${page}-${config.sfw}`, async () => {
+        animeResults = await cacheWrapJikanApi(`mal-genre-${genreId}-${mediaType || 'all'}-${page}-${config.sfw}`, async () => {
           return await jikan.getAnimeByGenre(genreId, mediaType, page, config);
         }, null);
       }

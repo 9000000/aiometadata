@@ -532,13 +532,8 @@ async function getAnimeByGenre(genreId: number | string, typeFilter: string | nu
   };
 
   if (typeFilter) {
-    let jikanType = typeFilter.toLowerCase();
-    if (jikanType === 'series') {
-      jikanType = 'tv';
-    }
-    if (genreId !== 12) {
-      queryParams.type = jikanType;
-    }
+    const jikanType = typeFilter.toLowerCase();
+    queryParams.type = jikanType === 'series' ? 'tv' : jikanType;
   }
 
   if (config.sfw) {

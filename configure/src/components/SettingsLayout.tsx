@@ -55,6 +55,8 @@ const LazyRatingPage = lazy(() => import('./RatingPage'));
 
 const SETTINGS_LAYOUT_NAVIGATE_EVENT = 'settings-layout:navigate';
 
+const SECTION_SCROLL_MARGIN = 24;
+
 /** Joined to SETTINGS_SECTIONS by id — the route model cannot hold components. */
 const SECTION_VIEWS: Record<SettingsSectionId, {
   Component: LazyExoticComponent<ComponentType>;
@@ -101,8 +103,8 @@ export function SettingsLayout() {
     }
   }, []);
 
-  // Scroll to top on section change, but not on the first render, so a deep
-  // link does not fight the browser's own scroll restoration.
+  // Scroll to the top of the section on change, but not on the first render, so
+  // a deep link does not fight the browser's own scroll restoration.
   useEffect(() => {
     if (isFirstRender.current) {
       isFirstRender.current = false;
@@ -111,7 +113,11 @@ export function SettingsLayout() {
     // An anchored route scrolls to its target instead; running both means
     // whichever lands second wins.
     if (parseRoute(window.location.hash).anchor) return;
-    window.scrollTo({ top: 0, behavior: 'auto' });
+    const main = mainRef.current;
+    const top = main
+      ? Math.max(0, main.getBoundingClientRect().top + window.scrollY - SECTION_SCROLL_MARGIN)
+      : 0;
+    window.scrollTo({ top, behavior: 'auto' });
   }, [section]);
 
   // Adapter for the existing event bus. PresetManager.tsx:1786 dispatches

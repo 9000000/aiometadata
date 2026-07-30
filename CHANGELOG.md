@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.9.1](https://github.com/cedya77/aiometadata/compare/v2.9.0...v2.9.1) (2026-07-30)
+
+
+### Bug Fixes
+
+* **settings:** land on the section instead of the page top ([83ec317](https://github.com/cedya77/aiometadata/commit/83ec31722c62d4c85c1796dd997273a73f1bd381))
+
 ## [2.9.0](https://github.com/cedya77/aiometadata/compare/v2.8.0...v2.9.0) (2026-07-30)
 
 

@@ -60,6 +60,15 @@ export function hashFor(id: SettingsSectionId, anchor?: string | null): string {
   return anchor ? `#${id}/${anchor}` : `#${id}`;
 }
 
+export const SETTINGS_LAYOUT_NAVIGATE_EVENT = 'settings-layout:navigate';
+
+/** Lets components outside the layout switch sections without threading a prop through. */
+export function navigateToSettingsSection(tab: SettingsSectionId): void {
+  window.dispatchEvent(
+    new CustomEvent(SETTINGS_LAYOUT_NAVIGATE_EVENT, { detail: { tab, scrollToTop: true } })
+  );
+}
+
 export function adjacentSections(id: SettingsSectionId): {
   prev: SettingsSection | null;
   next: SettingsSection | null;

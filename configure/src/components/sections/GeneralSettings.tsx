@@ -5,9 +5,20 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { WatchTrackingOptionsDialog } from '@/components/WatchTrackingOptionsDialog';
 import { useConfig } from '@/contexts/ConfigContext';
 import type { WatchTrackingService } from '@/contexts/config';
+import { navigateToSettingsSection } from '@/lib/settingsRoute';
 import {
   getWatchTrackingMediaTypeSummary,
   WATCH_TRACKING_SERVICE_DEFINITIONS,
@@ -268,6 +279,7 @@ export function GeneralSettings() {
   // Use our custom hook to get the current config and the function to update it
   const { config, setConfig } = useConfig();
   const [watchTrackingService, setWatchTrackingService] = useState<WatchTrackingService | null>(null);
+  const [connectPrompt, setConnectPrompt] = useState<WatchTrackingService | null>(null);
 
   // --- Handler Functions ---
   // These functions update the single state object, preserving the other values.
@@ -342,7 +354,15 @@ export function GeneralSettings() {
     switchId: string,
     checked: boolean,
     onCheckedChange: (checked: boolean) => void,
-  ) => (
+  ) => {
+    const handleToggle = (next: boolean) => {
+      onCheckedChange(next);
+      if (next && !WATCH_TRACKING_SERVICE_DEFINITIONS[service].hasCredential(config)) {
+        setConnectPrompt(service);
+      }
+    };
+
+    return (
     <div className="flex items-center gap-1 shrink-0">
       <Button
         type="button"
@@ -355,9 +375,10 @@ export function GeneralSettings() {
       >
         <Settings2 className="h-4 w-4 text-muted-foreground" />
       </Button>
-      <Switch id={switchId} checked={checked} onCheckedChange={onCheckedChange} />
+      <Switch id={switchId} checked={checked} onCheckedChange={handleToggle} />
     </div>
-  );
+    );
+  };
 
   return (
     <div className="space-y-8 animate-fade-in">
@@ -556,6 +577,36 @@ export function GeneralSettings() {
           if (!open) setWatchTrackingService(null);
         }}
       />
+
+      <AlertDialog open={connectPrompt !== null} onOpenChange={(open) => { if (!open) setConnectPrompt(null); }}>
+        <AlertDialogContent>
+          {connectPrompt && (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  Connect {WATCH_TRACKING_SERVICE_DEFINITIONS[connectPrompt].label} to start tracking
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {WATCH_TRACKING_SERVICE_DEFINITIONS[connectPrompt].connectHint} The setting is on and will
+                  start working as soon as the account is connected.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Later</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => {
+                    const { connectSection } = WATCH_TRACKING_SERVICE_DEFINITIONS[connectPrompt];
+                    setConnectPrompt(null);
+                    navigateToSettingsSection(connectSection);
+                  }}
+                >
+                  Take me there
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </>
+          )}
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

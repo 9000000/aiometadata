@@ -1,4 +1,5 @@
 import type { AppConfig, WatchTrackingService } from '@/contexts/config';
+import type { SettingsSectionId } from '@/lib/settingsRoute';
 
 export type WatchTrackingMediaType = 'movie' | 'series';
 type WatchTrackingMasterKey =
@@ -15,6 +16,8 @@ interface WatchTrackingServiceDefinition {
   hasCredential: (config: AppConfig) => boolean;
   movieLabel: string;
   seriesLabel: string;
+  connectSection: SettingsSectionId;
+  connectHint: string;
 }
 
 export const WATCH_TRACKING_SERVICES: WatchTrackingService[] = [
@@ -36,6 +39,8 @@ export const WATCH_TRACKING_SERVICE_DEFINITIONS: Record<
     hasCredential: (config) => !!config.apiKeys?.traktTokenId,
     movieLabel: 'Movies',
     seriesLabel: 'TV Shows',
+    connectSection: 'catalogs',
+    connectHint: 'Open the Catalogs tab and tap the Trakt icon to sign in.',
   },
   simkl: {
     label: 'Simkl',
@@ -43,6 +48,8 @@ export const WATCH_TRACKING_SERVICE_DEFINITIONS: Record<
     hasCredential: (config) => !!config.apiKeys?.simklTokenId,
     movieLabel: 'Movies',
     seriesLabel: 'TV Shows',
+    connectSection: 'catalogs',
+    connectHint: 'Open the Catalogs tab and tap the Simkl icon to sign in.',
   },
   anilist: {
     label: 'AniList',
@@ -50,6 +57,8 @@ export const WATCH_TRACKING_SERVICE_DEFINITIONS: Record<
     hasCredential: (config) => !!config.apiKeys?.anilistTokenId,
     movieLabel: 'Anime Movies',
     seriesLabel: 'Anime Series',
+    connectSection: 'catalogs',
+    connectHint: 'Open the Catalogs tab and tap the AniList icon to sign in.',
   },
   mal: {
     label: 'MyAnimeList',
@@ -57,6 +66,8 @@ export const WATCH_TRACKING_SERVICE_DEFINITIONS: Record<
     hasCredential: (config) => !!config.apiKeys?.malTokenId,
     movieLabel: 'Anime Movies',
     seriesLabel: 'Anime Series',
+    connectSection: 'catalogs',
+    connectHint: 'Open the Catalogs tab and tap the MyAnimeList icon to sign in.',
   },
   mdblist: {
     label: 'MDBList',
@@ -64,6 +75,8 @@ export const WATCH_TRACKING_SERVICE_DEFINITIONS: Record<
     hasCredential: (config) => !!config.apiKeys?.mdblist,
     movieLabel: 'Movies',
     seriesLabel: 'TV Shows',
+    connectSection: 'integrations',
+    connectHint: 'Add your MDBList API key in the Integrations tab.',
   },
   publicmetadb: {
     label: 'PublicMetaDB',
@@ -71,6 +84,8 @@ export const WATCH_TRACKING_SERVICE_DEFINITIONS: Record<
     hasCredential: (config) => !!config.apiKeys?.publicmetadb,
     movieLabel: 'Movies',
     seriesLabel: 'TV Shows',
+    connectSection: 'integrations',
+    connectHint: 'Add your PublicMetaDB API key in the Integrations tab.',
   },
 };
 

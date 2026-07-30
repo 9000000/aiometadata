@@ -192,6 +192,7 @@ const initialConfig: AppConfig = {
       'tvmaze.search': true,
       'trakt.search': true,
       'mdblist.search': true,
+      'imdb.suggestions.search': true,
       'people_search_movie': false,
       'people_search_series': false,
       'mal.search.movie': true,

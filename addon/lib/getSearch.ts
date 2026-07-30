@@ -16,7 +16,10 @@ const { performGeminiSearch, resolveGeminiModel }: any = require('../utils/gemin
 const { performOpenRouterSearch }: any = require('../utils/openrouter-service');
 import consola from 'consola';
 import { tmdbImageUrl, tmdbLogoSize, tmdbBackdropSize, TMDB_POSTER_SIZE } from '../utils/tmdbImageSize';
-const { cacheWrapMetaSmart }: any = require('./getCache');
+const { cacheWrapMetaSmart, cacheWrapGlobal }: any = require('./getCache');
+const { getSetting }: any = require('./settingsService');
+import { fetchImdbSuggestions, type ImdbSuggestion } from '../utils/imdbSuggestions.js';
+import { mapWithLimit } from '../utils/concurrency.js';
 const wikiMappings: any = require('./wiki-mapper');
 
 
@@ -732,6 +735,68 @@ async function performTmdbSearch(type: string, query: string, language: string, 
 
   logger.success(`Completed TMDB search for "${query}" in ${Date.now() - startTime}ms. Returning ${filteredResults.length} results.`);
   return filteredResults;
+}
+
+/**
+ * IMDb's own autocomplete. It tolerates typos that TMDB and TVDB reject outright,
+ * so it is used only to turn a loose query into IMDb ids; every id is then handed
+ * to the TMDB search path, which already resolves an IMDb id into a full meta.
+ */
+async function performImdbSuggestionSearch(type: string, query: string, language: string, config: any): Promise<any[]> {
+  const startTime = Date.now();
+  logger.info(`Starting IMDb suggestion search for type "${type}" with query: "${query}"`);
+
+  const timeoutMs = parseInt(getSetting('IMDB_SUGGESTION_TIMEOUT_MS'), 10) || 5000;
+  const ttl = parseInt(getSetting('IMDB_SUGGESTION_TTL_SECONDS'), 10);
+  const limit = parseInt(getSetting('IMDB_SUGGESTION_RESULT_LIMIT'), 10) || 12;
+
+  const cacheKey = `imdb-suggest:${type}:${query.toLowerCase().trim()}`;
+  let suggestions: ImdbSuggestion[];
+  try {
+    suggestions = ttl > 0
+      ? await cacheWrapGlobal(cacheKey, () => fetchImdbSuggestions(type, query, timeoutMs), ttl)
+      : await fetchImdbSuggestions(type, query, timeoutMs);
+  } catch (error: any) {
+    if (error?.name === 'ImdbSuggestionUnavailableError') {
+      logger.error(
+        `IMDb suggestions are not answering, which usually means the endpoint started challenging us. `
+        + `Pick another search provider in Search settings if this persists. ${error.message}`
+      );
+    } else {
+      logger.error(`IMDb suggestion lookup failed for "${query}": ${error.message}`);
+    }
+    return [];
+  }
+
+  if (!suggestions || suggestions.length === 0) {
+    logger.info(`No IMDb suggestions found for query: "${query}"`);
+    return [];
+  }
+
+  const limited = suggestions.slice(0, limit);
+  logger.debug(`IMDb returned ${suggestions.length} suggestions, hydrating ${limited.length}`);
+
+  const hydrated = await mapWithLimit(limited, (suggestion: ImdbSuggestion) =>
+    performTmdbSearch(type, suggestion.imdbId, language, config, false)
+      .catch((error: any) => {
+        logger.debug(`Could not hydrate ${suggestion.imdbId} (${suggestion.title}): ${error.message}`);
+        return [];
+      }));
+
+  // IMDb's rank ordering is the reason to use it, so results keep suggestion order.
+  const seen = new Set<string>();
+  const metas: any[] = [];
+  for (const group of hydrated) {
+    for (const meta of group) {
+      if (meta?.id && !seen.has(meta.id)) {
+        seen.add(meta.id);
+        metas.push(meta);
+      }
+    }
+  }
+
+  logger.info(`IMDb suggestion search completed in ${Date.now() - startTime}ms, returning ${metas.length} results`);
+  return metas;
 }
 
 async function performTmdbPeopleSearch(type: string, query: string, language: string, config: any, page: number = 1): Promise<any[]> {
@@ -2436,6 +2501,9 @@ async function getSearch(id: string, type: string, language: string, extra: any,
                 break;
               case 'mdblist.search':
                 metas = await performMdbListSearch(type, query, language, config);
+                break;
+              case 'imdb.suggestions.search':
+                metas = await performImdbSuggestionSearch(type, query, language, config);
                 break;
           }
         }

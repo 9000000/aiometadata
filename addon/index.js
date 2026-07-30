@@ -5415,10 +5415,19 @@ addon.get("/rating", (req, res) => {
   res.redirect(`/stremio/${user}/rating?${params.toString()}`);
 });
 
+const clientAssetsDir = path.join(clientDistDir, 'assets');
+function setClientDistCacheHeaders(res, filePath) {
+  if (filePath.startsWith(clientAssetsDir + path.sep)) {
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  } else if (path.basename(filePath) === 'index.html') {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  }
+}
+
 addon.use(favicon(path.join(publicDir, 'favicon.png')));
-addon.use('/configure', express.static(clientDistDir));
+addon.use('/configure', express.static(clientDistDir, { setHeaders: setClientDistCacheHeaders }));
 addon.use(express.static(publicDir));
-addon.use(express.static(clientDistDir));
+addon.use(express.static(clientDistDir, { setHeaders: setClientDistCacheHeaders }));
 
 // Dedicated Dashboard Page Route
 addon.get("/dashboard", (req, res) => {

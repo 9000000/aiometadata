@@ -6,6 +6,7 @@ import {
   Filter, Search, LayoutGrid, Settings2,
 } from "lucide-react";
 import { SectionSkeleton } from '@/components/settings/SectionSkeleton';
+import { SectionErrorBoundary } from '@/components/settings/SectionErrorBoundary';
 import { SECTION_SKELETONS, GENERIC_SKELETON } from '@/lib/sectionSkeletons';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useBreakpoint } from '@/hooks/use-breakpoint';
@@ -22,11 +23,6 @@ import {
 } from '@/lib/settingsRoute';
 import { cn } from '@/lib/utils';
 
-/**
- * Kept as thunks rather than inlined into `lazy()` so they can also be called
- * directly to warm a chunk on hover. Each key holds a literal `import()` so
- * Vite can still see and split every section at build time.
- */
 const SECTION_IMPORTS: Record<SettingsSectionId, () => Promise<{ default: ComponentType }>> = {
   'presets': () => import('./sections/PresetManager').then((m) => ({ default: m.PresetManager as ComponentType })),
   'general': () => import('./sections/GeneralSettings').then((m) => ({ default: m.GeneralSettings as ComponentType })),
@@ -39,11 +35,6 @@ const SECTION_IMPORTS: Record<SettingsSectionId, () => Promise<{ default: Compon
   'configuration': () => import('./ConfigurationManager').then((m) => ({ default: m.ConfigurationManager as ComponentType })),
 };
 
-/**
- * Fire-and-forget. The module registry dedupes repeat calls, so no guard set is
- * needed, and a rejection here is not actionable — the click path will surface
- * the same failure through Suspense.
- */
 function preloadSection(id: SettingsSectionId): void {
   void SECTION_IMPORTS[id]().catch(() => {});
 }
@@ -82,15 +73,9 @@ export function SettingsLayout() {
 
   const handleSearchSelect = (target: SettingsSectionId, targetAnchor: string | null) => {
     navigate(target, targetAnchor);
-    // Selecting the same result twice produces no hashchange, so a purely
-    // hash-driven effect would not re-fire and the second click would look
-    // broken. The nonce is what makes it repeatable.
     refocus();
   };
 
-  // Normalise a bare or unrecognised hash to what is actually rendered.
-  // replaceState, not pushState: a pushed entry would make the first back press
-  // a no-op.
   useEffect(() => {
     const route = parseRoute(window.location.hash);
     const canonical = hashFor(route.section, route.anchor);
@@ -103,15 +88,11 @@ export function SettingsLayout() {
     }
   }, []);
 
-  // Scroll to the top of the section on change, but not on the first render, so
-  // a deep link does not fight the browser's own scroll restoration.
   useEffect(() => {
     if (isFirstRender.current) {
       isFirstRender.current = false;
       return;
     }
-    // An anchored route scrolls to its target instead; running both means
-    // whichever lands second wins.
     if (parseRoute(window.location.hash).anchor) return;
     const main = mainRef.current;
     const top = main
@@ -120,8 +101,6 @@ export function SettingsLayout() {
     window.scrollTo({ top, behavior: 'auto' });
   }, [section]);
 
-  // Adapter for the existing event bus. PresetManager.tsx:1786 dispatches
-  // { tab, scrollToTop } and is deliberately not modified.
   useEffect(() => {
     const handleNavigate = (event: Event) => {
       const tab = (event as CustomEvent<{ tab?: string }>).detail?.tab;
@@ -138,21 +117,27 @@ export function SettingsLayout() {
   const isRatingMode = !!windowFlags?.RATING_MODE;
 
   if (isRatingMode) {
+    const skeleton = <SectionSkeleton spec={GENERIC_SKELETON} label="ratings" />;
     return (
       <div className="w-full">
-        <Suspense fallback={<SectionSkeleton spec={GENERIC_SKELETON} label="ratings" />}>
-          <LazyRatingPage />
-        </Suspense>
+        <SectionErrorBoundary label="Ratings" fallback={skeleton}>
+          <Suspense fallback={skeleton}>
+            <LazyRatingPage />
+          </Suspense>
+        </SectionErrorBoundary>
       </div>
     );
   }
 
   if (isDashboardMode) {
+    const skeleton = <SectionSkeleton spec={GENERIC_SKELETON} label="dashboard" />;
     return (
       <div className="w-full">
-        <Suspense fallback={<SectionSkeleton spec={GENERIC_SKELETON} label="dashboard" />}>
-          <LazyDashboard />
-        </Suspense>
+        <SectionErrorBoundary label="Dashboard" fallback={skeleton}>
+          <Suspense fallback={skeleton}>
+            <LazyDashboard />
+          </Suspense>
+        </SectionErrorBoundary>
       </div>
     );
   }
@@ -161,10 +146,14 @@ export function SettingsLayout() {
   const { Component } = SECTION_VIEWS[section];
   const { prev, next } = adjacentSections(section);
 
+  const sectionSkeleton = <SectionSkeleton spec={SECTION_SKELETONS[section]} label={current.title} />;
+
   const sectionContent = (
-    <Suspense fallback={<SectionSkeleton spec={SECTION_SKELETONS[section]} label={current.title} />}>
-      <Component />
-    </Suspense>
+    <SectionErrorBoundary key={section} label={current.title} fallback={sectionSkeleton}>
+      <Suspense fallback={sectionSkeleton}>
+        <Component />
+      </Suspense>
+    </SectionErrorBoundary>
   );
 
   if (isMobile) {
@@ -222,12 +211,6 @@ export function SettingsLayout() {
   return (
     <div className="w-full flex gap-10">
       <aside className="w-52 shrink-0">
-        {/*
-          z-50 is load-bearing, not decoration. `position: sticky` always creates a
-          stacking context, so the search results panel's own z-index is scoped
-          inside this nav and cannot escape it. <main> is a later sibling, so
-          without a z-index here its cards paint over the panel.
-        */}
         <nav className="sticky top-6 z-50 space-y-1 py-2" aria-label="Settings sections">
           <div className="mb-3">
             <SettingsSearch onSelect={handleSearchSelect} />

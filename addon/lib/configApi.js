@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { request, Agent, ProxyAgent } = require("undici");
 const database = require('./database');
 const buildInfo = require('./buildInfo');
+const { buildInstallUrl } = require('./installUrl');
 const KEY_VALIDATION_STATUS_SET = new Set(['valid', 'invalid', 'timeout', 'error']);
 const isKnownKeyValidationStatus = (status) =>
   typeof status === 'string' && KEY_VALIDATION_STATUS_SET.has(status);
@@ -528,12 +529,7 @@ class ConfigApi {
         // Don't fail the config save if cache invalidation fails
       }
       
-      const hostEnv = process.env.HOST_NAME;
-      const baseUrl = hostEnv
-        ? (hostEnv.startsWith('http') ? hostEnv : `https://${hostEnv}`)
-        : `https://${req.get('host')}`;
-
-      const installUrl = `${baseUrl}/stremio/${manifestIdentifier(userUUID)}/manifest.json`;
+      const installUrl = buildInstallUrl(process.env.HOST_NAME, req.get('host'), manifestIdentifier(userUUID));
 
       res.json({
         success: true,
@@ -590,6 +586,9 @@ class ConfigApi {
       res.json({
         success: true,
         userUUID,
+        // The frontend cannot rebuild this: manifestIdentifier may resolve to a
+        // user alias rather than the UUID, and the alias endpoints are admin-only.
+        installUrl: buildInstallUrl(process.env.HOST_NAME, req.get('host'), manifestIdentifier(userUUID)),
         config: sanitizedConfig
       });
     } catch (error) {
@@ -890,15 +889,10 @@ class ConfigApi {
         logger.error(`Error accessing Redis for cache invalidation:`, redisError);
       }
       
-      const hostEnv2 = process.env.HOST_NAME;
-      const baseUrl2 = hostEnv2
-        ? (hostEnv2.startsWith('http') ? hostEnv2 : `https://${hostEnv2}`)
-        : `https://${req.get('host')}`;
-      
       res.json({
         success: true,
         userUUID,
-        installUrl: `${baseUrl2}/stremio/${manifestIdentifier(userUUID)}/manifest.json`,
+        installUrl: buildInstallUrl(process.env.HOST_NAME, req.get('host'), manifestIdentifier(userUUID)),
         message: 'Configuration updated successfully'
       });
     } catch (error) {
@@ -932,14 +926,10 @@ class ConfigApi {
 
       const config = await database.getUserConfig(userUUID);
 
-      const hostEnv3 = process.env.HOST_NAME;
-      const baseUrl3 = hostEnv3
-        ? (hostEnv3.startsWith('http') ? hostEnv3 : `https://${hostEnv3}`)
-        : `https://${req.get('host')}`;
       res.json({
         success: true,
         userUUID,
-        installUrl: `${baseUrl3}/stremio/${manifestIdentifier(userUUID)}/manifest.json`,
+        installUrl: buildInstallUrl(process.env.HOST_NAME, req.get('host'), manifestIdentifier(userUUID)),
         message: 'Migration completed successfully'
       });
     } catch (error) {

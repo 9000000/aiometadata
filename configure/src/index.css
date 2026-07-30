@@ -2,10 +2,6 @@
 
 @config "../../tailwind.config.mts";
 
-/*
-  Tailwind CSS v4 changed the default border color to `currentcolor`.
-  Keep the previous app baseline until component-by-component cleanup.
-*/
 @layer base {
   *,
   ::after,
@@ -84,6 +80,23 @@
   animation: slide-up 0.2s ease-out;
 }
 
+@utility animate-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    hsl(var(--foreground) / 0.07) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: shimmer 1.9s linear infinite;
+}
+
+@utility skeleton-reveal {
+  opacity: 0;
+  animation: skeleton-reveal 0.18s ease-out 140ms forwards;
+}
+
 @layer utilities {
   @keyframes fade-in {
     from {
@@ -115,6 +128,14 @@
       transform: translateY(0);
     }
   }
+  @keyframes shimmer {
+    from { background-position: 150% 0; }
+    to { background-position: -50% 0; }
+  }
+  @keyframes skeleton-reveal {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
@@ -126,7 +147,6 @@
   }
 }
 
-/* --- FIX FOR TREMOR/RECHARTS GRAPH VISIBILITY --- */
 
 /* 1. Make the numbers on the X and Y axis light gray in dark mode */
 .dark .recharts-cartesian-axis-tick text {
@@ -149,4 +169,23 @@
 /* 4. Ensure the Tooltip text is readable */
 .dark .recharts-tooltip-item-list {
   color: #ffffff !important;
+}
+
+/*
+ * Search result arrival. Ring only — no layout properties, so nothing reflows
+ * around the highlighted row.
+ */
+[data-settings-highlight] {
+  border-radius: var(--radius);
+  box-shadow: 0 0 0 2px hsl(var(--ring));
+  transition: box-shadow 300ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-settings-highlight] {
+    transition: none;
+  }
+  .animate-shimmer {
+    background-image: none;
+  }
 }

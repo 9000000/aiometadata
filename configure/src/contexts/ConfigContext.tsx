@@ -9,6 +9,7 @@ interface AuthState {
   authenticated: boolean;
   userUUID: string | null;
   password: string | null; // ephemeral, in-memory only
+  installUrl?: string | null;
 }
 
 interface ConfigContextType {

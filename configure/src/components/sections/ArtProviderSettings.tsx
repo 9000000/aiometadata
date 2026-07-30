@@ -1,75 +1,42 @@
-import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useConfig } from '@/contexts/ConfigContext';
-import { AlertCircle, RotateCcw } from 'lucide-react';
+import type { AppConfig } from '@/contexts/ConfigContext';
+import { RotateCcw } from 'lucide-react';
+import {
+  ART_TYPES,
+  CONTENT_TYPES,
+  getOptions,
+  readValue,
+  writeValue,
+  type ArtType,
+  type ContentType,
+} from '@/lib/artProviders';
+import { Callout } from '@/components/settings/Callout';
+import { ProviderSelect } from '@/components/settings/ProviderSelect';
+import { SettingRow } from '@/components/settings/SettingRow';
+import { NoticeDisclosure } from '@/components/settings/NoticeDisclosure';
+import { animeNotices } from '@/lib/animeNotices';
 
-const movieArtProviders = [
-  { value: 'tmdb', label: 'The Movie Database (TMDB)' },
-  { value: 'tvdb', label: 'TheTVDB' },
-  { value: 'fanart', label: 'Fanart.tv' },
-  { value: 'imdb', label: 'Internet Movie Database (IMDB/Cinemeta)' },
-];
+const CONTENT_LABELS: Record<ContentType, string> = {
+  movie: 'Movies',
+  series: 'Series',
+  anime: 'Anime',
+};
 
-const seriesArtProviders = [
-  { value: 'tmdb', label: 'The Movie Database (TMDB)' },
-  { value: 'tvdb', label: 'TheTVDB' },
-  { value: 'fanart', label: 'Fanart.tv' },
-  { value: 'imdb', label: 'Internet Movie Database (IMDB/Cinemeta)' },
-];
-
-const animeArtProviders = [
-  { value: 'mal', label: 'MyAnimeList' },
-  { value: 'anilist', label: 'AniList' },
-  { value: 'kitsu', label: 'Kitsu' },
-  { value: 'tvdb', label: 'TheTVDB' },
-  { value: 'tmdb', label: 'The Movie Database (TMDB)' },
-  { value: 'fanart', label: 'Fanart.tv' },
-  { value: 'imdb', label: 'Internet Movie Database (IMDB/Cinemeta)' },
-];
-
-const animeBackgroundArtProviders = [
-  { value: 'mal', label: 'MyAnimeList' },
-  { value: 'anilist', label: 'AniList' },
-  { value: 'kitsu', label: 'Kitsu' },
-  { value: 'tvdb', label: 'TheTVDB' },
-  { value: 'tmdb', label: 'The Movie Database (TMDB)' },
-  { value: 'fanart', label: 'Fanart.tv' },
-  { value: 'imdb', label: 'Internet Movie Database (IMDB/Cinemeta) (Recommended)' },
-];
-
-const animeLogoArtProviders = [
-  { value: 'imdb', label: 'Internet Movie Database (IMDB/Cinemeta) (Recommended)' },
-  { value: 'tvdb', label: 'TheTVDB' },
-  { value: 'tmdb', label: 'The Movie Database (TMDB)' },
-  { value: 'fanart', label: 'Fanart.tv' },
-];
+const ART_LABELS: Record<ArtType, string> = {
+  poster: 'Poster',
+  background: 'Background',
+  logo: 'Logo',
+};
 
 export function ArtProviderSettings() {
   const { config, setConfig, hasBuiltInTvdb } = useConfig();
   const hasTvdbKey = !!config.apiKeys?.tvdb?.trim() || hasBuiltInTvdb;
-
-  const handleArtProviderChange = (
-    contentType: 'movie' | 'series' | 'anime',
-    artType: 'poster' | 'background' | 'logo',
-    value: string
-  ) => {
-    setConfig(prev => ({ 
-      ...prev, 
-      artProviders: { 
-        ...prev.artProviders,
-        [contentType]: {
-          ...(typeof prev.artProviders?.[contentType] === 'object' 
-            ? prev.artProviders[contentType] 
-            : { poster: 'meta', background: 'meta', logo: 'meta' }),
-          [artType]: value
-        }
-      } 
-    }));
-  };
 
   const handleEnglishArtOnlyChange = (value: boolean) => {
     setConfig(prev => ({
@@ -84,44 +51,20 @@ export function ArtProviderSettings() {
   const isFanartSelected = () => {
     const artProviders = config.artProviders;
     if (!artProviders) return false;
-    
-    return Object.values(artProviders).some(contentType => 
-      contentType && typeof contentType === 'object' && 
+
+    return Object.values(artProviders).some(contentType =>
+      contentType && typeof contentType === 'object' &&
       Object.values(contentType).includes('fanart')
     );
   };
 
   const hasFanartKey = config.apiKeys.fanart && config.apiKeys.fanart.trim() !== '';
 
-  const getArtProviders = (contentType: 'movie' | 'series' | 'anime', artType: 'poster' | 'background' | 'logo') => {
-    switch (contentType) {
-      case 'movie':
-        return movieArtProviders;
-      case 'series':
-        return seriesArtProviders;
-      case 'anime':
-        if (artType === 'background') {
-          return animeBackgroundArtProviders;
-        } else if (artType === 'logo') {
-          return animeLogoArtProviders;
-        } else {
-          return animeArtProviders;
-        }
-      default:
-        return [];
-    }
-  };
-
-  const getCurrentValue = (contentType: 'movie' | 'series' | 'anime', artType: 'poster' | 'background' | 'logo') => {
-    const contentTypeConfig = config.artProviders?.[contentType];
-    if (typeof contentTypeConfig === 'string') {
-      // Legacy format - return the single value for all art types
-      return contentTypeConfig;
-    }
-    if (contentTypeConfig && typeof contentTypeConfig === 'object') {
-      return contentTypeConfig[artType] || 'meta';
-    }
-    return 'meta';
+  const setArt = (contentType: ContentType, artType: ArtType, value: string) => {
+    setConfig(prev => ({
+      ...prev,
+      artProviders: writeValue(prev.artProviders, contentType, artType, value) as AppConfig['artProviders'],
+    }));
   };
 
   return (
@@ -131,335 +74,145 @@ export function ArtProviderSettings() {
         <p className="text-muted-foreground mt-1">
           Choose your preferred sources for different types of artwork. You can select different providers for posters, backgrounds, and logos.
         </p>
-        
+
         {/* Search Notice */}
-        <div className="flex items-start gap-2 mt-4 p-3 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg">
-          <AlertCircle className="h-5 w-5 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
-          <p className="text-sm text-blue-800 dark:text-blue-200">
-            <strong>Note:</strong> Art provider settings apply to catalogs and detail pages, but not to search results. Search uses the selected search engine's poster sources for faster performance. <strong>Art URL Overrides (configured below) take priority over art provider settings.</strong>
-          </p>
-        </div>
-        
-        {/* English Art Only Toggle */}
-        <Card className="mt-6">
-          <CardContent className="pt-6">
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label htmlFor="english-art-only" className="text-base font-medium">
-                  English Art Only
-                </Label>
-                <p className="text-sm text-muted-foreground">
-                  Force all artwork to be in English language, regardless of your language setting.
-                </p>
-              </div>
+        <Callout variant="info" className="mt-4">
+          <strong>Note:</strong> Art provider settings apply to catalogs and detail pages, but not to search results. Search uses the selected search engine's poster sources for faster performance. <strong>Art URL Overrides (configured below) take priority over art provider settings.</strong>
+        </Callout>
+      </div>
+
+      {/* Global toggles */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Global</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <SettingRow
+            htmlFor="english-art-only"
+            label="English Art Only"
+            description="Force all artwork to be in English language, regardless of your language setting."
+            control={
               <Switch
                 id="english-art-only"
                 checked={config.artProviders?.englishArtOnly || false}
                 onCheckedChange={handleEnglishArtOnlyChange}
               />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label htmlFor="original-lang-fallback" className="text-base font-medium">
-                  Original Language Poster Fallback
-                </Label>
-                <p className="text-sm text-muted-foreground">
-                  Skip region-mismatched posters in your display language and fall back to English or the title's original language instead.
-                </p>
-              </div>
+            }
+          />
+          <SettingRow
+            htmlFor="original-lang-fallback"
+            label="Original Language Poster Fallback"
+            description="Skip region-mismatched posters in your display language and fall back to English or the title's original language instead."
+            control={
               <Switch
                 id="original-lang-fallback"
                 checked={!!config.artProviders?.originalLangFallback}
                 onCheckedChange={(value) => setConfig(prev => ({ ...prev, artProviders: { ...prev.artProviders, originalLangFallback: value } }))}
               />
-            </div>
-          </CardContent>
-        </Card>
+            }
+          />
+        </CardContent>
+      </Card>
 
-        {isFanartSelected() && !hasFanartKey && (
-          <div className="p-4 border border-amber-400/30 bg-amber-900/20 rounded-lg mt-4">
-            <div className="flex items-center gap-2 text-amber-400">
-              <AlertCircle className="h-4 w-4" />
-              <p className="text-sm">
-                <strong>Fanart.tv API Key Required:</strong> You've selected Fanart.tv as an art provider. 
-                Please add your Fanart.tv API key in the <strong>Integrations</strong> tab to use this service.
-              </p>
-            </div>
+      {isFanartSelected() && !hasFanartKey && (
+        <Callout variant="warn">
+          <strong>Fanart.tv API Key Required:</strong> You've selected Fanart.tv as an art provider.
+          Please add your Fanart.tv API key in the <strong>Integrations</strong> tab to use this service.
+        </Callout>
+      )}
+
+      {/* Above the matrix because these notices qualify its Anime rows. */}
+      <NoticeDisclosure notices={animeNotices(config)} />
+
+      {/* The matrix */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Art Sources</CardTitle>
+          <CardDescription>
+            Pick a source for each combination of content type and artwork. "Meta Provider (default)" follows whatever you chose on the Meta Providers page. The Anime rows apply only to anime using MAL, AniList, Kitsu or AniDB IDs — anime with IMDb IDs uses the Movie or Series row instead.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {/* Desktop: a real table so row and column headers are announced */}
+          <Table className="hidden md:table">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[120px]">Content</TableHead>
+                {ART_TYPES.map(artType => (
+                  <TableHead key={artType}>{ART_LABELS[artType]}</TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {CONTENT_TYPES.map(contentType => (
+                <TableRow key={contentType}>
+                  <TableHead scope="row" className="font-medium text-foreground">
+                    {CONTENT_LABELS[contentType]}
+                  </TableHead>
+                  {ART_TYPES.map(artType => (
+                    <TableCell key={artType} data-setting={`art-${contentType}-${artType}`}>
+                      <ProviderSelect
+                        id={`art-${contentType}-${artType}`}
+                        ariaLabel={`${CONTENT_LABELS[contentType]} ${ART_LABELS[artType].toLowerCase()} provider`}
+                        value={readValue(config.artProviders, contentType, artType)}
+                        onValueChange={(val) => setArt(contentType, artType, val)}
+                        options={getOptions(contentType, artType)}
+                        includeMetaDefault
+                        hasTvdbKey={hasTvdbKey}
+                      />
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+
+          {/* Mobile: three labelled groups, no horizontal scrolling */}
+          <div className="md:hidden space-y-6">
+            {CONTENT_TYPES.map(contentType => (
+              <div key={contentType}>
+                <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                  {CONTENT_LABELS[contentType]}
+                </h4>
+                {/*
+                  Not SettingRow here: its 12rem label floor plus a
+                  content-sized control column makes the wrap decision depend on
+                  how long the *selected* provider's name is, so choosing
+                  "TheTVDB" pulled the select up beside its label while the rows
+                  still on "Meta Provider (default)" stayed below theirs. These
+                  labels are one short word with no description, so the floor
+                  buys nothing and the control can keep the right-hand side at
+                  every width. `flex-1 min-w-0` is what makes it stable: the
+                  select takes whatever the label leaves rather than measuring
+                  its own text, and the trigger's [&>span]:line-clamp-1 handles
+                  the longest option on a very narrow phone.
+                */}
+                {ART_TYPES.map(artType => (
+                  <div
+                    key={artType}
+                    data-setting={`art-${contentType}-${artType}`}
+                    className="flex items-center justify-between gap-3 py-2"
+                  >
+                    <Label htmlFor={`art-${contentType}-${artType}-m`} className="shrink-0 text-sm font-medium">
+                      {ART_LABELS[artType]}
+                    </Label>
+                    <ProviderSelect
+                      id={`art-${contentType}-${artType}-m`}
+                      ariaLabel={`${CONTENT_LABELS[contentType]} ${ART_LABELS[artType].toLowerCase()} provider`}
+                      value={readValue(config.artProviders, contentType, artType)}
+                      onValueChange={(val) => setArt(contentType, artType, val)}
+                      options={getOptions(contentType, artType)}
+                      includeMetaDefault
+                      hasTvdbKey={hasTvdbKey}
+                      className="w-auto min-w-0 flex-1 max-w-[15rem]"
+                    />
+                  </div>
+                ))}
+              </div>
+            ))}
           </div>
-        )}
-      </div>
-
-      {/* Movies Art Providers */}
-      <div>
-        <h3 className="text-xl font-semibold mb-4">Movies</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Poster Provider</CardTitle>
-              <CardDescription>Source for movie posters.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Select 
-                value={getCurrentValue('movie', 'poster')} 
-                onValueChange={(val) => handleArtProviderChange('movie', 'poster', val)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="meta">Meta Provider (default)</SelectItem>
-                  {movieArtProviders.map(p => (
-                    <SelectItem key={p.value} value={p.value} disabled={p.value === 'tvdb' && !hasTvdbKey}>
-                      {p.label}{p.value === 'tvdb' && !hasTvdbKey && ' (API key required)'}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Background Provider</CardTitle>
-              <CardDescription>Source for movie backgrounds.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Select 
-                value={getCurrentValue('movie', 'background')} 
-                onValueChange={(val) => handleArtProviderChange('movie', 'background', val)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="meta">Meta Provider (default)</SelectItem>
-                  {movieArtProviders.map(p => (
-                    <SelectItem key={p.value} value={p.value} disabled={p.value === 'tvdb' && !hasTvdbKey}>
-                      {p.label}{p.value === 'tvdb' && !hasTvdbKey && ' (API key required)'}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Logo Provider</CardTitle>
-              <CardDescription>Source for movie logos.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Select 
-                value={getCurrentValue('movie', 'logo')} 
-                onValueChange={(val) => handleArtProviderChange('movie', 'logo', val)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="meta">Meta Provider (default)</SelectItem>
-                  {movieArtProviders.map(p => (
-                    <SelectItem key={p.value} value={p.value} disabled={p.value === 'tvdb' && !hasTvdbKey}>
-                      {p.label}{p.value === 'tvdb' && !hasTvdbKey && ' (API key required)'}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-
-      {/* Series Art Providers */}
-      <div>
-        <h3 className="text-xl font-semibold mb-4">Series</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Poster Provider</CardTitle>
-              <CardDescription>Source for series posters.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Select 
-                value={getCurrentValue('series', 'poster')} 
-                onValueChange={(val) => handleArtProviderChange('series', 'poster', val)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="meta">Meta Provider (default)</SelectItem>
-                  {seriesArtProviders.map(p => (
-                    <SelectItem key={p.value} value={p.value} disabled={p.value === 'tvdb' && !hasTvdbKey}>
-                      {p.label}{p.value === 'tvdb' && !hasTvdbKey && ' (API key required)'}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Background Provider</CardTitle>
-              <CardDescription>Source for series backgrounds.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Select 
-                value={getCurrentValue('series', 'background')} 
-                onValueChange={(val) => handleArtProviderChange('series', 'background', val)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="meta">Meta Provider (default)</SelectItem>
-                  {seriesArtProviders.map(p => (
-                    <SelectItem key={p.value} value={p.value} disabled={p.value === 'tvdb' && !hasTvdbKey}>
-                      {p.label}{p.value === 'tvdb' && !hasTvdbKey && ' (API key required)'}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Logo Provider</CardTitle>
-              <CardDescription>Source for series logos.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Select 
-                value={getCurrentValue('series', 'logo')} 
-                onValueChange={(val) => handleArtProviderChange('series', 'logo', val)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="meta">Meta Provider (default)</SelectItem>
-                  {seriesArtProviders.map(p => (
-                    <SelectItem key={p.value} value={p.value} disabled={p.value === 'tvdb' && !hasTvdbKey}>
-                      {p.label}{p.value === 'tvdb' && !hasTvdbKey && ' (API key required)'}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-
-      {/* Anime Art Providers */}
-      <div>
-        <h3 className="text-xl font-semibold mb-4">Anime</h3>
-        
-        {/* Warning when IMDb settings are affecting anime art providers */}
-        {(config.mal?.useImdbIdForCatalogAndSearch || config.providers?.forceAnimeForDetectedImdb) && (
-          <div className="flex items-start gap-2 mb-4 p-4 bg-amber-50 dark:bg-amber-950 border-2 border-amber-400 dark:border-amber-600 rounded-lg">
-            <AlertCircle className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
-            <div className="text-sm text-amber-800 dark:text-amber-200">
-              <p className="font-semibold mb-1">⚠️ Important: Anime Art Providers Limited</p>
-              <p>
-                {config.mal?.useImdbIdForCatalogAndSearch && config.providers?.forceAnimeForDetectedImdb 
-                  ? 'Both "Use IMDb ID for Catalog/Search" and "Anime Detection Override" are enabled. Most anime will use the Movie/Series art providers instead of these Anime art providers.'
-                  : config.mal?.useImdbIdForCatalogAndSearch
-                  ? '"Use IMDb ID for Catalog/Search" is enabled in MAL settings. Anime in catalogs/search will use the Movie/Series art providers instead of these Anime art providers.'
-                  : '"Anime Detection Override" is enabled in Providers settings. Detected anime with IMDb IDs will use the Movie/Series art providers instead of these Anime art providers.'}
-              </p>
-            </div>
-          </div>
-        )}
-        
-        <div className="flex items-start gap-2 mb-4 p-3 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg">
-          <AlertCircle className="h-5 w-5 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
-          <p className="text-sm text-blue-800 dark:text-blue-200">
-            These settings apply only to anime using MAL, AniList, Kitsu, or AniDB as metadata ID. Anime using IMDB IDs will use the Movie or Series art providers instead depending on the type.
-          </p>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Poster Provider</CardTitle>
-              <CardDescription>Source for anime posters.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Select 
-                value={getCurrentValue('anime', 'poster')} 
-                onValueChange={(val) => handleArtProviderChange('anime', 'poster', val)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="meta">Meta Provider (default)</SelectItem>
-                  {getArtProviders('anime', 'poster').map(p => (
-                    <SelectItem key={p.value} value={p.value} disabled={p.value === 'tvdb' && !hasTvdbKey}>
-                      {p.label}{p.value === 'tvdb' && !hasTvdbKey && ' (API key required)'}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Background Provider</CardTitle>
-              <CardDescription>Source for anime backgrounds.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Select 
-                value={getCurrentValue('anime', 'background')} 
-                onValueChange={(val) => handleArtProviderChange('anime', 'background', val)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="meta">Meta Provider (default)</SelectItem>
-                  {getArtProviders('anime', 'background').map(p => (
-                    <SelectItem key={p.value} value={p.value} disabled={p.value === 'tvdb' && !hasTvdbKey}>
-                      {p.label}{p.value === 'tvdb' && !hasTvdbKey && ' (API key required)'}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Logo Provider</CardTitle>
-              <CardDescription>Source for anime logos.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Select 
-                value={getCurrentValue('anime', 'logo')} 
-                onValueChange={(val) => handleArtProviderChange('anime', 'logo', val)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="meta">Meta Provider (default)</SelectItem>
-                  {getArtProviders('anime', 'logo').map(p => (
-                    <SelectItem key={p.value} value={p.value} disabled={p.value === 'tvdb' && !hasTvdbKey}>
-                      {p.label}{p.value === 'tvdb' && !hasTvdbKey && ' (API key required)'}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Art URL Overrides */}
       <div>
@@ -468,17 +221,16 @@ export function ArtProviderSettings() {
           Override artwork with custom URL patterns. Select a rating poster provider for pre-filled defaults, or use fully custom patterns.
         </p>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div className="mr-4">
-                  <Label htmlFor="posterRatingProvider" className="font-medium">Rating Poster Provider</Label>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Pre-fills poster patterns. Choose Custom for manual patterns.
-                  </p>
-                </div>
-                <Select
+        <Card className="mb-6">
+          <CardContent className="pt-6">
+            <SettingRow
+              htmlFor="posterRatingProvider"
+              label="Rating Poster Provider"
+              description="Pre-fills poster patterns. Choose Custom for manual patterns."
+              control={
+                <ProviderSelect
+                  id="posterRatingProvider"
+                  ariaLabel="Rating poster provider"
                   value={config.posterRatingProvider || 'none'}
                   onValueChange={(value) => {
                     const provider = value as 'none' | 'rpdb' | 'top' | 'custom';
@@ -512,39 +264,31 @@ export function ArtProviderSettings() {
                       }));
                     }
                   }}
-                >
-                  <SelectTrigger id="posterRatingProvider" className="w-[220px] shrink-0">
-                    <SelectValue placeholder="Select provider" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">None (no rating posters)</SelectItem>
-                    <SelectItem value="rpdb">RatingPosterDB (RPDB)</SelectItem>
-                    <SelectItem value="top">TOP Posters API</SelectItem>
-                    <SelectItem value="custom">Custom Art URLs</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div className="mr-4">
-                  <Label htmlFor="usePosterProxy" className="font-medium">Proxy Rating & Custom Art</Label>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Route requests through addon with fallback to original art.
-                  </p>
-                </div>
+                  options={[
+                    { value: 'none', label: 'None (no rating posters)' },
+                    { value: 'rpdb', label: 'RatingPosterDB (RPDB)' },
+                    { value: 'top', label: 'TOP Posters API' },
+                    { value: 'custom', label: 'Custom Art URLs' },
+                  ]}
+                  hasTvdbKey={hasTvdbKey}
+                  className="w-full sm:w-[220px]"
+                />
+              }
+            />
+            <SettingRow
+              htmlFor="usePosterProxy"
+              label="Proxy Rating & Custom Art"
+              description="Route requests through addon with fallback to original art."
+              control={
                 <Switch
                   id="usePosterProxy"
                   checked={!!config.usePosterProxy}
                   onCheckedChange={(checked) => setConfig(prev => ({ ...prev, usePosterProxy: checked }))}
                 />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+              }
+            />
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader className="pb-3">
@@ -559,7 +303,7 @@ export function ArtProviderSettings() {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-sm font-medium">Poster URL Pattern</label>
+                  <Label htmlFor="custom-poster-pattern" className="text-sm font-medium">Poster URL Pattern</Label>
                   {(config.posterRatingProvider === 'rpdb' || config.posterRatingProvider === 'top') && (
                     <Button
                       variant="ghost"
@@ -578,22 +322,25 @@ export function ArtProviderSettings() {
                   )}
                 </div>
                 <Input
+                  id="custom-poster-pattern"
                   placeholder="https://example.com/poster/{imdb_id}.jpg"
                   value={config.customPosterUrlPattern || ''}
                   onChange={(e) => setConfig(prev => ({ ...prev, customPosterUrlPattern: e.target.value }))}
                 />
               </div>
               <div>
-                <label className="text-sm font-medium mb-1 block">Background URL Pattern</label>
+                <Label htmlFor="custom-background-pattern" className="text-sm font-medium mb-1 block">Background URL Pattern</Label>
                 <Input
+                  id="custom-background-pattern"
                   placeholder="https://example.com/background/{tmdb_id}.jpg"
                   value={config.customBackgroundUrlPattern || ''}
                   onChange={(e) => setConfig(prev => ({ ...prev, customBackgroundUrlPattern: e.target.value }))}
                 />
               </div>
               <div>
-                <label className="text-sm font-medium mb-1 block">Logo URL Pattern</label>
+                <Label htmlFor="custom-logo-pattern" className="text-sm font-medium mb-1 block">Logo URL Pattern</Label>
                 <Input
+                  id="custom-logo-pattern"
                   placeholder="https://example.com/logo/{tmdb_id}.png"
                   value={config.customLogoUrlPattern || ''}
                   onChange={(e) => setConfig(prev => ({ ...prev, customLogoUrlPattern: e.target.value }))}
@@ -601,7 +348,7 @@ export function ArtProviderSettings() {
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-sm font-medium">Episode Thumbnail URL Pattern</label>
+                  <Label htmlFor="custom-thumbnail-pattern" className="text-sm font-medium">Episode Thumbnail URL Pattern</Label>
                   {(config.posterRatingProvider === 'top') && (
                     <Button
                       variant="ghost"
@@ -618,6 +365,7 @@ export function ArtProviderSettings() {
                   )}
                 </div>
                 <Input
+                  id="custom-thumbnail-pattern"
                   placeholder="https://example.com/thumbnail/{imdb_id}/S{season}E{episode}.jpg"
                   value={config.customThumbnailUrlPattern || ''}
                   onChange={(e) => setConfig(prev => ({ ...prev, customThumbnailUrlPattern: e.target.value }))}
@@ -625,28 +373,30 @@ export function ArtProviderSettings() {
               </div>
             </div>
 
-            <div className="text-xs text-muted-foreground bg-muted p-3 rounded-lg space-y-1">
-              <p>
-                <strong>ID placeholders:</strong> <code>{'{id}'}</code> <code>{'{imdb_id}'}</code> <code>{'{tmdb_id}'}</code> <code>{'{tvdb_id}'}</code> <code>{'{mal_id}'}</code> <code>{'{kitsu_id}'}</code> <code>{'{anilist_id}'}</code> <code>{'{anidb_id}'}</code> <code>{'{type}'}</code>
-              </p>
-              <p>
-                <strong>API keys:</strong> <code>{'{rpdb_key}'}</code> <code>{'{top_key}'}</code> <code>{'{tmdb_key}'}</code> <code>{'{mdblist_key}'}</code> <code>{'{fanart_key}'}</code> <code>{'{user_agent}'}</code>
-              </p>
-              <p>
-                <strong>Language:</strong> <code>{'{language}'}</code> (e.g. fr-FR) <code>{'{language_short}'}</code> (e.g. fr) &nbsp;
-                <strong>Thumbnail:</strong> <code>{'{season}'}</code> <code>{'{episode}'}</code> <code>{'{blur}'}</code> <code>{'{thumbnail}'}</code>
-              </p>
-              <p>
-                <strong>Optional IDs:</strong> add <code>?</code> before the closing brace (e.g. <code>{'{tvdb_id?}'}</code>) to blank a
-                placeholder instead of discarding the URL when that ID is unavailable. Useful for patterns carrying several IDs where only
-                one needs to be present.
-              </p>
-              <p>RPDB/TOP patterns automatically fall back to alternative IDs when the primary one is unavailable.</p>
-            </div>
+            <details className="rounded-lg bg-muted p-3">
+              <summary className="text-xs font-medium cursor-pointer">Available placeholders</summary>
+              <div className="text-xs text-muted-foreground space-y-1 mt-2">
+                <p>
+                  <strong>ID placeholders:</strong> <code>{'{id}'}</code> <code>{'{imdb_id}'}</code> <code>{'{tmdb_id}'}</code> <code>{'{tvdb_id}'}</code> <code>{'{mal_id}'}</code> <code>{'{kitsu_id}'}</code> <code>{'{anilist_id}'}</code> <code>{'{anidb_id}'}</code> <code>{'{type}'}</code>
+                </p>
+                <p>
+                  <strong>API keys:</strong> <code>{'{rpdb_key}'}</code> <code>{'{top_key}'}</code> <code>{'{tmdb_key}'}</code> <code>{'{mdblist_key}'}</code> <code>{'{fanart_key}'}</code> <code>{'{user_agent}'}</code>
+                </p>
+                <p>
+                  <strong>Language:</strong> <code>{'{language}'}</code> (e.g. fr-FR) <code>{'{language_short}'}</code> (e.g. fr) &nbsp;
+                  <strong>Thumbnail:</strong> <code>{'{season}'}</code> <code>{'{episode}'}</code> <code>{'{blur}'}</code> <code>{'{thumbnail}'}</code>
+                </p>
+                <p>
+                  <strong>Optional IDs:</strong> add <code>?</code> before the closing brace (e.g. <code>{'{tvdb_id?}'}</code>) to blank a
+                  placeholder instead of discarding the URL when that ID is unavailable. Useful for patterns carrying several IDs where only
+                  one needs to be present.
+                </p>
+                <p>RPDB/TOP patterns automatically fall back to alternative IDs when the primary one is unavailable.</p>
+              </div>
+            </details>
           </CardContent>
         </Card>
       </div>
-
     </div>
   );
 }

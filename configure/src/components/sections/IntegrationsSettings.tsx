@@ -1,9 +1,9 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Eye, EyeOff, CheckCircle, XCircle, Loader2, LogIn, LogOut, AlertCircle } from 'lucide-react';
+import { Eye, EyeOff, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import { useConfig, AppConfig } from '@/contexts/ConfigContext';
 import { toast } from 'sonner';
 
@@ -104,121 +104,16 @@ const ApiKeyInput = ({
 };
 
 export function IntegrationsSettings() {
-  const { config, setConfig, sessionId, setSessionId, auth } = useConfig();
+  const { config } = useConfig();
   const [validationStatus, setValidationStatus] = useState<Record<string, 'idle' | 'loading' | 'success' | 'error'>>({});
   const [isTesting, setIsTesting] = useState(false);
   const [showAllKeys, setShowAllKeys] = useState(false);
-  const [tmdbAuthLoading, setTmdbAuthLoading] = useState(false);
-  const [tmdbAuthError, setTmdbAuthError] = useState('');
-  
   // Track successfully validated keys to prevent re-testing unchanged keys
   const lastValidatedKeys = useRef<Record<string, string>>({});
   // Track known-bad keys (definitive invalid keys, excluding temporary failures).
   const lastKnownBadKeys = useRef<Record<string, string>>({});
   const [hasChangedKeys, setHasChangedKeys] = useState(true);
   
-  // Track if we've already processed a request token to prevent infinite loops
-  const processedTokenRef = useRef<string | null>(null);
-
-  // Handle TMDB authentication callback - create session using user's API key
-  const handleRequestToken = useCallback(async (requestToken: string) => {
-    // Prevent processing the same token multiple times
-    if (processedTokenRef.current === requestToken) {
-      return;
-    }
-    
-    processedTokenRef.current = requestToken;
-    setTmdbAuthLoading(true);
-    setTmdbAuthError('');
-    
-    const tmdbApiKey = config.apiKeys?.tmdb;
-    
-    if (!tmdbApiKey) {
-      setTmdbAuthError("TMDB API key is required");
-      toast.error("Please enter your TMDB API key first");
-      setTmdbAuthLoading(false);
-      return;
-    }
-    
-    try {
-      const sessionResponse = await fetch(
-        `https://api.themoviedb.org/3/authentication/session/new?api_key=${tmdbApiKey}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ request_token: requestToken })
-        }
-      );
-      
-      if (!sessionResponse.ok) {
-        const errorData = await sessionResponse.json().catch(() => ({}));
-        throw new Error(errorData.status_message || 'Failed to create session');
-      }
-      
-      const sessionData = await sessionResponse.json();
-      
-      if (!sessionData.success) {
-        throw new Error('Failed to create session with TMDB');
-      }
-      
-      const newSessionId = sessionData.session_id;
-      setSessionId(newSessionId);
-      
-      // Auto-save config if user is authenticated
-      if (auth.authenticated && auth.userUUID && auth.password) {
-        try {
-          const configToSave = {
-            ...config,
-            sessionId: newSessionId,
-            apiKeys: {
-              ...config.apiKeys,
-              customDescriptionBlurb: undefined
-            }
-          };
-          
-          const saveResponse = await fetch(`/api/config/update/${encodeURIComponent(auth.userUUID)}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ config: configToSave, password: auth.password })
-          });
-          
-          if (saveResponse.ok) {
-            toast.success("TMDB session saved successfully!");
-          } else {
-            toast.warning("Session created but save failed. Please save your config manually.");
-          }
-        } catch (saveError) {
-          console.error('Auto-save error:', saveError);
-          toast.warning("Session created but save failed. Please save your config manually.");
-        }
-      } else {
-        toast.info("Session created. Please save your configuration to persist it.");
-      }
-      
-      window.history.replaceState({}, '', window.location.pathname);
-      setTmdbAuthError('');
-    } catch (e) {
-      const errorMessage = e instanceof Error ? e.message : "Failed to create TMDB session";
-      setSessionId("");
-      setTmdbAuthError(errorMessage);
-      toast.error(errorMessage);
-    } finally {
-      setTmdbAuthLoading(false);
-    }
-  }, [setSessionId, config, auth]);
-
-  // Check for request_token in URL
-  useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const requestToken = urlParams.get('request_token');
-
-    if (requestToken && !processedTokenRef.current) {
-      handleRequestToken(requestToken);
-    }
-  }, [handleRequestToken]);
-
   // Check if any keys have changed since last successful validation
   useEffect(() => {
     const apiKeyFields: (keyof AppConfig['apiKeys'])[] = ['gemini', 'openrouter', 'tmdb', 'tvdb', 'fanart', 'rpdb', 'topPoster', 'mdblist', 'publicmetadb'];
@@ -262,61 +157,6 @@ export function IntegrationsSettings() {
     delete lastKnownBadKeys.current[id];
   };
 
-  const handleTmdbLogin = async () => {
-    setTmdbAuthLoading(true);
-    setTmdbAuthError('');
-
-    const tmdbApiKey = config.apiKeys?.tmdb;
-    
-    if (!tmdbApiKey) {
-      setTmdbAuthError("Please enter your TMDB API key first");
-      toast.error("Please enter your TMDB API key first");
-      setTmdbAuthLoading(false);
-      return;
-    }
-
-    try {
-      const response = await fetch(
-        `https://api.themoviedb.org/3/authentication/token/new?api_key=${tmdbApiKey}`,
-        { method: 'GET' }
-      );
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.status_message || 'Failed to get request token');
-      }
-      
-      const data = await response.json();
-      
-      if (!data.success) {
-        throw new Error('Failed to get request token from TMDB');
-      }
-      
-      const requestToken = data.request_token;
-      
-      // Construct redirect URL - use /stremio/{uuid}/configure format if authenticated
-      let redirectUrl = window.location.href;
-      if (auth.authenticated && auth.userUUID) {
-        const origin = window.location.origin;
-        redirectUrl = `${origin}/stremio/${auth.userUUID}/configure`;
-      }
-      
-      const tmdbAuthUrl = `https://www.themoviedb.org/authenticate/${requestToken}?redirect_to=${encodeURIComponent(redirectUrl)}`;
-      
-      window.location.href = tmdbAuthUrl;
-    } catch (e) {
-      const errorMessage = e instanceof Error ? e.message : "Failed to start TMDB authentication";
-      setTmdbAuthError(errorMessage);
-      toast.error(errorMessage);
-      setTmdbAuthLoading(false);
-    }
-  };
-
-  const handleTmdbLogout = () => {
-    setSessionId("");
-    toast.info("TMDB session cleared. Save your configuration to persist the change.");
-  };
-  
   const handleTestAllKeys = async () => {
     setIsTesting(true);
     const apiKeyFields: (keyof AppConfig['apiKeys'])[] = ['gemini', 'openrouter', 'tmdb', 'tvdb', 'fanart', 'rpdb', 'topPoster', 'mdblist', 'publicmetadb'];

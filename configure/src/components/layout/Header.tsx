@@ -149,7 +149,13 @@ export function Header() {
       }));
       // Prefer the canonical UUID the server resolved, so an alias typed at
       // login does not propagate into later update calls and OAuth redirects.
-      setAuth({ authenticated: true, userUUID: result.userUUID || uuidInput, password: passwordInput });
+      setAuth({
+        authenticated: true,
+        userUUID: result.userUUID || uuidInput,
+        password: passwordInput,
+        installUrl: result.installUrl ?? null,
+      });
+      try { sessionStorage.removeItem('fromStremioSettings'); } catch {}
       toast.success('Configuration loaded');
       setIsLoginOpen(false);
       setUuidInput('');

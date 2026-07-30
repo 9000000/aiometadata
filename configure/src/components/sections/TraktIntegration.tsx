@@ -1055,7 +1055,7 @@ export function TraktIntegration({ isOpen, onClose }: TraktIntegrationProps) {
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <div className="flex items-center gap-3">
-            <img src="https://trakt.tv/assets/logos/logomark.square.gradient-b644b16c38ff775861b4b1f58c1230f6a097a2466ab33ae00445a505c33fcb91.svg" alt="Trakt Logo" className="h-7 w-auto" />
+            <img src="/trakt_icon.png" alt="Trakt Logo" className="h-7 w-auto" />
             <DialogTitle>Trakt Integration</DialogTitle>
           </div>
           <DialogDescription>

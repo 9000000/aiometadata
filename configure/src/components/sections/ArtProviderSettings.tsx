@@ -134,7 +134,7 @@ export function ArtProviderSettings() {
         </CardHeader>
         <CardContent>
           {/* Desktop: a real table so row and column headers are announced */}
-          <Table className="hidden md:table">
+          <Table className="hidden md:table table-fixed min-w-[42rem]">
             <TableHeader>
               <TableRow>
                 <TableHead className="w-[120px]">Content</TableHead>

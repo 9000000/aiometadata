@@ -34,6 +34,7 @@
     --input: 240 5.9% 90%;
     --ring: 240 10% 3.9%;
     --radius: 0.625rem;
+    color-scheme: light;
   }
  
   .dark {
@@ -56,6 +57,7 @@
     --border: 220 5% 15%;
     --input: 220 5% 15%;
     --ring: 220 5% 75%;
+    color-scheme: dark;
   }
 }
 

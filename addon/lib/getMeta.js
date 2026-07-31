@@ -1388,7 +1388,7 @@ async function ensureLatinTmdbCredits(mediaType, tmdbId, existingCredits, config
 
 async function buildTmdbMovieResponse(stremioId, movieData, language, config, userUUID, enrichmentData = {}, isAnime = false) {
   const { allIds } = enrichmentData;
-  const { id: tmdbId, title, external_ids, poster_path, backdrop_path, images, } = movieData;
+  const { id: tmdbId, title, external_ids, poster_path, backdrop_path, images: rawImages, } = movieData;
   const originalLanguage = movieData.original_language || null;
   const imdbId = allIds?.imdbId;
   const tvdbId = allIds?.tvdbId;
@@ -1398,6 +1398,7 @@ async function buildTmdbMovieResponse(stremioId, movieData, language, config, us
   if (!credits) {
     credits = { cast: [], crew: [] };
   }
+  const images = await Utils.mergeTmdbOriginalLanguageImages('movie', tmdbId, rawImages, originalLanguage, langCode, config);
   const selectedPoster = Utils.selectTmdbImageByLang(images?.posters, config, 'iso_639_1', originalLanguage);
   const tmdbPosterUrl = selectedPoster?.file_path ? `https://image.tmdb.org/t/p/w600_and_h900_bestv2${selectedPoster?.file_path}` : poster_path ? `https://image.tmdb.org/t/p/w600_and_h900_bestv2${poster_path}` : `${host}/missing_poster.png`;
   const selectedBg = images?.backdrops?.find(b => b.iso_639_1 === 'xx')
@@ -1510,7 +1511,7 @@ async function buildTmdbMovieResponse(stremioId, movieData, language, config, us
 
 
 async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, userUUID, enrichmentData = {}, isAnime = false, includeVideos = true) {
-  const { id: tmdbId, name, external_ids, poster_path, backdrop_path, videos: trailers, seasons, images } = seriesData;
+  const { id: tmdbId, name, external_ids, poster_path, backdrop_path, videos: trailers, seasons, images: rawImages } = seriesData;
   const originalLanguage = seriesData.original_language || null;
   const { allIds } = enrichmentData;
   const imdbId = allIds?.imdbId;
@@ -1531,6 +1532,7 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
   }
   const langCode = language.split('-')[0];
 
+  const images = await Utils.mergeTmdbOriginalLanguageImages('tv', tmdbId, rawImages, originalLanguage, langCode, config);
   const selectedPoster = Utils.selectTmdbImageByLang(images?.posters, config, 'iso_639_1', originalLanguage);
   const tmdbPosterUrl = selectedPoster?.file_path ? `https://image.tmdb.org/t/p/w600_and_h900_bestv2${selectedPoster?.file_path}` : poster_path ? `https://image.tmdb.org/t/p/w600_and_h900_bestv2${poster_path}` : `${host}/missing_poster.png`;
   const selectedBg = images?.backdrops?.find(b => b.iso_639_1 === 'xx')

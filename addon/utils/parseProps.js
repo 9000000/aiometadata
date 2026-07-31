@@ -2605,6 +2605,40 @@ async function getTmdbMovieArtBatch(tmdbId, config, isLandscape = false, origina
   return fetchPromise;
 }
 
+const TMDB_IMAGE_KINDS = ['posters', 'backdrops', 'logos'];
+
+/**
+ * Refill image kinds the meta call came back empty on, from a second request scoped to
+ * the title's original language. Meta calls can't request it up front since they learn
+ * it from their own response. Skipped under englishArtOnly, which keeps falling through
+ * to the next provider instead.
+ */
+async function mergeTmdbOriginalLanguageImages(mediaType, tmdbId, images, originalLanguage, langCode, config) {
+  if (!tmdbId || !originalLanguage) return images;
+  if (config?.artProviders?.englishArtOnly) return images;
+  if (originalLanguage === 'en' || originalLanguage === langCode) return images;
+
+  const missing = TMDB_IMAGE_KINDS.filter(kind => !images?.[kind]?.length);
+  if (missing.length === 0) return images;
+
+  try {
+    const params = { id: tmdbId, include_image_language: originalLanguage };
+    const extra = mediaType === 'movie'
+      ? await tmdb.movieImages(params, config)
+      : await tmdb.tvImages(params, config);
+    if (!extra) return images;
+
+    const merged = { ...(images || {}) };
+    for (const kind of missing) {
+      if (extra[kind]?.length) merged[kind] = extra[kind];
+    }
+    return merged;
+  } catch (error) {
+    logger.warn(`[mergeTmdbOriginalLanguageImages] Failed to fetch ${originalLanguage} images for ${mediaType} ${tmdbId}:`, error.message);
+    return images;
+  }
+}
+
 /**
  * Get movie poster with art provider preference
  */
@@ -3413,6 +3447,7 @@ module.exports = {
   getSeriesLogo,
   getTmdbSeriesArtBatch,
   selectTmdbImageByLang,
+  mergeTmdbOriginalLanguageImages,
   getTmdbMovieCertificationForCountry,
   getTmdbTvCertificationForCountry,
   resolveArtProvider,

@@ -13,6 +13,8 @@ import { useBreakpoint } from '@/hooks/use-breakpoint';
 import { useSettingsRoute } from '@/hooks/useSettingsRoute';
 import { useAnchorFocus } from '@/hooks/useAnchorFocus';
 import { SettingsSearch } from '@/components/settings/SettingsSearch';
+import { MobileSaveBar } from '@/components/layout/MobileSaveBar';
+import { SidebarSaveButton } from '@/components/layout/SidebarSaveButton';
 import {
   SETTINGS_SECTIONS,
   adjacentSections,
@@ -204,6 +206,8 @@ export function SettingsLayout() {
             <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground" />
           </button>
         </div>
+
+        <MobileSaveBar />
       </div>
     );
   }
@@ -245,6 +249,8 @@ export function SettingsLayout() {
               </button>
             );
           })}
+
+          <SidebarSaveButton />
         </nav>
       </aside>
 

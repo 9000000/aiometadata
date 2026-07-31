@@ -1,6 +1,7 @@
 import { Header } from './components/layout/Header';
 import { SettingsLayout } from './components/SettingsLayout';
 import { AdminProvider } from './contexts/AdminContext';
+import { SaveProvider } from './contexts/SaveContext';
 import { Toaster } from "@/components/ui/sonner";
 import { useConfig } from './contexts/ConfigContext';
 
@@ -18,21 +19,23 @@ function AppContent() {
   }
 
   return (
-    <div className="dark min-h-screen w-full bg-background text-foreground">
-      <div className="w-full px-4 sm:px-6 lg:px-8">
-        <Header />
+    <SaveProvider>
+      <div className="dark min-h-screen w-full bg-background text-foreground">
+        <div className="w-full px-4 sm:px-6 lg:px-8">
+          <Header />
 
-        {config.apiKeys.customDescriptionBlurb && (
-          <div
-            className="mb-6 p-4 bg-black border rounded-lg"
-            dangerouslySetInnerHTML={{ __html: config.apiKeys.customDescriptionBlurb }}
-          />
-        )}
+          {config.apiKeys.customDescriptionBlurb && (
+            <div
+              className="mb-6 p-4 bg-black border rounded-lg"
+              dangerouslySetInnerHTML={{ __html: config.apiKeys.customDescriptionBlurb }}
+            />
+          )}
 
-        <SettingsLayout />
+          <SettingsLayout />
+        </div>
+        <Toaster />
       </div>
-      <Toaster />
-    </div>
+    </SaveProvider>
   );
 }
 

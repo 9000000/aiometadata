@@ -71,7 +71,7 @@ export function ConfigurationManager() {
     () => (contextLoading ? [] : missingRequiredKeys(config, caps)),
     [config, hasBuiltInTmdb, hasBuiltInTvdb, contextLoading] // eslint-disable-line react-hooks/exhaustive-deps
   );
-  const canSave = missingKeys.length === 0;
+  const canSave = !contextLoading && missingKeys.length === 0;
 
   const identity: SavedConfig | null = savedConfig
     ?? (auth.authenticated && auth.userUUID && auth.installUrl
@@ -115,11 +115,14 @@ export function ConfigurationManager() {
     }
     const isAuthenticated = auth.authenticated && auth.userUUID && auth.password;
     try {
-      // Remove instance-specific fields that shouldn't be saved to user config
+      // Remove instance-specific fields that shouldn't be saved to user config.
+      const trimmedApiKeys = Object.fromEntries(
+        Object.entries(config.apiKeys).map(([k, v]) => [k, typeof v === 'string' ? v.trim() : v])
+      );
       const configToSave = {
         ...config,
         apiKeys: {
-          ...config.apiKeys,
+          ...trimmedApiKeys,
           customDescriptionBlurb: undefined // Never save this - it's instance-specific
         }
       };

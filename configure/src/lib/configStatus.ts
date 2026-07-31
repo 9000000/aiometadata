@@ -51,6 +51,10 @@ export function enabledCatalogs(config: ConfigLike): Record<string, any>[] {
   return (config?.catalogs ?? []).filter((c: { enabled?: boolean }) => !!c?.enabled);
 }
 
+export function aiProvider(config: ConfigLike): 'gemini' | 'openrouter' {
+  return config?.search?.ai_provider === 'openrouter' ? 'openrouter' : 'gemini';
+}
+
 /** True when `provider` is the movie, series or anime meta provider. */
 export function usesMetaProvider(config: ConfigLike, provider: string): boolean {
   const providers = config?.providers;
@@ -82,7 +86,10 @@ export function requirementFor(config: ConfigLike, id: ApiKeyId): string | null 
         : `${count} of your enabled catalogs come from MDBList`;
     }
     case 'ai_service':
-      return config?.search?.ai_enabled === true ? 'AI search is enabled' : null;
+      if (config?.search?.ai_enabled !== true) return null;
+      return aiProvider(config) === 'openrouter'
+        ? 'AI search is enabled and set to OpenRouter'
+        : 'AI search is enabled and set to Gemini';
     // Optional enhancements: reported for visibility, never block a save.
     case 'rpdb':
     case 'topPoster':
@@ -101,7 +108,11 @@ export function isKeyInUse(config: ConfigLike, id: ApiKeyId): boolean {
 export function isKeyConfigured(config: ConfigLike, id: ApiKeyId, caps: ConfigCaps): boolean {
   const apiKeys: Record<string, string | undefined> = config?.apiKeys || {};
   if (id === 'ai_service') {
-    return !!(apiKeys.gemini?.trim() || apiKeys.openrouter?.trim());
+    // The unselected provider's key cannot serve a search, so it cannot satisfy
+    // the requirement either.
+    return aiProvider(config) === 'openrouter'
+      ? !!apiKeys.openrouter?.trim()
+      : !!apiKeys.gemini?.trim();
   }
   const hasUserKey = !!apiKeys[id]?.trim();
   if (id === 'tmdb') return hasUserKey || caps.hasBuiltInTmdb;

@@ -163,7 +163,7 @@ function SortableEngineRow(props: EngineRowProps) {
 }
 
 export function SearchSettings() {
-  const { config, setConfig, hasBuiltInTvdb, traktSearchEnabled } = useConfig();
+  const { config, setConfig, hasBuiltInTvdb, traktSearchEnabled, simklSearchEnabled } = useConfig();
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editType, setEditType] = useState('');
@@ -181,6 +181,7 @@ export function SearchSettings() {
   const hasTvdbKey = !!config.apiKeys?.tvdb?.trim() || hasBuiltInTvdb;
   const hasRPDBKey = !!config.apiKeys?.rpdb || !!config.apiKeys?.topPoster || !!config.customPosterUrlPattern;
   const isTraktSearchEnabled = traktSearchEnabled;
+  const isSimklSearchEnabled = simklSearchEnabled;
 
   const caps = { hasTvdbKey, hasAnyAiKey };
   const slotViews = listSlots(config, caps);
@@ -191,6 +192,9 @@ export function SearchSettings() {
     if ((p.value === 'trakt.search' || p.value === 'trakt.people.search') && !isTraktSearchEnabled) {
       return false;
     }
+    if (p.value === 'simkl.search' && !isSimklSearchEnabled) {
+      return false;
+    }
     return p.mediaType.includes('movie') &&
            !p.value.includes('people.search') &&
            p.value !== 'mal.search.movie' &&
@@ -199,6 +203,9 @@ export function SearchSettings() {
 
   const seriesSearchProviders = allSearchProviders.filter(p => {
     if ((p.value === 'trakt.search' || p.value === 'trakt.people.search') && !isTraktSearchEnabled) {
+      return false;
+    }
+    if (p.value === 'simkl.search' && !isSimklSearchEnabled) {
       return false;
     }
     return p.mediaType.includes('series') &&
@@ -409,6 +416,27 @@ export function SearchSettings() {
       },
     }));
   };
+
+  useEffect(() => {
+    if (!simklSearchEnabled) {
+      const updates: Partial<Record<string, string>> = {};
+      if (config.search.providers.movie === 'simkl.search') updates.movie = 'tmdb.search';
+      if (config.search.providers.series === 'simkl.search') updates.series = 'tvdb.search';
+
+      if (Object.keys(updates).length > 0) {
+        setConfig(prev => ({
+          ...prev,
+          search: {
+            ...prev.search,
+            providers: {
+              ...prev.search.providers,
+              ...updates,
+            },
+          },
+        }));
+      }
+    }
+  }, [simklSearchEnabled]);
 
   useEffect(() => {
     if (!traktSearchEnabled) {

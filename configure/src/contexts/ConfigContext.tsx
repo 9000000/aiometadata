@@ -22,6 +22,7 @@ interface ConfigContextType {
   hasBuiltInTvdb: boolean;
   hasBuiltInTmdb: boolean;
   traktSearchEnabled: boolean;
+  simklSearchEnabled: boolean;
   catalogTTL: number;
   isLoading: boolean;
   sessionId: string;
@@ -193,6 +194,7 @@ const initialConfig: AppConfig = {
       'trakt.search': true,
       'mdblist.search': true,
       'imdb.suggestions.search': true,
+      'simkl.search': true,
       'people_search_movie': false,
       'people_search_series': false,
       'mal.search.movie': true,
@@ -374,6 +376,7 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
   const [hasBuiltInTvdb, setHasBuiltInTvdb] = useState(false);
   const [hasBuiltInTmdb, setHasBuiltInTmdb] = useState(false);
   const [traktSearchEnabled, setTraktSearchEnabled] = useState(true);
+  const [simklSearchEnabled, setSimklSearchEnabled] = useState(true);
   const [catalogTTL, setCatalogTTL] = useState(86400); // Default to 24 hours
   const manifestFingerprint = useRef<string | null>(null);
 
@@ -389,6 +392,7 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
         setHasBuiltInTvdb(!!envApiKeys.hasBuiltInTvdb);
         setHasBuiltInTmdb(!!envApiKeys.hasBuiltInTmdb);
         setTraktSearchEnabled(envApiKeys.traktSearchEnabled ?? true);
+        setSimklSearchEnabled(envApiKeys.simklSearchEnabled ?? true);
         setCatalogTTL(envApiKeys.catalogTTL || 86400);
 
         // Layer in the server keys with the correct priority.
@@ -461,7 +465,7 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <ConfigContext.Provider value={{ config, setConfig, addonVersion, resetConfig, auth, setAuth, hasBuiltInTvdb, hasBuiltInTmdb, catalogTTL, isLoading, sessionId, setSessionId, traktSearchEnabled, manifestFingerprint, manifestChangedSinceInstall, markManifestInstalled }}>
+    <ConfigContext.Provider value={{ config, setConfig, addonVersion, resetConfig, auth, setAuth, hasBuiltInTvdb, hasBuiltInTmdb, catalogTTL, isLoading, sessionId, setSessionId, traktSearchEnabled, simklSearchEnabled, manifestFingerprint, manifestChangedSinceInstall, markManifestInstalled }}>
       {children}
     </ConfigContext.Provider>
   );

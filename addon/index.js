@@ -534,6 +534,7 @@ const respond = function (req, res, data, opts) {
       catalogTTL: parseInt(getSetting('CATALOG_TTL') || String(24 * 60 * 60), 10),
       simklTrendingPageSizeOptions: resolvedOptions,
       traktSearchEnabled: getSetting('DISABLE_TRAKT_SEARCH') !== 'true',
+      simklSearchEnabled: getSetting('DISABLE_SIMKL_SEARCH') !== 'true',
     };
     
     // No cache to prevent cross-instance contamination

@@ -357,6 +357,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: false,
   },
   {
+    key: 'DISABLE_SIMKL_SEARCH',
+    envVar: 'DISABLE_SIMKL_SEARCH',
+    label: 'Disable Simkl Search',
+    description: 'Disable Simkl as a search provider',
+    category: 'Features',
+    type: 'boolean',
+    default: false,
+  },
+  {
     key: 'DISABLE_METRICS',
     envVar: 'DISABLE_METRICS',
     label: 'Disable Metrics',
@@ -1684,6 +1693,17 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'Proxy',
     type: 'string',
     default: '',
+  },
+  {
+    key: 'SIMKL_SEARCH_RESULT_LIMIT',
+    envVar: 'SIMKL_SEARCH_RESULT_LIMIT',
+    label: 'Simkl Search Result Limit',
+    description: 'How many Simkl search results to hydrate into full results. Each one costs a TMDB lookup, so raising this makes searches slower.',
+    category: 'Features',
+    type: 'number',
+    default: 20,
+    min: 1,
+    max: 50,
   },
   {
     key: 'IMDB_SUGGESTION_TIMEOUT_MS',

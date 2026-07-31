@@ -442,6 +442,11 @@ async function performTmdbSearch(type: string, query: string, language: string, 
       logger.error(`Error searching TMDB by IMDb ID ${query}:`, error.message);
       return [];
     }
+  } else if (/^tmdb:\d+$/.test(query.trim()) && !peopleOnly) {
+    // Lets a provider that already resolved a TMDB id reuse the hydration below
+    // instead of searching for a title it has no reason to guess at.
+    const tmdbId = Number(query.trim().split(':')[1]);
+    rawResults.set(tmdbId, { id: tmdbId, media_type: type === 'movie' ? 'movie' : 'tv' });
   } else {
     const addRawResult = (media: any) => {
       if (media && media.id && !rawResults.has(media.id)) {
@@ -796,6 +801,65 @@ async function performImdbSuggestionSearch(type: string, query: string, language
   }
 
   logger.info(`IMDb suggestion search completed in ${Date.now() - startTime}ms, returning ${metas.length} results`);
+  return metas;
+}
+
+/**
+ * Simkl searches every translated title it stores, so it answers alias queries that
+ * title-only engines miss. Results already carry a TMDB id, which is handed to the
+ * TMDB search path so the metas match every other provider's.
+ */
+async function performSimklSearch(type: string, query: string, language: string, config: any, page: number = 1): Promise<any[]> {
+  const startTime = Date.now();
+  logger.info(`Starting Simkl search for type "${type}" with query: "${query}"`);
+
+  const { fetchSimklSearchItems }: any = require('../utils/simklUtils.js');
+  const limit = parseInt(getSetting('SIMKL_SEARCH_RESULT_LIMIT'), 10) || 20;
+  const searchType = type === 'movie' ? 'movie' : 'tv';
+
+  const results = await fetchSimklSearchItems(searchType, query, limit, page);
+  if (!results || results.length === 0) {
+    logger.info(`No Simkl results found for query: "${query}"`);
+    return [];
+  }
+
+  const tmdbIds: string[] = [];
+  const seenIds = new Set<string>();
+  for (const item of results) {
+    const tmdbId = item?.ids?.tmdb;
+    if (tmdbId && !seenIds.has(String(tmdbId))) {
+      seenIds.add(String(tmdbId));
+      tmdbIds.push(String(tmdbId));
+    }
+  }
+
+  if (tmdbIds.length === 0) {
+    logger.info(`Simkl returned ${results.length} results for "${query}" but none carried a TMDB id`);
+    return [];
+  }
+
+  logger.debug(`Simkl gathered ${tmdbIds.length} TMDB ids in ${Date.now() - startTime}ms`);
+
+  const hydrated = await mapWithLimit(tmdbIds, (tmdbId: string) =>
+    performTmdbSearch(type, `tmdb:${tmdbId}`, language, config, false)
+      .catch((error: any) => {
+        logger.debug(`Could not hydrate tmdb:${tmdbId}: ${error.message}`);
+        return [];
+      }));
+
+  // Simkl orders by its own relevance, which is the reason to use it.
+  const seenMetas = new Set<string>();
+  const metas: any[] = [];
+  for (const group of hydrated) {
+    for (const meta of group) {
+      if (meta?.id && !seenMetas.has(meta.id)) {
+        seenMetas.add(meta.id);
+        metas.push(meta);
+      }
+    }
+  }
+
+  logger.info(`Simkl search completed in ${Date.now() - startTime}ms, returning ${metas.length} results`);
   return metas;
 }
 
@@ -2504,6 +2568,9 @@ async function getSearch(id: string, type: string, language: string, extra: any,
                 break;
               case 'imdb.suggestions.search':
                 metas = await performImdbSuggestionSearch(type, query, language, config);
+                break;
+              case 'simkl.search':
+                metas = await performSimklSearch(type, query, language, config, page);
                 break;
           }
         }

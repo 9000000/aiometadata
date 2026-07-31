@@ -229,6 +229,40 @@ async function makeRateLimitedSimklRequest(url: string, context: string = 'Simkl
   );
 }
 
+/**
+ * Simkl matches against every translated title it holds, which is why it answers
+ * queries like "LotR" that title-only engines miss.
+ */
+async function fetchSimklSearchItems(
+  type: 'movie' | 'tv',
+  query: string,
+  limit: number = 20,
+  page: number = 1
+): Promise<any[]> {
+  try {
+    // Simkl clamps rather than rejecting: limit tops out at 50 and page at 20.
+    const safeLimit = Math.min(Math.max(limit, 1), 50);
+    const safePage = Math.min(Math.max(page, 1), 20);
+    const url = `${SIMKL_BASE_URL}/search/${type}?q=${encodeURIComponent(query)}&limit=${safeLimit}&page=${safePage}&${simklDataParams()}`;
+    const response: any = await makeRateLimitedSimklRequest(url, `Simkl search (${type}, query: "${query}")`);
+
+    if (!response?.data || !Array.isArray(response.data)) {
+      logger.info(`No Simkl search results found for query: "${query}"`);
+      return [];
+    }
+
+    logger.debug(`Found ${response.data.length} Simkl search results for query: "${query}"`);
+    return response.data;
+  } catch (err: any) {
+    if (err?.response?.status === 412) {
+      logger.error('Simkl rejected the client_id, so search cannot run. Check SIMKL_CLIENT_ID.');
+    } else {
+      logger.error(`Error fetching Simkl search results for ${type} "${query}":`, err.message);
+    }
+    return [];
+  }
+}
+
 async function fetchSimklUserStats(tokenId: string): Promise<any> {
   const tokenHash = crypto.createHash('sha256').update(tokenId).digest('hex').substring(0, 16);
   const cacheKey = `simkl-stats:${tokenHash}`;
@@ -1316,6 +1350,7 @@ async function fetchSimklDvdReleases(
 
 export {
   fetchSimklUserStats,
+  fetchSimklSearchItems,
   fetchSimklWatchlistItems,
   parseSimklItems,
   makeAuthenticatedSimklRequest,

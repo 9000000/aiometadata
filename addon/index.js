@@ -4258,7 +4258,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
       ? (config.search?.engineRatingPosters?.[config._currentSearchCatalogId] === true)
       : (catalogConfig?.enableRatingPosters !== false);
     const posterPattern = posterPatternsEnabled ? require('./utils/parseProps').resolvePosterPattern(config) : null;
-    if ((posterPattern || config.customBackgroundUrlPattern || config.customLogoUrlPattern) && responseData?.metas && Array.isArray(responseData.metas)) {
+    if ((posterPattern || config.customBackgroundUrlPattern || config.customLandscapeUrlPattern || config.customLogoUrlPattern) && responseData?.metas && Array.isArray(responseData.metas)) {
       const isUpNextCatalog = cleanId.includes('up_next') || cleanId.includes('upnext');
       const upNextUsesShowPoster = isUpNextCatalog && catalogConfig?.metadata?.useShowPosterForUpNext === true;
       const { resolveCustomArtUrl, getPosterRatingApiKey } = require('./utils/parseProps');
@@ -4298,6 +4298,21 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
               }
             } else {
               meta.background = resolved;
+            }
+          }
+        }
+        if (config.customLandscapeUrlPattern) {
+          const resolved = resolveCustomArtUrl(config.customLandscapeUrlPattern, ids, type, config);
+          if (resolved) {
+            if (config.usePosterProxy) {
+              const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
+              if (proxyId) {
+                meta.landscapePoster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'landscape', type: type, id: proxyId, fallback: meta.landscapePoster, url: resolved });
+              } else {
+                meta.landscapePoster = resolved;
+              }
+            } else {
+              meta.landscapePoster = resolved;
             }
           }
         }
@@ -4454,6 +4469,21 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
             }
           } else {
             result.meta.background = resolved;
+          }
+        }
+      }
+      if (config.customLandscapeUrlPattern) {
+        const resolved = resolveCustomArtUrl(config.customLandscapeUrlPattern, ids, metaType, config, { userAgent });
+        if (resolved) {
+          if (config.usePosterProxy) {
+            const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
+            if (proxyId) {
+              result.meta.landscapePoster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'landscape', type: metaType, id: proxyId, fallback: result.meta.landscapePoster, url: resolved });
+            } else {
+              result.meta.landscapePoster = resolved;
+            }
+          } else {
+            result.meta.landscapePoster = resolved;
           }
         }
       }
@@ -5168,6 +5198,7 @@ addon.get("/background/:type/:id", streamArtWithFallback('background'));
 addon.get("/poster-cache/proxy/poster/:type/:id", handlePosterProxy);
 addon.get("/poster-cache/proxy/logo/:type/:id", streamArtWithFallback('logo'));
 addon.get("/poster-cache/proxy/background/:type/:id", streamArtWithFallback('background'));
+addon.get("/poster-cache/proxy/landscape/:type/:id", streamArtWithFallback('landscape'));
 
 // --- Built-in image cache ---
 // Serves /poster-cache/[class/]<absolute-image-url>. Registered well before the
@@ -6519,7 +6550,7 @@ addon.post("/api/dashboard/poster-cache/invalidate", requireDashboardAdmin, asyn
   const markerAt = raw.indexOf(marker);
   if (markerAt >= 0) {
     const afterMount = raw.slice(markerAt + marker.length - 1);
-    const proxyRoute = /^\/proxy\/(poster|logo|background)\//.exec(afterMount);
+    const proxyRoute = /^\/proxy\/(poster|logo|background|landscape)\//.exec(afterMount);
     if (proxyRoute) {
       let customUrl = null;
       try {

@@ -206,6 +206,7 @@ const initialConfig: AppConfig = {
   streaming: [], // Added to satisfy AppConfig interface
   customPosterUrlPattern: '',
   customBackgroundUrlPattern: '',
+  customLandscapeUrlPattern: '',
   customLogoUrlPattern: '',
 };
 

@@ -295,6 +295,7 @@ export interface AppConfig {
   catalogModeOnly?: boolean;
   customPosterUrlPattern?: string;
   customBackgroundUrlPattern?: string;
+  customLandscapeUrlPattern?: string;
   customLogoUrlPattern?: string;
   customThumbnailUrlPattern?: string;
 }

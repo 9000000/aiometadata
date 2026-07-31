@@ -250,6 +250,7 @@ export function ArtProviderSettings() {
                         posterRatingProvider: provider,
                         customPosterUrlPattern: 'https://api.ratingposterdb.com/{rpdb_key}/imdb/poster-default/{imdb_id}.jpg?fallback=true',
                         customBackgroundUrlPattern: '',
+                        customLandscapeUrlPattern: '',
                         customLogoUrlPattern: '',
                         customThumbnailUrlPattern: ''
                       }));
@@ -259,6 +260,7 @@ export function ArtProviderSettings() {
                         posterRatingProvider: provider,
                         customPosterUrlPattern: 'https://api.top-posters.com/{top_key}/imdb/poster/{imdb_id}.jpg?lang={language_short}',
                         customBackgroundUrlPattern: '',
+                        customLandscapeUrlPattern: '',
                         customLogoUrlPattern: '',
                         customThumbnailUrlPattern: 'https://api.top-posters.com/{top_key}/imdb/thumbnail/{imdb_id}/S{season}E{episode}.jpg?blur={blur}&fallback_url={thumbnail}&user_agent={user_agent}'
                       }));
@@ -335,6 +337,15 @@ export function ArtProviderSettings() {
                   placeholder="https://example.com/background/{tmdb_id}.jpg"
                   value={config.customBackgroundUrlPattern || ''}
                   onChange={(e) => setConfig(prev => ({ ...prev, customBackgroundUrlPattern: e.target.value }))}
+                />
+              </div>
+              <div>
+                <Label htmlFor="custom-landscape-pattern" className="text-sm font-medium mb-1 block">Landscape URL Pattern</Label>
+                <Input
+                  id="custom-landscape-pattern"
+                  placeholder="https://example.com/landscape/{tmdb_id}.jpg"
+                  value={config.customLandscapeUrlPattern || ''}
+                  onChange={(e) => setConfig(prev => ({ ...prev, customLandscapeUrlPattern: e.target.value }))}
                 />
               </div>
               <div>

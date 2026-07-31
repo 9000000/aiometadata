@@ -102,13 +102,13 @@ export const allSearchProviders: SearchProviderDefinition[] = [
   { value: 'tmdb.search', label: 'TMDB Search', mediaType: ['movie', 'series'] },
   { value: 'tvdb.search', label: 'TheTVDB Search', mediaType: ['movie', 'series'] },
   { value: 'tvmaze.search', label: 'TVmaze Search', mediaType: ['series'] },
-  { value: 'trakt.search', label: 'Trakt Search', mediaType: ['movie', 'series'] },
+  { value: 'trakt.search', label: 'Trakt Search (VIP only)', mediaType: ['movie', 'series'] },
   { value: 'mdblist.search', label: 'MDBList Search', mediaType: ['movie', 'series'] },
-  { value: 'imdb.suggestions.search', label: 'IMDb Search (typo tolerant)', mediaType: ['movie', 'series'] },
+  { value: 'imdb.suggestions.search', label: 'IMDb Search', mediaType: ['movie', 'series'] },
   // People Search Providers
   { value: 'tmdb.people.search', label: 'TMDB People Search', mediaType: ['movie', 'series'] },
   { value: 'tvdb.people.search', label: 'TheTVDB People Search', mediaType: ['movie', 'series'] },
-  { value: 'trakt.people.search', label: 'Trakt People Search', mediaType: ['movie', 'series'] },
+  { value: 'trakt.people.search', label: 'Trakt People Search (VIP only)', mediaType: ['movie', 'series'] },
 
   // Anime-Specific Providers
   { value: 'mal.search.movie', label: 'MAL (Movies)', mediaType: ['movie', 'anime_movie'] },

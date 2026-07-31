@@ -300,6 +300,7 @@ async function configLoadRateLimitMiddleware(req, res, next) {
 
 const posterCacheConfig = require('./lib/posterCache/config.js');
 const { buildProxyArtUrl, proxyArtUrlVouched } = require('./lib/posterCache/proxyArt.js');
+const { applyProxyResponseHeaders } = require('./lib/posterCache/proxyResponse.js');
 
 function POSTER_PROXY_PREFIX_URL() { return posterCacheConfig.getPosterProxyPrefix(); }
 
@@ -4963,24 +4964,14 @@ async function fetchPosterImageStream(posterUrl) {
   return imageResponse;
 }
 
-function proxyImageCacheControl(entry, status) {
-  if (status === 'BYPASS') return 'no-store';
-  let maxAge = posterCacheConfig.getProxyMaxAgeSeconds();
-  if (entry && Number.isFinite(entry.expiresAt)) {
-    maxAge = Math.min(maxAge, posterCacheConfig.browserMaxAgeFor(entry.expiresAt));
-  }
-  return `public, max-age=${maxAge}, stale-while-revalidate=${Math.max(maxAge, 604800)}`;
-}
-
 function pipePosterImageResponse(res, imageResponse, bypassed) {
   const contentType = imageResponse.headers['content-type'];
   res.setHeader('Content-Type', contentType || 'image/jpeg');
-  if (bypassed) {
-    res.setHeader('X-Cache-Status', 'BYPASS');
-    res.setHeader('Cache-Control', 'no-store');
-  } else {
-    res.setHeader('Cache-Control', proxyImageCacheControl());
-  }
+  if (bypassed) res.setHeader('X-Cache-Status', 'BYPASS');
+  applyProxyResponseHeaders(res, {
+    status: bypassed ? 'BYPASS' : null,
+    upstreamHeaders: imageResponse.headers,
+  });
   imageResponse.data.pipe(res);
 }
 
@@ -5045,15 +5036,6 @@ const handlePosterProxy = async function (req, res) {
   if (!key && !customUrl) {
     return res.redirect(302, fallback);
   }
-  const etag = crypto.createHash('md5').update(`${type}:${id}:${customUrl || key}:${lang}`).digest('hex');
-  res.setHeader('ETag', `"${etag}"`);
-  if (req.headers['if-none-match'] === `"${etag}"`) {
-    if (posterCacheConfig.isBuiltinPosterCacheEnabled()) {
-      require('./lib/posterCache/handler.js').recordRevalidated('poster', req.method, customUrl || id);
-    }
-    return res.status(304).end();
-  }
-
   try {
     let posterUrl = customUrl || null;
 
@@ -5091,8 +5073,13 @@ const handlePosterProxy = async function (req, res) {
       const result = isRatingPoster
         ? await posterCacheStore.getOrFetch('processed', `rating-poster:${posterUrl}`, (validators) => produceProcessedBytes(posterUrl, () => fetchUpstream(validators)))
         : await posterCacheStore.getOrFetch('poster', posterUrl, fetchUpstream);
+      res.setHeader('X-Cache-Status', result.status);
+      const etag = applyProxyResponseHeaders(res, { entry: result.entry, status: result.status });
+      if (etag && req.headers['if-none-match'] === etag) {
+        require('./lib/posterCache/handler.js').recordRevalidated('poster', req.method, posterUrl);
+        return res.status(304).end();
+      }
       recordServe('poster', result.status, result.entry.size, req.method, posterUrl);
-      res.setHeader('Cache-Control', proxyImageCacheControl(result.entry, result.status));
       return await sendCachedImage(res, result);
     }
 
@@ -5124,14 +5111,6 @@ function streamArtWithFallback(assetName) {
     if (!customUrl) {
       return res.redirect(302, fallback || '');
     }
-    const etag = crypto.createHash('md5').update(`${assetName}:${type}:${id}:${customUrl}`).digest('hex');
-    res.setHeader('ETag', `"${etag}"`);
-    if (req.headers['if-none-match'] === `"${etag}"`) {
-      if (posterCacheConfig.isBuiltinPosterCacheEnabled()) {
-        require('./lib/posterCache/handler.js').recordRevalidated(assetName, req.method, customUrl);
-      }
-      return res.status(304).end();
-    }
     const bypassed = posterCacheConfig.isBypassed(customUrl);
     try {
       if (posterCacheConfig.isClassEnabled(assetName) && !bypassed) {
@@ -5141,8 +5120,13 @@ function streamArtWithFallback(assetName) {
         const allowPrivateHost = proxyArtUrlVouched(customUrl, sig);
         const result = await posterCacheStore.getOrFetch(assetName, customUrl, (validators) =>
           fetchImage(customUrl, { allowPrivateHost, validators }));
+        res.setHeader('X-Cache-Status', result.status);
+        const etag = applyProxyResponseHeaders(res, { entry: result.entry, status: result.status });
+        if (etag && req.headers['if-none-match'] === etag) {
+          require('./lib/posterCache/handler.js').recordRevalidated(assetName, req.method, customUrl);
+          return res.status(304).end();
+        }
         recordServe(assetName, result.status, result.entry.size, req.method, customUrl);
-        res.setHeader('Cache-Control', proxyImageCacheControl(result.entry, result.status));
         return await sendCachedImage(res, result);
       }
 
@@ -5158,13 +5142,14 @@ function streamArtWithFallback(assetName) {
       res.setHeader('Content-Type', contentType || 'image/jpeg');
       if (bypassed) {
         res.setHeader('X-Cache-Status', 'BYPASS');
-        res.setHeader('Cache-Control', 'no-store');
         if (posterCacheConfig.isBuiltinPosterCacheEnabled()) {
           require('./lib/posterCache/handler.js').recordServe(assetName, 'BYPASS', 0, req.method, customUrl);
         }
-      } else {
-        res.setHeader('Cache-Control', proxyImageCacheControl());
       }
+      applyProxyResponseHeaders(res, {
+        status: bypassed ? 'BYPASS' : null,
+        upstreamHeaders: imageResponse.headers,
+      });
       imageResponse.data.pipe(res);
     } catch (error) {
       if (posterCacheConfig.isBuiltinPosterCacheEnabled()) require('./lib/posterCache/handler.js').recordServeError();

@@ -47,6 +47,10 @@ export function usesArtProvider(config: ConfigLike, provider: string): boolean {
   );
 }
 
+export function enabledCatalogs(config: ConfigLike): Record<string, any>[] {
+  return (config?.catalogs ?? []).filter((c: { enabled?: boolean }) => !!c?.enabled);
+}
+
 /** True when `provider` is the movie, series or anime meta provider. */
 export function usesMetaProvider(config: ConfigLike, provider: string): boolean {
   const providers = config?.providers;
@@ -69,13 +73,13 @@ export function requirementFor(config: ConfigLike, id: ApiKeyId): string | null 
     case 'fanart':
       return usesArtProvider(config, 'fanart') ? 'Selected as an art provider' : null;
     case 'mdblist': {
-      const count = (config?.catalogs ?? []).filter(
-        (c: { id?: string }) => typeof c?.id === 'string' && c.id.startsWith('mdblist.')
+      const count = enabledCatalogs(config).filter(
+        (c) => typeof c?.id === 'string' && c.id.startsWith('mdblist.')
       ).length;
       if (count === 0) return null;
       return count === 1
-        ? '1 of your catalogs comes from MDBList'
-        : `${count} of your catalogs come from MDBList`;
+        ? '1 of your enabled catalogs comes from MDBList'
+        : `${count} of your enabled catalogs come from MDBList`;
     }
     case 'ai_service':
       return config?.search?.ai_enabled === true ? 'AI search is enabled' : null;

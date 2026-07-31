@@ -214,9 +214,12 @@ export function SearchSettings() {
            p.value !== 'kitsu.search.series';
   });
 
-  const animeSearchProviders = allSearchProviders.filter(
-    p => p.mediaType.includes('anime_movie') || p.mediaType.includes('anime_series')
-  );
+  const animeSearchProviders = allSearchProviders.filter(p => {
+    if (p.value.startsWith('simkl.search') && !isSimklSearchEnabled) {
+      return false;
+    }
+    return p.mediaType.includes('anime_movie') || p.mediaType.includes('anime_series');
+  });
 
   const peopleSearchProviders = allSearchProviders.filter(p => {
     if (p.value === 'trakt.people.search' && !isTraktSearchEnabled) {
@@ -422,6 +425,8 @@ export function SearchSettings() {
       const updates: Partial<Record<string, string>> = {};
       if (config.search.providers.movie === 'simkl.search') updates.movie = 'tmdb.search';
       if (config.search.providers.series === 'simkl.search') updates.series = 'tvdb.search';
+      if (config.search.providers.anime_movie === 'simkl.search.movie') updates.anime_movie = 'mal.search.movie';
+      if (config.search.providers.anime_series === 'simkl.search.series') updates.anime_series = 'mal.search.series';
 
       if (Object.keys(updates).length > 0) {
         setConfig(prev => ({

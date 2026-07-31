@@ -195,6 +195,8 @@ const initialConfig: AppConfig = {
       'mdblist.search': true,
       'imdb.suggestions.search': true,
       'simkl.search': true,
+      'simkl.search.movie': true,
+      'simkl.search.series': true,
       'people_search_movie': false,
       'people_search_series': false,
       'mal.search.movie': true,

@@ -116,6 +116,8 @@ export const allSearchProviders: SearchProviderDefinition[] = [
   { value: 'mal.search.series', label: 'MAL (Series)', mediaType: ['series', 'anime_series'] },
   { value: 'kitsu.search.movie', label: 'Kitsu (Movies)', mediaType: ['movie', 'anime_movie'] },
   { value: 'kitsu.search.series', label: 'Kitsu (Series)', mediaType: ['series', 'anime_series'] },
+  { value: 'simkl.search.movie', label: 'Simkl (Movies)', mediaType: ['anime_movie'] },
+  { value: 'simkl.search.series', label: 'Simkl (Series)', mediaType: ['anime_series'] },
 ];
 
 export const allCatalogDefinitions: CatalogDefinition[] = [

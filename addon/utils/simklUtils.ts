@@ -234,7 +234,7 @@ async function makeRateLimitedSimklRequest(url: string, context: string = 'Simkl
  * queries like "LotR" that title-only engines miss.
  */
 async function fetchSimklSearchItems(
-  type: 'movie' | 'tv',
+  type: 'movie' | 'tv' | 'anime',
   query: string,
   limit: number = 20,
   page: number = 1

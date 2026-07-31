@@ -805,6 +805,70 @@ async function performImdbSuggestionSearch(type: string, query: string, language
 }
 
 /**
+ * Simkl's anime endpoint answers with every format at once, so the requested type has
+ * to be applied here. The sets mirror performAnimeSearch, with Simkl's 'special'
+ * standing in for MAL's 'tv special'.
+ */
+function simklAnimeTypesFor(type: string, config: any): Set<string> {
+  if (type === 'movie') return new Set(['movie']);
+  return config.mal?.useImdbIdForCatalogAndSearch
+    ? new Set(['tv', 'ona'])
+    : new Set(['tv', 'ova', 'ona', 'special']);
+}
+
+/**
+ * Simkl search items name their fields differently from the catalog items
+ * parseSimklItems expects, so line them up before handing them over.
+ */
+function normalizeSimklSearchItem(item: any, type: string): any {
+  const year = typeof item?.year === 'number' ? item.year : null;
+  return {
+    ...item,
+    type: type === 'movie' ? 'movie' : 'series',
+    title: item?.title || item?.title_romaji || item?.title_en || '',
+    release_date: item?.release_date || (year ? `01/01/${year}` : undefined),
+  };
+}
+
+/**
+ * Fribb's mapping turns a simkl id into a MAL id in memory, which routes results
+ * through the same anime meta path MAL and Kitsu search use rather than emitting a
+ * TMDB id that would bypass anime_id_provider and useImdbIdForCatalogAndSearch.
+ */
+async function performSimklAnimeSearch(type: string, query: string, language: string, config: any, page: number = 1): Promise<any[]> {
+  const startTime = Date.now();
+  logger.info(`Starting Simkl anime search for type "${type}" with query: "${query}"`);
+
+  const { fetchSimklSearchItems, parseSimklItems }: any = require('../utils/simklUtils.js');
+  const limit = parseInt(getSetting('SIMKL_ANIME_SEARCH_RESULT_LIMIT'), 10) || 20;
+
+  const results = await fetchSimklSearchItems('anime', query, limit, page);
+  if (!results || results.length === 0) {
+    logger.info(`No Simkl anime results found for query: "${query}"`);
+    return [];
+  }
+
+  const itemType = type === 'movie' ? 'movie' : 'series';
+  const allowedTypes = simklAnimeTypesFor(itemType, config);
+  const matching = results.filter((item: any) => {
+    // Simkl documents anime_type but search answers with type.
+    const format = item?.anime_type || item?.type;
+    return typeof format === 'string' && allowedTypes.has(format.toLowerCase());
+  });
+
+  if (matching.length === 0) {
+    logger.info(`Simkl returned ${results.length} results for "${query}" but none were ${itemType}`);
+    return [];
+  }
+
+  const items = matching.map((item: any) => normalizeSimklSearchItem(item, itemType));
+  const metas = await parseSimklItems(items, itemType, config, config.userUUID, false, true);
+
+  logger.info(`Simkl anime search returned ${metas.length} of ${results.length} results in ${Date.now() - startTime}ms`);
+  return metas;
+}
+
+/**
  * Simkl searches every translated title it stores, so it answers alias queries that
  * title-only engines miss. Results already carry a TMDB id, which is handed to the
  * TMDB search path so the metas match every other provider's.
@@ -2548,6 +2612,12 @@ async function getSearch(id: string, type: string, language: string, extra: any,
               case 'kitsu.search.movie':
                 metas = await performKitsuSearch('movie', query, language, config, page);
                 break;
+              case 'simkl.search.series':
+                metas = await performSimklAnimeSearch('series', query, language, config, page);
+                break;
+              case 'simkl.search.movie':
+                metas = await performSimklAnimeSearch('movie', query, language, config, page);
+                break;
               case 'tmdb.search':
                 metas = await performTmdbSearch(type, query, language, config, false, page);
                 break;
@@ -2606,6 +2676,8 @@ async function getSearch(id: string, type: string, language: string, extra: any,
         else if (providerId.includes('tvmaze.')) actualProvider = 'tvmaze';
         else if (providerId.includes('trakt.')) actualProvider = 'trakt';
         else if (providerId.includes('mdblist.')) actualProvider = 'mdblist';
+        else if (providerId.includes('simkl.')) actualProvider = 'simkl';
+        else if (providerId.includes('imdb.')) actualProvider = 'imdb';
       }
     }
 
@@ -2673,6 +2745,8 @@ async function getSearch(id: string, type: string, language: string, extra: any,
         else if (providerId.includes('tvmaze.')) actualProvider = 'tvmaze';
         else if (providerId.includes('trakt.')) actualProvider = 'trakt';
         else if (providerId.includes('mdblist.')) actualProvider = 'mdblist';
+        else if (providerId.includes('simkl.')) actualProvider = 'simkl';
+        else if (providerId.includes('imdb.')) actualProvider = 'imdb';
       }
     }
 

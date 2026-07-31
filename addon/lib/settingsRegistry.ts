@@ -1706,6 +1706,17 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     max: 50,
   },
   {
+    key: 'SIMKL_ANIME_SEARCH_RESULT_LIMIT',
+    envVar: 'SIMKL_ANIME_SEARCH_RESULT_LIMIT',
+    label: 'Simkl Anime Search Result Limit',
+    description: 'How many Simkl anime search results to hydrate into full results. Ids are mapped in memory and metas are fetched in one batch, so this costs less than the movie and series limit.',
+    category: 'Features',
+    type: 'number',
+    default: 20,
+    min: 1,
+    max: 50,
+  },
+  {
     key: 'IMDB_SUGGESTION_TIMEOUT_MS',
     envVar: 'IMDB_SUGGESTION_TIMEOUT_MS',
     label: 'IMDb Suggestion Timeout',

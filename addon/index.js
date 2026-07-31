@@ -5771,25 +5771,6 @@ addon.post('/api/cache/clean-bad', async (req, res) => {
   }
 });
 
-// Get cache health statistics
-addon.get('/api/cache/health', async (req, res) => {
-  try {
-    const { getCacheHealth } = require('./lib/getCache');
-    const health = getCacheHealth();
-    
-    res.json({
-      success: true,
-      health: health
-    });
-  } catch (error) {
-    consola.error('[Cache Health] Error:', error);
-    res.status(500).json({ 
-      error: 'Failed to get cache health',
-      details: error.message 
-    });
-  }
-});
-
 // Test granular caching
 addon.post('/api/cache/test-granular', async (req, res) => {
   try {

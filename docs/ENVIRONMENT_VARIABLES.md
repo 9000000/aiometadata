@@ -875,8 +875,19 @@ Caches artwork on disk and serves it from `/poster-cache` on the addon's own por
 
 ### `POSTER_PROXY_MAX_AGE_DAYS`
 - **Default**: `1`
-- **Description**: `Cache-Control: max-age` sent to players and browsers by the `/poster`, `/logo` and `/background` proxy routes (and their `/poster-cache/proxy/…` twins). Deliberately shorter than the store's own validity: the ETag on these routes is derived from the request parameters rather than the bytes, so a revalidation always answers `304` and only expiry brings down new art — which matters because most of what these routes serve is built from a URL template, so the bytes can change while the URL does not. Fractional values work (`0.25` = 6 hours), `0` means never expire, and anything below one minute is rounded up to it. Applies whether or not the built-in cache is on. It is capped by the served entry's own remaining validity, so a client can never hold art the cache has already refreshed. `stale-while-revalidate` stays at 7 days, or the `max-age` if that is longer.
+- **Description**: `Cache-Control: max-age` sent to players and browsers by the `/poster`, `/logo` and `/background` proxy routes (and their `/poster-cache/proxy/…` twins). Deliberately shorter than the store's own validity: an image these routes pass straight through is never buffered, so there is no body hash to revalidate against and only expiry brings down new art — which matters because most of what these routes serve is built from a URL template, so the bytes can change while the URL does not. An image served *from* the built-in cache does carry the store's body-hash ETag, so a client whose copy has aged out gets a bodyless `304` when the bytes are unchanged. Fractional values work (`0.25` = 6 hours), `0` means never expire, and anything below one minute is rounded up to it. Applies whether or not the built-in cache is on. It is capped by the served entry's own remaining validity, so a client can never hold art the cache has already refreshed.
+
+  `stale-while-revalidate` is sent at the same figure as `max-age`. It used to carry a 7-day floor inherited from the header's hardcoded ancestor, which let a CDN honouring it (Cloudflare does) serve art stale for a week regardless of how short the `max-age` was — including art the addon itself had already expired.
 - **Example**: `POSTER_PROXY_MAX_AGE_DAYS=7` or `POSTER_PROXY_MAX_AGE_DAYS=0.25`
+
+### `POSTER_PROXY_FOLLOW_UPSTREAM`
+- **Default**: `false`
+- **Description**: Forwards the `Cache-Control` the art provider itself sent, verbatim, instead of the figure `POSTER_PROXY_MAX_AGE_DAYS` produces — on images the `/poster`, `/logo` and `/background` routes pass straight through. Off by default, which is why a provider's own header does not reach a CDN in front of the addon: those routes replace it unconditionally, so a rating provider's short validity, or its request not to be cached at all, is invisible downstream. Turn this on when the provider is the authority on how long its art stays good — a ratings-overlay service such as XRDB or RPDB, whose URL names a slot rather than a file.
+
+  Only passed-through images are affected. One served from the built-in cache is advertised on its own remaining validity, which already reflects the source's headers when [`POSTER_CACHE_INFER_TTL`](#poster_cache_infer_ttl) or an `infer` provider policy is in play — so with the cache on, that pair is the more precise control and this one is unnecessary.
+
+  Where the provider sent no `Cache-Control`, the addon's own figure still applies. Note that art URL patterns are operator-supplied, so this trusts a provider you chose; a provider you do not control can pin its art in your CDN for as long as it likes.
+- **Example**: `POSTER_PROXY_FOLLOW_UPSTREAM=true`
 
 ### `POSTER_CACHE_INACTIVE_DAYS`
 - **Default**: `30`

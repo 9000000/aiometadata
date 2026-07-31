@@ -3,7 +3,9 @@ import { httpGet } from './httpClient.js';
 
 const logger = consola.withTag('ImdbSuggestions');
 
-const SUGGESTION_BASE = 'https://v3.sg.media-imdb.com/suggestion/x';
+// The titles path spends all eight slots the endpoint allows on titles, where the
+// unscoped one shares them with people and franchises we would only discard.
+const SUGGESTION_BASE = 'https://v3.sg.media-imdb.com/suggestion/titles/x';
 
 const TITLE_QIDS: Record<string, string[]> = {
   movie: ['movie', 'tvMovie', 'video', 'short', 'tvShort'],

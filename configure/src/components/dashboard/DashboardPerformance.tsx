@@ -18,6 +18,10 @@ import {
 } from "lucide-react";
 import { AnimatedNumber } from "../AnimatedNumber";
 
+const SEARCH_PROVIDER_METRICS = [
+  'tmdb', 'tvdb', 'tvmaze', 'mal', 'kitsu', 'trakt', 'mdblist', 'simkl', 'imdb', 'ai',
+].map(p => `search_${p}`);
+
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
@@ -233,13 +237,7 @@ export function DashboardPerformance({ data, loading }: { data: any; loading: bo
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {[
-                "search_tmdb",
-                "search_tvdb",
-                "search_tvmaze",
-                "search_mal",
-                "search_kitsu",
-              ].map((metric) => {
+              {SEARCH_PROVIDER_METRICS.map((metric) => {
                 const stats = timingMetrics[metric]?.overall || {};
                 if (stats.count === 0) return null;
 
@@ -638,13 +636,7 @@ export function DashboardPerformance({ data, loading }: { data: any; loading: bo
               <h4 className="font-medium mb-2">Provider Performance</h4>
               <p className="text-sm text-muted-foreground">
                 {(() => {
-                  const providers = [
-                    "search_tmdb",
-                    "search_tvdb",
-                    "search_tvmaze",
-                    "search_mal",
-                  ];
-                  const providerStats = providers
+                  const providerStats = SEARCH_PROVIDER_METRICS
                     .map((provider) => ({
                       name: provider.replace("search_", "").toUpperCase(),
                       avg: timingMetrics?.[provider]?.overall?.average || 0,

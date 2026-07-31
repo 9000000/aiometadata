@@ -2494,6 +2494,12 @@ function getProviderFromSearchId(searchId: string): string {
     return 'trakt';
   } else if (searchId.includes('mdblist.')) {
     return 'mdblist';
+  } else if (searchId.includes('simkl.')) {
+    return 'simkl';
+  } else if (searchId.includes('imdb.')) {
+    return 'imdb';
+  } else if (searchId.includes('gemini.')) {
+    return 'ai';
   } else if (searchId === 'people_search') {
     return 'people_search';
   } else if (searchId === 'search') {

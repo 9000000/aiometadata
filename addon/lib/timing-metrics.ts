@@ -21,6 +21,10 @@ interface TrendEntry {
   period?: string;
 }
 
+const SEARCH_PROVIDER_METRICS = [
+  'tmdb', 'tvdb', 'tvmaze', 'mal', 'kitsu', 'trakt', 'mdblist', 'simkl', 'imdb', 'ai',
+].map(p => `search_${p}`);
+
 const EMPTY_STATS: TimingStats = {
   count: 0,
   average: 0,
@@ -162,7 +166,7 @@ class TimingMetrics {
 
   async getProviderTimingBreakdown(): Promise<Record<string, any>> {
     try {
-      const providerMetrics = ['search_tmdb', 'search_tvdb', 'search_tvmaze', 'search_mal', 'search_kitsu', 'search_trakt'];
+      const providerMetrics = SEARCH_PROVIDER_METRICS;
       const secondaryMetrics = [
         'secondary_tmdb_find_by_imdb',
         'secondary_tvdb_find_by_imdb',

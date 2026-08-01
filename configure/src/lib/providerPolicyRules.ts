@@ -1,49 +1,41 @@
-/**
- * The rules behind the per-provider cache policy modal.
- *
- * Deliberately free of React, and of path aliases — the node:test runner resolves
- * neither, and the distinction this encodes (a row that is *displayed* is not a
- * row that is *ruled on*) is the part of that screen worth testing. That is also
- * why the shared duration grammar below is imported by relative path.
- *
- * See docs/superpowers/specs/2026-07-26-policy-modal-ux-design.md §4.
- */
-
 export type TtlPolicy = 'default' | 'infer' | 'custom' | 'bypass';
 
-/** A rule exactly as stored in `POSTER_CACHE_PROVIDER_POLICIES`. */
 export interface ProviderPolicyRule {
   domain: string;
   policy: TtlPolicy;
   ttl?: string;
 }
 
-export interface PolicyRow {
-  domain: string;
-  /** On the built-in list: offered whether or not it has a rule, so it resets rather than removes. */
-  builtIn: boolean;
-  /** Whether this row has a rule of its own. Tracked apart from `policy` — see `buildPolicyRules`. */
-  explicit: boolean;
-  /** What the row shows: its own rule when explicit, otherwise what it inherits. */
+export interface ProviderPreset {
   policy: TtlPolicy;
-  /** Verbatim, and only meaningful for `custom`. */
-  ttl: string;
+  ttl?: string;
 }
 
-/** What a provider resolves to with no rule of its own. */
-export function inheritedPolicy(inferEnabled: boolean): TtlPolicy {
+export interface KnownProvider {
+  domain: string;
+  preset?: ProviderPreset;
+}
+
+export interface PolicyRow {
+  domain: string;
+  builtIn: boolean;
+  explicit: boolean;
+  policy: TtlPolicy;
+  ttl: string;
+  preset?: ProviderPreset;
+}
+
+export function inheritedPolicy(inferEnabled: boolean, preset?: ProviderPreset): TtlPolicy {
+  if (preset) return preset.policy;
   return inferEnabled ? 'infer' : 'default';
 }
 
-// The duration grammar lives in addon/lib/posterCache/duration.ts, imported by
-// the engine too, so a rule the modal accepts is one the engine reads the same way.
 import { parseDurationMs } from '../../../addon/lib/posterCache/duration';
 
 export { parseDurationMs };
 
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 
-/** Lower-cased and stripped of leading dots, matching how the engine reads a rule. */
 export function normalizeDomain(value: string): string {
   return (value || '').trim().toLowerCase().replace(/^\.+/, '');
 }
@@ -52,66 +44,53 @@ export function isValidDomain(value: string): boolean {
   return DOMAIN_RE.test(normalizeDomain(value));
 }
 
-/** A human-readable reason this row cannot be saved yet, or `null`. */
 export function rowProblem(row: PolicyRow): string | null {
-  // A duration only has to parse when the chosen policy is going to use it.
   if (!row.explicit || row.policy !== 'custom') return null;
   if (!row.ttl.trim()) return 'Enter a duration';
   if (parseDurationMs(row.ttl) === null) return 'Use a duration such as 12h, 30d or 1y';
   return null;
 }
 
-/**
- * Builds the rows the modal shows: every built-in provider, plus any domain that
- * already has a rule. A provider with no rule still gets a row — that is the
- * point of the screen — but it is marked inherited so it saves as nothing.
- */
 export function rowsFromRules(
   rules: ProviderPolicyRule[],
-  knownProviders: string[],
+  knownProviders: KnownProvider[],
   inferEnabled: boolean
 ): PolicyRow[] {
   const byDomain = new Map<string, ProviderPolicyRule>();
   for (const rule of rules) byDomain.set(normalizeDomain(rule.domain), rule);
 
-  const domains = [...knownProviders.map(normalizeDomain)];
+  const presets = new Map<string, ProviderPreset | undefined>();
+  for (const provider of knownProviders) {
+    presets.set(normalizeDomain(provider.domain), provider.preset);
+  }
+
+  const domains = [...presets.keys()];
   for (const domain of byDomain.keys()) {
     if (!domains.includes(domain)) domains.push(domain);
   }
 
   return domains.map((domain) => {
     const rule = byDomain.get(domain);
+    const preset = presets.get(domain);
     return {
       domain,
-      builtIn: knownProviders.map(normalizeDomain).includes(domain),
+      builtIn: presets.has(domain),
       explicit: !!rule,
-      policy: rule ? rule.policy : inheritedPolicy(inferEnabled),
+      policy: rule ? rule.policy : inheritedPolicy(inferEnabled, preset),
       ttl: rule?.ttl ?? '',
+      preset,
     };
   });
 }
 
-/**
- * Only rows with a rule of their own are written.
- *
- * `explicit` is tracked separately from `policy` because `{policy: 'default'}`
- * and *no rule* are not the same thing: with the global toggle on, no-rule
- * resolves to `infer` while an explicit `default` overrides it back. Saving every
- * displayed row would write a rule per provider and neuter the toggle; saving
- * only the non-default ones would make pinning a provider to default
- * unexpressible. So choosing any value marks a row explicit, and only a reset
- * clears it.
- */
 export function buildPolicyRules(rows: PolicyRow[]): ProviderPolicyRule[] {
   return rows
     .filter((row) => row.explicit)
     .map((row) => (row.policy === 'custom'
       ? { domain: row.domain, policy: row.policy, ttl: row.ttl.trim() }
-      // A duration left behind by switching away from Custom must not ride along.
       : { domain: row.domain, policy: row.policy }));
 }
 
-/** The empty string, not `[]`, so an install with no rules reads as unset. */
 export function serializePolicies(rules: ProviderPolicyRule[]): string {
   return rules.length === 0 ? '' : JSON.stringify(rules);
 }
@@ -120,7 +99,6 @@ export function serializePolicies(rules: ProviderPolicyRule[]): string {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** At most two decimals, without a trailing `.0`. */
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -133,13 +111,6 @@ function plural(value: number, unit: string): string {
   return `${trimNumber(value)} ${unit}${value === 1 ? '' : 's'}`;
 }
 
-/**
- * The stored setting is in days and accepts fractions, and `0` means *never
- * expire* rather than *expire immediately*. Both are easy to get wrong from a
- * bare number box, so the modal echoes the meaning back as you type.
- *
- * `null` for anything unusable, which is what blocks the save.
- */
 export function describeDays(raw: unknown): string | null {
   const text = String(raw ?? '').trim();
   if (text === '') return null;
@@ -148,8 +119,6 @@ export function describeDays(raw: unknown): string | null {
 
   if (days === 0) return 'never expires';
 
-  // The unit is chosen from the *rounded* figure, so a value a hair under an hour
-  // reads as "1 hour" rather than "60 minutes".
   const ms = days * DAY_MS;
   const asMinutes = round2(ms / (60 * 1000));
   if (asMinutes < 1) return 'under a minute';
@@ -164,7 +133,6 @@ export function describeDays(raw: unknown): string | null {
 export interface SettingChange {
   key: string;
   value: string;
-  /** Names the setting in a partial-failure message. */
   label: string;
 }
 
@@ -174,7 +142,6 @@ export interface PolicyFormState {
   rules: ProviderPolicyRule[];
 }
 
-/** Compared rather than the written value: row order is deterministic but arbitrary. */
 function canonicalPolicies(rules: ProviderPolicyRule[]): string {
   return JSON.stringify(
     [...rules]
@@ -185,7 +152,6 @@ function canonicalPolicies(rules: ProviderPolicyRule[]): string {
   );
 }
 
-/** `30`, ` 30 ` and `30.0` are the same setting; only a different number is a change. */
 function sameDays(a: string, b: string): boolean {
   const left = Number(String(a).trim());
   const right = Number(String(b).trim());
@@ -193,16 +159,6 @@ function sameDays(a: string, b: string): boolean {
   return String(a).trim() === String(b).trim();
 }
 
-/**
- * Folds one landed write back into the baseline Save diffs against.
- *
- * Needed because a save is several requests and any one of them can fail. Without
- * this the baseline stays where it started, so a retry re-asks for settings that
- * already landed and the Save button contradicts the "Partly saved" message.
- *
- * Every key `pendingChanges` can emit must be handled here — a missing one makes
- * Save retry that setting forever.
- */
 export function applyChange(state: PolicyFormState, change: SettingChange): PolicyFormState {
   switch (change.key) {
     case 'POSTER_CACHE_TTL_DAYS':
@@ -216,12 +172,6 @@ export function applyChange(state: PolicyFormState, change: SettingChange): Poli
   }
 }
 
-/**
- * The settings this form would actually write, least specific first so that every
- * intermediate state during a multi-write save is a coherent one. Untouched
- * settings are never written, which keeps the common case — editing one rule — to
- * a single request, and lets the modal disable Save when there is nothing to do.
- */
 export function pendingChanges(next: PolicyFormState, saved: PolicyFormState): SettingChange[] {
   const changes: SettingChange[] = [];
 

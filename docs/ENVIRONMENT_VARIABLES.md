@@ -723,6 +723,10 @@ thing dropped. No manual purge is needed.
 
 Caches artwork on disk and serves it from `/poster-cache` on the addon's own port — no extra container, port, or volume. Images live under `addon/data/poster-cache`, inside the data volume that is already mounted.
 
+Two terms used throughout this section. The **proxy routes** are `/poster`, `/logo`, `/background` and `/landscape`, plus their `/poster-cache/proxy/…` twins. The **direct route** is `/poster-cache/<class>/<url>`, addressed by the image URL itself.
+
+**How long an image stays fresh** is decided most-specific-first: a rule in [`POSTER_CACHE_PROVIDER_POLICIES`](#poster_cache_provider_policies), then the provider's built-in policy ([`POSTER_CACHE_PROVIDER_PRESETS`](#poster_cache_provider_presets)), then [`POSTER_CACHE_INFER_TTL`](#poster_cache_infer_ttl), then the flat [`POSTER_CACHE_TTL_DAYS`](#poster_cache_ttl_days).
+
 ### `ENABLE_BUILTIN_POSTER_CACHE`
 - **Default**: `false`
 - **Description**: Turns the image cache on. Requires a restart. Posters are cached immediately; every other image class is opt-in below, so enabling this never changes disk usage unexpectedly. Each replica in a multi-replica deployment keeps its own independent cache.
@@ -752,32 +756,30 @@ Caches artwork on disk and serves it from `/poster-cache` on the addon's own por
 - **Default**: `true` (when `ENABLE_BUILTIN_POSTER_CACHE` is on)
 - **Description**: Caches the images the addon renders itself — rating-overlaid posters from the `/poster` route (active when **Proxy Rating & Custom Art** is on) plus the `/api/image/blur` and `/api/image/banner-to-background` transforms. Enabled by default with the cache; without it those requests re-render on every view. Total volume is still bounded by `POSTER_CACHE_MAX_SIZE`.
 
-  This covers *rendered* images only. Custom art URLs travel through the same `/poster`, `/logo` and `/background` proxy routes and their `/poster-cache/proxy/…` twins, landscape included, but are passed through byte-for-byte, so they are stored as the class they actually are and follow that class's toggle — a custom logo needs `POSTER_CACHE_LOGOS`, a custom background needs `POSTER_CACHE_BACKGROUNDS`, a custom landscape needs `POSTER_CACHE_LANDSCAPE_POSTERS`.
+  This covers *rendered* images only. Custom art URLs use the same proxy routes but are passed through byte-for-byte, so they store as the class they actually are and follow that class's toggle — a custom logo needs `POSTER_CACHE_LOGOS`, a custom background needs `POSTER_CACHE_BACKGROUNDS`, and so on.
 - **Example**: `POSTER_CACHE_PROCESSED_IMAGES=false`
 
 ### `POSTER_PROXY_ALLOW_PRIVATE`
 - **Default**: `true`
-- **Description**: Whether a signed art URL may reach a private/LAN address. The signature proves the addon generated the URL from your art config — but on a multi-user instance that config is *user-supplied*, so it proves origin, not safety: any user could set an art pattern pointing at an address inside your network and have the addon fetch it. Leave this on for a single-operator deployment, where a self-hosted art provider then works with no allowlist entry. **Set it to `false` on a public multi-user instance**; `POSTER_CACHE_ALLOWED_HOSTS` still lets you permit specific hosts you control, and public art providers are unaffected either way.
+- **Description**: Whether a signed art URL may reach a private/LAN address. The signature proves the addon generated the URL from your art config — but that config is user-supplied, so it proves origin, not safety: on a multi-user instance any user could point an art pattern at an address inside your network. Leave it on for a single-operator deployment, where a self-hosted art provider then needs no allowlist entry. **Set it to `false` on a public multi-user instance**; `POSTER_CACHE_ALLOWED_HOSTS` still permits specific hosts you control, and public art providers are unaffected either way.
 
-  This applies to every art fetch the addon makes — whether the image is being stored in the built-in cache or passed straight through to the client, and on both the `/poster`, `/logo` and `/background` proxy routes with their `/poster-cache/proxy/…` twins (landscape included) and the direct `/poster-cache/<url>` route.
+  Applies to every art fetch, cached or passed through, on both the proxy routes and the direct route.
 - **Example**: `POSTER_PROXY_ALLOW_PRIVATE=false`
 
 ### `POSTER_CACHE_ALLOWED_HOSTS`
 - **Default**: _(empty)_
-- **Description**: Comma-separated hosts the image cache is allowed to fetch from even when they resolve to a private/LAN address. By default any upstream resolving to a private address is refused (SSRF protection). You usually **don't** need this with **Proxy Rating & Custom Art** on: those URLs are signed, and a valid signature is what grants the exception, so a self-hosted PosterPlus on your LAN works without listing it — in catalogs, on detail pages and during cache warming alike.
+- **Description**: Comma-separated hosts the addon may fetch from even when they resolve to a private/LAN address, which is otherwise refused as SSRF protection. Matched by hostname; listed hosts are still pinned to their resolved addresses. The guard runs before every fetch whether or not the class is being stored, so turning the cache off narrows what is kept, never what can be reached.
 
-  You **do** need it when a private art host is reached without that signature: with the art proxy **off**, art URLs go straight to `/poster-cache/<class>/<url>`, which carries no signature and so faces the full guard. Match is by hostname; everything not listed stays blocked, and listed hosts are still pinned to their resolved addresses.
+  You usually **don't** need this with **Proxy Rating & Custom Art** on: those URLs are signed, and a valid signature grants the exception on its own. You **do** need it with the art proxy off, when art goes to the direct route, which carries no signature.
 
-  The refusal itself is not conditional on the cache being enabled: an art URL is resolved and checked before it is fetched even when the class is not being stored, so turning `ENABLE_BUILTIN_POSTER_CACHE` off narrows what is kept, never what is allowed to be reached.
-
-  **If art from a host on your own network stopped loading**, that host is being refused because nothing proved the addon issued the URL. The addon logs a warning naming it. Either list it here, or set [`IMAGE_PROXY_SIGNING_SECRET`](#image_proxy_signing_secret) (or `ADMIN_KEY`, which it falls back to) so proxy art URLs are signed — with no secret set, no URL is signed and none can claim the private-address exception.
+  **If art from your own network stopped loading**, it is being refused because nothing proved the addon issued the URL — a warning naming the host is logged. Either list it here, or set [`IMAGE_PROXY_SIGNING_SECRET`](#image_proxy_signing_secret) so proxy art URLs are signed. With no secret set, nothing is signed and nothing can claim the exception.
 - **Example**: `POSTER_CACHE_ALLOWED_HOSTS=postersplus,xrdb`
 
 ### `IMAGE_PROXY_SIGNING_SECRET`
 - **Default**: falls back to `ADMIN_KEY`
-- **Description**: Secret used to sign the `/poster`, `/logo`, `/background` and `/landscape` proxy URLs the addon generates from your art config. A valid signature lets those (and only those) URLs reach a private/LAN provider without an explicit allowlist entry; unsigned or tampered `url=` values still face the full SSRF guard. Optional — only set it to pin a dedicated secret; the `ADMIN_KEY` fallback is sufficient for most deployments.
+- **Description**: Secret used to sign the proxy URLs the addon generates from your art config. A valid signature lets those, and only those, reach a private/LAN provider without an allowlist entry; unsigned or tampered `url=` values still face the full SSRF guard. Optional — the `ADMIN_KEY` fallback suits most deployments.
 
-  Note that rotating this value (or `ADMIN_KEY`, when it is the fallback) invalidates every signature already issued, so art URLs sitting in cached meta responses stop verifying and fall back to their unproxied source until that cache turns over.
+  Rotating it (or `ADMIN_KEY`, when it is the fallback) invalidates every signature already issued, so art URLs in cached meta responses stop verifying and fall back to their unproxied source until that cache turns over.
 - **Example**: `IMAGE_PROXY_SIGNING_SECRET=some-long-random-string`
 
 ### `POSTER_CACHE_MAX_SIZE`
@@ -787,66 +789,65 @@ Caches artwork on disk and serves it from `/poster-cache` on the addon's own por
 
 ### `POSTER_CACHE_MEMORY_SIZE`
 - **Default**: `128m`
-- **Description**: **RAM** budget for the hottest images, layered in front of the disk cache. A memory hit skips both the disk read and the per-request buffer allocation that goes with it, which lowers GC pressure and resident memory even though the tier itself holds images. Evicts least-recently-used once the budget is reached, and only admits images below `POSTER_CACHE_STREAM_THRESHOLD` — caching large artwork in RAM would defeat the point of streaming it.
+- **Description**: **RAM** budget for the hottest images, in front of the disk cache. A memory hit skips the disk read and its per-request buffer, lowering GC pressure. Evicts least-recently-used at the budget, and only admits images below `POSTER_CACHE_STREAM_THRESHOLD` — holding large artwork in RAM would defeat streaming it.
 
-  **Set to `0` to disable the tier and serve every hit from disk.** Do that on memory-constrained hosts; the cache keeps working exactly as before, just without the RAM layer.
-
-  This is *in addition to* the addon's own footprint, so budget roughly `baseline + POSTER_CACHE_MEMORY_SIZE`. The benefit is largest when the disk cache is too big for the OS page cache to absorb; if the whole cache already fits in free RAM, the operating system is effectively doing this for you.
+  This is *in addition to* the addon's own footprint, so budget roughly `baseline + POSTER_CACHE_MEMORY_SIZE`. **Set `0` to disable the tier** on memory-constrained hosts. The benefit is largest when the disk cache is too big for the OS page cache to absorb; if it already fits in free RAM, the OS is doing this for you.
 - **Example**: `POSTER_CACHE_MEMORY_SIZE=512m` or `POSTER_CACHE_MEMORY_SIZE=0`
 
 ### `POSTER_CACHE_TTL_DAYS`
 - **Default**: `30`
-- **Description**: How long a cached image stays fresh. One number for every provider, re-evaluated on every read, so a change takes effect immediately — no migration, no rewrite, no purge.
+- **Description**: How long a cached image stays fresh, for any provider without a rule or a built-in policy. Re-evaluated on every read, so a change applies immediately — no migration or purge. Fractional values work (`0.5` = 12 hours); **`0` means never expire**, leaving images to be evicted for space (`POSTER_CACHE_MAX_SIZE`) or swept as unused (`POSTER_CACHE_INACTIVE_DAYS`).
 
-  > **If you use a rating poster service or a custom art URL pattern, give its domain a rule.** Those URLs name a *slot* rather than a file: `api.ratingposterdb.com/…/tt1234567.jpg` and `images.metahub.space/logo/medium/tt0055708/img` serve whatever the provider currently holds for that ID, at a URL that never changes. The bytes move underneath a URL that does not, and a rating baked into the pixels moves with them — so the flat validity will show a stale rating or overlay until it expires. Set a short `custom` validity for the domain under **Advanced…** on the Image Cache card, or in `POSTER_CACHE_PROVIDER_POLICIES` below.
-  >
-  > The rating services: `api.ratingposterdb.com`, `api.top-posters.com`, `btttr.cc`, `extendedratings.com`, `postersplus.elfhosted.com`. A custom pattern's domain is whatever you pointed it at — there is no list for that, which is why it is worth checking.
-  >
-  > `POSTER_CACHE_INFER_TTL` is **not** a substitute here. RPDB advertises 14–54 days per poster and answers `200` to `If-Modified-Since`, so inference makes it worse rather than better.
+  Expiry is not a re-download. Where the source sent an `ETag` or `Last-Modified`, the refetch is conditional and a `304` restarts the entry's validity without transferring the body (`X-Cache-Status: REVALIDATED`). If the source is unreachable the old bytes are still served (`X-Cache-Status: STALE`) rather than erroring. Clients are told what is left of the entry's validity, so a browser revalidates when the store does.
 
-  By contrast, art read out of a provider's metadata response mostly names a specific file — `image.tmdb.org/t/p/w600_and_h900_bestv2/xdhL….jpg` serves the same bytes forever, and when the artwork changes the path changes with it. Those are safe at the flat default.
-
-  Fractional values work (`0.5` = 12 hours). **Set to `0` to never expire**, so images live until they are evicted for space (`POSTER_CACHE_MAX_SIZE`) or swept as unused (`POSTER_CACHE_INACTIVE_DAYS`).
-
-  Expiry is not the same as a re-download. Where the source sent an `ETag` or `Last-Modified` — 90% and 99% of sampled art URLs respectively — the refetch is conditional, and a `304` restarts the entry's validity without transferring the body (`X-Cache-Status: REVALIDATED`). Only a genuinely changed image costs a full transfer. If the source is unreachable the old bytes are still served (`X-Cache-Status: STALE`) rather than erroring.
-
-  Clients are told what is left of the entry's own validity, so a browser revalidates at the same moment the store does rather than on a global schedule.
-
-  This is a flat number by design: a default nobody configured should be predictable and identical for every provider. To use what each source actually promises instead, see `POSTER_CACHE_INFER_TTL`; to override one provider, see `POSTER_CACHE_PROVIDER_POLICIES`.
+  > **Pointing a custom art URL pattern at a host the addon does not know?** Give its domain a rule. Such URLs usually name a *slot* rather than a file — `…/logo/medium/tt0055708/img` serves whatever the provider holds for that ID now — so the bytes change while the URL does not, and a stale rating or overlay sits there until this flat validity expires. Art read out of a metadata response mostly names a specific file and is safe here. The rating services the addon already knows need nothing from you; see [`POSTER_CACHE_PROVIDER_PRESETS`](#poster_cache_provider_presets).
 - **Example**: `POSTER_CACHE_TTL_DAYS=7` or `POSTER_CACHE_TTL_DAYS=0`
 
 ### `POSTER_CACHE_INFER_TTL`
 - **Default**: `false`
-- **Description**: Derives each image's validity from the caching headers its own source sent with it, rather than from the flat setting above. Where a source promises nothing we can act on, the flat value still applies — this replaces the default, it does not remove it.
+- **Description**: Derives an image's validity from the caching headers its source sent, instead of the flat setting above. Applies only to providers with **neither** a rule **nor** a built-in policy — every provider the addon knows already has one, so in practice this governs whatever you pointed a custom art URL pattern at. Where a source promises nothing usable, the flat value still applies.
 
-  What the providers actually send, and what that works out to:
+  How a header is read:
 
-  | Source | Read from | Resulting validity |
-  | --- | --- | --- |
-  | `image.tmdb.org` | `max-age=31919000` | 1 year (bounded; raw 369 days) |
-  | `media.kitsu.app` | `max-age=31536000` | 1 year |
-  | `images.metahub.space` | `max-age=5184000` − `Age` | ~55 days |
-  | `artworks.thetvdb.com` | *(no `Cache-Control`)* — `Last-Modified` heuristic | ~147 days |
-  | `cdn.myanimelist.net` | `max-age≈204000` | ~2.4 days |
-  | `api.ratingposterdb.com` | `max-age` − `Age`, computed per title | 14–54 days, per poster |
-  | `api.top-posters.com` | `max-age=21600` − `Age` | 27 minutes – 6 hours |
-  | `btttr.cc` | `max-age=0, must-revalidate`, or a 6 h `max-age` whose `Age` has already outrun it — both with an `ETag` | revalidated on every read |
+  - A value is never raised. Two days stays two days, even where the flat default would have been thirty.
+  - `Age` is subtracted — the promise was already running before the bytes arrived.
+  - `CDN-Cache-Control` (RFC 9213) and `s-maxage` win over `max-age`, because both address shared caches and that is what the store is. Neither is ever used for the lifetime handed to a browser, so a provider can tell caches five minutes and browsers to revalidate every time, and both answers hold.
+  - `max-age=0`, `no-cache`, or a spent window mean *revalidate before reuse*: the entry expires at once and every read becomes a conditional `GET`. With no validator to revalidate against that would be a full re-download per request, so inference declines and the flat default applies instead.
+  - `no-store` is a refusal to be cached: the image is served but never written, any existing copy is dropped, and the client is told `no-store` too.
+  - Where nothing is promised but a `Last-Modified` is present, RFC 9111's heuristic applies — 10% of how long the art has sat unchanged, and only for art at least 10 days old.
 
-  `s-maxage` outranks `max-age` (we are a shared cache), any `Age` is subtracted since the promise was already running before the bytes reached us, `Expires` is used only when nothing explicit was sent, and `immutable` goes straight to the one-year bound. Where a source sends no freshness at all but does send a `Last-Modified`, RFC 9111's heuristic applies — 10% of how long the art has already sat unchanged — but only for art at least 10 days old, since 10% of "rendered four minutes ago" is a timestamp artefact rather than a signal.
+  Two cautions. RPDB, postersplus and MyAnimeList each advertise a validator and then answer `200` with a full body anyway, so an expiry there costs the whole image. And `Age` differs per CDN node, so one URL can land on different validities from different edges.
 
-  **No value is ever raised.** If a source says two days, it gets two days, even where the flat default would have been thirty. Inference either produces a confident answer or declines and falls back.
-
-  Three answers are not durations. `max-age=0`, `no-cache`, and a window whose `Age` has already consumed it all mean *revalidate before reuse* — so the entry is expired immediately and every read becomes a conditional `GET`, which is cheap where the source answers `304`. Where there is no `ETag` or `Last-Modified` to revalidate with, that would mean a full re-download per request, so inference declines instead and the flat default applies. And `no-store` is the source refusing to be cached at all: its image is served from the fetch already made but never written, any copy held from before is removed, and the client is told `no-store` too.
-
-  Two things worth knowing before enabling it. RPDB cannot be revalidated (above), so a long inferred validity there is a one-way bet with no cheap correction until it expires. And `Age` differs per CDN node, so the same URL can land on different validities from different edges — correct per HTTP, but not reproducible.
-
-  Shortening any validity produces a one-off revalidation wave: expiry is lazy, so entries refresh as they are next requested rather than all at once, but the warmer pulls whole catalogs in one run, so many entries share an expiry instant.
-
-  This governs **stored** images only. An image the addon passes straight through is not stored, so there is nothing for this setting to decide: those responses already follow the provider's own headers, bounded by [`POSTER_PROXY_MAX_AGE_DAYS`](#poster_proxy_max_age_days).
+  This governs **stored** images only. A passed-through image already follows its provider, bounded by [`POSTER_PROXY_MAX_AGE_DAYS`](#poster_proxy_max_age_days).
 - **Example**: `POSTER_CACHE_INFER_TTL=true`
 
+### `POSTER_CACHE_PROVIDER_PRESETS`
+- **Default**: `true`
+- **Description**: Every provider the addon knows ships with a validity policy measured from what it actually sends, so a fresh install caches rating posters correctly with nothing configured. Each preset answers one question — **can this provider's own headers be believed?**
+
+  Measured 2026-08-01 across ten assets per provider:
+
+  | Provider | What it sends | Policy |
+  | --- | --- | --- |
+  | `api.ratingposterdb.com` | 1–2 days for a new release, 20–50 days once the rating settles | `infer` |
+  | `btttr.cc` | 5 minutes where the overlay moves, up to 7 days where it does not | `infer` |
+  | `extendedratings.com` | 20 minutes or 3 days, on the same split | `infer` |
+  | `api.top-posters.com` | 6 hours, and answers `304` so an expiry is nearly free | `infer` |
+  | `postersplus.elfhosted.com` | a flat 4 hours | `infer` |
+  | `image.tmdb.org` | ~1 year, on art whose path changes when the picture does | `infer` |
+  | `images.metahub.space` | 60 days — but addresses art by title | `default` |
+  | `media.kitsu.app` | 1 year — but addresses art by title | `default` |
+  | `artworks.thetvdb.com` | no cache directives at all | `default` |
+  | `cdn.myanimelist.net` | 3.8 hours – 6.9 days, jittering per file; ignores conditional requests | `default` |
+  | `assets.fanart.tv` | nothing, and no validator, on the largest bodies of any provider | `default` |
+
+  The rating services vary their figure by how volatile each image is, which is why following them beats any fixed duration. The `default` half is what a global toggle could never express: following metahub would cache art addressed by title for 57 days — worse than the flat number, not better. These presets are what makes [`POSTER_CACHE_INFER_TTL`](#poster_cache_infer_ttl) safe to turn on.
+
+  Resolved on every read and never stored, so turning this off applies immediately to images already cached. A rule always wins, so you only need this to go back to a single validity across every provider without one.
+- **Example**: `POSTER_CACHE_PROVIDER_PRESETS=false`
+
 ### `POSTER_CACHE_PROVIDER_POLICIES`
-- **Default**: unset — no rules, so every provider resolves to the flat validity
+- **Default**: unset — no rules, so each provider falls to its built-in policy, or to the flat validity if it has none
 - **Description**: Overrides how **one provider's** images are cached, leaving every other provider alone. A JSON list of rules:
 
   ```json
@@ -864,45 +865,34 @@ Caches artwork on disk and serves it from `/poster-cache` on the addon's own por
   | `custom` | A fixed duration given as `ttl`. Units are required: `30s`, `15m`, `12h`, `30d`, `2w`, `1y`. |
   | `bypass` | Serve the provider's images without ever storing them. |
 
-  **Precedence**, most specific first: a rule here, then `POSTER_CACHE_INFER_TTL`, then the flat validity. A rule is matched on the host in the cache key, so one rule covers that provider's posters, backgrounds, logos, thumbnails and processed art alike. A rule saying `default` therefore switches one provider *back* to the flat number while the global toggle is on.
+  A rule outranks everything else, including a provider's built-in policy — so `default` pins one provider to the flat number while the global toggle is on. Matching is on the host in the cache key, so one rule covers that provider's posters, backgrounds, logos, thumbnails and processed art alike. A domain covers its subdomains (`elfhosted.com` matches `postersplus.elfhosted.com`), and where two rules match, the more specific wins regardless of order.
 
-  A domain covers its subdomains, so `elfhosted.com` matches `postersplus.elfhosted.com`. Where two rules both match, the more specific one wins regardless of the order they are written in.
+  You do not have to write this by hand: **Dashboard → Operations → Image Cache → Advanced…** edits the same setting. Malformed JSON is refused on save; a bad value reaching the engine another way is logged once and ignored, falling back to the flat validity.
 
-  You do not have to write this by hand: **Dashboard → Operations → Image Cache → Advanced…** edits the same setting and explains what each policy does as you pick it.
-
-  Malformed JSON is refused when you save it. If a bad value reaches the engine another way it is ignored — logged once, with every provider falling back to the flat validity — rather than taking the cache down with it.
-
-  **`bypass` leaves whatever is already cached for that provider on disk.** Those entries are simply never read again, so they are swept after `POSTER_CACHE_INACTIVE_DAYS` (30 days by default) with the disk held in the meantime. Saving a policy never deletes data as a side effect; to reclaim the space now, purge that provider explicitly:
+  **`bypass` leaves whatever is already cached for that provider on disk** — saving a policy never deletes data as a side effect. Those entries are never read again and are swept after `POSTER_CACHE_INACTIVE_DAYS`. To reclaim the space now, purge the domain explicitly:
 
   ```
   POST /api/dashboard/poster-cache/purge   { "domain": "some.broken.cdn" }
   ```
-
-  which removes that domain's entries across every image class. Switching a provider back off `bypass` later simply finds the survivors expired, and they revalidate.
 - **Example**: `POSTER_CACHE_PROVIDER_POLICIES=[{"domain":"api.ratingposterdb.com","policy":"custom","ttl":"6h"}]`
 
 ### `POSTER_PROXY_MAX_AGE_DAYS`
 - **Default**: `1`
-- **Description**: `Cache-Control: max-age` sent to players and browsers by the `/poster`, `/logo` and `/background` proxy routes and their `/poster-cache/proxy/…` twins, landscape included. For an image served *from* the built-in cache, the entry's own remaining validity applies, capped by this figure. For an image **passed straight through** — one the addon is not storing — this is the **ceiling** on what the provider itself asked for, and the figure sent outright when the provider asked for nothing. Fractional values work (`0.25` = 6 hours); `0` lifts the ceiling to a year, which means whatever the provider promised wins. Anything below one minute is rounded up to it. Applies whether or not the built-in cache is on.
+- **Description**: The `Cache-Control: max-age` the proxy routes send to players and browsers. Applies whether or not the built-in cache is on. Fractional values work (`0.25` = 6 hours); `0` lifts the ceiling to a year, and anything below a minute is rounded up to one.
 
-  **A passed-through image follows its provider, bounded.** Those bytes are not being kept, so for them the addon is a plain proxy and the provider is the authority on how long its own art stays good: the figure sent is what it promised, less the `Age` it arrived with, clamped to this setting and to a one-minute floor. Its refusals are relayed too — `no-store` as `no-store`, `no-cache` as `no-cache`, and `must-revalidate` suppresses the stale window. This matters most for a rating provider, whose URL names a slot rather than a file: a flat figure here advertised a stale rating for its whole duration. Provider policies are deliberately **not** consulted on this path — see [`POSTER_CACHE_PROVIDER_POLICIES`](#poster_cache_provider_policies), which decides what the *store* keeps.
+  - **Served from the cache**: the entry's own remaining validity, capped by this figure.
+  - **Passed straight through**: this is a *ceiling* on what the provider asked for, and the figure sent outright when it asked for nothing. The addon is a plain proxy for those bytes, so the provider decides — its figure less the `Age` it arrived with, and its `no-store` / `no-cache` / `must-revalidate` relayed as sent. Provider policies are deliberately not consulted here; they decide what the *store* keeps.
 
-  Both kinds of response carry a validator, so an unchanged image costs a bodyless `304` rather than a transfer: a cached one carries the store's body hash, a passed-through one carries the origin's own `ETag` and `Last-Modified` with the client's conditional request relayed upstream to answer it.
+  Both kinds carry a validator, so an unchanged image costs a bodyless `304`: a cached one uses the store's body hash, a passed-through one the origin's own `ETag`, with the client's conditional request relayed upstream.
 
-  `stale-while-revalidate` is sent at the same figure as `max-age`. It used to carry a 7-day floor inherited from the header's hardcoded ancestor, which let a CDN honouring it (Cloudflare does) serve art stale for a week regardless of how short the `max-age` was — including art the addon itself had already expired. Note the direct `/poster-cache/<url>` route sends no `stale-while-revalidate` at all and is not capped by this figure: it is addressed by the image URL itself and never serves rating providers, so a changed image is a changed request and there is nothing to serve stale.
+  `stale-while-revalidate` is sent at the same figure as `max-age`. The direct route sends none and is not capped by this setting — it is addressed by the image URL, so a changed image is a changed request.
 - **Example**: `POSTER_PROXY_MAX_AGE_DAYS=7` or `POSTER_PROXY_MAX_AGE_DAYS=0.25`
 
 ### `POSTER_PROXY_FOLLOW_UPSTREAM`
 - **Default**: `false`
-- **Description**: Forwards the provider's `Cache-Control` **verbatim** — the entire header, directives the addon does not itself act on included, and with no ceiling applied — instead of deriving a bounded figure from it. Only affects images the `/poster`, `/logo` and `/background` routes — and their `/poster-cache/proxy/…` twins, landscape included — pass straight through.
+- **Description**: Forwards the provider's `Cache-Control` **verbatim** on passed-through images, with no floor or ceiling applied. Affects the proxy routes only; a stored image is still advertised on its own remaining validity.
 
-  You rarely need this. A passed-through image **already** follows its provider: the figure sent is what it promised less the `Age` it arrived with, clamped to [`POSTER_PROXY_MAX_AGE_DAYS`](#poster_proxy_max_age_days) and to a one-minute floor, with its `no-store` / `no-cache` / `must-revalidate` relayed. What this setting adds on top is *unclamped* fidelity — the header exactly as sent, floor and ceiling removed.
-
-  The clamp is the reason to think twice. Turned on, a provider sending `immutable` or a year-long `max-age` pins its art in your CDN for exactly that long, and one that starts sending `no-store` makes your art uncacheable downstream without you changing anything. Art URL patterns are operator-supplied, so this is a provider you chose — but it is still a lifetime you no longer bound. A forwarded lifetime does carry the provider's `Age` alongside it, so a downstream cache subtracts what the provider had already spent rather than starting the clock again.
-
-  With the built-in cache on for a class this does not apply to it: a stored image is advertised on its own remaining validity and its own body hash, which already account for the source's headers under `POSTER_CACHE_INFER_TTL` or an `infer` policy.
-
-  Where the provider sent no `Cache-Control`, the addon's own figure still applies.
+  You rarely need this. Passed-through images already follow their provider, bounded by [`POSTER_PROXY_MAX_AGE_DAYS`](#poster_proxy_max_age_days) — this only removes that bound. Think twice, because with it a provider sending `immutable` or a year-long `max-age` pins art in your CDN for exactly that long, and one that starts sending `no-store` makes your art uncacheable downstream without you changing anything. Where the provider sent no `Cache-Control`, the addon's own figure still applies.
 - **Example**: `POSTER_PROXY_FOLLOW_UPSTREAM=true`
 
 ### `POSTER_CACHE_INACTIVE_DAYS`
@@ -917,7 +907,7 @@ Caches artwork on disk and serves it from `/poster-cache` on the addon's own por
 
 ### `POSTER_CACHE_FETCH_CONCURRENCY`
 - **Default**: `128`
-- **Description**: Ceiling on simultaneous downloads of uncached images. Each in-flight fetch briefly holds a whole image in memory, so this is what bounds peak memory during a burst of cache misses — without it, memory would scale with concurrent requests. Requests for images already being fetched are coalesced and do not consume a slot. Lower it on memory-constrained hosts; raise it on a busy public instance with a cold cache.
+- **Description**: Ceiling on simultaneous downloads of uncached images. Each in-flight fetch briefly holds a whole image in memory, so this bounds peak memory during a burst of misses. Requests for an image already being fetched are coalesced and take no slot. Lower it on memory-constrained hosts; raise it on a busy instance with a cold cache.
 - **Example**: `POSTER_CACHE_FETCH_CONCURRENCY=32`
 
 ### `POSTER_CACHE_STREAM_THRESHOLD`
@@ -927,7 +917,7 @@ Caches artwork on disk and serves it from `/poster-cache` on the addon's own por
 
 ### `POSTER_CACHE_AGENT_TTL_MS`
 - **Default**: `60000`
-- **Description**: How long a validated upstream host's pinned IP addresses and pooled keep-alive connections are reused before the host is re-resolved. Pooling avoids a fresh DNS lookup and TLS handshake on every cache-miss image fetch; the TTL bounds how long a since-retired CDN address may still be dialed. Reusing an already-open socket stays safe regardless of DNS — its peer was proven public when it connected — so this only trades connection freshness against handshake cost. Advanced tuning; the default suits almost everyone.
+- **Description**: How long a validated host's pinned IP addresses and pooled keep-alive connections are reused before it is re-resolved. Pooling avoids a DNS lookup and TLS handshake per cache-miss fetch; the TTL bounds how long a retired CDN address may still be dialed. Advanced tuning; the default suits almost everyone.
 - **Example**: `POSTER_CACHE_AGENT_TTL_MS=30000`
 
 ### `POSTER_CACHE_AGENT_MAX`
@@ -949,9 +939,9 @@ Caches artwork on disk and serves it from `/poster-cache` on the addon's own por
 - **Default**: empty (auto-detect)
 - **Description**: Source directory for the one-time import of a cache built by the old bundled nginx proxy, so upgrading does not discard a warm cache.
 
-  **You normally do not need to set this.** On startup the addon looks for the old cache at its known location (`/var/cache/nginx/posters`, then `/var/cache/nginx`) and imports it automatically if found — just leave that volume mounted for one start. A marker file in the cache directory records the result so it never runs twice, even if the old volume stays mounted or gains new files. Files that cannot be parsed are skipped, never imported as corrupt entries.
+  **You normally do not need to set this.** On startup the addon looks in `/var/cache/nginx/posters`, then `/var/cache/nginx`, and imports what it finds — just leave that volume mounted for one start. A marker file records the result so it never runs twice, and unparseable files are skipped rather than imported as corrupt entries.
 
-  Set it to a path only if your old cache lived somewhere non-standard. Set it to `off` (or `false`/`none`/`0`) to skip the import entirely.
+  Set a path only if your old cache lived somewhere non-standard, or `off` (also `false`/`none`/`0`) to skip the import entirely.
 - **Example**: `POSTER_CACHE_IMPORT_NGINX_DIR=off`
 
 ### `POSTER_PROXY_PREFIX_URL`

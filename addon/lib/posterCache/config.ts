@@ -196,13 +196,6 @@ export interface UpstreamCacheMeta extends CacheDirectives {
   etag?: string;
   lastModified?: string;
   lastModifiedAt?: number;
-  /**
-   * `CDN-Cache-Control`, kept apart from the fields above rather than folded
-   * into them. It addresses shared caches in the delivery path — which is what
-   * the store is — while the flat fields address browsers, and a provider may
-   * deliberately answer the two differently. Merging them would lose whichever
-   * answer lost the tie. See `inferFreshnessMs` and `inferClientFreshnessMs`.
-   */
   cdn?: CacheDirectives;
 }
 
@@ -227,8 +220,6 @@ function parseCacheDirectives(raw: unknown): CacheDirectives | undefined {
   if (!value.trim()) return undefined;
 
   const directives: CacheDirectives = {};
-  // Three different answers: `no-store` refuses storage, `no-cache` refuses reuse
-  // without revalidating first, `must-revalidate` refuses reuse once stale.
   if (NO_STORE_RE.test(value)) directives.noStore = true;
   if (NO_CACHE_RE.test(value)) directives.noCache = true;
   if (MUST_REVALIDATE_RE.test(value)) directives.mustRevalidate = true;
@@ -276,16 +267,13 @@ function ttlDaysFrom(raw: string | undefined, fallback: number): number {
   const trimmed = (raw ?? '').trim();
   if (trimmed === '') return fallback;
   const parsed = Number(trimmed);
-  // Junk is not a configuration, so the shipped default stands.
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
-/** The flat default, in days. `0` means never expire. */
 export function getEntryTtlDays(): number {
   return ttlDaysFrom(process.env.POSTER_CACHE_TTL_DAYS, DEFAULT_TTL_DAYS);
 }
 
-/** The one flat validity. `0` means never expire. */
 export function getEntryTtlMs(): number {
   const days = getEntryTtlDays();
   return days > 0 ? days * DAY_MS : Infinity;
@@ -303,13 +291,6 @@ const ONE_YEAR_MS = MAX_TTL_DAYS * DAY_MS;
 
 const HEURISTIC_MIN_ELAPSED_SECONDS = 10 * 24 * 60 * 60;
 
-/**
- * "Expired already" is only a usable answer when someone can revalidate cheaply;
- * otherwise it means refetching a whole body on every request, and declining is
- * the better answer. The origin's validators settle that for the store, and
- * `revalidatable` settles it for a client we are holding an entry for — it
- * revalidates against our body hash, so it needs nothing from the origin.
- */
 function zero(upstream: UpstreamCacheMeta, revalidatable: boolean): number | null {
   return (revalidatable || upstream.etag || upstream.lastModified) ? 0 : null;
 }
@@ -328,7 +309,6 @@ function expiresSeconds(upstream: UpstreamCacheMeta): number | null {
     : null;
 }
 
-/** A stated lifetime, less the time it has already been running. */
 function remainingMs(
   lifetimeSeconds: number,
   upstream: UpstreamCacheMeta,
@@ -339,14 +319,6 @@ function remainingMs(
   return Math.min(ONE_YEAR_MS, remaining * 1000);
 }
 
-/**
- * What one set of directives promises, to whoever they were addressed to.
- *
- * `lifetime` is supplied by the caller because the two audiences read different
- * fields for it: only a shared cache may act on `s-maxage`, and `Expires` and
- * the RFC 9111 heuristic belong to the response as a whole rather than to any
- * targeted field.
- */
 function freshnessFrom(
   directives: CacheDirectives,
   upstream: UpstreamCacheMeta,
@@ -361,19 +333,6 @@ function freshnessFrom(
   return remainingMs(lifetimeSeconds, upstream, revalidatable);
 }
 
-/**
- * How long **the store** may reuse these bytes.
- *
- * The audience is a shared cache sitting in the delivery path, so `s-maxage`
- * outranks `max-age` and a `CDN-Cache-Control` is addressed to us directly.
- * Per RFC 9213 a targeted field replaces `Cache-Control` for the cache it
- * names rather than combining with it — so it is neither the smaller of the
- * two nor the larger, it is simply the one meant for us. A targeted field that
- * states no lifetime of its own, a bare stale window say, is not an instruction
- * to forget the figure the provider did state, so that falls back.
- *
- * Use `inferClientFreshnessMs` for anything a browser will read.
- */
 export function inferFreshnessMs(upstream?: UpstreamCacheMeta): InferredFreshness {
   if (!upstream) return null;
 
@@ -387,18 +346,6 @@ export function inferFreshnessMs(upstream?: UpstreamCacheMeta): InferredFreshnes
     upstream.sMaxAge ?? upstream.maxAge ?? expiresSeconds(upstream) ?? heuristicSeconds(upstream), false);
 }
 
-/**
- * How long **a browser** may reuse these bytes.
- *
- * Same response, different audience, and often a different answer: a rating
- * provider that lets a CDN hold a poster for five minutes can still require
- * every browser to revalidate, which is exactly what btttr.cc does. Reading
- * `s-maxage` or a targeted field here would hand a private cache a promise it
- * was never offered — the defect this pair of functions exists to separate.
- *
- * Set `revalidatable` when the response carries a validator of our own, which
- * is what lets a provider's `max-age=0` be relayed as the zero it is.
- */
 export function inferClientFreshnessMs(
   upstream?: UpstreamCacheMeta,
   revalidatable = false
@@ -422,22 +369,30 @@ export interface ProviderPolicy {
 
 export interface ResolvedPolicy {
   policy: TtlPolicy;
-  /** Set only for `custom`. */
   ttlMs?: number;
 }
 
-export const KNOWN_ART_PROVIDERS: ReadonlyArray<{ domain: string; group: 'source' | 'rating' }> = [
-  { domain: 'image.tmdb.org', group: 'source' },
-  { domain: 'artworks.thetvdb.com', group: 'source' },
-  { domain: 'cdn.myanimelist.net', group: 'source' },
-  { domain: 'media.kitsu.app', group: 'source' },
-  { domain: 'assets.fanart.tv', group: 'source' },
-  { domain: 'images.metahub.space', group: 'source' },
-  { domain: 'api.ratingposterdb.com', group: 'rating' },
-  { domain: 'api.top-posters.com', group: 'rating' },
-  { domain: 'btttr.cc', group: 'rating' },
-  { domain: 'extendedratings.com', group: 'rating' },
-  { domain: 'postersplus.elfhosted.com', group: 'rating' },
+export interface ProviderPreset {
+  policy: TtlPolicy;
+  ttl?: string;
+}
+
+export const KNOWN_ART_PROVIDERS: ReadonlyArray<{
+  domain: string;
+  group: 'source' | 'rating';
+  preset?: ProviderPreset;
+}> = [
+  { domain: 'image.tmdb.org', group: 'source', preset: { policy: 'infer' } },
+  { domain: 'artworks.thetvdb.com', group: 'source', preset: { policy: 'default' } },
+  { domain: 'cdn.myanimelist.net', group: 'source', preset: { policy: 'default' } },
+  { domain: 'media.kitsu.app', group: 'source', preset: { policy: 'default' } },
+  { domain: 'assets.fanart.tv', group: 'source', preset: { policy: 'default' } },
+  { domain: 'images.metahub.space', group: 'source', preset: { policy: 'default' } },
+  { domain: 'api.ratingposterdb.com', group: 'rating', preset: { policy: 'infer' } },
+  { domain: 'api.top-posters.com', group: 'rating', preset: { policy: 'infer' } },
+  { domain: 'btttr.cc', group: 'rating', preset: { policy: 'infer' } },
+  { domain: 'extendedratings.com', group: 'rating', preset: { policy: 'infer' } },
+  { domain: 'postersplus.elfhosted.com', group: 'rating', preset: { policy: 'infer' } },
 ];
 
 const TTL_POLICIES: TtlPolicy[] = ['default', 'infer', 'custom', 'bypass'];
@@ -521,18 +476,39 @@ function ruleFor(host: string, rules: ProviderPolicy[]): ProviderPolicy | null {
   return best;
 }
 
-/** Most specific first: an operator's domain rule, then the global toggle, then the bucket. */
+export function arePresetsEnabled(): boolean {
+  return !isExplicitlyDisabled(process.env.POSTER_CACHE_PROVIDER_PRESETS);
+}
+
+const PRESET_RULES: ProviderPolicy[] = KNOWN_ART_PROVIDERS
+  .filter((provider) => provider.preset)
+  .map((provider) => ({
+    domain: provider.domain,
+    policy: provider.preset!.policy,
+    ttl: provider.preset!.ttl,
+  }));
+
+function resolvedFrom(rule: ProviderPolicy): ResolvedPolicy {
+  return rule.policy === 'custom'
+    ? { policy: 'custom', ttlMs: parseDurationMs(rule.ttl)! }
+    : { policy: rule.policy };
+}
+
 export function resolvePolicyFor(key: string): ResolvedPolicy {
   const rules = activeRules();
-  if (rules.length > 0) {
-    const host = hostFromKey(key);
-    const rule = host ? ruleFor(host, rules) : null;
-    if (rule) {
-      return rule.policy === 'custom'
-        ? { policy: 'custom', ttlMs: parseDurationMs(rule.ttl)! }
-        : { policy: rule.policy };
-    }
+  const presets = arePresetsEnabled();
+  const host = rules.length > 0 || presets ? hostFromKey(key) : null;
+
+  if (host && rules.length > 0) {
+    const rule = ruleFor(host, rules);
+    if (rule) return resolvedFrom(rule);
   }
+
+  if (host && presets) {
+    const preset = ruleFor(host, PRESET_RULES);
+    if (preset) return resolvedFrom(preset);
+  }
+
   return { policy: isInferTtlEnabled() ? 'infer' : 'default' };
 }
 
@@ -576,7 +552,6 @@ export function getEntryExpiry(key: string, storedAt: number, upstream?: Upstrea
   return Number.isFinite(ttl) ? storedAt + ttl : Infinity;
 }
 
-/** `getEntryExpiry` from a kept inference. See `resolveEntryTtlMsFrom`. */
 export function getEntryExpiryFrom(key: string, storedAt: number, inferredMs: number | null): number {
   const ttl = resolveEntryTtlMsFrom(key, inferredMs);
   return Number.isFinite(ttl) ? storedAt + ttl : Infinity;
@@ -584,23 +559,17 @@ export function getEntryExpiryFrom(key: string, storedAt: number, inferredMs: nu
 
 const MAX_BROWSER_MAX_AGE = 365 * 24 * 60 * 60;
 
-/** Client validity when no entry is in hand — passthrough and bypass responses. */
 export function getBrowserMaxAgeSeconds(): number {
   const ttl = getEntryTtlMs();
   if (!Number.isFinite(ttl)) return MAX_BROWSER_MAX_AGE;
   return Math.min(MAX_BROWSER_MAX_AGE, Math.max(60, Math.floor(ttl / 1000)));
 }
 
-/**
- * A client is never told less than a minute — a whole catalogue revalidating on
- * every single request is its own failure mode — nor more than a year.
- */
 export function clampBrowserMaxAge(seconds: number): number {
   if (!Number.isFinite(seconds)) return MAX_BROWSER_MAX_AGE;
   return Math.min(MAX_BROWSER_MAX_AGE, Math.max(60, Math.floor(seconds)));
 }
 
-/** Clients are told what is left of this entry's validity, so they revalidate when we do. */
 export function browserMaxAgeFor(expiresAt: number): number {
   if (!Number.isFinite(expiresAt)) return MAX_BROWSER_MAX_AGE;
   return clampBrowserMaxAge((expiresAt - Date.now()) / 1000);

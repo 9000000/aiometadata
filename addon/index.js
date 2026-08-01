@@ -5020,9 +5020,6 @@ async function cacheProcessedImage(cacheKey, contentType, produce) {
   });
 }
 
-// A refused origin is fixable configuration, not a transient miss, so it must be
-// visible at the default log level — but a catalogue page is ~100 art requests,
-// and an SSRF probe is unbounded, so warn once per distinct message with a cap.
 const refusalsWarned = new Set();
 function warnRefusedOrigin(context, message) {
   const line = `${context}: ${message}`;
@@ -5064,13 +5061,7 @@ const handlePosterProxy = async function (req, res) {
     }
 
     const isRatingPoster = !customUrl;
-    // The providers an operator is most likely to bypass — RPDB, TopPoster,
-    // btttr, xrdb, postersplus — only ever arrive here, never through the direct
-    // route, so the check has to be on this path too.
     const bypassed = posterCacheConfig.isBypassed(posterUrl);
-    // Whether a private origin is permitted is a property of the URL, not of
-    // whether we happen to be storing it. A rating poster's URL is built from a
-    // provider's fixed host rather than from the query, so it needs no signature.
     const allowPrivateHost = customUrl ? proxyArtUrlVouched(customUrl, sig) : true;
     if (!bypassed && (isRatingPoster ? isProcessedImageCacheEnabled() : posterCacheConfig.isClassEnabled('poster'))) {
       const posterCacheStore = require('./lib/posterCache/store.js');
@@ -5087,15 +5078,11 @@ const handlePosterProxy = async function (req, res) {
       });
     }
 
-    // 100 bytes is not an image. A rating provider answering an error page with a
-    // 200 is what this catches, and it is specific to this route.
     const openUpstream = openArtStream({ url: posterUrl, allowPrivateHost, minContentLength: 100 });
     await servePassThrough(req, res, {
       imageClass: 'poster',
       url: posterUrl,
       bypassed,
-      // The BYPASS record stays after the fetch, so a fetch that throws still
-      // records only recordServeError() from the catch, never a serve as well.
       open: async (validators) => {
         const imageResponse = await openUpstream(validators);
         if (bypassed && posterCacheConfig.isBuiltinPosterCacheEnabled()) {
@@ -5183,14 +5170,6 @@ addon.get("/poster-cache/proxy/logo/:type/:id", streamArtWithFallback('logo'));
 addon.get("/poster-cache/proxy/background/:type/:id", streamArtWithFallback('background'));
 addon.get("/poster-cache/proxy/landscape/:type/:id", streamArtWithFallback('landscape'));
 
-// --- Built-in image cache ---
-// Serves /poster-cache/[class/]<absolute-image-url>. Registered well before the
-// static middleware so it is never shadowed by a file lookup.
-//
-// Mounted unconditionally and gated per request: this module is required before
-// initializeSettings() runs, so at this point process.env does not yet reflect
-// settings stored in the database. Deciding here would permanently ignore the
-// toggle for anyone who enables the cache from the dashboard.
 {
   const { posterCacheHandler } = require('./lib/posterCache/handler.js');
   addon.use(posterCacheConfig.POSTER_CACHE_ROUTE, posterCacheHandler());

@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -102,7 +101,11 @@ export function ImageCachePolicyDialog({
   const [saving, setSaving] = useState(false);
 
   const data = statsQuery.data as {
-    known_providers?: Array<{ domain: string; group: "source" | "rating" }>;
+    known_providers?: Array<{
+      domain: string;
+      group: "source" | "rating";
+      preset?: { policy: TtlPolicy; ttl?: string };
+    }>;
     provider_policies?: ProviderPolicyRule[];
     infer_ttl?: boolean;
     ttl_days?: number;
@@ -111,7 +114,6 @@ export function ImageCachePolicyDialog({
 
   const saved = useMemo(() => data?.provider_policies ?? [], [data]);
   const providers = useMemo(() => data?.known_providers ?? [], [data]);
-  const known = useMemo(() => providers.map((p) => p.domain), [providers]);
   // Grouping comes from the backend alongside the list, so the two cannot drift.
   const groupOf = useMemo(
     () => new Map(providers.map((p) => [p.domain, p.group])),
@@ -132,27 +134,22 @@ export function ImageCachePolicyDialog({
 
     setInfer(inferEnabled);
     setFlatDays(days);
-    setRows(rowsFromRules(saved, known, inferEnabled));
+    setRows(rowsFromRules(saved, providers, inferEnabled));
     // What Save diffs against, so only what you actually moved is written.
     setBaseline({ flatDays: days, infer: inferEnabled, rules: saved });
     setShowHelp(false);
     setNewDomain("");
-  }, [open, data, saved, known]);
-
-  /** Flipping the master toggle re-displays inherited rows; explicit ones are untouched. */
-  const setInferToggle = (next: boolean) => {
-    setInfer(next);
-    setRows((current) => current.map((row) => (row.explicit
-      ? row
-      : { ...row, policy: inheritedPolicy(next) })));
-  };
+  }, [open, data, saved, providers]);
 
   const updateRow = (domain: string, patch: Partial<PolicyRow>) => {
     setRows((current) => current.map((row) => (row.domain === domain ? { ...row, ...patch } : row)));
   };
 
+  /** Back to whatever the row would show untouched — its preset, or the toggle. */
   const resetRow = (domain: string) =>
-    updateRow(domain, { explicit: false, policy: inheritedPolicy(infer), ttl: "" });
+    setRows((current) => current.map((row) => (row.domain === domain
+      ? { ...row, explicit: false, policy: inheritedPolicy(infer, row.preset), ttl: "" }
+      : row)));
 
   const removeRow = (domain: string) =>
     setRows((current) => current.filter((row) => row.domain !== domain));
@@ -281,7 +278,7 @@ export function ImageCachePolicyDialog({
             {row.builtIn ? (
               <Button
                 variant="ghost" size="sm" className="h-9 w-9 p-0"
-                aria-label={`Reset ${row.domain} to the default policy`}
+                aria-label={`Reset ${row.domain} to its recommended policy`}
                 disabled={!row.explicit}
                 onClick={() => resetRow(row.domain)}
               >
@@ -299,8 +296,9 @@ export function ImageCachePolicyDialog({
           </div>
         </div>
 
-        {/* Only rows you actually changed explain themselves — eleven paragraphs
-            of help is worse than none. */}
+        {/* Only rows you actually changed explain themselves — a paragraph under
+            every provider is worse than none, and what the policies mean is what
+            the help toggle above is for. */}
         {row.explicit && (
           <div className="pl-1 pr-10 pt-1 space-y-1">
             <p className={`text-xs ${problem ? "text-red-500" : "text-muted-foreground"}`}>
@@ -361,15 +359,15 @@ export function ImageCachePolicyDialog({
             </span>
           </div>
 
-          <div className="flex items-center justify-between gap-3 pt-3 border-t">
-            <Label htmlFor="infer-ttl" className="flex-1 min-w-0 text-sm font-normal">
-              Follow each source's own validity
-              <span className="block text-xs text-muted-foreground mt-0.5">
-                Applies to every provider without a rule of its own below.
-              </span>
-            </Label>
-            <Switch id="infer-ttl" checked={infer} onCheckedChange={setInferToggle} />
-          </div>
+          {/* Not editable here. It is a server-wide setting, it is reachable from
+              the settings section, and every provider listed below already has a
+              policy of its own — so the only thing worth saying is that it is on. */}
+          {infer && (
+            <p className="pt-3 border-t text-xs text-muted-foreground">
+              <code className="font-mono">POSTER_CACHE_INFER_TTL</code> is enabled — anything
+              without a rule or a built-in policy defaults to Follow source.
+            </p>
+          )}
         </div>
 
         <button
@@ -382,6 +380,12 @@ export function ImageCachePolicyDialog({
         </button>
         {showHelp && (
           <dl className="text-xs text-muted-foreground space-y-1.5 pl-5">
+            {/* Answers the question a row cannot: why a provider already shows a
+                policy when you never gave it one. */}
+            <p className="pb-0.5">
+              Each provider below already has a policy, measured from what it actually sends.
+              Choose one yourself only where you want something different.
+            </p>
             {(Object.keys(POLICY_LABELS) as TtlPolicy[]).map((policy) => (
               <div key={policy}>
                 <dt className="inline font-medium text-foreground">{POLICY_LABELS[policy]}: </dt>

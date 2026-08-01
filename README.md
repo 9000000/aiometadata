@@ -140,7 +140,7 @@ Custom art URLs are passed through unchanged rather than rendered, so they count
 | `POSTER_CACHE_MAX_SIZE` | `10g` | **Disk** used by the cache |
 | `POSTER_CACHE_MEMORY_SIZE` | `128m` | **RAM** held for the hottest images, in front of the disk cache. Set to `0` for disk only. |
 
-The memory tier is on top of the addon's own footprint, so budget roughly `baseline + POSTER_CACHE_MEMORY_SIZE`. It skips both the disk read and the per-request allocation, which lowers GC pressure — set it to `0` on memory-constrained hosts.
+The memory tier sits on top of the addon's own footprint, so budget roughly `baseline + POSTER_CACHE_MEMORY_SIZE`.
 
 **Smaller TMDB renditions.** The other lever on storage is asking TMDB for less in the first place. TMDB serves `/t/p/original` as the file the uploader supplied — like logos that are frequently lossless PNGs and overly large, far more than any client renders. These work whether or not the image cache is on, and all three are off by default:
 
@@ -152,9 +152,20 @@ The memory tier is on top of the addon's own footprint, so budget roughly `basel
 
 A sized rendition is only requested when the asset is actually larger than that size. TMDB upscales rather than refusing, so asking for more than an asset has would make it both blurrier and bigger — the addon falls back to `original` in that case. Toggling any of these does not rewrite meta already in the cache; those payloads keep their existing URLs until `META_TTL` expires, and the superseded images are reclaimed as they age out.
 
-**Validity.** `POSTER_CACHE_TTL_DAYS` (default `30`) sets how long a cached image stays fresh. Fractional values work, and `0` means never expire. `POSTER_CACHE_INFER_TTL` swaps that flat number for whatever each source's own headers promise, and `POSTER_CACHE_PROVIDER_POLICIES` overrides one provider at a time — `default`, `infer`, a `custom` duration, or `bypass` to serve without storing. `POSTER_PROXY_MAX_AGE_DAYS` (default `1`) is the matching client-side lifetime for the `/poster`, `/logo` and `/background` proxy routes and their `/poster-cache/proxy/…` twins — and the ceiling on it for art the addon passes through without storing, which follows what that provider's own headers asked for. `POSTER_CACHE_INACTIVE_DAYS` (default `30`) drops images nobody has requested, and `POSTER_CACHE_DIR` moves the cache elsewhere.
+**Validity.** How long a cached image stays fresh, decided most-specific-first:
 
-> **Using a rating poster service or a custom art URL pattern?** Give its domain a shorter rule — under **Advanced…** on the dashboard's Image Cache card, or in `POSTER_CACHE_PROVIDER_POLICIES`. Those URLs name a slot rather than a file, so the provider serves whatever it holds for that ID now and the bytes change while the URL does not; on the flat 30-day default a stale rating sits there until it expires. The rating services are `api.ratingposterdb.com`, `api.top-posters.com`, `btttr.cc`, `extendedratings.com` and `postersplus.elfhosted.com`. That rule applies to what the cache *keeps*; with the cache off nothing is kept, and the client is told whatever the provider itself asked for, bounded by `POSTER_PROXY_MAX_AGE_DAYS`.
+| Variable | Default | Sets |
+|----------|---------|------|
+| `POSTER_CACHE_PROVIDER_POLICIES` | unset | A rule for one provider — `default`, `infer`, a `custom` duration, or `bypass` to serve without storing |
+| `POSTER_CACHE_PROVIDER_PRESETS` | `true` | Built-in policies, measured per provider, so rating posters stay current out of the box |
+| `POSTER_CACHE_INFER_TTL` | `false` | Follows each remaining source's own headers instead of the flat number |
+| `POSTER_CACHE_TTL_DAYS` | `30` | The flat fallback. Fractional values work; `0` never expires |
+
+`POSTER_PROXY_MAX_AGE_DAYS` (default `1`) is the matching client-side lifetime, and the ceiling on it for art passed through without storing. `POSTER_CACHE_INACTIVE_DAYS` (default `30`) drops images nobody has requested, and `POSTER_CACHE_DIR` moves the cache elsewhere.
+
+> **Using a rating poster service?** Nothing to do — `api.ratingposterdb.com`, `api.top-posters.com`, `btttr.cc`, `extendedratings.com` and `postersplus.elfhosted.com` each ship a built-in policy following their own headers, which run short while an overlay moves and long once a rating settles.
+>
+> **Using a custom art URL pattern?** Check the host you pointed it at. Anything the addon does not know has no built-in policy, and such URLs usually name a slot rather than a file — the bytes change while the URL does not, so a stale rating sits there for the full 30 days. Give its domain a rule under **Advanced…** on the dashboard's Image Cache card.
 
 > **Multi-replica / Kubernetes:** each replica keeps its own local cache — independent and unshared, which costs N× storage and N× cold fetches but needs no coordination. Use Option B if you want a single shared cache.
 

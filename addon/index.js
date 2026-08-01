@@ -5514,6 +5514,24 @@ addon.get('/api/admin/users', async (req, res) => {
 });
 
 // Get detailed user information
+// Export all user data
+addon.get('/api/admin/users/export', async (req, res) => {
+  const adminKey = process.env.ADMIN_KEY;
+  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  
+  try {
+    const userData = await database.exportAllUserData();
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename=users-export-${new Date().toISOString().split('T')[0]}.json`);
+    res.json(userData);
+  } catch (error) {
+    consola.error('[Admin API] Error exporting user data:', error);
+    res.status(500).json({ error: 'Failed to export user data' });
+  }
+});
+
 addon.get('/api/admin/users/:userUUID', async (req, res) => {
   const adminKey = process.env.ADMIN_KEY;
   if (adminKey && req.headers['x-admin-key'] !== adminKey) {
@@ -5625,23 +5643,6 @@ addon.delete('/api/admin/users/:userUUID', async (req, res) => {
   }
 });
 
-// Export all user data
-addon.get('/api/admin/users/export', async (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  
-  try {
-    const userData = await database.exportAllUserData();
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename=users-export-${new Date().toISOString().split('T')[0]}.json`);
-    res.json(userData);
-  } catch (error) {
-    consola.error('[Admin API] Error exporting user data:', error);
-    res.status(500).json({ error: 'Failed to export user data' });
-  }
-});
 
 // Bulk delete inactive users
 addon.post('/api/admin/users/bulk-delete-inactive', async (req, res) => {

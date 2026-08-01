@@ -7068,6 +7068,19 @@ addon.post("/api/dashboard/maintenance/execute", requireDashboardAdmin, async (r
           result = { success: false, message: `Failed to update ID Mapper: ${error.message}` };
         }
       }
+    } else if (taskId === 12) { // Update animeApi overlay
+      if (action === 'restart' || action === 'enable') {
+        try {
+          const { forceUpdateAnimeApi } = require('./lib/id-mapper');
+          result = await forceUpdateAnimeApi();
+          if (result.success) {
+            result.message = `animeApi overlay updated successfully (${result.count.toLocaleString()} entries)`;
+          }
+        } catch (error) {
+          consola.error('[Maintenance Task] Error updating animeApi overlay:', error);
+          result = { success: false, message: `Failed to update animeApi overlay: ${error.message}` };
+        }
+      }
     } else if (taskId === 4) { // Update Kitsu-IMDB Mapping
       if (action === 'restart' || action === 'enable') {
         try {

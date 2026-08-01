@@ -69,7 +69,7 @@ const MEDIA_ID_PATTERNS = [
 const isCompleteMediaId = (token) => MEDIA_ID_PATTERNS.some((re) => re.test(token));
 const { getCacheCleanupScheduler } = require('./cacheCleanupScheduler');
 const { getAnimeListXmlStats } = require('./anime-list-mapper');
-const { getIdMapperStats, getKitsuImdbStats, getMemoryStats: getIdMapperMemoryStats } = require('./id-mapper');
+const { getIdMapperStats, getKitsuImdbStats, getAnimeApiStats, getMemoryStats: getIdMapperMemoryStats } = require('./id-mapper');
 const { getWikiMapperStats } = require('./wiki-mapper');
 const { getImdbRatingsStatsForDashboard, getRatingsStats } = require('./imdbRatings');
 const { getWarmupStats: getEssentialWarmupStats } = require('./cacheWarmer');
@@ -1630,6 +1630,62 @@ class DashboardAPI {
           status: "error",
           lastRun: "Unknown",
           description: "Updates Kitsu to IMDB ID mappings",
+          nextRun: "Now",
+          action: "restart",
+          category: "mapping"
+        });
+      }
+
+      // 12. animeApi overlay update task
+      try {
+        const animeApiStats = getAnimeApiStats();
+
+        if (this.cache && animeApiStats.enabled) {
+          const animeApiLastUpdate = await this.cache.get(
+            "maintenance:last_anime_api_update",
+          );
+          const animeApiStatus = animeApiLastUpdate ? "completed" : "scheduled";
+          const animeApiTime = animeApiLastUpdate
+            ? this.getTimeAgo(new Date(parseInt(animeApiLastUpdate)))
+            : "Never";
+
+          let nextRunDisplay = "Now";
+          if (animeApiLastUpdate) {
+            const lastUpdateTime = parseInt(animeApiLastUpdate);
+            const intervalMs = animeApiStats.updateIntervalHours * 60 * 60 * 1000;
+            const nextRunTime = lastUpdateTime + intervalMs;
+
+            if (nextRunTime > Date.now()) {
+              nextRunDisplay = this.getTimeUntil(new Date(nextRunTime));
+            } else {
+              nextRunDisplay = "Soon";
+            }
+          }
+
+          const run = animeApiStats.lastRun;
+          const detail = run
+            ? `${animeApiStats.count.toLocaleString()} entries, backfilled ${run.rows.toLocaleString()}, merged ${run.merged.toLocaleString()}, added ${run.added.toLocaleString()}`
+            : `${animeApiStats.count.toLocaleString()} entries`;
+
+          tasks.push({
+            id: 12,
+            name: "Update animeApi Overlay",
+            status: animeApiStatus,
+            lastRun: animeApiTime,
+            description: `Backfills MAL/AniList/Kitsu/AniDB ids the anime list no longer receives (${detail})`,
+            nextRun: nextRunDisplay,
+            action: "restart",
+            category: "mapping"
+          });
+        }
+      } catch (error) {
+        logger.warn("Failed to get animeApi overlay status:", error.message);
+        tasks.push({
+          id: 12,
+          name: "Update animeApi Overlay",
+          status: "error",
+          lastRun: "Unknown",
+          description: "Backfills MAL/AniList/Kitsu/AniDB ids the anime list no longer receives",
           nextRun: "Now",
           action: "restart",
           category: "mapping"

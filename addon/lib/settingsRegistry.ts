@@ -832,6 +832,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     requiresRestart: true,
   },
   {
+    key: 'ANIME_API_OVERLAY_ENABLED',
+    envVar: 'ANIME_API_OVERLAY_ENABLED',
+    label: 'animeApi Overlay',
+    description: 'Backfill the anime ids the anime list no longer receives (MAL, AniList, Kitsu, Simkl) from animeApi',
+    category: 'Data Updates',
+    type: 'boolean',
+    default: true,
+    requiresRestart: true,
+  },
+  {
     key: 'WIKI_MAPPER_UPDATE_INTERVAL_HOURS',
     envVar: 'WIKI_MAPPER_UPDATE_INTERVAL_HOURS',
     label: 'Wiki Mapper Update (hrs)',

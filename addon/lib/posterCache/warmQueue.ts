@@ -39,6 +39,8 @@ interface Stats {
 
 const queue: WarmTarget[] = [];
 const pending = new Set<string>();
+/** Images already counted this run, so one poster in twenty catalogs counts once. */
+const counted = new Set<string>();
 let head = 0;
 
 let active = 0;
@@ -229,12 +231,21 @@ export function offer(targets: WarmTarget[]): void {
   }
 
   for (const target of targets) {
-    stats.offered += 1;
+    const key = keyOf(target);
+    // Counted once per image, not once per offer: the same poster is offered again
+    // for every catalog it appears in, and counting those made the dashboard report
+    // several times more images than the cache holds. The queueing below is
+    // deliberately left to run on every offer so a dropped image can still be retried.
+    const firstSight = !counted.has(key);
+    if (firstSight) {
+      counted.add(key);
+      stats.offered += 1;
+    }
 
     const freshClass = target.http ? target.checkClass : target.imageClass;
     const freshKey = target.http ? target.checkKey : target.url;
     if (freshClass && freshKey && store.isCachedFresh(freshClass, freshKey)) {
-      stats.skipped += 1;
+      if (firstSight) stats.skipped += 1;
       continue;
     }
     if (full) {
@@ -246,7 +257,6 @@ export function offer(targets: WarmTarget[]): void {
       continue;
     }
 
-    const key = keyOf(target);
     if (pending.has(key)) continue;
     pending.add(key);
     queue.push(target);
@@ -321,14 +331,24 @@ export function getStats(): Stats & {
   };
 }
 
+/**
+ * Zeroes the counters without touching the queue, so a run that starts while the
+ * previous one is still draining does not throw away its outstanding work. Without
+ * this the counters ran for the life of the process and read as a single run.
+ */
+export function resetStats(): void {
+  counted.clear();
+  failureReasons.clear();
+  capacityWarned = false;
+  lastReported = -1;
+  for (const key of Object.keys(stats) as (keyof Stats)[]) stats[key] = 0;
+}
+
 export function reset(): void {
   queue.length = 0;
   head = 0;
   pending.clear();
-  capacityWarned = false;
-  lastReported = -1;
-  failureReasons.clear();
-  for (const key of Object.keys(stats) as (keyof Stats)[]) stats[key] = 0;
+  resetStats();
 }
 
 export async function drain(timeoutMs: number): Promise<boolean> {

@@ -889,6 +889,7 @@ class ComprehensiveCatalogWarmer {
 
     // Reset stop flag at start
     this.shouldStop = false;
+    imageWarmQueue.resetStats();
     this.isRunning = true;
     this.stats.isRunning = true;
     this.stats.totalUUIDs = this.config.uuids.length;

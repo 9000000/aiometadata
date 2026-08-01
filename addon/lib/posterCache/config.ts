@@ -191,6 +191,62 @@ export interface UpstreamCacheMeta {
   immutable?: boolean;
   noStore?: boolean;
   noCache?: boolean;
+  mustRevalidate?: boolean;
+}
+
+const MAX_AGE_RE = /(?:^|,)\s*max-age\s*=\s*"?(\d+)"?/;
+const SHARED_MAX_AGE_RE = /(?:^|,)\s*s-maxage\s*=\s*"?(\d+)"?/;
+const NO_STORE_RE = /(?:^|,)\s*no-store\s*(?:,|$)/;
+const NO_CACHE_RE = /(?:^|,)\s*no-cache\s*(?:,|$)/;
+const IMMUTABLE_RE = /(?:^|,)\s*immutable\s*(?:,|$)/;
+const MUST_REVALIDATE_RE = /(?:^|,)\s*must-revalidate\s*(?:,|$)/;
+
+/** An HTTP date we cannot read is no date at all — never a NaN handed to the policy. */
+function parseHttpDate(value: unknown): number | undefined {
+  const raw = String(value ?? '').trim();
+  if (!raw) return undefined;
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/** Reads the freshness promise and validators off a response. Absent fields stay absent. */
+export function parseUpstreamCacheMeta(headers: Record<string, any> = {}): UpstreamCacheMeta {
+  const meta: UpstreamCacheMeta = {};
+
+  const cacheControl = String(headers['cache-control'] || '').toLowerCase();
+  if (cacheControl) {
+    // Three different answers: `no-store` refuses storage, `no-cache` refuses reuse
+    // without revalidating first, `must-revalidate` refuses reuse once stale.
+    if (NO_STORE_RE.test(cacheControl)) meta.noStore = true;
+    if (NO_CACHE_RE.test(cacheControl)) meta.noCache = true;
+    if (MUST_REVALIDATE_RE.test(cacheControl)) meta.mustRevalidate = true;
+    if (IMMUTABLE_RE.test(cacheControl)) meta.immutable = true;
+    const shared = SHARED_MAX_AGE_RE.exec(cacheControl)?.[1];
+    if (shared !== undefined) meta.sMaxAge = Number(shared);
+    const seconds = MAX_AGE_RE.exec(cacheControl)?.[1];
+    if (seconds !== undefined) meta.maxAge = Number(seconds);
+  }
+
+  const age = Number.parseInt(String(headers['age'] ?? ''), 10);
+  if (Number.isFinite(age) && age >= 0) meta.age = age;
+
+  const date = parseHttpDate(headers['date']);
+  if (date !== undefined) meta.date = date;
+
+  const expires = parseHttpDate(headers['expires']);
+  if (expires !== undefined) meta.expires = expires;
+
+  const etag = String(headers['etag'] || '').trim();
+  if (etag) meta.etag = etag;
+
+  const lastModified = String(headers['last-modified'] || '').trim();
+  if (lastModified) {
+    meta.lastModified = lastModified;
+    const lastModifiedAt = parseHttpDate(lastModified);
+    if (lastModifiedAt !== undefined) meta.lastModifiedAt = lastModifiedAt;
+  }
+
+  return meta;
 }
 
 export const DEFAULT_TTL_DAYS = 30;
@@ -444,11 +500,19 @@ export function getBrowserMaxAgeSeconds(): number {
   return Math.min(MAX_BROWSER_MAX_AGE, Math.max(60, Math.floor(ttl / 1000)));
 }
 
+/**
+ * A client is never told less than a minute — a whole catalogue revalidating on
+ * every single request is its own failure mode — nor more than a year.
+ */
+export function clampBrowserMaxAge(seconds: number): number {
+  if (!Number.isFinite(seconds)) return MAX_BROWSER_MAX_AGE;
+  return Math.min(MAX_BROWSER_MAX_AGE, Math.max(60, Math.floor(seconds)));
+}
+
 /** Clients are told what is left of this entry's validity, so they revalidate when we do. */
 export function browserMaxAgeFor(expiresAt: number): number {
   if (!Number.isFinite(expiresAt)) return MAX_BROWSER_MAX_AGE;
-  const remaining = Math.floor((expiresAt - Date.now()) / 1000);
-  return Math.min(MAX_BROWSER_MAX_AGE, Math.max(60, remaining));
+  return clampBrowserMaxAge((expiresAt - Date.now()) / 1000);
 }
 
 export const DEFAULT_PROXY_MAX_AGE_DAYS = 1;

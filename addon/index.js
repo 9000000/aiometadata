@@ -300,7 +300,7 @@ async function configLoadRateLimitMiddleware(req, res, next) {
 
 const posterCacheConfig = require('./lib/posterCache/config.js');
 const { buildProxyArtUrl, proxyArtUrlVouched } = require('./lib/posterCache/proxyArt.js');
-const { applyProxyResponseHeaders } = require('./lib/posterCache/proxyResponse.js');
+const { serveStoreResult, servePassThrough, openArtStream } = require('./lib/posterCache/artProxyServe.js');
 
 function POSTER_PROXY_PREFIX_URL() { return posterCacheConfig.getPosterProxyPrefix(); }
 
@@ -4965,46 +4965,6 @@ addon.get("/api/proxy-manifest", async function (req, res) {
 
 // API endpoint to auto-detect page size for external addon catalogs
 
-function POSTER_PROXY_TIMEOUT_MS() { return parseInt(process.env.POSTER_PROXY_TIMEOUT_MS || '10000', 10); }
-
-async function fetchPosterImageStream(posterUrl) {
-  const imageResponse = await axios({
-    method: 'get',
-    url: posterUrl,
-    responseType: 'stream',
-    timeout: POSTER_PROXY_TIMEOUT_MS(),
-    maxRedirects: 5,
-    validateStatus: (status) => status >= 200 && status < 300,
-    headers: { 'User-Agent': `AIOMetadata/${buildInfo.version}` }
-  });
-
-  const contentType = imageResponse.headers['content-type'];
-  if (contentType && !contentType.toLowerCase().startsWith('image/')) {
-    imageResponse.data.destroy();
-    throw new Error(`Poster URL returned non-image content-type: ${contentType}`);
-  }
-
-  const contentLength = imageResponse.headers['content-length'];
-  const parsedContentLength = contentLength ? parseInt(contentLength, 10) : null;
-  if (Number.isFinite(parsedContentLength) && parsedContentLength < 100) {
-    imageResponse.data.destroy();
-    throw new Error(`Poster URL returned too-small content-length: ${contentLength}`);
-  }
-
-  return imageResponse;
-}
-
-function pipePosterImageResponse(res, imageResponse, bypassed) {
-  const contentType = imageResponse.headers['content-type'];
-  res.setHeader('Content-Type', contentType || 'image/jpeg');
-  if (bypassed) res.setHeader('X-Cache-Status', 'BYPASS');
-  applyProxyResponseHeaders(res, {
-    status: bypassed ? 'BYPASS' : null,
-    upstreamHeaders: imageResponse.headers,
-  });
-  imageResponse.data.pipe(res);
-}
-
 function isProcessedImageCacheEnabled() {
   return posterCacheConfig.isClassEnabled('processed');
 }
@@ -5060,6 +5020,20 @@ async function cacheProcessedImage(cacheKey, contentType, produce) {
   });
 }
 
+// A refused origin is fixable configuration, not a transient miss, so it must be
+// visible at the default log level — but a catalogue page is ~100 art requests,
+// and an SSRF probe is unbounded, so warn once per distinct message with a cap.
+const refusalsWarned = new Set();
+function warnRefusedOrigin(context, message) {
+  const line = `${context}: ${message}`;
+  if (refusalsWarned.has(line) || refusalsWarned.size >= 20) return;
+  refusalsWarned.add(line);
+  consola.warn(
+    `${line}. If that host is yours, add it to POSTER_CACHE_ALLOWED_HOSTS, or set ` +
+    `IMAGE_PROXY_SIGNING_SECRET (or ADMIN_KEY) so the addon signs the art URLs it issues.`
+  );
+}
+
 const handlePosterProxy = async function (req, res) {
   const { type, id } = req.params;
   const { fallback, lang, key, url: customUrl, sig } = req.query;
@@ -5094,30 +5068,42 @@ const handlePosterProxy = async function (req, res) {
     // btttr, xrdb, postersplus — only ever arrive here, never through the direct
     // route, so the check has to be on this path too.
     const bypassed = posterCacheConfig.isBypassed(posterUrl);
+    // Whether a private origin is permitted is a property of the URL, not of
+    // whether we happen to be storing it. A rating poster's URL is built from a
+    // provider's fixed host rather than from the query, so it needs no signature.
+    const allowPrivateHost = customUrl ? proxyArtUrlVouched(customUrl, sig) : true;
     if (!bypassed && (isRatingPoster ? isProcessedImageCacheEnabled() : posterCacheConfig.isClassEnabled('poster'))) {
       const posterCacheStore = require('./lib/posterCache/store.js');
       const { fetchImage } = require('./lib/posterCache/upstream.js');
-      const { recordServe } = require('./lib/posterCache/handler.js');
-      const allowPrivateHost = customUrl ? proxyArtUrlVouched(customUrl, sig) : true;
       const fetchUpstream = (validators) => fetchImage(posterUrl, { allowPrivateHost, validators });
       const result = isRatingPoster
         ? await posterCacheStore.getOrFetch('processed', `rating-poster:${posterUrl}`, (validators) => produceProcessedBytes(posterUrl, () => fetchUpstream(validators)))
         : await posterCacheStore.getOrFetch('poster', posterUrl, fetchUpstream);
-      res.setHeader('X-Cache-Status', result.status);
-      const etag = applyProxyResponseHeaders(res, { entry: result.entry, status: result.status });
-      if (etag && req.headers['if-none-match'] === etag) {
-        require('./lib/posterCache/handler.js').recordRevalidated('poster', req.method, posterUrl);
-        return res.status(304).end();
-      }
-      recordServe('poster', result.status, result.entry.size, req.method, posterUrl);
-      return await sendCachedImage(res, result);
+      return await serveStoreResult(req, res, {
+        imageClass: 'poster',
+        url: posterUrl,
+        result,
+        send: (served) => sendCachedImage(res, served),
+      });
     }
 
-    const imageResponse = await fetchPosterImageStream(posterUrl);
-    if (bypassed && posterCacheConfig.isBuiltinPosterCacheEnabled()) {
-      require('./lib/posterCache/handler.js').recordServe('poster', 'BYPASS', 0, req.method, posterUrl);
-    }
-    pipePosterImageResponse(res, imageResponse, bypassed);
+    // 100 bytes is not an image. A rating provider answering an error page with a
+    // 200 is what this catches, and it is specific to this route.
+    const openUpstream = openArtStream({ url: posterUrl, allowPrivateHost, minContentLength: 100 });
+    await servePassThrough(req, res, {
+      imageClass: 'poster',
+      url: posterUrl,
+      bypassed,
+      // The BYPASS record stays after the fetch, so a fetch that throws still
+      // records only recordServeError() from the catch, never a serve as well.
+      open: async (validators) => {
+        const imageResponse = await openUpstream(validators);
+        if (bypassed && posterCacheConfig.isBuiltinPosterCacheEnabled()) {
+          require('./lib/posterCache/handler.js').recordServe('poster', 'BYPASS', 0, req.method, posterUrl);
+        }
+        return imageResponse;
+      },
+    });
   } catch (error) {
     if (posterCacheConfig.isBuiltinPosterCacheEnabled()) require('./lib/posterCache/handler.js').recordServeError();
     const isTimeout = error.code === 'ECONNABORTED' || /timeout/i.test(error.message || '');
@@ -5126,6 +5112,8 @@ const handlePosterProxy = async function (req, res) {
       consola.warn(`Poster proxy timed out for ${id}, serving fallback:`, error.message);
     } else if (status === 404) {
       consola.debug(`No art for ${id} at the poster provider, serving fallback`);
+    } else if (status === 403) {
+      warnRefusedOrigin(`Poster proxy refused ${id}`, error.message);
     } else {
       consola.error(`Error in poster proxy for ${id}:`, error.message);
     }
@@ -5142,48 +5130,43 @@ function streamArtWithFallback(assetName) {
       return res.redirect(302, fallback || '');
     }
     const bypassed = posterCacheConfig.isBypassed(customUrl);
+    // A property of the URL, not of whether we are storing it — see handlePosterProxy.
+    const allowPrivateHost = proxyArtUrlVouched(customUrl, sig);
     try {
       if (posterCacheConfig.isClassEnabled(assetName) && !bypassed) {
         const posterCacheStore = require('./lib/posterCache/store.js');
         const { fetchImage } = require('./lib/posterCache/upstream.js');
-        const { recordServe } = require('./lib/posterCache/handler.js');
-        const allowPrivateHost = proxyArtUrlVouched(customUrl, sig);
         const result = await posterCacheStore.getOrFetch(assetName, customUrl, (validators) =>
           fetchImage(customUrl, { allowPrivateHost, validators }));
-        res.setHeader('X-Cache-Status', result.status);
-        const etag = applyProxyResponseHeaders(res, { entry: result.entry, status: result.status });
-        if (etag && req.headers['if-none-match'] === etag) {
-          require('./lib/posterCache/handler.js').recordRevalidated(assetName, req.method, customUrl);
-          return res.status(304).end();
-        }
-        recordServe(assetName, result.status, result.entry.size, req.method, customUrl);
-        return await sendCachedImage(res, result);
+        return await serveStoreResult(req, res, {
+          imageClass: assetName,
+          url: customUrl,
+          result,
+          send: (served) => sendCachedImage(res, served),
+        });
       }
 
-      const imageResponse = await axios({
-        method: 'get',
+      // No size floor here: a 1×1 logo is small but legitimate.
+      const openUpstream = openArtStream({ url: customUrl, allowPrivateHost });
+      await servePassThrough(req, res, {
+        imageClass: assetName,
         url: customUrl,
-        responseType: 'stream',
-        timeout: POSTER_PROXY_TIMEOUT_MS(),
-        validateStatus: (status) => status >= 200 && status < 300,
-        headers: { 'User-Agent': `AIOMetadata/${buildInfo.version}` }
+        bypassed,
+        open: async (validators) => {
+          const imageResponse = await openUpstream(validators);
+          if (bypassed && posterCacheConfig.isBuiltinPosterCacheEnabled()) {
+            require('./lib/posterCache/handler.js').recordServe(assetName, 'BYPASS', 0, req.method, customUrl);
+          }
+          return imageResponse;
+        },
       });
-      const contentType = imageResponse.headers['content-type'];
-      res.setHeader('Content-Type', contentType || 'image/jpeg');
-      if (bypassed) {
-        res.setHeader('X-Cache-Status', 'BYPASS');
-        if (posterCacheConfig.isBuiltinPosterCacheEnabled()) {
-          require('./lib/posterCache/handler.js').recordServe(assetName, 'BYPASS', 0, req.method, customUrl);
-        }
-      }
-      applyProxyResponseHeaders(res, {
-        status: bypassed ? 'BYPASS' : null,
-        upstreamHeaders: imageResponse.headers,
-      });
-      imageResponse.data.pipe(res);
     } catch (error) {
       if (posterCacheConfig.isBuiltinPosterCacheEnabled()) require('./lib/posterCache/handler.js').recordServeError();
-      consola.debug(`Art proxy miss for ${assetName} ${id}: ${error.message}`);
+      if (error.status === 403) {
+        warnRefusedOrigin(`Art proxy refused ${assetName} ${id}`, error.message);
+      } else {
+        consola.debug(`Art proxy miss for ${assetName} ${id}: ${error.message}`);
+      }
       if (fallback) {
         return res.redirect(302, fallback);
       }

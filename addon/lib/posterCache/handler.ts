@@ -4,8 +4,6 @@ import { ingestExternalLog } from '../logBuffer.js';
 import {
   POSTER_CACHE_ROUTE,
   URL_ADDRESSABLE_CLASSES,
-  browserMaxAgeFor,
-  getBrowserMaxAgeSeconds,
   isBuiltinPosterCacheEnabled,
   isBypassed,
   isClassEnabled,
@@ -14,6 +12,7 @@ import {
   type ImageClass,
   type UpstreamCacheMeta,
 } from './config.js';
+import { applyProxyResponseHeaders, etagMatches } from './proxyResponse.js';
 import * as store from './store.js';
 import { OversizeImage, UpstreamRejected, fetchImage, openImageStream } from './upstream.js';
 
@@ -142,9 +141,9 @@ export function recordServeError(): void {
   recordError();
 }
 
-export function recordRevalidated(imageClass: ImageClass, method: string, url: string): void {
-  record('HIT');
-  if (shouldLogRequests()) log(3, `${method} ${imageClass} HIT 304 ${url}`);
+export function recordRevalidated(imageClass: ImageClass, status: string, method: string, url: string): void {
+  record(status);
+  if (shouldLogRequests()) log(3, `${method} ${imageClass} ${status} 304 ${url}`);
 }
 
 const CLAIMED = Symbol('poster-cache-claimed');
@@ -164,9 +163,10 @@ async function pipeStream(
   upstream?: UpstreamCacheMeta
 ): Promise<void> {
   res.setHeader('X-Cache-Status', 'BYPASS');
-  res.setHeader('Cache-Control', isBypassed(url) || isNotStorable(url, upstream)
-    ? 'no-store'
-    : `public, max-age=${getBrowserMaxAgeSeconds()}`);
+  applyProxyResponseHeaders(res, {
+    surface: 'direct',
+    notStorable: isBypassed(url) || isNotStorable(url, upstream),
+  });
   res.setHeader('Content-Type', contentType || 'image/jpeg');
 
   if (req.method === 'HEAD') {
@@ -253,15 +253,11 @@ export function posterCacheHandler() {
         throw error;
       }
 
-      const etag = `"${entry.etag}"`;
-      res.setHeader('ETag', etag);
       res.setHeader('X-Cache-Status', status);
-      res.setHeader('Cache-Control', status === 'BYPASS'
-        ? 'no-store'
-        : `public, max-age=${browserMaxAgeFor(entry.expiresAt)}`);
+      const etag = applyProxyResponseHeaders(res, { entry, status, surface: 'direct' });
       res.setHeader('Content-Type', entry.contentType || 'image/jpeg');
 
-      if (req.headers['if-none-match'] === etag) {
+      if (etagMatches(req.headers['if-none-match'], etag)) {
         record(status);
         if (logRequests) log(3, `${req.method} ${imageClass} ${status} 304 ${url}`);
         res.status(304).end();

@@ -1037,7 +1037,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'IMAGE_PROXY_SIGNING_SECRET',
     envVar: 'IMAGE_PROXY_SIGNING_SECRET',
     label: 'Image Proxy Signing Secret',
-    description: 'HMAC secret used to sign the /poster, /logo and /background proxy URLs. Falls back to ADMIN_KEY; if neither is set, proxy URLs are served unsigned. A purpose-specific key is derived from it, so a signature reveals nothing about the secret itself. Rotating it invalidates every previously signed URL.',
+    description: 'HMAC secret used to sign the /poster, /logo, /background and /landscape proxy URLs. Falls back to ADMIN_KEY; if neither is set, proxy URLs are served unsigned. A purpose-specific key is derived from it, so a signature reveals nothing about the secret itself. Rotating it invalidates every previously signed URL.',
     category: 'Server',
     type: 'string',
     default: '',
@@ -1371,7 +1371,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'POSTER_PROXY_MAX_AGE_DAYS',
     envVar: 'POSTER_PROXY_MAX_AGE_DAYS',
     label: 'Art Proxy Client Cache (Days)',
-    description: 'How long players and browsers may keep an image served by the /poster, /logo and /background proxy routes. Kept short by default because an image these routes pass straight through has no body hash to revalidate against, so only expiry picks up changed art. Fractional values are allowed (0.25 = 6 hours); 0 means never expire. Applies with or without the built-in cache, and is capped by the served image\'s own remaining validity. The same figure bounds how long a CDN may serve the image stale while it refreshes.',
+    description: 'How long players and browsers may keep an image served by the /poster, /logo and /background proxy routes and their /poster-cache/proxy/… twins, landscape included. Kept short by default because most of what these routes serve is built from a URL template, so the bytes can change while the URL does not. Fractional values are allowed (0.25 = 6 hours); 0 lifts the ceiling to a year. Applies with or without the built-in cache. For an image served from the cache it is capped by that entry\'s own remaining validity. For an image passed straight through — one the addon is not storing — it is the ceiling on what the provider itself asked for, and the figure sent outright when the provider asked for nothing: those bytes are not being kept, so the provider is the authority on how long its art stays good, bounded here and by a one-minute floor. The same figure bounds how long a CDN may serve the image stale while it refreshes.',
     category: 'Features',
     type: 'number',
     default: 1,
@@ -1381,7 +1381,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'POSTER_PROXY_FOLLOW_UPSTREAM',
     envVar: 'POSTER_PROXY_FOLLOW_UPSTREAM',
     label: 'Art Proxy Follows the Source\'s Cache-Control',
-    description: 'Forwards the `Cache-Control` the art provider itself sent, instead of the figure above, on the images the /poster, /logo and /background routes pass straight through. Off by default: those routes are what a CDN in front of the addon sees, and until you turn this on it is told the addon\'s own figure no matter what the provider asked for — which is why a rating provider\'s short validity, or its request not to be cached at all, does not reach Cloudflare. Only applies to passed-through images; one served from the built-in cache is advertised on its own remaining validity, which already accounts for the source\'s headers when Follow Each Source\'s Own Validity is on. Art URL patterns are operator-supplied, so what you turn this on for is a provider you chose; a provider you do not control can pin its art in your CDN for as long as it likes.',
+    description: 'Forwards the provider\'s Cache-Control verbatim — the whole header, with no floor or ceiling applied — on the images the /poster, /logo and /background routes and their /poster-cache/proxy/… twins pass straight through. You rarely need this: a passed-through image already follows its provider, less the Age it arrived with, clamped to the figure above and to a one-minute floor, with its no-store, no-cache and must-revalidate relayed. What this adds is unclamped fidelity, and that clamp is the reason to think twice: turned on, a provider sending immutable or a year-long max-age pins its art in your CDN for exactly that long, and one sending max-age=0 makes every view revalidate. A forwarded lifetime carries the provider\'s Age with it, and the provider\'s ETag is forwarded either way, so a short validity costs a revalidation rather than a re-download. Only applies to passed-through images; one served from the built-in cache is advertised on its own remaining validity.',
     category: 'Features',
     type: 'boolean',
     default: false,
@@ -2214,7 +2214,10 @@ export const CONDITIONAL_RULES: ConditionalRule[] = [
         'POSTER_CACHE_DIR', 'POSTER_CACHE_IMPORT_NGINX_DIR',
         'POSTER_CACHE_FETCH_CONCURRENCY', 'POSTER_CACHE_STREAM_THRESHOLD',
         'POSTER_CACHE_LOG_REQUESTS', 'POSTER_CACHE_MEMORY_SIZE',
-        'POSTER_CACHE_ALLOWED_HOSTS', 'POSTER_PROXY_ALLOW_PRIVATE',
+        // POSTER_CACHE_ALLOWED_HOSTS and POSTER_PROXY_ALLOW_PRIVATE are deliberately
+        // absent: the private-address guard runs on every art fetch, including the
+        // pass-through the art proxy serves with the cache off, so these two are the
+        // remedy an operator needs exactly when the cache is disabled.
       ],
     },
     reason: 'The built-in image cache is disabled',

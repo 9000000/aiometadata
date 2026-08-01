@@ -151,7 +151,7 @@ function toCollectionItem(
       notes.push({
         entryId: folder.id,
         entryTitle: name,
-        message: `Genre "${trimmed(source.genre)}" on "${trimmed(source.name) || plainLabel(source)}" is dropped. Fusion widgets have no genre field.`,
+        message: `Genre "${trimmed(source.genre)}" on "${trimmed(source.name) || plainLabel(source)}" is dropped. Fusion requests a catalog as <type>/<id> with no genre.`,
       });
     }
     dataSources.push(mapped);
@@ -235,7 +235,7 @@ export function toFusionWidgets(
       notes.push({
         entryId: entry.id,
         entryTitle: title,
-        message: `Genre "${trimmed(entry.source.genre)}" is dropped. Fusion widgets have no genre field.`,
+        message: `Genre "${trimmed(entry.source.genre)}" is dropped. Fusion requests a catalog as <type>/<id> with no genre.`,
       });
     }
 

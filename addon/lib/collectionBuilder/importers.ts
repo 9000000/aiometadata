@@ -178,17 +178,35 @@ export function fromNuvioCollections(input: unknown, notes: string[]): Collectio
 // ---- Fusion ----
 
 /** Fusion stores `<type>::<id>`; everything after the first separator is the id. */
-function splitCatalogId(composite: string, fallbackType: string): { catalogId: string; type: string } | null {
+function splitCatalogId(composite: string, fallbackType: string): { catalogId: string; type: string; genre: string | null } | null {
   const value = trimmed(composite);
   if (!value) return null;
   const index = value.indexOf('::');
-  if (index < 0) {
-    return fallbackType ? { catalogId: value, type: fallbackType } : null;
+  const type = index < 0 ? fallbackType : (value.slice(0, index).trim() || fallbackType);
+  const rest = index < 0 ? value : value.slice(index + 2).trim();
+  if (!rest || !type) return null;
+
+  const { id, genre } = splitCatalogGenre(rest);
+  if (!id) return null;
+  return { catalogId: id, type, genre };
+}
+
+/** A genre rides in the id as `<id>/genre=<value>`, since Fusion has no field for it. */
+function splitCatalogGenre(value: string): { id: string; genre: string | null } {
+  const marker = value.indexOf('/genre=');
+  if (marker < 0) return { id: value, genre: null };
+
+  const id = value.slice(0, marker).trim();
+  const raw = value.slice(marker + '/genre='.length).trim();
+  if (!raw) return { id, genre: null };
+
+  let genre = raw;
+  try {
+    genre = decodeURIComponent(raw);
+  } catch {
+    genre = raw;
   }
-  const type = value.slice(0, index).trim();
-  const catalogId = value.slice(index + 2).trim();
-  if (!catalogId) return null;
-  return { catalogId, type: type || fallbackType };
+  return { id, genre };
 }
 
 function fusionSource(raw: unknown, label: string, notes: string[]): SourceDraft | null {
@@ -203,7 +221,7 @@ function fusionSource(raw: unknown, label: string, notes: string[]): SourceDraft
     notes.push(`"${label}": skipped a source with no catalog id.`);
     return null;
   }
-  return { catalogId: split.catalogId, type: split.type, name: split.catalogId, genre: null };
+  return { catalogId: split.catalogId, type: split.type, name: split.catalogId, genre: split.genre };
 }
 
 /** Widget files spell a tile title/imageAspect/imageURL, collection files name/layout/backgroundImageURL. */

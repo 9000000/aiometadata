@@ -868,16 +868,61 @@ async function performSimklAnimeSearch(type: string, query: string, language: st
   return metas;
 }
 
+const MOVIE_RATING_HIERARCHY = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
+const TV_RATING_HIERARCHY = ['TV-Y', 'TV-Y7', 'TV-G', 'TV-PG', 'TV-14', 'TV-MA'];
+const MOVIE_TO_TV_RATING: Record<string, string> = { 'G': 'TV-G', 'PG': 'TV-PG', 'PG-13': 'TV-14', 'R': 'TV-MA', 'NC-17': 'TV-MA' };
+const ADULT_GENRES = new Set(['hentai', 'erotica', 'erotic', 'adult', 'pornographic', 'porn']);
+
+/** Mirrors the age filter the TMDB and Trakt paths apply inline. */
+function passesAgeRating(certification: string | null | undefined, type: string, ageRating: string): boolean {
+  const isTvRating = type === 'series';
+  const userRating = isTvRating ? (MOVIE_TO_TV_RATING[ageRating] || ageRating) : ageRating;
+  const isUserRatingRestrictive = userRating === 'PG-13'
+    || (MOVIE_RATING_HIERARCHY.indexOf(userRating) !== -1 && MOVIE_RATING_HIERARCHY.indexOf(userRating) <= MOVIE_RATING_HIERARCHY.indexOf('PG-13'))
+    || (TV_RATING_HIERARCHY.indexOf(userRating) !== -1 && TV_RATING_HIERARCHY.indexOf(userRating) <= TV_RATING_HIERARCHY.indexOf('TV-14'));
+
+  if (!certification || certification === '' || certification.toLowerCase() === 'nr') {
+    return !isUserRatingRestrictive;
+  }
+
+  const hierarchy = isTvRating ? TV_RATING_HIERARCHY : MOVIE_RATING_HIERARCHY;
+  const userRatingIndex = hierarchy.indexOf(userRating);
+  const resultRatingIndex = hierarchy.indexOf(certification);
+  if (userRatingIndex === -1 || resultRatingIndex === -1) return true;
+  return resultRatingIndex <= userRatingIndex;
+}
+
+/** `_m` is the largest true 2:3 poster Simkl stores; `_w` is a landscape crop. */
+function simklPosterUrl(poster: string | null | undefined): string | null {
+  return poster ? `https://wsrv.nl/?url=https://simkl.in/posters/${poster}_m.webp&q=90` : null;
+}
+
+/**
+ * Search never carries an imdb id and drops the tmdb one on a fair share of series.
+ * The anime mapper knows a lot of simkl ids already, so it is tried first and the
+ * detail call is what is left over.
+ */
+function simklIdsFromMapper(simklId: string | number | null | undefined): Record<string, any> | null {
+  if (!simklId) return null;
+  const mapping = idMapper.getMappingBySimklId(simklId);
+  if (!mapping) return null;
+  return {
+    tmdb: mapping.themoviedb_id || null,
+    tvdb: mapping.tvdb_id || null,
+    imdb: mapping.imdb_id || null,
+  };
+}
+
 /**
  * Simkl searches every translated title it stores, so it answers alias queries that
- * title-only engines miss. Results already carry a TMDB id, which is handed to the
- * TMDB search path so the metas match every other provider's.
+ * title-only engines miss. Its search payload carries title, year, poster, ratings and
+ * status, so metas are built from it directly rather than re-fetched from TMDB.
  */
 async function performSimklSearch(type: string, query: string, language: string, config: any, page: number = 1): Promise<any[]> {
   const startTime = Date.now();
   logger.info(`Starting Simkl search for type "${type}" with query: "${query}"`);
 
-  const { fetchSimklSearchItems }: any = require('../utils/simklUtils.js');
+  const { fetchSimklSearchItems, fetchSimklItemDetail }: any = require('../utils/simklUtils.js');
   const limit = parseInt(getSetting('SIMKL_SEARCH_RESULT_LIMIT'), 10) || 20;
   const searchType = type === 'movie' ? 'movie' : 'tv';
 
@@ -887,43 +932,128 @@ async function performSimklSearch(type: string, query: string, language: string,
     return [];
   }
 
-  const tmdbIds: string[] = [];
-  const seenIds = new Set<string>();
-  for (const item of results) {
-    const tmdbId = item?.ids?.tmdb;
-    if (tmdbId && !seenIds.has(String(tmdbId))) {
-      seenIds.add(String(tmdbId));
-      tmdbIds.push(String(tmdbId));
+  let detailLookups = 0;
+
+  const built = await mapWithLimit(results, async (item: any) => {
+    try {
+      const simklId = item?.ids?.simkl_id || item?.ids?.simkl;
+      const mapped = item?.ids?.tmdb ? null : simklIdsFromMapper(simklId);
+      let detail: any = null;
+      if (!item?.ids?.tmdb && !mapped?.imdb && !mapped?.tmdb && !mapped?.tvdb) {
+        detail = await fetchSimklItemDetail(searchType, simklId);
+        detailLookups++;
+      }
+
+      const ids = { ...(item?.ids || {}), ...(mapped || {}), ...(detail?.ids || {}) };
+      const tmdbId = ids.tmdb ? String(ids.tmdb) : null;
+      const tvdbId = ids.tvdb ? String(ids.tvdb) : null;
+      let imdbId = ids.imdb || null;
+
+      if (!imdbId && (tmdbId || tvdbId)) {
+        const resolved = await resolveAllIds(
+          tmdbId ? `tmdb:${tmdbId}` : `tvdb:${tvdbId}`,
+          type,
+          config,
+          { tmdbId, tvdbId },
+          ['imdb']
+        );
+        imdbId = resolved?.imdbId || null;
+      }
+
+      const stremioId = imdbId || (tmdbId ? `tmdb:${tmdbId}` : (tvdbId ? `tvdb:${tvdbId}` : null));
+      if (!stremioId) {
+        logger.debug(`Skipping Simkl result "${item?.title}" - no id we can address it by`);
+        return null;
+      }
+
+      const fallbackImage = `${host}/missing_poster.png`;
+      const rawPosterUrl = simklPosterUrl(item?.poster || detail?.poster);
+      const posterUrl = rawPosterUrl && !rawPosterUrl.includes('undefined') ? rawPosterUrl : fallbackImage;
+
+      const typedProxyId = type === 'movie'
+        ? (tmdbId ? `tmdb:${tmdbId}` : null)
+        : (tvdbId ? `tvdb:${tvdbId}` : (tmdbId ? `tmdb:${tmdbId}` : null));
+      let posterProxyId: string | null = imdbId || typedProxyId;
+      // Top Poster cannot use a tvdb id, so an item with neither imdb nor tmdb has
+      // nothing to send it.
+      if (config.posterRatingProvider === 'top' && !imdbId && !tmdbId) {
+        posterProxyId = null;
+      }
+      const posterProxyUrl = posterProxyId
+        ? Utils.buildPosterProxyUrl(host, type, posterProxyId, posterUrl, language, config)
+        : posterUrl;
+
+      const imdbRating = item?.ratings?.imdb?.rating
+        ?? (imdbId ? await getImdbRating(imdbId, type) : 'N/A');
+
+      let releaseDates: any = null;
+      if (type === 'movie' && tmdbId && config.hideUnreleasedDigitalSearch) {
+        releaseDates = await moviedb.movieReleaseDates(tmdbId, config)
+          .catch((error: any) => {
+            logger.debug(`Failed to get TMDB release dates for movie ${tmdbId}: ${error.message}`);
+            return null;
+          });
+      }
+
+      return {
+        id: stremioId,
+        type,
+        name: item?.title || detail?.title,
+        poster: Utils.isPosterRatingEnabled(config) ? posterProxyUrl : posterUrl,
+        description: Utils.addMetaProviderAttribution(item?.overview || detail?.overview || '', 'Simkl', config),
+        certification: item?.certification || detail?.certification || null,
+        logo: imdbId ? imdb.getLogoFromImdb(imdbId) : null,
+        genres: item?.genres || detail?.genres || [],
+        year: item?.year || detail?.year || null,
+        released: detail?.released ? new Date(detail.released) : undefined,
+        imdbRating: imdbRating ?? 'N/A',
+        _tmdbId: tmdbId || undefined,
+        _tvdbId: tvdbId || undefined,
+        runtime: type === 'movie' ? Utils.parseRunTime(item?.runtime ?? detail?.runtime) : null,
+        status: type === 'series' ? (item?.status || detail?.status || null) : null,
+        ...(releaseDates ? { app_extras: { releaseDates } } : {}),
+      };
+    } catch (error: any) {
+      logger.error(`Error parsing Simkl result "${item?.title}":`, error.message);
+      return null;
     }
-  }
-
-  if (tmdbIds.length === 0) {
-    logger.info(`Simkl returned ${results.length} results for "${query}" but none carried a TMDB id`);
-    return [];
-  }
-
-  logger.debug(`Simkl gathered ${tmdbIds.length} TMDB ids in ${Date.now() - startTime}ms`);
-
-  const hydrated = await mapWithLimit(tmdbIds, (tmdbId: string) =>
-    performTmdbSearch(type, `tmdb:${tmdbId}`, language, config, false)
-      .catch((error: any) => {
-        logger.debug(`Could not hydrate tmdb:${tmdbId}: ${error.message}`);
-        return [];
-      }));
+  });
 
   // Simkl orders by its own relevance, which is the reason to use it.
   const seenMetas = new Set<string>();
-  const metas: any[] = [];
-  for (const group of hydrated) {
-    for (const meta of group) {
-      if (meta?.id && !seenMetas.has(meta.id)) {
-        seenMetas.add(meta.id);
-        metas.push(meta);
-      }
+  let metas: any[] = [];
+  for (const meta of built) {
+    if (meta?.id && !seenMetas.has(meta.id)) {
+      seenMetas.add(meta.id);
+      metas.push(meta);
     }
   }
 
-  logger.info(`Simkl search completed in ${Date.now() - startTime}ms, returning ${metas.length} results`);
+  if (config.ageRating && String(config.ageRating).toLowerCase() !== 'none') {
+    const beforeCount = metas.length;
+    metas = metas.filter((meta: any) => passesAgeRating(meta.certification, type, config.ageRating));
+    if (beforeCount !== metas.length) {
+      logger.info(`Age rating filter (Simkl): filtered out ${beforeCount - metas.length} results`);
+    }
+  }
+
+  if (config.includeAdult === false) {
+    const beforeCount = metas.length;
+    metas = metas.filter((meta: any) => !meta.genres?.some((genre: string) => ADULT_GENRES.has(String(genre).toLowerCase())));
+    if (beforeCount !== metas.length) {
+      logger.info(`Adult filter (Simkl): filtered out ${beforeCount - metas.length} results`);
+    }
+  }
+
+  if (type === 'movie' && config.hideUnreleasedDigitalSearch) {
+    const beforeCount = metas.length;
+    metas = metas.filter((meta: any) => Utils.isReleasedDigitally(meta));
+    if (beforeCount !== metas.length) {
+      logger.info(`Digital release filter (Simkl): filtered out ${beforeCount - metas.length} unreleased movies`);
+    }
+  }
+
+  logger.info(`Simkl search completed in ${Date.now() - startTime}ms, returning ${metas.length} of ${results.length} results (${detailLookups} detail lookups)`);
   return metas;
 }
 

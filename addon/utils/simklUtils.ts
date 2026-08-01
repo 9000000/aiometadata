@@ -243,7 +243,7 @@ async function fetchSimklSearchItems(
     // Simkl clamps rather than rejecting: limit tops out at 50 and page at 20.
     const safeLimit = Math.min(Math.max(limit, 1), 50);
     const safePage = Math.min(Math.max(page, 1), 20);
-    const url = `${SIMKL_BASE_URL}/search/${type}?q=${encodeURIComponent(query)}&limit=${safeLimit}&page=${safePage}&${simklDataParams()}`;
+    const url = `${SIMKL_BASE_URL}/search/${type}?q=${encodeURIComponent(query)}&limit=${safeLimit}&page=${safePage}&extended=full&${simklDataParams()}`;
     const response: any = await makeRateLimitedSimklRequest(url, `Simkl search (${type}, query: "${query}")`);
 
     if (!response?.data || !Array.isArray(response.data)) {
@@ -261,6 +261,30 @@ async function fetchSimklSearchItems(
     }
     return [];
   }
+}
+
+/**
+ * Search answers with an index row, so anything beyond title, year, poster and ids
+ * has to come from here. This is also the only place a simkl id turns into an imdb
+ * or tvdb one, which search omits.
+ */
+async function fetchSimklItemDetail(type: 'movie' | 'tv', simklId: string | number): Promise<any> {
+  if (!simklId) return null;
+  const segment = type === 'movie' ? 'movies' : 'tv';
+  return cacheWrapGlobal(
+    `simkl:detail:${segment}:${simklId}`,
+    async () => {
+      try {
+        const url = `${SIMKL_BASE_URL}/${segment}/${simklId}?extended=full&${simklDataParams()}`;
+        const response: any = await makeRateLimitedSimklRequest(url, `Simkl detail (${segment}/${simklId})`);
+        return response?.data ?? null;
+      } catch (err: any) {
+        logger.debug(`Simkl detail lookup failed for ${segment}/${simklId}: ${err.message}`);
+        return null;
+      }
+    },
+    24 * 60 * 60
+  );
 }
 
 async function fetchSimklUserStats(tokenId: string): Promise<any> {
@@ -1351,6 +1375,7 @@ async function fetchSimklDvdReleases(
 export {
   fetchSimklUserStats,
   fetchSimklSearchItems,
+  fetchSimklItemDetail,
   fetchSimklWatchlistItems,
   parseSimklItems,
   makeAuthenticatedSimklRequest,

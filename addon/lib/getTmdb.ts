@@ -462,11 +462,21 @@ export async function primaryTranslations(config: UserConfig) {
 
 export async function movieInfo(params: any, config: UserConfig) {
   const { id, ...queryParams } = params;
-  return makeTmdbRequest(`/movie/${id}`, getApiKey(config), queryParams, 'GET', null, config);
+  const normalizedQueryParams = normalizeTmdbCacheQueryParams(queryParams);
+  const cacheKey = `tmdb:movie:detail:${id}${getTmdbQueryCacheSuffix(normalizedQueryParams)}`;
+  return cacheWrapGlobal(cacheKey, () =>
+    makeTmdbRequest(`/movie/${id}`, getApiKey(config), normalizedQueryParams, 'GET', null, config),
+    24 * 60 * 60
+  );
 }
 export async function tvInfo(params: any, config: UserConfig) {
   const { id, ...queryParams } = params;
-  return makeTmdbRequest(`/tv/${id}`, getApiKey(config), queryParams, 'GET', null, config);
+  const normalizedQueryParams = normalizeTmdbCacheQueryParams(queryParams);
+  const cacheKey = `tmdb:tv:detail:${id}${getTmdbQueryCacheSuffix(normalizedQueryParams)}`;
+  return cacheWrapGlobal(cacheKey, () =>
+    makeTmdbRequest(`/tv/${id}`, getApiKey(config), normalizedQueryParams, 'GET', null, config),
+    24 * 60 * 60
+  );
 }
 
 export async function movieReleaseDates(id: string, config: UserConfig) {

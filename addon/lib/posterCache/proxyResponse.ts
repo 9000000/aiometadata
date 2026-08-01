@@ -5,7 +5,7 @@ import {
   clampBrowserMaxAge,
   getBrowserMaxAgeSeconds,
   getProxyMaxAgeSeconds,
-  inferFreshnessMs,
+  inferClientFreshnessMs,
   isTruthy,
   parseUpstreamCacheMeta,
   type UpstreamCacheMeta,
@@ -14,7 +14,7 @@ import {
 export type ResponseSurface = 'proxy' | 'direct';
 
 export interface ProxyResponseInput {
-  entry?: { expiresAt?: number; etag?: string } | null;
+  entry?: { expiresAt?: number; etag?: string; upstream?: UpstreamCacheMeta } | null;
   status?: string | null;
   upstreamHeaders?: Record<string, unknown> | null;
   surface?: ResponseSurface;
@@ -45,12 +45,60 @@ export function followsUpstreamCacheControl(): boolean {
   return isTruthy(process.env.POSTER_PROXY_FOLLOW_UPSTREAM);
 }
 
+interface ClientTerms {
+  /** The provider's answer for a browser is terminal — no lifetime applies. */
+  verdict?: string;
+  maxAge: number;
+  mustRevalidate: boolean;
+}
+
+/**
+ * Bounds a lifetime by what the origin offered a *browser*, which is a
+ * different question from what it offered us. Only `Cache-Control` is read
+ * here: `s-maxage` and `CDN-Cache-Control` address shared caches, and this
+ * header is handed to a private one.
+ */
+function clientTerms(
+  upstream: UpstreamCacheMeta | undefined,
+  maxAge: number,
+  revalidatable = false
+): ClientTerms {
+  const client = inferClientFreshnessMs(upstream, revalidatable);
+  if (client === DO_NOT_STORE) return { verdict: 'no-store', maxAge, mustRevalidate: false };
+  // Reuse requires revalidating first, so no lifetime applies. Checked separately
+  // from the inference because `inferClientFreshnessMs` answers `null` — not 0 —
+  // for a `no-cache` response that carried no validator, which would otherwise
+  // fall straight through to the full ceiling.
+  if (upstream?.noCache) return { verdict: 'public, no-cache', maxAge, mustRevalidate: false };
+  return {
+    maxAge: client === null ? maxAge : Math.min(maxAge, clampBrowserMaxAge(client / 1000)),
+    mustRevalidate: !!upstream?.mustRevalidate,
+  };
+}
+
+/** `stale` adds the revalidation window; `must-revalidate` is what forbids one. */
+function renderTerms(terms: ClientTerms, stale: boolean): string {
+  if (terms.verdict) return terms.verdict;
+  if (terms.mustRevalidate) return `public, max-age=${terms.maxAge}, must-revalidate`;
+  return stale ? lifetime(terms.maxAge) : `public, max-age=${terms.maxAge}`;
+}
+
+/**
+ * How long a client may reuse an image we are holding.
+ *
+ * Two bounds, not one. `expiresAt` is how long *we* may reuse these bytes,
+ * which under a targeted `CDN-Cache-Control` is legitimately longer than
+ * anything the provider offered a browser; the provider's browser-facing terms
+ * bound the figure again. Serving the store's own validity alone is what would
+ * hand a browser five minutes of a rating poster the provider had told it to
+ * revalidate every time.
+ */
 function ourCacheControl(entry?: ProxyResponseInput['entry']): string {
   let maxAge = getProxyMaxAgeSeconds();
   if (entry && Number.isFinite(entry.expiresAt)) {
     maxAge = Math.min(maxAge, browserMaxAgeFor(entry.expiresAt as number));
   }
-  return `public, max-age=${maxAge}, stale-while-revalidate=${maxAge}`;
+  return renderTerms(clientTerms(entry?.upstream, maxAge, !!entry?.etag), true);
 }
 
 function upstreamCacheControl(headers: ProxyResponseInput['upstreamHeaders']): string | null {
@@ -90,27 +138,17 @@ function lifetime(maxAge: number): string {
  * nothing still gets the operator's figure. `POSTER_PROXY_FOLLOW_UPSTREAM` is the
  * separate, unclamped escape hatch for operators who want the header verbatim.
  *
+ * Browser-facing throughout — see `clientTerms`. A `CDN-Cache-Control` on the
+ * way in was addressed to the store, not to the client this header reaches.
+ *
  * Provider policies are deliberately not consulted: they decide what the store
  * keeps, and nothing is being kept here. See `resolveEntryTtlMs` for the
  * storage side.
  */
 function passThroughCacheControl(upstream: UpstreamCacheMeta): string {
-  const ceiling = getProxyMaxAgeSeconds();
-
-  const inferred = inferFreshnessMs(upstream);
-  // The origin refuses storage outright, so nothing downstream may keep it.
-  if (inferred === DO_NOT_STORE) return 'no-store';
-  // Reuse requires revalidating first, so no lifetime applies. Checked separately
-  // from the inference because `inferFreshnessMs` answers `null` — not 0 — for a
-  // `no-cache` response that carried no validator, which would otherwise fall
-  // straight through to the full ceiling.
-  if (upstream.noCache) return 'public, no-cache';
-
-  // `null` means the provider promised nothing we can act on, so our figure stands.
-  const maxAge = inferred === null ? ceiling : Math.min(ceiling, clampBrowserMaxAge(inferred / 1000));
-  // A stale window is exactly what `must-revalidate` forbids.
-  if (upstream.mustRevalidate) return `public, max-age=${maxAge}, must-revalidate`;
-  return lifetime(maxAge);
+  // `POSTER_PROXY_MAX_AGE_DAYS` is the ceiling, and stands on its own where the
+  // provider promised a browser nothing we can act on.
+  return renderTerms(clientTerms(upstream, getProxyMaxAgeSeconds()), true);
 }
 
 export function proxyResponseHeaders(input: ProxyResponseInput = {}): ProxyResponseHeaders {
@@ -124,8 +162,11 @@ export function proxyResponseHeaders(input: ProxyResponseInput = {}): ProxyRespo
 
   if (entry) {
     const headers: ProxyResponseHeaders = {
+      // The direct surface is not behind the operator's CDN, so it carries
+      // neither the proxy ceiling nor a stale window — but the same audience
+      // reads it, so the origin's browser-facing terms bound it just the same.
       'Cache-Control': surface === 'direct'
-        ? `public, max-age=${browserMaxAgeFor(entry.expiresAt as number)}`
+        ? renderTerms(clientTerms(entry.upstream, browserMaxAgeFor(entry.expiresAt as number), !!entry.etag), false)
         : ourCacheControl(entry),
     };
     if (entry.etag) headers.ETag = `"${entry.etag}"`;

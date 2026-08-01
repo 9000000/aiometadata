@@ -1,10 +1,11 @@
-import type { ImageClass } from './config.js';
+import type { ImageClass, UpstreamCacheMeta } from './config.js';
 import { recordRevalidated, recordServe } from './handler.js';
 import { applyProxyResponseHeaders, etagMatches } from './proxyResponse.js';
 import { UpstreamRejected, openImageStream } from './upstream.js';
 
 export interface StoreResult {
-  entry: { etag?: string; expiresAt?: number; size: number };
+  /** `upstream` is what the origin promised a browser — see `proxyResponseHeaders`. */
+  entry: { etag?: string; expiresAt?: number; size: number; upstream?: UpstreamCacheMeta };
   status: string;
 }
 

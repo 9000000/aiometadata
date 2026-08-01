@@ -179,19 +179,31 @@ export function getMemoryBudget(): number {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export interface UpstreamCacheMeta {
+/** The directives one `Cache-Control`-shaped header field carries. */
+export interface CacheDirectives {
   maxAge?: number;
   sMaxAge?: number;
+  immutable?: boolean;
+  noStore?: boolean;
+  noCache?: boolean;
+  mustRevalidate?: boolean;
+}
+
+export interface UpstreamCacheMeta extends CacheDirectives {
   age?: number;
   date?: number;
   expires?: number;
   etag?: string;
   lastModified?: string;
   lastModifiedAt?: number;
-  immutable?: boolean;
-  noStore?: boolean;
-  noCache?: boolean;
-  mustRevalidate?: boolean;
+  /**
+   * `CDN-Cache-Control`, kept apart from the fields above rather than folded
+   * into them. It addresses shared caches in the delivery path — which is what
+   * the store is — while the flat fields address browsers, and a provider may
+   * deliberately answer the two differently. Merging them would lose whichever
+   * answer lost the tie. See `inferFreshnessMs` and `inferClientFreshnessMs`.
+   */
+  cdn?: CacheDirectives;
 }
 
 const MAX_AGE_RE = /(?:^|,)\s*max-age\s*=\s*"?(\d+)"?/;
@@ -209,23 +221,31 @@ function parseHttpDate(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+/** Reads one `Cache-Control`-shaped field. `undefined` when the field is absent or empty. */
+function parseCacheDirectives(raw: unknown): CacheDirectives | undefined {
+  const value = String(raw || '').toLowerCase();
+  if (!value.trim()) return undefined;
+
+  const directives: CacheDirectives = {};
+  // Three different answers: `no-store` refuses storage, `no-cache` refuses reuse
+  // without revalidating first, `must-revalidate` refuses reuse once stale.
+  if (NO_STORE_RE.test(value)) directives.noStore = true;
+  if (NO_CACHE_RE.test(value)) directives.noCache = true;
+  if (MUST_REVALIDATE_RE.test(value)) directives.mustRevalidate = true;
+  if (IMMUTABLE_RE.test(value)) directives.immutable = true;
+  const shared = SHARED_MAX_AGE_RE.exec(value)?.[1];
+  if (shared !== undefined) directives.sMaxAge = Number(shared);
+  const seconds = MAX_AGE_RE.exec(value)?.[1];
+  if (seconds !== undefined) directives.maxAge = Number(seconds);
+  return directives;
+}
+
 /** Reads the freshness promise and validators off a response. Absent fields stay absent. */
 export function parseUpstreamCacheMeta(headers: Record<string, any> = {}): UpstreamCacheMeta {
-  const meta: UpstreamCacheMeta = {};
+  const meta: UpstreamCacheMeta = { ...parseCacheDirectives(headers['cache-control']) };
 
-  const cacheControl = String(headers['cache-control'] || '').toLowerCase();
-  if (cacheControl) {
-    // Three different answers: `no-store` refuses storage, `no-cache` refuses reuse
-    // without revalidating first, `must-revalidate` refuses reuse once stale.
-    if (NO_STORE_RE.test(cacheControl)) meta.noStore = true;
-    if (NO_CACHE_RE.test(cacheControl)) meta.noCache = true;
-    if (MUST_REVALIDATE_RE.test(cacheControl)) meta.mustRevalidate = true;
-    if (IMMUTABLE_RE.test(cacheControl)) meta.immutable = true;
-    const shared = SHARED_MAX_AGE_RE.exec(cacheControl)?.[1];
-    if (shared !== undefined) meta.sMaxAge = Number(shared);
-    const seconds = MAX_AGE_RE.exec(cacheControl)?.[1];
-    if (seconds !== undefined) meta.maxAge = Number(seconds);
-  }
+  const cdn = parseCacheDirectives(headers['cdn-cache-control']);
+  if (cdn) meta.cdn = cdn;
 
   const age = Number.parseInt(String(headers['age'] ?? ''), 10);
   if (Number.isFinite(age) && age >= 0) meta.age = age;
@@ -283,8 +303,15 @@ const ONE_YEAR_MS = MAX_TTL_DAYS * DAY_MS;
 
 const HEURISTIC_MIN_ELAPSED_SECONDS = 10 * 24 * 60 * 60;
 
-function zero(upstream: UpstreamCacheMeta): number | null {
-  return (upstream.etag || upstream.lastModified) ? 0 : null;
+/**
+ * "Expired already" is only a usable answer when someone can revalidate cheaply;
+ * otherwise it means refetching a whole body on every request, and declining is
+ * the better answer. The origin's validators settle that for the store, and
+ * `revalidatable` settles it for a client we are holding an entry for — it
+ * revalidates against our body hash, so it needs nothing from the origin.
+ */
+function zero(upstream: UpstreamCacheMeta, revalidatable: boolean): number | null {
+  return (revalidatable || upstream.etag || upstream.lastModified) ? 0 : null;
 }
 
 // RFC 9111
@@ -295,26 +322,90 @@ function heuristicSeconds(upstream: UpstreamCacheMeta): number | null {
   return elapsed * 0.10;
 }
 
+function expiresSeconds(upstream: UpstreamCacheMeta): number | null {
+  return upstream.expires !== undefined && upstream.date !== undefined
+    ? (upstream.expires - upstream.date) / 1000
+    : null;
+}
+
+/** A stated lifetime, less the time it has already been running. */
+function remainingMs(
+  lifetimeSeconds: number,
+  upstream: UpstreamCacheMeta,
+  revalidatable: boolean
+): InferredFreshness {
+  const remaining = lifetimeSeconds - (upstream.age ?? 0);
+  if (remaining <= 0) return zero(upstream, revalidatable);
+  return Math.min(ONE_YEAR_MS, remaining * 1000);
+}
+
+/**
+ * What one set of directives promises, to whoever they were addressed to.
+ *
+ * `lifetime` is supplied by the caller because the two audiences read different
+ * fields for it: only a shared cache may act on `s-maxage`, and `Expires` and
+ * the RFC 9111 heuristic belong to the response as a whole rather than to any
+ * targeted field.
+ */
+function freshnessFrom(
+  directives: CacheDirectives,
+  upstream: UpstreamCacheMeta,
+  lifetime: () => number | null,
+  revalidatable: boolean
+): InferredFreshness {
+  if (directives.noStore) return DO_NOT_STORE;
+  if (directives.noCache) return zero(upstream, revalidatable);
+  if (directives.immutable) return ONE_YEAR_MS;
+  const lifetimeSeconds = lifetime();
+  if (lifetimeSeconds === null) return null; // Nothing was promised at all.
+  return remainingMs(lifetimeSeconds, upstream, revalidatable);
+}
+
+/**
+ * How long **the store** may reuse these bytes.
+ *
+ * The audience is a shared cache sitting in the delivery path, so `s-maxage`
+ * outranks `max-age` and a `CDN-Cache-Control` is addressed to us directly.
+ * Per RFC 9213 a targeted field replaces `Cache-Control` for the cache it
+ * names rather than combining with it — so it is neither the smaller of the
+ * two nor the larger, it is simply the one meant for us. A targeted field that
+ * states no lifetime of its own, a bare stale window say, is not an instruction
+ * to forget the figure the provider did state, so that falls back.
+ *
+ * Use `inferClientFreshnessMs` for anything a browser will read.
+ */
 export function inferFreshnessMs(upstream?: UpstreamCacheMeta): InferredFreshness {
   if (!upstream) return null;
-  if (upstream.noStore) return DO_NOT_STORE;
-  if (upstream.noCache) return zero(upstream);
-  if (upstream.immutable) return ONE_YEAR_MS;
 
-  const lifetimeSeconds =
-    // We are a shared cache, so `s-maxage` outranks `max-age`.
-    upstream.sMaxAge
-    ?? upstream.maxAge
-    ?? (upstream.expires !== undefined && upstream.date !== undefined
-      ? (upstream.expires - upstream.date) / 1000
-      : null)
-    ?? heuristicSeconds(upstream);
+  if (upstream.cdn) {
+    const targeted = freshnessFrom(upstream.cdn, upstream, () =>
+      upstream.cdn!.sMaxAge ?? upstream.cdn!.maxAge ?? null, false);
+    if (targeted !== null) return targeted;
+  }
 
-  if (lifetimeSeconds === null) return null; // Nothing was promised at all.
+  return freshnessFrom(upstream, upstream, () =>
+    upstream.sMaxAge ?? upstream.maxAge ?? expiresSeconds(upstream) ?? heuristicSeconds(upstream), false);
+}
 
-  const remaining = lifetimeSeconds - (upstream.age ?? 0); // The promise was already running.
-  if (remaining <= 0) return zero(upstream);
-  return Math.min(ONE_YEAR_MS, remaining * 1000);
+/**
+ * How long **a browser** may reuse these bytes.
+ *
+ * Same response, different audience, and often a different answer: a rating
+ * provider that lets a CDN hold a poster for five minutes can still require
+ * every browser to revalidate, which is exactly what btttr.cc does. Reading
+ * `s-maxage` or a targeted field here would hand a private cache a promise it
+ * was never offered — the defect this pair of functions exists to separate.
+ *
+ * Set `revalidatable` when the response carries a validator of our own, which
+ * is what lets a provider's `max-age=0` be relayed as the zero it is.
+ */
+export function inferClientFreshnessMs(
+  upstream?: UpstreamCacheMeta,
+  revalidatable = false
+): InferredFreshness {
+  if (!upstream) return null;
+  return freshnessFrom(upstream, upstream, () =>
+    upstream.maxAge ?? expiresSeconds(upstream) ?? heuristicSeconds(upstream), revalidatable);
 }
 
 // --- per-provider policy --------------------------------------------------

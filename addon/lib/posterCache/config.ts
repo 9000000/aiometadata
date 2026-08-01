@@ -179,18 +179,85 @@ export function getMemoryBudget(): number {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export interface UpstreamCacheMeta {
+/** The directives one `Cache-Control`-shaped header field carries. */
+export interface CacheDirectives {
   maxAge?: number;
   sMaxAge?: number;
+  immutable?: boolean;
+  noStore?: boolean;
+  noCache?: boolean;
+  mustRevalidate?: boolean;
+}
+
+export interface UpstreamCacheMeta extends CacheDirectives {
   age?: number;
   date?: number;
   expires?: number;
   etag?: string;
   lastModified?: string;
   lastModifiedAt?: number;
-  immutable?: boolean;
-  noStore?: boolean;
-  noCache?: boolean;
+  cdn?: CacheDirectives;
+}
+
+const MAX_AGE_RE = /(?:^|,)\s*max-age\s*=\s*"?(\d+)"?/;
+const SHARED_MAX_AGE_RE = /(?:^|,)\s*s-maxage\s*=\s*"?(\d+)"?/;
+const NO_STORE_RE = /(?:^|,)\s*no-store\s*(?:,|$)/;
+const NO_CACHE_RE = /(?:^|,)\s*no-cache\s*(?:,|$)/;
+const IMMUTABLE_RE = /(?:^|,)\s*immutable\s*(?:,|$)/;
+const MUST_REVALIDATE_RE = /(?:^|,)\s*must-revalidate\s*(?:,|$)/;
+
+/** An HTTP date we cannot read is no date at all — never a NaN handed to the policy. */
+function parseHttpDate(value: unknown): number | undefined {
+  const raw = String(value ?? '').trim();
+  if (!raw) return undefined;
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/** Reads one `Cache-Control`-shaped field. `undefined` when the field is absent or empty. */
+function parseCacheDirectives(raw: unknown): CacheDirectives | undefined {
+  const value = String(raw || '').toLowerCase();
+  if (!value.trim()) return undefined;
+
+  const directives: CacheDirectives = {};
+  if (NO_STORE_RE.test(value)) directives.noStore = true;
+  if (NO_CACHE_RE.test(value)) directives.noCache = true;
+  if (MUST_REVALIDATE_RE.test(value)) directives.mustRevalidate = true;
+  if (IMMUTABLE_RE.test(value)) directives.immutable = true;
+  const shared = SHARED_MAX_AGE_RE.exec(value)?.[1];
+  if (shared !== undefined) directives.sMaxAge = Number(shared);
+  const seconds = MAX_AGE_RE.exec(value)?.[1];
+  if (seconds !== undefined) directives.maxAge = Number(seconds);
+  return directives;
+}
+
+/** Reads the freshness promise and validators off a response. Absent fields stay absent. */
+export function parseUpstreamCacheMeta(headers: Record<string, any> = {}): UpstreamCacheMeta {
+  const meta: UpstreamCacheMeta = { ...parseCacheDirectives(headers['cache-control']) };
+
+  const cdn = parseCacheDirectives(headers['cdn-cache-control']);
+  if (cdn) meta.cdn = cdn;
+
+  const age = Number.parseInt(String(headers['age'] ?? ''), 10);
+  if (Number.isFinite(age) && age >= 0) meta.age = age;
+
+  const date = parseHttpDate(headers['date']);
+  if (date !== undefined) meta.date = date;
+
+  const expires = parseHttpDate(headers['expires']);
+  if (expires !== undefined) meta.expires = expires;
+
+  const etag = String(headers['etag'] || '').trim();
+  if (etag) meta.etag = etag;
+
+  const lastModified = String(headers['last-modified'] || '').trim();
+  if (lastModified) {
+    meta.lastModified = lastModified;
+    const lastModifiedAt = parseHttpDate(lastModified);
+    if (lastModifiedAt !== undefined) meta.lastModifiedAt = lastModifiedAt;
+  }
+
+  return meta;
 }
 
 export const DEFAULT_TTL_DAYS = 30;
@@ -200,16 +267,13 @@ function ttlDaysFrom(raw: string | undefined, fallback: number): number {
   const trimmed = (raw ?? '').trim();
   if (trimmed === '') return fallback;
   const parsed = Number(trimmed);
-  // Junk is not a configuration, so the shipped default stands.
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
-/** The flat default, in days. `0` means never expire. */
 export function getEntryTtlDays(): number {
   return ttlDaysFrom(process.env.POSTER_CACHE_TTL_DAYS, DEFAULT_TTL_DAYS);
 }
 
-/** The one flat validity. `0` means never expire. */
 export function getEntryTtlMs(): number {
   const days = getEntryTtlDays();
   return days > 0 ? days * DAY_MS : Infinity;
@@ -227,8 +291,8 @@ const ONE_YEAR_MS = MAX_TTL_DAYS * DAY_MS;
 
 const HEURISTIC_MIN_ELAPSED_SECONDS = 10 * 24 * 60 * 60;
 
-function zero(upstream: UpstreamCacheMeta): number | null {
-  return (upstream.etag || upstream.lastModified) ? 0 : null;
+function zero(upstream: UpstreamCacheMeta, revalidatable: boolean): number | null {
+  return (revalidatable || upstream.etag || upstream.lastModified) ? 0 : null;
 }
 
 // RFC 9111
@@ -239,26 +303,56 @@ function heuristicSeconds(upstream: UpstreamCacheMeta): number | null {
   return elapsed * 0.10;
 }
 
+function expiresSeconds(upstream: UpstreamCacheMeta): number | null {
+  return upstream.expires !== undefined && upstream.date !== undefined
+    ? (upstream.expires - upstream.date) / 1000
+    : null;
+}
+
+function remainingMs(
+  lifetimeSeconds: number,
+  upstream: UpstreamCacheMeta,
+  revalidatable: boolean
+): InferredFreshness {
+  const remaining = lifetimeSeconds - (upstream.age ?? 0);
+  if (remaining <= 0) return zero(upstream, revalidatable);
+  return Math.min(ONE_YEAR_MS, remaining * 1000);
+}
+
+function freshnessFrom(
+  directives: CacheDirectives,
+  upstream: UpstreamCacheMeta,
+  lifetime: () => number | null,
+  revalidatable: boolean
+): InferredFreshness {
+  if (directives.noStore) return DO_NOT_STORE;
+  if (directives.noCache) return zero(upstream, revalidatable);
+  if (directives.immutable) return ONE_YEAR_MS;
+  const lifetimeSeconds = lifetime();
+  if (lifetimeSeconds === null) return null; // Nothing was promised at all.
+  return remainingMs(lifetimeSeconds, upstream, revalidatable);
+}
+
 export function inferFreshnessMs(upstream?: UpstreamCacheMeta): InferredFreshness {
   if (!upstream) return null;
-  if (upstream.noStore) return DO_NOT_STORE;
-  if (upstream.noCache) return zero(upstream);
-  if (upstream.immutable) return ONE_YEAR_MS;
 
-  const lifetimeSeconds =
-    // We are a shared cache, so `s-maxage` outranks `max-age`.
-    upstream.sMaxAge
-    ?? upstream.maxAge
-    ?? (upstream.expires !== undefined && upstream.date !== undefined
-      ? (upstream.expires - upstream.date) / 1000
-      : null)
-    ?? heuristicSeconds(upstream);
+  if (upstream.cdn) {
+    const targeted = freshnessFrom(upstream.cdn, upstream, () =>
+      upstream.cdn!.sMaxAge ?? upstream.cdn!.maxAge ?? null, false);
+    if (targeted !== null) return targeted;
+  }
 
-  if (lifetimeSeconds === null) return null; // Nothing was promised at all.
+  return freshnessFrom(upstream, upstream, () =>
+    upstream.sMaxAge ?? upstream.maxAge ?? expiresSeconds(upstream) ?? heuristicSeconds(upstream), false);
+}
 
-  const remaining = lifetimeSeconds - (upstream.age ?? 0); // The promise was already running.
-  if (remaining <= 0) return zero(upstream);
-  return Math.min(ONE_YEAR_MS, remaining * 1000);
+export function inferClientFreshnessMs(
+  upstream?: UpstreamCacheMeta,
+  revalidatable = false
+): InferredFreshness {
+  if (!upstream) return null;
+  return freshnessFrom(upstream, upstream, () =>
+    upstream.maxAge ?? expiresSeconds(upstream) ?? heuristicSeconds(upstream), revalidatable);
 }
 
 // --- per-provider policy --------------------------------------------------
@@ -275,22 +369,30 @@ export interface ProviderPolicy {
 
 export interface ResolvedPolicy {
   policy: TtlPolicy;
-  /** Set only for `custom`. */
   ttlMs?: number;
 }
 
-export const KNOWN_ART_PROVIDERS: ReadonlyArray<{ domain: string; group: 'source' | 'rating' }> = [
-  { domain: 'image.tmdb.org', group: 'source' },
-  { domain: 'artworks.thetvdb.com', group: 'source' },
-  { domain: 'cdn.myanimelist.net', group: 'source' },
-  { domain: 'media.kitsu.app', group: 'source' },
-  { domain: 'assets.fanart.tv', group: 'source' },
-  { domain: 'images.metahub.space', group: 'source' },
-  { domain: 'api.ratingposterdb.com', group: 'rating' },
-  { domain: 'api.top-posters.com', group: 'rating' },
-  { domain: 'btttr.cc', group: 'rating' },
-  { domain: 'extendedratings.com', group: 'rating' },
-  { domain: 'postersplus.elfhosted.com', group: 'rating' },
+export interface ProviderPreset {
+  policy: TtlPolicy;
+  ttl?: string;
+}
+
+export const KNOWN_ART_PROVIDERS: ReadonlyArray<{
+  domain: string;
+  group: 'source' | 'rating';
+  preset?: ProviderPreset;
+}> = [
+  { domain: 'image.tmdb.org', group: 'source', preset: { policy: 'infer' } },
+  { domain: 'artworks.thetvdb.com', group: 'source', preset: { policy: 'default' } },
+  { domain: 'cdn.myanimelist.net', group: 'source', preset: { policy: 'default' } },
+  { domain: 'media.kitsu.app', group: 'source', preset: { policy: 'default' } },
+  { domain: 'assets.fanart.tv', group: 'source', preset: { policy: 'default' } },
+  { domain: 'images.metahub.space', group: 'source', preset: { policy: 'default' } },
+  { domain: 'api.ratingposterdb.com', group: 'rating', preset: { policy: 'infer' } },
+  { domain: 'api.top-posters.com', group: 'rating', preset: { policy: 'infer' } },
+  { domain: 'btttr.cc', group: 'rating', preset: { policy: 'infer' } },
+  { domain: 'extendedratings.com', group: 'rating', preset: { policy: 'infer' } },
+  { domain: 'postersplus.elfhosted.com', group: 'rating', preset: { policy: 'infer' } },
 ];
 
 const TTL_POLICIES: TtlPolicy[] = ['default', 'infer', 'custom', 'bypass'];
@@ -374,18 +476,39 @@ function ruleFor(host: string, rules: ProviderPolicy[]): ProviderPolicy | null {
   return best;
 }
 
-/** Most specific first: an operator's domain rule, then the global toggle, then the bucket. */
+export function arePresetsEnabled(): boolean {
+  return !isExplicitlyDisabled(process.env.POSTER_CACHE_PROVIDER_PRESETS);
+}
+
+const PRESET_RULES: ProviderPolicy[] = KNOWN_ART_PROVIDERS
+  .filter((provider) => provider.preset)
+  .map((provider) => ({
+    domain: provider.domain,
+    policy: provider.preset!.policy,
+    ttl: provider.preset!.ttl,
+  }));
+
+function resolvedFrom(rule: ProviderPolicy): ResolvedPolicy {
+  return rule.policy === 'custom'
+    ? { policy: 'custom', ttlMs: parseDurationMs(rule.ttl)! }
+    : { policy: rule.policy };
+}
+
 export function resolvePolicyFor(key: string): ResolvedPolicy {
   const rules = activeRules();
-  if (rules.length > 0) {
-    const host = hostFromKey(key);
-    const rule = host ? ruleFor(host, rules) : null;
-    if (rule) {
-      return rule.policy === 'custom'
-        ? { policy: 'custom', ttlMs: parseDurationMs(rule.ttl)! }
-        : { policy: rule.policy };
-    }
+  const presets = arePresetsEnabled();
+  const host = rules.length > 0 || presets ? hostFromKey(key) : null;
+
+  if (host && rules.length > 0) {
+    const rule = ruleFor(host, rules);
+    if (rule) return resolvedFrom(rule);
   }
+
+  if (host && presets) {
+    const preset = ruleFor(host, PRESET_RULES);
+    if (preset) return resolvedFrom(preset);
+  }
+
   return { policy: isInferTtlEnabled() ? 'infer' : 'default' };
 }
 
@@ -429,7 +552,6 @@ export function getEntryExpiry(key: string, storedAt: number, upstream?: Upstrea
   return Number.isFinite(ttl) ? storedAt + ttl : Infinity;
 }
 
-/** `getEntryExpiry` from a kept inference. See `resolveEntryTtlMsFrom`. */
 export function getEntryExpiryFrom(key: string, storedAt: number, inferredMs: number | null): number {
   const ttl = resolveEntryTtlMsFrom(key, inferredMs);
   return Number.isFinite(ttl) ? storedAt + ttl : Infinity;
@@ -437,18 +559,20 @@ export function getEntryExpiryFrom(key: string, storedAt: number, inferredMs: nu
 
 const MAX_BROWSER_MAX_AGE = 365 * 24 * 60 * 60;
 
-/** Client validity when no entry is in hand — passthrough and bypass responses. */
 export function getBrowserMaxAgeSeconds(): number {
   const ttl = getEntryTtlMs();
   if (!Number.isFinite(ttl)) return MAX_BROWSER_MAX_AGE;
   return Math.min(MAX_BROWSER_MAX_AGE, Math.max(60, Math.floor(ttl / 1000)));
 }
 
-/** Clients are told what is left of this entry's validity, so they revalidate when we do. */
+export function clampBrowserMaxAge(seconds: number): number {
+  if (!Number.isFinite(seconds)) return MAX_BROWSER_MAX_AGE;
+  return Math.min(MAX_BROWSER_MAX_AGE, Math.max(60, Math.floor(seconds)));
+}
+
 export function browserMaxAgeFor(expiresAt: number): number {
   if (!Number.isFinite(expiresAt)) return MAX_BROWSER_MAX_AGE;
-  const remaining = Math.floor((expiresAt - Date.now()) / 1000);
-  return Math.min(MAX_BROWSER_MAX_AGE, Math.max(60, remaining));
+  return clampBrowserMaxAge((expiresAt - Date.now()) / 1000);
 }
 
 export const DEFAULT_PROXY_MAX_AGE_DAYS = 1;

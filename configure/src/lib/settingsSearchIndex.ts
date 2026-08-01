@@ -397,6 +397,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ['background', 'custom url', 'override', 'pattern'],
   },
   {
+    id: 'artProviders.customLandscapePattern', section: 'art-providers', anchor: 'custom-landscape-pattern',
+    label: 'Landscape URL Pattern',
+    description: 'Override art with custom URL patterns. If a placeholder references an unavailable value, normal art is used instead.',
+    keywords: ['landscape', 'wide', 'custom url', 'override', 'pattern'],
+  },
+  {
     id: 'artProviders.customLogoPattern', section: 'art-providers', anchor: 'custom-logo-pattern',
     label: 'Logo URL Pattern',
     description: 'Override art with custom URL patterns. If a placeholder references an unavailable value, normal art is used instead.',

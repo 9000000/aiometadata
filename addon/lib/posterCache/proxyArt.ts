@@ -45,7 +45,7 @@ export function proxyArtUrlVouched(targetUrl: string, sig: unknown): boolean {
 
 export interface ProxyArtUrlOptions {
   base: string;
-  imageClass: 'poster' | 'logo' | 'background';
+  imageClass: 'poster' | 'logo' | 'background' | 'landscape';
   type: string;
   id: string;
   fallback?: string;

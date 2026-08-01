@@ -11,6 +11,7 @@ import {
   getMaxObjectBytes,
   getUpstreamTimeoutMs,
   isPrivateArtAllowed,
+  parseUpstreamCacheMeta,
   type UpstreamCacheMeta,
 } from './config.js';
 
@@ -82,64 +83,8 @@ export interface FetchOptions extends ResolveOptions {
   validators?: ConditionalValidators;
 }
 
-const MAX_AGE_RE = /(?:^|,)\s*max-age\s*=\s*"?(\d+)"?/;
-const SHARED_MAX_AGE_RE = /(?:^|,)\s*s-maxage\s*=\s*"?(\d+)"?/;
-const NO_STORE_RE = /(?:^|,)\s*no-store\s*(?:,|$)/;
-const NO_CACHE_RE = /(?:^|,)\s*no-cache\s*(?:,|$)/;
-const IMMUTABLE_RE = /(?:^|,)\s*immutable\s*(?:,|$)/;
+export { parseUpstreamCacheMeta } from './config.js';
 
-/** An HTTP date we cannot read is no date at all — never a NaN handed to the policy. */
-function parseHttpDate(value: unknown): number | undefined {
-  const raw = String(value ?? '').trim();
-  if (!raw) return undefined;
-  const parsed = Date.parse(raw);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-/** Reads the freshness promise and validators off a response. Absent fields stay absent. */
-export function parseUpstreamCacheMeta(headers: Record<string, any> = {}): UpstreamCacheMeta {
-  const meta: UpstreamCacheMeta = {};
-
-  const cacheControl = String(headers['cache-control'] || '').toLowerCase();
-  if (cacheControl) {
-    // Two different answers: `no-store` refuses storage, `no-cache` only refuses
-    // reuse without revalidating first.
-    if (NO_STORE_RE.test(cacheControl)) meta.noStore = true;
-    if (NO_CACHE_RE.test(cacheControl)) meta.noCache = true;
-    if (IMMUTABLE_RE.test(cacheControl)) meta.immutable = true;
-    const shared = SHARED_MAX_AGE_RE.exec(cacheControl)?.[1];
-    if (shared !== undefined) meta.sMaxAge = Number(shared);
-    const seconds = MAX_AGE_RE.exec(cacheControl)?.[1];
-    if (seconds !== undefined) meta.maxAge = Number(seconds);
-  }
-
-  const age = Number.parseInt(String(headers['age'] ?? ''), 10);
-  if (Number.isFinite(age) && age >= 0) meta.age = age;
-
-  const date = parseHttpDate(headers['date']);
-  if (date !== undefined) meta.date = date;
-
-  const expires = parseHttpDate(headers['expires']);
-  if (expires !== undefined) meta.expires = expires;
-
-  const etag = String(headers['etag'] || '').trim();
-  if (etag) meta.etag = etag;
-
-  const lastModified = String(headers['last-modified'] || '').trim();
-  if (lastModified) {
-    meta.lastModified = lastModified;
-    const lastModifiedAt = parseHttpDate(lastModified);
-    if (lastModifiedAt !== undefined) meta.lastModifiedAt = lastModifiedAt;
-  }
-
-  return meta;
-}
-
-/**
- * Folds a 304 into the promise we already had. A 304 only has to resend headers
- * that changed, so absent fields keep their stored value — but `age` restarts,
- * because the answer itself is fresh.
- */
 export function mergeRevalidated(
   previous: UpstreamCacheMeta | undefined,
   fresh: UpstreamCacheMeta | undefined
@@ -153,6 +98,7 @@ export function mergeRevalidated(
     if (fresh.immutable !== undefined) merged.immutable = fresh.immutable;
     if (fresh.noStore !== undefined) merged.noStore = fresh.noStore;
     if (fresh.noCache !== undefined) merged.noCache = fresh.noCache;
+    if (fresh.mustRevalidate !== undefined) merged.mustRevalidate = fresh.mustRevalidate;
     if (fresh.etag) merged.etag = fresh.etag;
     if (fresh.lastModified) {
       merged.lastModified = fresh.lastModified;

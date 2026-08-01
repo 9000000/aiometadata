@@ -300,6 +300,7 @@ async function configLoadRateLimitMiddleware(req, res, next) {
 
 const posterCacheConfig = require('./lib/posterCache/config.js');
 const { buildProxyArtUrl, proxyArtUrlVouched } = require('./lib/posterCache/proxyArt.js');
+const { serveStoreResult, servePassThrough, openArtStream } = require('./lib/posterCache/artProxyServe.js');
 
 function POSTER_PROXY_PREFIX_URL() { return posterCacheConfig.getPosterProxyPrefix(); }
 
@@ -4257,7 +4258,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
       ? (config.search?.engineRatingPosters?.[config._currentSearchCatalogId] === true)
       : (catalogConfig?.enableRatingPosters !== false);
     const posterPattern = posterPatternsEnabled ? require('./utils/parseProps').resolvePosterPattern(config) : null;
-    if ((posterPattern || config.customBackgroundUrlPattern || config.customLogoUrlPattern) && responseData?.metas && Array.isArray(responseData.metas)) {
+    if ((posterPattern || config.customBackgroundUrlPattern || config.customLandscapeUrlPattern || config.customLogoUrlPattern) && responseData?.metas && Array.isArray(responseData.metas)) {
       const isUpNextCatalog = cleanId.includes('up_next') || cleanId.includes('upnext');
       const upNextUsesShowPoster = isUpNextCatalog && catalogConfig?.metadata?.useShowPosterForUpNext === true;
       const { resolveCustomArtUrl, getPosterRatingApiKey } = require('./utils/parseProps');
@@ -4297,6 +4298,21 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
               }
             } else {
               meta.background = resolved;
+            }
+          }
+        }
+        if (config.customLandscapeUrlPattern) {
+          const resolved = resolveCustomArtUrl(config.customLandscapeUrlPattern, ids, type, config);
+          if (resolved) {
+            if (config.usePosterProxy) {
+              const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
+              if (proxyId) {
+                meta.landscapePoster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'landscape', type: type, id: proxyId, fallback: meta.landscapePoster, url: resolved });
+              } else {
+                meta.landscapePoster = resolved;
+              }
+            } else {
+              meta.landscapePoster = resolved;
             }
           }
         }
@@ -4453,6 +4469,21 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
             }
           } else {
             result.meta.background = resolved;
+          }
+        }
+      }
+      if (config.customLandscapeUrlPattern) {
+        const resolved = resolveCustomArtUrl(config.customLandscapeUrlPattern, ids, metaType, config, { userAgent });
+        if (resolved) {
+          if (config.usePosterProxy) {
+            const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
+            if (proxyId) {
+              result.meta.landscapePoster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'landscape', type: metaType, id: proxyId, fallback: result.meta.landscapePoster, url: resolved });
+            } else {
+              result.meta.landscapePoster = resolved;
+            }
+          } else {
+            result.meta.landscapePoster = resolved;
           }
         }
       }
@@ -4934,56 +4965,6 @@ addon.get("/api/proxy-manifest", async function (req, res) {
 
 // API endpoint to auto-detect page size for external addon catalogs
 
-function POSTER_PROXY_TIMEOUT_MS() { return parseInt(process.env.POSTER_PROXY_TIMEOUT_MS || '10000', 10); }
-
-async function fetchPosterImageStream(posterUrl) {
-  const imageResponse = await axios({
-    method: 'get',
-    url: posterUrl,
-    responseType: 'stream',
-    timeout: POSTER_PROXY_TIMEOUT_MS(),
-    maxRedirects: 5,
-    validateStatus: (status) => status >= 200 && status < 300,
-    headers: { 'User-Agent': `AIOMetadata/${buildInfo.version}` }
-  });
-
-  const contentType = imageResponse.headers['content-type'];
-  if (contentType && !contentType.toLowerCase().startsWith('image/')) {
-    imageResponse.data.destroy();
-    throw new Error(`Poster URL returned non-image content-type: ${contentType}`);
-  }
-
-  const contentLength = imageResponse.headers['content-length'];
-  const parsedContentLength = contentLength ? parseInt(contentLength, 10) : null;
-  if (Number.isFinite(parsedContentLength) && parsedContentLength < 100) {
-    imageResponse.data.destroy();
-    throw new Error(`Poster URL returned too-small content-length: ${contentLength}`);
-  }
-
-  return imageResponse;
-}
-
-function proxyImageCacheControl(entry, status) {
-  if (status === 'BYPASS') return 'no-store';
-  let maxAge = posterCacheConfig.getProxyMaxAgeSeconds();
-  if (entry && Number.isFinite(entry.expiresAt)) {
-    maxAge = Math.min(maxAge, posterCacheConfig.browserMaxAgeFor(entry.expiresAt));
-  }
-  return `public, max-age=${maxAge}, stale-while-revalidate=${Math.max(maxAge, 604800)}`;
-}
-
-function pipePosterImageResponse(res, imageResponse, bypassed) {
-  const contentType = imageResponse.headers['content-type'];
-  res.setHeader('Content-Type', contentType || 'image/jpeg');
-  if (bypassed) {
-    res.setHeader('X-Cache-Status', 'BYPASS');
-    res.setHeader('Cache-Control', 'no-store');
-  } else {
-    res.setHeader('Cache-Control', proxyImageCacheControl());
-  }
-  imageResponse.data.pipe(res);
-}
-
 function isProcessedImageCacheEnabled() {
   return posterCacheConfig.isClassEnabled('processed');
 }
@@ -5039,21 +5020,23 @@ async function cacheProcessedImage(cacheKey, contentType, produce) {
   });
 }
 
+const refusalsWarned = new Set();
+function warnRefusedOrigin(context, message) {
+  const line = `${context}: ${message}`;
+  if (refusalsWarned.has(line) || refusalsWarned.size >= 20) return;
+  refusalsWarned.add(line);
+  consola.warn(
+    `${line}. If that host is yours, add it to POSTER_CACHE_ALLOWED_HOSTS, or set ` +
+    `IMAGE_PROXY_SIGNING_SECRET (or ADMIN_KEY) so the addon signs the art URLs it issues.`
+  );
+}
+
 const handlePosterProxy = async function (req, res) {
   const { type, id } = req.params;
   const { fallback, lang, key, url: customUrl, sig } = req.query;
   if (!key && !customUrl) {
     return res.redirect(302, fallback);
   }
-  const etag = crypto.createHash('md5').update(`${type}:${id}:${customUrl || key}:${lang}`).digest('hex');
-  res.setHeader('ETag', `"${etag}"`);
-  if (req.headers['if-none-match'] === `"${etag}"`) {
-    if (posterCacheConfig.isBuiltinPosterCacheEnabled()) {
-      require('./lib/posterCache/handler.js').recordRevalidated('poster', req.method, customUrl || id);
-    }
-    return res.status(304).end();
-  }
-
   try {
     let posterUrl = customUrl || null;
 
@@ -5078,29 +5061,36 @@ const handlePosterProxy = async function (req, res) {
     }
 
     const isRatingPoster = !customUrl;
-    // The providers an operator is most likely to bypass — RPDB, TopPoster,
-    // btttr, xrdb, postersplus — only ever arrive here, never through the direct
-    // route, so the check has to be on this path too.
     const bypassed = posterCacheConfig.isBypassed(posterUrl);
+    const allowPrivateHost = customUrl ? proxyArtUrlVouched(customUrl, sig) : true;
     if (!bypassed && (isRatingPoster ? isProcessedImageCacheEnabled() : posterCacheConfig.isClassEnabled('poster'))) {
       const posterCacheStore = require('./lib/posterCache/store.js');
       const { fetchImage } = require('./lib/posterCache/upstream.js');
-      const { recordServe } = require('./lib/posterCache/handler.js');
-      const allowPrivateHost = customUrl ? proxyArtUrlVouched(customUrl, sig) : true;
       const fetchUpstream = (validators) => fetchImage(posterUrl, { allowPrivateHost, validators });
       const result = isRatingPoster
         ? await posterCacheStore.getOrFetch('processed', `rating-poster:${posterUrl}`, (validators) => produceProcessedBytes(posterUrl, () => fetchUpstream(validators)))
         : await posterCacheStore.getOrFetch('poster', posterUrl, fetchUpstream);
-      recordServe('poster', result.status, result.entry.size, req.method, posterUrl);
-      res.setHeader('Cache-Control', proxyImageCacheControl(result.entry, result.status));
-      return await sendCachedImage(res, result);
+      return await serveStoreResult(req, res, {
+        imageClass: 'poster',
+        url: posterUrl,
+        result,
+        send: (served) => sendCachedImage(res, served),
+      });
     }
 
-    const imageResponse = await fetchPosterImageStream(posterUrl);
-    if (bypassed && posterCacheConfig.isBuiltinPosterCacheEnabled()) {
-      require('./lib/posterCache/handler.js').recordServe('poster', 'BYPASS', 0, req.method, posterUrl);
-    }
-    pipePosterImageResponse(res, imageResponse, bypassed);
+    const openUpstream = openArtStream({ url: posterUrl, allowPrivateHost, minContentLength: 100 });
+    await servePassThrough(req, res, {
+      imageClass: 'poster',
+      url: posterUrl,
+      bypassed,
+      open: async (validators) => {
+        const imageResponse = await openUpstream(validators);
+        if (bypassed && posterCacheConfig.isBuiltinPosterCacheEnabled()) {
+          require('./lib/posterCache/handler.js').recordServe('poster', 'BYPASS', 0, req.method, posterUrl);
+        }
+        return imageResponse;
+      },
+    });
   } catch (error) {
     if (posterCacheConfig.isBuiltinPosterCacheEnabled()) require('./lib/posterCache/handler.js').recordServeError();
     const isTimeout = error.code === 'ECONNABORTED' || /timeout/i.test(error.message || '');
@@ -5109,6 +5099,8 @@ const handlePosterProxy = async function (req, res) {
       consola.warn(`Poster proxy timed out for ${id}, serving fallback:`, error.message);
     } else if (status === 404) {
       consola.debug(`No art for ${id} at the poster provider, serving fallback`);
+    } else if (status === 403) {
+      warnRefusedOrigin(`Poster proxy refused ${id}`, error.message);
     } else {
       consola.error(`Error in poster proxy for ${id}:`, error.message);
     }
@@ -5124,51 +5116,44 @@ function streamArtWithFallback(assetName) {
     if (!customUrl) {
       return res.redirect(302, fallback || '');
     }
-    const etag = crypto.createHash('md5').update(`${assetName}:${type}:${id}:${customUrl}`).digest('hex');
-    res.setHeader('ETag', `"${etag}"`);
-    if (req.headers['if-none-match'] === `"${etag}"`) {
-      if (posterCacheConfig.isBuiltinPosterCacheEnabled()) {
-        require('./lib/posterCache/handler.js').recordRevalidated(assetName, req.method, customUrl);
-      }
-      return res.status(304).end();
-    }
     const bypassed = posterCacheConfig.isBypassed(customUrl);
+    // A property of the URL, not of whether we are storing it — see handlePosterProxy.
+    const allowPrivateHost = proxyArtUrlVouched(customUrl, sig);
     try {
       if (posterCacheConfig.isClassEnabled(assetName) && !bypassed) {
         const posterCacheStore = require('./lib/posterCache/store.js');
         const { fetchImage } = require('./lib/posterCache/upstream.js');
-        const { recordServe } = require('./lib/posterCache/handler.js');
-        const allowPrivateHost = proxyArtUrlVouched(customUrl, sig);
         const result = await posterCacheStore.getOrFetch(assetName, customUrl, (validators) =>
           fetchImage(customUrl, { allowPrivateHost, validators }));
-        recordServe(assetName, result.status, result.entry.size, req.method, customUrl);
-        res.setHeader('Cache-Control', proxyImageCacheControl(result.entry, result.status));
-        return await sendCachedImage(res, result);
+        return await serveStoreResult(req, res, {
+          imageClass: assetName,
+          url: customUrl,
+          result,
+          send: (served) => sendCachedImage(res, served),
+        });
       }
 
-      const imageResponse = await axios({
-        method: 'get',
+      // No size floor here: a 1×1 logo is small but legitimate.
+      const openUpstream = openArtStream({ url: customUrl, allowPrivateHost });
+      await servePassThrough(req, res, {
+        imageClass: assetName,
         url: customUrl,
-        responseType: 'stream',
-        timeout: POSTER_PROXY_TIMEOUT_MS(),
-        validateStatus: (status) => status >= 200 && status < 300,
-        headers: { 'User-Agent': `AIOMetadata/${buildInfo.version}` }
+        bypassed,
+        open: async (validators) => {
+          const imageResponse = await openUpstream(validators);
+          if (bypassed && posterCacheConfig.isBuiltinPosterCacheEnabled()) {
+            require('./lib/posterCache/handler.js').recordServe(assetName, 'BYPASS', 0, req.method, customUrl);
+          }
+          return imageResponse;
+        },
       });
-      const contentType = imageResponse.headers['content-type'];
-      res.setHeader('Content-Type', contentType || 'image/jpeg');
-      if (bypassed) {
-        res.setHeader('X-Cache-Status', 'BYPASS');
-        res.setHeader('Cache-Control', 'no-store');
-        if (posterCacheConfig.isBuiltinPosterCacheEnabled()) {
-          require('./lib/posterCache/handler.js').recordServe(assetName, 'BYPASS', 0, req.method, customUrl);
-        }
-      } else {
-        res.setHeader('Cache-Control', proxyImageCacheControl());
-      }
-      imageResponse.data.pipe(res);
     } catch (error) {
       if (posterCacheConfig.isBuiltinPosterCacheEnabled()) require('./lib/posterCache/handler.js').recordServeError();
-      consola.debug(`Art proxy miss for ${assetName} ${id}: ${error.message}`);
+      if (error.status === 403) {
+        warnRefusedOrigin(`Art proxy refused ${assetName} ${id}`, error.message);
+      } else {
+        consola.debug(`Art proxy miss for ${assetName} ${id}: ${error.message}`);
+      }
       if (fallback) {
         return res.redirect(302, fallback);
       }
@@ -5183,15 +5168,8 @@ addon.get("/background/:type/:id", streamArtWithFallback('background'));
 addon.get("/poster-cache/proxy/poster/:type/:id", handlePosterProxy);
 addon.get("/poster-cache/proxy/logo/:type/:id", streamArtWithFallback('logo'));
 addon.get("/poster-cache/proxy/background/:type/:id", streamArtWithFallback('background'));
+addon.get("/poster-cache/proxy/landscape/:type/:id", streamArtWithFallback('landscape'));
 
-// --- Built-in image cache ---
-// Serves /poster-cache/[class/]<absolute-image-url>. Registered well before the
-// static middleware so it is never shadowed by a file lookup.
-//
-// Mounted unconditionally and gated per request: this module is required before
-// initializeSettings() runs, so at this point process.env does not yet reflect
-// settings stored in the database. Deciding here would permanently ignore the
-// toggle for anyone who enables the cache from the dashboard.
 {
   const { posterCacheHandler } = require('./lib/posterCache/handler.js');
   addon.use(posterCacheConfig.POSTER_CACHE_ROUTE, posterCacheHandler());
@@ -6535,7 +6513,7 @@ addon.post("/api/dashboard/poster-cache/invalidate", requireDashboardAdmin, asyn
   const markerAt = raw.indexOf(marker);
   if (markerAt >= 0) {
     const afterMount = raw.slice(markerAt + marker.length - 1);
-    const proxyRoute = /^\/proxy\/(poster|logo|background)\//.exec(afterMount);
+    const proxyRoute = /^\/proxy\/(poster|logo|background|landscape)\//.exec(afterMount);
     if (proxyRoute) {
       let customUrl = null;
       try {

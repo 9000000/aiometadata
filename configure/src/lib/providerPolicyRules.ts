@@ -25,9 +25,24 @@ export interface PolicyRow {
   preset?: ProviderPreset;
 }
 
-export function inheritedPolicy(inferEnabled: boolean, preset?: ProviderPreset): TtlPolicy {
-  if (preset) return preset.policy;
-  return inferEnabled ? 'infer' : 'default';
+export type PolicyMode = 'store' | 'proxy';
+
+export interface PolicyContext {
+  mode: PolicyMode;
+  inferEnabled: boolean;
+  followUpstream: boolean;
+  presetsEnabled: boolean;
+}
+
+export function inheritedPolicy(ctx: PolicyContext, preset?: ProviderPreset): TtlPolicy {
+  const fromPreset = ctx.presetsEnabled ? preset?.policy : undefined;
+
+  if (ctx.mode === 'proxy') {
+    if (ctx.followUpstream) return 'infer';
+    return fromPreset ?? 'infer';
+  }
+
+  return fromPreset ?? (ctx.inferEnabled ? 'infer' : 'default');
 }
 
 import { parseDurationMs } from '../../../addon/lib/posterCache/duration';
@@ -54,7 +69,7 @@ export function rowProblem(row: PolicyRow): string | null {
 export function rowsFromRules(
   rules: ProviderPolicyRule[],
   knownProviders: KnownProvider[],
-  inferEnabled: boolean
+  ctx: PolicyContext
 ): PolicyRow[] {
   const byDomain = new Map<string, ProviderPolicyRule>();
   for (const rule of rules) byDomain.set(normalizeDomain(rule.domain), rule);
@@ -76,7 +91,7 @@ export function rowsFromRules(
       domain,
       builtIn: presets.has(domain),
       explicit: !!rule,
-      policy: rule ? rule.policy : inheritedPolicy(inferEnabled, preset),
+      policy: rule ? rule.policy : inheritedPolicy(ctx, preset),
       ttl: rule?.ttl ?? '',
       preset,
     };
@@ -136,6 +151,12 @@ export interface SettingChange {
   label: string;
 }
 
+/** Which setting the modal's flat field writes — the two modes edit different keys. */
+export interface FlatSetting {
+  key: string;
+  label: string;
+}
+
 export interface PolicyFormState {
   flatDays: string;
   infer: boolean;
@@ -159,10 +180,9 @@ function sameDays(a: string, b: string): boolean {
   return String(a).trim() === String(b).trim();
 }
 
-export function applyChange(state: PolicyFormState, change: SettingChange): PolicyFormState {
+export function applyChange(state: PolicyFormState, change: SettingChange, flatKey: string): PolicyFormState {
+  if (change.key === flatKey) return { ...state, flatDays: change.value };
   switch (change.key) {
-    case 'POSTER_CACHE_TTL_DAYS':
-      return { ...state, flatDays: change.value };
     case 'POSTER_CACHE_INFER_TTL':
       return { ...state, infer: change.value === 'true' };
     case 'POSTER_CACHE_PROVIDER_POLICIES':
@@ -172,15 +192,15 @@ export function applyChange(state: PolicyFormState, change: SettingChange): Poli
   }
 }
 
-export function pendingChanges(next: PolicyFormState, saved: PolicyFormState): SettingChange[] {
+export function pendingChanges(
+  next: PolicyFormState,
+  saved: PolicyFormState,
+  flat: FlatSetting
+): SettingChange[] {
   const changes: SettingChange[] = [];
 
   if (!sameDays(next.flatDays, saved.flatDays)) {
-    changes.push({
-      key: 'POSTER_CACHE_TTL_DAYS',
-      value: String(next.flatDays).trim(),
-      label: 'the default validity',
-    });
+    changes.push({ key: flat.key, value: String(next.flatDays).trim(), label: flat.label });
   }
   if (next.infer !== saved.infer) {
     changes.push({

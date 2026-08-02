@@ -3,11 +3,12 @@ import {
   DO_NOT_STORE,
   browserMaxAgeFor,
   clampBrowserMaxAge,
+  followsUpstreamCacheControl,
   getBrowserMaxAgeSeconds,
   getProxyMaxAgeSeconds,
   inferClientFreshnessMs,
-  isTruthy,
   parseUpstreamCacheMeta,
+  type ResolvedPolicy,
   type UpstreamCacheMeta,
 } from './config.js';
 
@@ -19,6 +20,8 @@ export interface ProxyResponseInput {
   upstreamHeaders?: Record<string, unknown> | null;
   surface?: ResponseSurface;
   notStorable?: boolean;
+  /** A per-provider policy resolved by the caller. `null`/absent means nobody spoke. */
+  policy?: ResolvedPolicy | null;
 }
 
 export interface ProxyResponseHeaders {
@@ -42,12 +45,7 @@ export function etagMatches(ifNoneMatch: unknown, etag: string | undefined): boo
   return candidates.some((candidate) => withoutWeakPrefix(candidate) === target);
 }
 
-export function followsUpstreamCacheControl(): boolean {
-  return isTruthy(process.env.POSTER_PROXY_FOLLOW_UPSTREAM);
-}
-
 interface ClientTerms {
-  /** The provider's answer for a browser is terminal — no lifetime applies. */
   verdict?: string;
   maxAge: number;
   mustRevalidate: boolean;
@@ -110,8 +108,17 @@ function passThroughCacheControl(upstream: UpstreamCacheMeta): string {
   return renderTerms(clientTerms(upstream, getProxyMaxAgeSeconds()), true);
 }
 
+function policyCacheControl(policy: ResolvedPolicy, upstream: UpstreamCacheMeta): string {
+  switch (policy.policy) {
+    case 'bypass': return 'no-store';
+    case 'custom': return lifetime(clampBrowserMaxAge(policy.ttlMs! / 1000));
+    case 'default': return lifetime(getProxyMaxAgeSeconds());
+    case 'infer': return passThroughCacheControl(upstream);
+  }
+}
+
 export function proxyResponseHeaders(input: ProxyResponseInput = {}): ProxyResponseHeaders {
-  const { entry, status, upstreamHeaders, surface = 'proxy', notStorable } = input;
+  const { entry, status, upstreamHeaders, surface = 'proxy', notStorable, policy } = input;
 
   if (status === 'BYPASS') {
     const headers: ProxyResponseHeaders = { 'Cache-Control': 'no-store' };
@@ -134,6 +141,14 @@ export function proxyResponseHeaders(input: ProxyResponseInput = {}): ProxyRespo
   }
 
   const upstream = parseUpstreamCacheMeta((upstreamHeaders ?? {}) as Record<string, any>);
+
+  if (policy) {
+    return {
+      'Cache-Control': policyCacheControl(policy, upstream),
+      ...upstreamValidators(upstream),
+    };
+  }
+
   const followed = followsUpstreamCacheControl() ? upstreamHeaderValue(upstreamHeaders, 'cache-control') : null;
   const headers: ProxyResponseHeaders = {
     'Cache-Control': followed ?? passThroughCacheControl(upstream),

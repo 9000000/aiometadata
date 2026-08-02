@@ -142,26 +142,27 @@ Custom art URLs are passed through unchanged rather than rendered, so they count
 
 The memory tier sits on top of the addon's own footprint, so budget roughly `baseline + POSTER_CACHE_MEMORY_SIZE`.
 
-**Smaller TMDB renditions.** The other lever on storage is asking TMDB for less in the first place. TMDB serves `/t/p/original` as the file the uploader supplied — like logos that are frequently lossless PNGs and overly large, far more than any client renders. These work whether or not the image cache is on, and all three are off by default:
+**Smaller TMDB renditions.** The other lever on storage is asking TMDB for less in the first place. TMDB serves `/t/p/original` as the file the uploader supplied — like logos that are frequently lossless PNGs and overly large, far more than any client renders. These work whether or not the image cache is on. The first three are off by default; posters are the exception and are already sized:
 
 | Variable | Default | Requests | Saving |
 |----------|---------|----------|--------|
 | `PREFER_SMALLER_LOGOS_TMDB` | `false` | Logos at `w500` | ~12× — the safest of the three, since logos are rendered small |
 | `PREFER_SMALLER_LANDSCAPE_TMDB` | `false` | Landscape posters at `w780` | ~11.6× — clients draw these as catalog tiles, not full-screen |
 | `PREFER_SMALLER_BACKDROPS_TMDB` | `false` | Backgrounds at `w1280` | ~5.1× — the only genuine quality trade; leave it off if backgrounds are rendered full-screen on a 4K display |
+| `PREFER_SMALLER_POSTERS_TMDB` | `true` | Posters at `w600_and_h900_bestv2` | Already on — this is the long-standing default. Set it to `false` for `original` posters, which is the most expensive of the four to flip: posters are the highest-volume class, one per catalog tile |
 
-A sized rendition is only requested when the asset is actually larger than that size. TMDB upscales rather than refusing, so asking for more than an asset has would make it both blurrier and bigger — the addon falls back to `original` in that case. Toggling any of these does not rewrite meta already in the cache; those payloads keep their existing URLs until `META_TTL` expires, and the superseded images are reclaimed as they age out.
+For the first three a sized rendition is only requested when the asset is actually larger than that size. TMDB upscales rather than refusing, so asking for more than an asset has would make it both blurrier and bigger — the addon falls back to `original` in that case. Posters skip that check, since `w600_and_h900_bestv2` is a fixed 600×900 crop and falling back to `original` would change their aspect ratio. Toggling any of these does not rewrite meta already in the cache; those payloads keep their existing URLs until `META_TTL` expires, and the superseded images are reclaimed as they age out.
 
 **Validity.** How long a cached image stays fresh, decided most-specific-first:
 
 | Variable | Default | Sets |
 |----------|---------|------|
-| `POSTER_CACHE_PROVIDER_POLICIES` | unset | A rule for one provider — `default`, `infer`, a `custom` duration, or `bypass` to serve without storing |
+| `POSTER_CACHE_PROVIDER_POLICIES` | unset | A rule for one provider — `default`, `infer`, a `custom` duration, or `bypass`. Sets how long art is stored, and the `Cache-Control` on art passed through without storing |
 | `POSTER_CACHE_PROVIDER_PRESETS` | `true` | Built-in policies, measured per provider, so rating posters stay current out of the box |
 | `POSTER_CACHE_INFER_TTL` | `false` | Follows each remaining source's own headers instead of the flat number |
 | `POSTER_CACHE_TTL_DAYS` | `30` | The flat fallback. Fractional values work; `0` never expires |
 
-`POSTER_PROXY_MAX_AGE_DAYS` (default `1`) is the matching client-side lifetime, and the ceiling on it for art passed through without storing. `POSTER_CACHE_INACTIVE_DAYS` (default `30`) drops images nobody has requested, and `POSTER_CACHE_DIR` moves the cache elsewhere.
+`POSTER_PROXY_MAX_AGE_DAYS` (default `1`) is the matching client-side lifetime, and the ceiling on it for art passed through without storing. `POSTER_CACHE_INACTIVE_DAYS` (default `30`) drops images nobody has requested, and `POSTER_CACHE_DIR` moves the cache elsewhere. Both `POSTER_PROXY_*` settings apply with the built-in cache off, and a per-provider rule overrides them for that provider.
 
 > **Using a rating poster service?** Nothing to do — `api.ratingposterdb.com`, `api.top-posters.com`, `btttr.cc`, `extendedratings.com` and `postersplus.elfhosted.com` each ship a built-in policy following their own headers, which run short while an overlay moves and long once a rating settles.
 >

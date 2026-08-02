@@ -684,15 +684,21 @@ Powers personalized recommendation catalogs backed by a user's own MovieLens acc
 ## TMDB Image Renditions
 
 TMDB serves `/t/p/original` as the file the uploader supplied, which is usually far
-larger than any client renders. These three toggles request a sized rendition
-instead. All three are **off by default**, so artwork is unchanged until you opt in.
-All are also dashboard toggles and apply without a restart.
+larger than any client renders. These four toggles request a sized rendition
+instead. Three of them — logos, backdrops, landscape — are **off by default**, so
+artwork is unchanged until you opt in. `PREFER_SMALLER_POSTERS_TMDB` is the
+exception and defaults to **on**, because posters have always been requested at a
+sized rendition; turning it off is what changes artwork. All are dashboard toggles
+and apply without a restart.
 
-A sized rendition is only requested when the asset is actually larger than that
-size. TMDB *upscales* rather than refusing when asked for more than an asset has — a
-350px logo requested at `w500` comes back re-encoded at 500px and roughly 1.8x the
-bytes of the original — so the addon falls back to `original` whenever TMDB reports
-the asset at or below the target width.
+For logos, backdrops and landscape posters a sized rendition is only requested when
+the asset is actually larger than that size. TMDB *upscales* rather than refusing
+when asked for more than an asset has — a 350px logo requested at `w500` comes back
+re-encoded at 500px and roughly 1.8x the bytes of the original — so the addon falls
+back to `original` whenever TMDB reports the asset at or below the target width.
+Posters skip that check: `w600_and_h900_bestv2` is a fixed 600x900 crop rather than a
+width-bounded resize, so falling back to `original` for a narrow poster would change
+its aspect ratio in a catalog grid.
 
 None of them rewrite meta that is already cached — those payloads carry the URLs
 they were built with until `META_TTL` / `CATALOG_TTL` expire, which spreads the
@@ -701,6 +707,11 @@ apply a change immediately. Superseded images stay on disk unreferenced; because
 reclaim paths (`POSTER_CACHE_MAX_SIZE` eviction and `POSTER_CACHE_INACTIVE_DAYS`
 sweeping) order by last access, they sort ahead of every live entry and are the first
 thing dropped. No manual purge is needed.
+
+### `PREFER_SMALLER_POSTERS_TMDB`
+- **Default**: `true`
+- **Description**: Request TMDB posters at `w600_and_h900_bestv2` rather than `original`. Unlike the other three this is **on by default** — it is what the addon has always done, so leaving it alone keeps artwork exactly as it is, and setting it to `false` is the change. Posters are the highest-volume image class by a wide margin, one per catalog tile, so originals multiply bandwidth and disk on every catalog view rather than on the occasional detail page. Set it to `false` only if poster sharpness on a large display matters more than that.
+- **Example**: `PREFER_SMALLER_POSTERS_TMDB=false`
 
 ### `PREFER_SMALLER_LOGOS_TMDB`
 - **Default**: `false`

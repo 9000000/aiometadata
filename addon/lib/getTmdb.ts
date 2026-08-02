@@ -3,7 +3,7 @@ import { socksDispatcher } from 'fetch-socks';
 import { scrapeSingleImdbResultByTitle, getMetaFromImdbIo } from './imdb';
 import requestTracker from './requestTracker';
 import consola from 'consola';
-import { tmdbImageUrl, tmdbLogoSize, tmdbBackdropSize } from '../utils/tmdbImageSize';
+import { tmdbImageUrl, tmdbLogoSize, tmdbBackdropSize, tmdbPosterSize } from '../utils/tmdbImageSize';
 import nameToImdb from "name-to-imdb";
 import timingMetrics from './timing-metrics';
 import { cacheWrapGlobal, stableStringify } from './getCache';
@@ -911,7 +911,7 @@ export async function getTmdbMoviePoster(tmdbId: string, config: UserConfig) {
     if (images && images.posters && images.posters.length > 0) {
       const poster = selectTmdbImageByLang(images.posters, config);
       if (poster) {
-        return `https://image.tmdb.org/t/p/w600_and_h900_bestv2${poster.file_path}`;
+        return tmdbImageUrl(tmdbPosterSize(), poster.file_path);
       }
     }
     
@@ -932,7 +932,7 @@ export async function getTmdbSeriesPoster(tmdbId: string, config: UserConfig) {
     if (images && images.posters && images.posters.length > 0) {
       const poster = selectTmdbImageByLang(images.posters, config);
       if (poster) {
-        return `https://image.tmdb.org/t/p/w600_and_h900_bestv2${poster.file_path}`;
+        return tmdbImageUrl(tmdbPosterSize(), poster.file_path);
       }
     }
     

@@ -10,7 +10,7 @@ const jikan = require('../lib/mal');
 const { resolveAllIds } = require('../lib/id-resolver');
 const idMapper = require('../lib/id-mapper');
 const { selectFanartImageByLang } = require('./fanart');
-const { tmdbImageUrl, tmdbLogoSize, tmdbBackdropSize, tmdbLandscapeSize } = require('./tmdbImageSize');
+const { tmdbImageUrl, tmdbLogoSize, tmdbBackdropSize, tmdbLandscapeSize, tmdbPosterSize } = require('./tmdbImageSize');
 const { getImdbRating } = require('../lib/getImdbRating');
 const consola = require('consola');
 const { cacheWrapMetaSmart, cacheWrapGlobal } = require('../lib/getCache');
@@ -2587,7 +2587,7 @@ async function getTmdbMovieArtBatch(tmdbId, config, isLandscape = false, origina
 
       const posterImg = selectTmdbImageByLang(res.posters, config, 'iso_639_1', originalLanguage);
       const poster = posterImg?.file_path
-        ? `https://image.tmdb.org/t/p/w600_and_h900_bestv2${posterImg.file_path}`
+        ? tmdbImageUrl(tmdbPosterSize(), posterImg.file_path)
         : null;
       let backgroundImg;
       if (isLandscape) {
@@ -2967,7 +2967,7 @@ async function getTmdbSeriesArtBatch(tmdbId, config, isLandscape = false, origin
 
       const posterImg = selectTmdbImageByLang(res.posters, config, 'iso_639_1', originalLanguage);
       const poster = posterImg?.file_path
-        ? `https://image.tmdb.org/t/p/w600_and_h900_bestv2${posterImg.file_path}`
+        ? tmdbImageUrl(tmdbPosterSize(), posterImg.file_path)
         : null;
 
       let backgroundImg;

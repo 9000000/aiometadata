@@ -360,10 +360,10 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'DISABLE_SIMKL_SEARCH',
     envVar: 'DISABLE_SIMKL_SEARCH',
     label: 'Disable Simkl Search',
-    description: 'Disable Simkl as a search provider',
+    description: 'On by default. Simkl search runs against a shared client id, so an instance serving many people can spend the allowance for everyone. Turn this off to offer Simkl as a search provider; existing configs that already name it fall back to the default provider until you do.',
     category: 'Features',
     type: 'boolean',
-    default: false,
+    default: true,
   },
   {
     key: 'DISABLE_METRICS',

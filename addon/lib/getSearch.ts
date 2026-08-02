@@ -55,6 +55,12 @@ function getTvdbCertification(contentRatings: any[], countryCode: string, conten
 }
 
 
+const SIMKL_SEARCH_PROVIDERS = new Set(['simkl.search', 'simkl.search.movie', 'simkl.search.series']);
+
+function isSimklSearchDisabled(): boolean {
+  return getSetting('DISABLE_SIMKL_SEARCH') === 'true';
+}
+
 function getDefaultProvider(type: string): string {
   if (type === 'movie') return 'tmdb.search';
   if (type === 'series') return 'tvdb.search';
@@ -2733,6 +2739,15 @@ async function getSearch(id: string, type: string, language: string, extra: any,
           }
 
           providerId = providerId || getDefaultProvider(type);
+
+          // A config saved while Simkl search was on keeps naming it, and the
+          // configure page only rewrites that the next time its owner opens it.
+          if (SIMKL_SEARCH_PROVIDERS.has(providerId) && isSimklSearchDisabled()) {
+            const fallback = getDefaultProvider(type);
+            logger.info(`Simkl search is off on this instance, falling back to '${fallback}' for "${query}"`);
+            providerId = fallback;
+          }
+
           logger.debug(`Performing direct keyword search for type '${type}' using provider '${providerId}'`);
 
           switch (providerId) {

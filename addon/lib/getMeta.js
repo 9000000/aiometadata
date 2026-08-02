@@ -12,7 +12,7 @@ const idMapper = require('./id-mapper');
 const { resolveAnidbEpisodeFromTvdbEpisode } = require('./anime-list-mapper');
 const fanart = require('../utils/fanart');
 const { isAnime: isAnimeFunc } = require('../utils/isAnime');
-const { tmdbImageUrl, tmdbLogoSize, tmdbBackdropSize, tmdbLandscapeSize } = require('../utils/tmdbImageSize');
+const { tmdbImageUrl, tmdbLogoSize, tmdbBackdropSize, tmdbLandscapeSize, tmdbPosterSize } = require('../utils/tmdbImageSize');
 const e = require("express");
 const { resolveAllIds } = require('./id-resolver');
 const { cacheWrapMeta, cacheWrapJikanApi, cacheWrapGlobal } = require('./getCache');
@@ -1400,7 +1400,7 @@ async function buildTmdbMovieResponse(stremioId, movieData, language, config, us
   }
   const images = await Utils.mergeTmdbOriginalLanguageImages('movie', tmdbId, rawImages, originalLanguage, langCode, config);
   const selectedPoster = Utils.selectTmdbImageByLang(images?.posters, config, 'iso_639_1', originalLanguage);
-  const tmdbPosterUrl = selectedPoster?.file_path ? `https://image.tmdb.org/t/p/w600_and_h900_bestv2${selectedPoster?.file_path}` : poster_path ? `https://image.tmdb.org/t/p/w600_and_h900_bestv2${poster_path}` : `${host}/missing_poster.png`;
+  const tmdbPosterUrl = selectedPoster?.file_path ? tmdbImageUrl(tmdbPosterSize(), selectedPoster?.file_path) : poster_path ? tmdbImageUrl(tmdbPosterSize(), poster_path) : `${host}/missing_poster.png`;
   const selectedBg = images?.backdrops?.find(b => b.iso_639_1 === 'xx')
     || images?.backdrops?.find(b => b.iso_639_1 === null)
     || images?.backdrops?.find(b => b.iso_639_1 === langCode)
@@ -1534,7 +1534,7 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
 
   const images = await Utils.mergeTmdbOriginalLanguageImages('tv', tmdbId, rawImages, originalLanguage, langCode, config);
   const selectedPoster = Utils.selectTmdbImageByLang(images?.posters, config, 'iso_639_1', originalLanguage);
-  const tmdbPosterUrl = selectedPoster?.file_path ? `https://image.tmdb.org/t/p/w600_and_h900_bestv2${selectedPoster?.file_path}` : poster_path ? `https://image.tmdb.org/t/p/w600_and_h900_bestv2${poster_path}` : `${host}/missing_poster.png`;
+  const tmdbPosterUrl = selectedPoster?.file_path ? tmdbImageUrl(tmdbPosterSize(), selectedPoster?.file_path) : poster_path ? tmdbImageUrl(tmdbPosterSize(), poster_path) : `${host}/missing_poster.png`;
   const selectedBg = images?.backdrops?.find(b => b.iso_639_1 === 'xx')
     || images?.backdrops?.find(b => b.iso_639_1 === null)
     || images?.backdrops?.find(b => b.iso_639_1 === langCode)
@@ -1585,7 +1585,7 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
   let videos = [];
   const tmdbSeasons = (seasons || []).filter(season => season.season_number != 0);
   const tmdbSeasonPosters = tmdbSeasons.map(season => {
-    return season.poster_path ? `https://image.tmdb.org/t/p/w600_and_h900_bestv2${season.poster_path}` : null;
+    return season.poster_path ? tmdbImageUrl(tmdbPosterSize(), season.poster_path) : null;
   });
 
   if(includeVideos) {

@@ -1284,6 +1284,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: true,
   },
   {
+    key: 'PREFER_SMALLER_POSTERS_TMDB',
+    envVar: 'PREFER_SMALLER_POSTERS_TMDB',
+    label: 'Prefer Smaller TMDB Posters',
+    description: 'Request TMDB posters at w600_and_h900_bestv2 instead of the uploader\'s original file. ON by default and recommended. Posters are usually rendered in small cards and the resolution should already be sufficient, expect exponentially more disk usage/bandwidth if disabled.',
+    category: 'Features',
+    type: 'boolean',
+    default: true,
+  },
+  {
     key: 'PREFER_SMALLER_LOGOS_TMDB',
     envVar: 'PREFER_SMALLER_LOGOS_TMDB',
     label: 'Prefer Smaller TMDB Logos',

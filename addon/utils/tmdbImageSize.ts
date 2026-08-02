@@ -11,9 +11,18 @@ function isTruthy(value: string | undefined): boolean {
   return /^(1|true|yes|on)$/i.test((value || '').trim());
 }
 
+function isExplicitlyDisabled(value: string | undefined): boolean {
+  return /^(0|false|no|off)$/i.test((value || '').trim());
+}
+
 function requestSize(nativeWidth: number | undefined, target: number, sized: string): string {
   const known = typeof nativeWidth === 'number' && nativeWidth > 0;
   return known && nativeWidth <= target ? ORIGINAL : sized;
+}
+
+// On by default, unlike the other three
+export function tmdbPosterSize(): string {
+  return isExplicitlyDisabled(process.env.PREFER_SMALLER_POSTERS_TMDB) ? ORIGINAL : TMDB_POSTER_SIZE;
 }
 
 export function tmdbLogoSize(nativeWidth?: number): string {
@@ -38,6 +47,7 @@ export function tmdbImageUrl(size: string, filePath: string): string {
 module.exports = {
   TMDB_IMAGE_HOST,
   TMDB_POSTER_SIZE,
+  tmdbPosterSize,
   tmdbLogoSize,
   tmdbBackdropSize,
   tmdbLandscapeSize,

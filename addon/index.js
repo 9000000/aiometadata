@@ -51,7 +51,7 @@ const configApi = require('./lib/configApi');
 const database = require('./lib/database');
 const { loadConfigFromDatabase } = require('./lib/configApi');
 const { getTrending } = require("./lib/getTrending");
-const { getRpdbPoster, getRatingPosterUrl, parseAnimeCatalogMeta, parseAnimeCatalogMetaBatch } = require("./utils/parseProps");
+const { resolveProxyRatingPosterUrl, parseAnimeCatalogMeta, parseAnimeCatalogMetaBatch } = require("./utils/parseProps");
 const { getFavorites, getWatchList } = require("./lib/getPersonalLists");
 const { resolveDynamicTmdbDiscoverParams } = require('./lib/tmdbDiscoverDateTokens');
 const { blurImage, convertBannerToBackground } = require('./utils/imageProcessor');
@@ -5041,19 +5041,7 @@ const handlePosterProxy = async function (req, res) {
     let posterUrl = customUrl || null;
 
     if (!posterUrl) {
-      const [idSource, idValue] = id.startsWith('tt') ? ['imdb', id] : id.split(':');
-      const ids = {
-        tmdbId: idSource === 'tmdb' ? idValue : null,
-        tvdbId: idSource === 'tvdb' ? idValue : null,
-        imdbId: idSource === 'imdb' ? idValue : null,
-      };
-      const isTopPoster = key.startsWith('TP-');
-      if (isTopPoster) {
-        const config = { apiKeys: { topPoster: key }, posterRatingProvider: 'top' };
-        posterUrl = getRatingPosterUrl(type, ids, lang, config, fallback);
-      } else {
-        posterUrl = getRpdbPoster(type, ids, lang, key);
-      }
+      posterUrl = resolveProxyRatingPosterUrl(type, id, lang, key, fallback);
     }
 
     if (!posterUrl) {

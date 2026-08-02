@@ -109,6 +109,19 @@ export function getPosterWarmupBase(): string {
   return getPosterProxyPrefix();
 }
 
+/**
+ * Base for the rendered-art URLs the warmer fetches. It stays on loopback so a
+ * warm run never leaves the box: routing it through HOST_NAME sent every poster
+ * out through the CDN and back for no gain, since the fetch only exists to fill
+ * the local store.
+ */
+export function getProxyArtWarmBase(): string {
+  const explicit = (process.env.IMAGE_WARM_PROXY_BASE || '').trim().replace(/\/+$/, '');
+  if (explicit) return explicit;
+  const port = parseInt(process.env.PORT || '3232', 10);
+  return `http://127.0.0.1:${port}${POSTER_CACHE_ROUTE}/proxy`;
+}
+
 export function getSelfOrigin(): string {
   const host = normalizeBase(process.env.HOST_NAME);
   if (!host) return '';

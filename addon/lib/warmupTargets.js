@@ -34,6 +34,7 @@ function collectWarmupTargets(metas, config, fallbackType, deps) {
   const {
     resolveCustomArtUrl,
     resolvePosterPattern,
+    resolveProxyRatingPosterUrl,
     getPosterRatingApiKey,
     isRatingPostersEnabled,
   } = deps || require('../utils/parseProps');
@@ -41,9 +42,10 @@ function collectWarmupTargets(metas, config, fallbackType, deps) {
   const ratingPostersEnabled = isRatingPostersEnabled(config);
   const posterPattern = ratingPostersEnabled ? resolvePosterPattern(config) : null;
   const proxyApiKey = ratingPostersEnabled && config.usePosterProxy ? getPosterRatingApiKey(config) : null;
-  const addonHost = process.env.HOST_NAME
-    ? (process.env.HOST_NAME.startsWith('http') ? process.env.HOST_NAME : `https://${process.env.HOST_NAME}`)
-    : '';
+  const proxyArtBase = posterCacheConfig.getProxyArtWarmBase();
+  const cacheProcessed = posterCacheConfig.isClassEnabled('processed');
+  const cachePosters = posterCacheConfig.isClassEnabled('poster');
+  const language = config.language || 'en-US';
   const selfOrigin = posterCacheConfig.getSelfOrigin();
   const metaFieldClasses = posterCacheConfig.META_FIELD_CLASSES;
   const cacheThumbnails = posterCacheConfig.isClassEnabled('thumbnail');
@@ -57,11 +59,11 @@ function collectWarmupTargets(metas, config, fallbackType, deps) {
     if (!cacheableFields.has(field || imageClass)) return;
     targets.push({ imageClass, url });
   };
-  const addRendered = (url, checkKey) => {
-    if (!url) return;
-    targets.push(checkKey
-      ? { imageClass: 'poster', url, http: url, checkClass: 'poster', checkKey }
-      : { imageClass: 'poster', url, http: url });
+  // A rendered target without a check key is refetched on every run, so an origin
+  // URL it can be looked up by is required rather than optional.
+  const addRendered = (url, checkClass, checkKey) => {
+    if (!url || !checkKey) return;
+    targets.push({ imageClass: 'poster', url, http: url, checkClass, checkKey });
   };
 
   for (const meta of metas) {
@@ -72,13 +74,26 @@ function collectWarmupTargets(metas, config, fallbackType, deps) {
     let posterWarmed = false;
     if (posterPattern && proxyId) {
       if (proxyApiKey) {
-        addRendered(buildProxyArtUrl({ base: addonHost, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, ratingKey: proxyApiKey, lang: config.language }));
+        const origin = resolveProxyRatingPosterUrl(type, proxyId, language, proxyApiKey, meta.poster);
+        if (proxyArtBase && cacheProcessed && origin && !posterCacheConfig.isBypassed(origin)) {
+          addRendered(
+            buildProxyArtUrl({ base: proxyArtBase, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, ratingKey: proxyApiKey, lang: language }),
+            'processed',
+            `rating-poster:${origin}`
+          );
+        }
         posterWarmed = true;
       } else {
         const resolved = resolveCustomArtUrl(posterPattern, ids, type, config);
         if (resolved) {
           if (config.usePosterProxy) {
-            addRendered(buildProxyArtUrl({ base: addonHost, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, url: resolved }), resolved);
+            if (proxyArtBase && cachePosters && !posterCacheConfig.isBypassed(resolved)) {
+              addRendered(
+                buildProxyArtUrl({ base: proxyArtBase, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, url: resolved }),
+                'poster',
+                resolved
+              );
+            }
           } else {
             addThirdParty(resolved, 'poster', 'poster');
           }

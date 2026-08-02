@@ -266,6 +266,25 @@ function getRatingPosterUrl(type, ids, language, config, fallbackUrl = null) {
 }
 
 /**
+ * Rebuilds the provider URL that `/poster-cache/proxy/poster/:type/:id` fetches,
+ * from the single id the route carries. The warmer needs the same URL to know
+ * whether that poster is already cached, so both callers share this.
+ */
+function resolveProxyRatingPosterUrl(type, proxyId, language, key, fallbackUrl = null) {
+  if (!proxyId || !key) return null;
+  const [idSource, idValue] = proxyId.startsWith('tt') ? ['imdb', proxyId] : proxyId.split(':');
+  const ids = {
+    tmdbId: idSource === 'tmdb' ? idValue : null,
+    tvdbId: idSource === 'tvdb' ? idValue : null,
+    imdbId: idSource === 'imdb' ? idValue : null,
+  };
+  if (key.startsWith('TP-')) {
+    return getRatingPosterUrl(type, ids, language, { apiKeys: { topPoster: key }, posterRatingProvider: 'top' }, fallbackUrl);
+  }
+  return getRpdbPoster(type, ids, language, key);
+}
+
+/**
  * Get the API key for the selected poster rating provider
  */
 function getPosterRatingApiKey(config) {
@@ -3417,6 +3436,7 @@ module.exports = {
   getTopPosterPoster,
   getTopPosterThumbnail,
   getRatingPosterUrl,
+  resolveProxyRatingPosterUrl,
   getPosterRatingApiKey,
   buildPosterProxyUrl,
   isPosterRatingEnabled,

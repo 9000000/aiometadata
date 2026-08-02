@@ -2183,6 +2183,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     min: 1,
   },
   {
+    key: 'IMAGE_WARM_PROXY_BASE',
+    envVar: 'IMAGE_WARM_PROXY_BASE',
+    label: 'Image Warm Proxy Base',
+    description: 'Where the warmer fetches rendered posters from. Leave empty to use loopback on this instance, which keeps a warm run off the public network. Set it only if the instance cannot reach its own port.',
+    category: 'Comprehensive Warming',
+    type: 'string',
+    default: '',
+  },
+  {
     key: 'COLD_STORE_STATS_TTL',
     envVar: 'COLD_STORE_STATS_TTL',
     label: 'Cold Store Stats TTL',

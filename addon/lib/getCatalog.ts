@@ -2668,8 +2668,10 @@ async function getMovieLensCatalog(
     const minPop = metadata.minPop ?? (sortBy === 'avgRating' ? 100 : sortBy === 'releaseDate' ? 20 : undefined);
     const maxDaysAgo = metadata.maxDaysAgo;
     // always exclude unreleased titles from "explore" catalogs.
-    const maxFutureDays = metadata.maxFutureDays
-      ?? (isExplore ? 0 : undefined);
+    // but obey API rule: drop maxFutureDays if the user wants maxYear instead.
+    const maxFutureDays = maxYear !== undefined
+      ? undefined
+      : (metadata.maxFutureDays ?? (isExplore ? 0 : undefined));
     const sortDirection = metadata.sortDirection;
     // always include rated movies if sorting by "your rating".
     const onlyIncludeRated = sortBy === 'userRating' || sortBy === 'userRatedDate';

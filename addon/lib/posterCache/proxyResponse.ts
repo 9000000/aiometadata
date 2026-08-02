@@ -23,6 +23,7 @@ export interface ProxyResponseInput {
 
 export interface ProxyResponseHeaders {
   'Cache-Control': string;
+  'CDN-Cache-Control'?: string;
   ETag?: string;
   'Last-Modified'?: string;
   Age?: string;
@@ -80,8 +81,11 @@ function ourCacheControl(entry?: ProxyResponseInput['entry']): string {
   return renderTerms(clientTerms(entry?.upstream, maxAge, !!entry?.etag), true);
 }
 
-function upstreamCacheControl(headers: ProxyResponseInput['upstreamHeaders']): string | null {
-  const raw = headers?.['cache-control'];
+function upstreamHeaderValue(
+  headers: ProxyResponseInput['upstreamHeaders'],
+  name: string
+): string | null {
+  const raw = headers?.[name];
   if (typeof raw !== 'string') return null;
   const value = raw.trim();
   return value === '' ? null : value;
@@ -130,7 +134,7 @@ export function proxyResponseHeaders(input: ProxyResponseInput = {}): ProxyRespo
   }
 
   const upstream = parseUpstreamCacheMeta((upstreamHeaders ?? {}) as Record<string, any>);
-  const followed = followsUpstreamCacheControl() ? upstreamCacheControl(upstreamHeaders) : null;
+  const followed = followsUpstreamCacheControl() ? upstreamHeaderValue(upstreamHeaders, 'cache-control') : null;
   const headers: ProxyResponseHeaders = {
     'Cache-Control': followed ?? passThroughCacheControl(upstream),
     ...upstreamValidators(upstream),
@@ -138,6 +142,8 @@ export function proxyResponseHeaders(input: ProxyResponseInput = {}): ProxyRespo
   if (followed) {
     const age = upstreamAge(upstream);
     if (age) headers.Age = age;
+    const targeted = upstreamHeaderValue(upstreamHeaders, 'cdn-cache-control');
+    if (targeted) headers['CDN-Cache-Control'] = targeted;
   }
   return headers;
 }

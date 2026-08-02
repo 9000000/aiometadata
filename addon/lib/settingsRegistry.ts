@@ -1409,7 +1409,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'POSTER_PROXY_FOLLOW_UPSTREAM',
     envVar: 'POSTER_PROXY_FOLLOW_UPSTREAM',
     label: 'Art Proxy Follows the Source\'s Cache-Control',
-    description: 'Forwards the provider\'s Cache-Control verbatim on passed-through images, removing the ceiling above. Rarely needed — a provider sending a year-long max-age would then pin its art in your CDN for that long.',
+    description: 'Forwards the provider\'s Cache-Control and CDN-Cache-Control verbatim on passed-through images, removing the ceiling above. Rarely needed — a provider sending a year-long max-age would then pin its art in your CDN for that long.',
     category: 'Features',
     type: 'boolean',
     default: false,

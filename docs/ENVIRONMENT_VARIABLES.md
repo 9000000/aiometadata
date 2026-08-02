@@ -901,7 +901,7 @@ Two terms used throughout this section. The **proxy routes** are `/poster`, `/lo
 
 ### `POSTER_PROXY_FOLLOW_UPSTREAM`
 - **Default**: `false`
-- **Description**: Forwards the provider's `Cache-Control` **verbatim** on passed-through images, with no floor or ceiling applied. Affects the proxy routes only; a stored image is still advertised on its own remaining validity.
+- **Description**: Forwards the provider's `Cache-Control` **verbatim** on passed-through images, with no floor or ceiling applied. Its `CDN-Cache-Control` travels with it, so a CDN in front of the addon gets the directive the provider addressed to it — btttr, for one, tells caches five minutes while telling browsers to revalidate every time. Affects the proxy routes only; a stored image is still advertised on its own remaining validity, and the addon has already consumed the targeted directive itself.
 
   You rarely need this. Passed-through images already follow their provider, bounded by [`POSTER_PROXY_MAX_AGE_DAYS`](#poster_proxy_max_age_days) — this only removes that bound. Think twice, because with it a provider sending `immutable` or a year-long `max-age` pins art in your CDN for exactly that long, and one that starts sending `no-store` makes your art uncacheable downstream without you changing anything. Where the provider sent no `Cache-Control`, the addon's own figure still applies.
 - **Example**: `POSTER_PROXY_FOLLOW_UPSTREAM=true`

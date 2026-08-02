@@ -53,8 +53,11 @@ async function gatherRatings(config: any, since?: string): Promise<{ merged: any
     try {
       const tok = await simklUtils.getSimklToken(simklTokenId);
       if (tok?.access_token) {
-        const data = await simklUtils.getSimklMovieRatings(tok.access_token, since);
-        const norm = imp.fromSimklMovieRatings(data);
+        const [movies, anime] = await Promise.all([
+          simklUtils.getSimklRatings(tok.access_token, 'movies', since),
+          simklUtils.getSimklRatings(tok.access_token, 'anime', since),
+        ]);
+        const norm = [...imp.fromSimklRatings(movies), ...imp.fromSimklRatings(anime)];
         lists.push(norm);
         perSource.simkl = norm.length;
       }

@@ -1,3 +1,5 @@
+const idMapper: any = require('./id-mapper');
+
 interface NormalizedRating {
   imdb: string;
   rating: number;
@@ -43,19 +45,45 @@ function fromMovieRatingItems(items: any[]): NormalizedRating[] {
   return out;
 }
 
-function fromSimklMovieRatings(sync: any): NormalizedRating[] {
-  const items = sync?.movies || [];
+/** The anime_type values the rest of the codebase reads as a film rather than a series. */
+const ANIME_FILM_TYPES = new Set(['movie', 'ona']);
+
+function mappedFilmImdb(ids: any): string | null {
+  if (!ids) return null;
+  const simklId = ids.simkl ?? ids.simkl_id;
+  const mapping =
+    (simklId && idMapper.getMappingBySimklId(simklId))
+    || (ids.mal && idMapper.getMappingByMalId(ids.mal))
+    || (ids.anidb && idMapper.getMappingByAnidbId(ids.anidb))
+    || (ids.anilist && idMapper.getMappingByAnilistId(ids.anilist))
+    || (ids.kitsu && idMapper.getMappingByKitsuId(ids.kitsu))
+    || null;
+  if (!mapping?.imdb_id) return null;
+  if (!ANIME_FILM_TYPES.has(String(mapping.type || '').toLowerCase())) return null;
+  return normalizeImdb(mapping.imdb_id);
+}
+
+/**
+ * Handles both ratings buckets. Anime is wrapped in `show` whatever its
+ * anime_type, so a film there would otherwise be read as a series and dropped.
+ * An entry whose anime_type Simkl does not know is kept: the worst a series
+ * costs is a CSV row MovieLens finds no movie for, while dropping it loses a
+ * rating for good.
+ */
+function fromSimklRatings(items: any[]): NormalizedRating[] {
   const out: NormalizedRating[] = [];
-  for (const it of items) {
-    const imdb = normalizeImdb(it?.movie?.ids?.imdb);
+  for (const it of items || []) {
+    if (it?.anime_type && !ANIME_FILM_TYPES.has(it.anime_type)) continue;
+    const media = it?.movie || it?.show;
+    const imdb = normalizeImdb(media?.ids?.imdb) || mappedFilmImdb(media?.ids);
     const rating = it?.user_rating ?? it?.rating;
     if (!imdb || !validRating(rating)) continue;
     out.push({
       imdb,
       rating,
       ratedAt: it?.user_rated_at || it?.last_watched_at || it?.rated_at || '',
-      title: it?.movie?.title || '',
-      year: it?.movie?.year ?? null,
+      title: media?.title || '',
+      year: media?.year ?? null,
     });
   }
   return out;
@@ -100,13 +128,13 @@ function normalizedToImdbCsv(ratings: NormalizedRating[]): { csv: string; count:
 export {
   NormalizedRating,
   fromMovieRatingItems,
-  fromSimklMovieRatings,
+  fromSimklRatings,
   mergeRatings,
   normalizedToImdbCsv,
 };
 module.exports = {
   fromMovieRatingItems,
-  fromSimklMovieRatings,
+  fromSimklRatings,
   mergeRatings,
   normalizedToImdbCsv,
 };

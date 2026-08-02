@@ -206,14 +206,24 @@ async function makeAuthenticatedSimklRequest(
   }
 }
 
-async function getSimklMovieRatings(accessToken: string, dateFrom?: string): Promise<any> {
+/**
+ * `type` is its own path segment and its own bucket in the reply, and Simkl files
+ * anime apart from movies whatever the anime_type, so an anime film is only ever
+ * in the `anime` bucket — never in `movies`.
+ */
+async function getSimklRatings(
+  accessToken: string,
+  type: 'movies' | 'shows' | 'anime',
+  dateFrom?: string
+): Promise<any[]> {
   try {
-    let url = `${SIMKL_BASE_URL}/sync/ratings/movies`;
+    let url = `${SIMKL_BASE_URL}/sync/ratings/${type}`;
     if (dateFrom) url += `?date_from=${encodeURIComponent(dateFrom)}`;
-    const response: any = await makeAuthenticatedSimklRequest(url, accessToken, 'Simkl Movie Ratings');
-    return response?.data && Array.isArray(response.data.movies) ? response.data : { movies: [] };
+    const response: any = await makeAuthenticatedSimklRequest(url, accessToken, `Simkl ${type} ratings`);
+    const bucket = response?.data?.[type];
+    return Array.isArray(bucket) ? bucket : [];
   } catch (error) {
-    return { movies: [] };
+    return [];
   }
 }
 
@@ -1379,7 +1389,7 @@ export {
   fetchSimklWatchlistItems,
   parseSimklItems,
   makeAuthenticatedSimklRequest,
-  getSimklMovieRatings,
+  getSimklRatings,
   getSimklToken,
   getSimklActivityFingerprint,
   fetchSimklTrendingItems,

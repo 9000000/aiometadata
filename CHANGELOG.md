@@ -2,6 +2,54 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.10.0](https://github.com/cedya77/aiometadata/compare/v2.9.1...v2.10.0) (2026-08-03)
+
+
+### Features
+
+* add PREFER_SMALLER_POSTERS_TMDB toggle ([d9387b2](https://github.com/cedya77/aiometadata/commit/d9387b2ad657acaddea4694013c0ee9d46ef1a97))
+* add PREFER_SMALLER_POSTERS_TMDB toggle ([51d3401](https://github.com/cedya77/aiometadata/commit/51d3401ed67f4c72a33ee5141f58eba16c5ceffd))
+* **anime:** backfill anime id mappings from animeApi ([b58d50c](https://github.com/cedya77/aiometadata/commit/b58d50ccb279274a2ff992c5303e25a8f0705a31))
+* **art proxy:** guard the passthrough and follow the provider's own validity ([acd7b93](https://github.com/cedya77/aiometadata/commit/acd7b934f5200ff21628f3a5d38b0c61747afe1d))
+* **art proxy:** read CDN-Cache-Control and split the two cache audiences ([baa2309](https://github.com/cedya77/aiometadata/commit/baa2309885c55c46cba4180120188f68c63e33fa))
+* **art:** add landscape url patterns option ([a33d1b7](https://github.com/cedya77/aiometadata/commit/a33d1b70d39e571552dd8b789a2230af0bdf60ea))
+* **catalogs:** allow a per-catalog override of the digital release filter ([dbe40ed](https://github.com/cedya77/aiometadata/commit/dbe40ed200945b3df3e2a728b8f232712438a304))
+* **filters:** hide watched items from Simkl ([dbe40ed](https://github.com/cedya77/aiometadata/commit/dbe40ed200945b3df3e2a728b8f232712438a304))
+* **image cache:** add built-in provider policy ([b12ced8](https://github.com/cedya77/aiometadata/commit/b12ced8c866cf9202f3891aeb41ab7eddc46fa8e))
+* **search:** add IMDb suggestions as a typo tolerant search provider ([bda234f](https://github.com/cedya77/aiometadata/commit/bda234f07c9f43b1dcb2dbf3970d257b12fb8e0a))
+* **search:** add Simkl as a search provider ([9b39cd2](https://github.com/cedya77/aiometadata/commit/9b39cd2af65658fbcd53994faca744357f34ea8c))
+* **search:** add Simkl as an anime search provider ([73b25dd](https://github.com/cedya77/aiometadata/commit/73b25dd7e490ae0ba29ec7881ba1b9eeaa03d051))
+* **search:** build Simkl results from Simkl's own data ([cc1b345](https://github.com/cedya77/aiometadata/commit/cc1b3453b8da751af9ffbcbb73d159e2544fee92))
+* **ui:** save from any settings section ([31f9540](https://github.com/cedya77/aiometadata/commit/31f9540f3a41d14ef3fd7fd3653c3e6a9f34d5ff))
+
+
+### Bug Fixes
+
+* **admin:** serve the user export route before the :userUUID wildcard ([86281f4](https://github.com/cedya77/aiometadata/commit/86281f406bccd20917b0b63cc4cdcd600d6fc527))
+* **anime:** fetch release dates regardless of the digital release filter ([dbe40ed](https://github.com/cedya77/aiometadata/commit/dbe40ed200945b3df3e2a728b8f232712438a304))
+* **art proxy:** relay the provider's CDN-Cache-Control when following it ([9c6a829](https://github.com/cedya77/aiometadata/commit/9c6a829132bd3d7643ccecb5fcd2dd09d0d54fb5))
+* **art proxy:** relay the provider's CDN-Cache-Control when following it ([b2e8f68](https://github.com/cedya77/aiometadata/commit/b2e8f68ce50b311c79548b59a4e1e929efce9fe2))
+* **art proxy:** stop overriding the client and CDN cache contract ([3c5583f](https://github.com/cedya77/aiometadata/commit/3c5583f5df49c02ca5d871fd4283a808681c9bb7))
+* **collections:** keep the genre when importing a Fusion export ([77150fc](https://github.com/cedya77/aiometadata/commit/77150fcecf3bda4313252557c42fd36e4d7ea228))
+* **dashboard:** report image warming per run instead of per process ([37a4b72](https://github.com/cedya77/aiometadata/commit/37a4b72850fd45a19814e232d4ae6f2862ea71f1))
+* **dashboard:** show every search provider in the performance tab ([ac8b53b](https://github.com/cedya77/aiometadata/commit/ac8b53b25fe121a31eabf517abf9ce72b28320fb))
+* **filters:** keep hide-watched out of completed and history catalogs ([dbe40ed](https://github.com/cedya77/aiometadata/commit/dbe40ed200945b3df3e2a728b8f232712438a304))
+* further improvements to save configuration gating logic ([2151070](https://github.com/cedya77/aiometadata/commit/215107025a0bfc6d26216785f89d69f13ed668f6))
+* handle cached chunks better between addon updates ([6529450](https://github.com/cedya77/aiometadata/commit/652945086ff7647fc7c402137b7f8f247dda060f))
+* handle cached chunks better between addon updates ([e766e96](https://github.com/cedya77/aiometadata/commit/e766e96bb8d4bad82083a9dfcad5bfcf741a8e85))
+* **mal:** stop the genres catalog hiding everything that is not a TV series ([55192ab](https://github.com/cedya77/aiometadata/commit/55192ab52abd982467de22604776d5cbe189d5fd))
+* **meta:** use TMDB original-language art when no English art exists ([5bd73d3](https://github.com/cedya77/aiometadata/commit/5bd73d33ae6d5d425f2898f1e42465f06e30a3e2))
+* **movielens:** resolve conflict between maxYear and maxFutureDays ([a1eb9ee](https://github.com/cedya77/aiometadata/commit/a1eb9ee1c1112dba41fceeac76606e1deee11924))
+* **movielens:** resolve conflict between maxYear and maxFutureDays ([f8367d3](https://github.com/cedya77/aiometadata/commit/f8367d37514ed1c18695c74fe153a1018564d8f6))
+* **movielens:** sync anime film ratings from Simkl ([a71b65f](https://github.com/cedya77/aiometadata/commit/a71b65f415f37b7ea80ad5d85818272d97fdf480))
+* only require mdblist keys when mdblist catalogs are enabled ([9343f70](https://github.com/cedya77/aiometadata/commit/9343f7083aa6502e1f01b0767c22975c18710752))
+* **search:** flag Trakt search as VIP only ([b39f8cf](https://github.com/cedya77/aiometadata/commit/b39f8cf82091fc89a7cc30edee912645bf992394))
+* **search:** make Simkl search opt-in ([627c874](https://github.com/cedya77/aiometadata/commit/627c874d46c0ea9e1361613ac4a43b820ba3127c))
+* **simkl:** apply SIMKL_ACTIVITIES_TTL without a restart ([dbe40ed](https://github.com/cedya77/aiometadata/commit/dbe40ed200945b3df3e2a728b8f232712438a304))
+* **tmdb:** cache movie and series detail responses ([cc1b345](https://github.com/cedya77/aiometadata/commit/cc1b3453b8da751af9ffbcbb73d159e2544fee92))
+* **warmer:** register IMAGE_WARM_PROXY_BASE ([1dc2481](https://github.com/cedya77/aiometadata/commit/1dc248196b9540d1327edecf0729470a1b95c543))
+* **warmer:** stop refetching every rendered poster each cycle ([a0992ff](https://github.com/cedya77/aiometadata/commit/a0992ff552c904c35078092247f883d502195e87))
+
 ## [2.9.1](https://github.com/cedya77/aiometadata/compare/v2.9.0...v2.9.1) (2026-07-30)
 
 

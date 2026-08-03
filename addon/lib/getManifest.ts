@@ -1482,24 +1482,26 @@ async function getManifest(config: any, opts: { tag?: string } = {}): Promise<an
     }
   }
 
-  catalogs.push({
-    type: "series",
-    id: "calendar-videos",
-    extra: [
-      {
-        name: "calendarVideosIds",
-        isRequired: true,
-        optionsLimit: 100
-      }
-    ],
-    extraSupported: [
-      "calendarVideosIds"
-    ],
-    extraRequired: [
-      "calendarVideosIds"
-    ],
-    name: "Calendar videos"
-  });
+  if (!config.hideStremioCatalogs) {
+    catalogs.push({
+      type: "series",
+      id: "calendar-videos",
+      extra: [
+        {
+          name: "calendarVideosIds",
+          isRequired: true,
+          optionsLimit: 100
+        }
+      ],
+      extraSupported: [
+        "calendarVideosIds"
+      ],
+      extraRequired: [
+        "calendarVideosIds"
+      ],
+      name: "Calendar videos"
+    });
+  }
 
   const activeConfigs = [
     `Language: ${language}`,

@@ -516,6 +516,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ['catalog mode', 'manifest', 'metadata', 'meta', 'resources'],
   },
   {
+    id: 'configuration.hideStremioCatalogs', section: 'configuration', anchor: 'hide-stremio-catalogs',
+    label: 'Hide Stremio Catalogs',
+    description: 'Hide Stremio-specific catalogs such as Calendar videos from the manifest for clients that do not use them.',
+    keywords: ['stremio', 'catalog', 'manifest', 'metadata', 'calendar'],
+  },
+  {
     id: 'configuration.password', section: 'configuration', anchor: 'cfgmgr-password',
     label: 'Password',
     description: 'Password must be at least 6 characters long.',

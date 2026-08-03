@@ -241,6 +241,7 @@ function getManifestFingerprint(config: AppConfig): string {
     catalogs: catalogFingerprint,
     addonName: config.addonName,
     catalogModeOnly: config.catalogModeOnly,
+    hideStremioCatalogs: config.hideStremioCatalogs,
     showRateMeButton: config.showRateMeButton,
     subtitlesResource,
     showPrefix: config.showPrefix,

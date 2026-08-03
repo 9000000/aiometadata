@@ -63,6 +63,7 @@ export interface UserConfig {
   hideWatchedTrakt?: boolean;
   hideWatchedAnilist?: boolean;
   hideWatchedMdblist?: boolean;
+  hideWatchedSimkl?: boolean;
   exclusionKeywords?: string;
   regexExclusionFilter?: string;
   exclusionGenres?: string;

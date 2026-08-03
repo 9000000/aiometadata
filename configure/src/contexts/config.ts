@@ -66,6 +66,8 @@ export interface CatalogConfig {
     hideWatchedTrakt?: boolean;
     hideWatchedAnilist?: boolean;
     hideWatchedMdblist?: boolean;
+    hideWatchedSimkl?: boolean;
+    hideUnreleasedDigital?: boolean;
     identifier?: string;
     url?: string;
     // TMDB-specific metadata
@@ -226,6 +228,7 @@ export interface AppConfig {
   hideWatchedTrakt?: boolean;
   hideWatchedAnilist?: boolean;
   hideWatchedMdblist?: boolean;
+  hideWatchedSimkl?: boolean;
   exclusionKeywords?: string;
   regexExclusionFilter?: string;
   exclusionGenres?: string;

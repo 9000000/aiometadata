@@ -854,6 +854,7 @@ class DashboardAPI {
         hideWatchedTrakt: 0,
         hideWatchedAnilist: 0,
         hideWatchedMdblist: 0,
+        hideWatchedSimkl: 0,
         exclusionKeywords: 0,
         posterProxy: 0,
         forceAnimeDetection: 0,
@@ -984,6 +985,7 @@ class DashboardAPI {
       if (config.hideWatchedTrakt) stats.contentFilters.hideWatchedTrakt++;
       if (config.hideWatchedAnilist) stats.contentFilters.hideWatchedAnilist++;
       if (config.hideWatchedMdblist) stats.contentFilters.hideWatchedMdblist++;
+      if (config.hideWatchedSimkl) stats.contentFilters.hideWatchedSimkl++;
       if (config.exclusionKeywords) stats.contentFilters.exclusionKeywords++;
       if (config.usePosterProxy) stats.contentFilters.posterProxy++;
       if (config.providers?.forceAnimeForDetectedImdb) stats.contentFilters.forceAnimeDetection++;
@@ -1057,6 +1059,7 @@ class DashboardAPI {
         hideWatchedTrakt: Math.round((stats.contentFilters.hideWatchedTrakt / total) * 100),
         hideWatchedAnilist: Math.round((stats.contentFilters.hideWatchedAnilist / total) * 100),
         hideWatchedMdblist: Math.round((stats.contentFilters.hideWatchedMdblist / total) * 100),
+        hideWatchedSimkl: Math.round((stats.contentFilters.hideWatchedSimkl / total) * 100),
         exclusionKeywords: Math.round((stats.contentFilters.exclusionKeywords / total) * 100),
         posterProxy: Math.round((stats.contentFilters.posterProxy / total) * 100),
         forceAnimeDetection: Math.round((stats.contentFilters.forceAnimeDetection / total) * 100),
@@ -1104,6 +1107,7 @@ class DashboardAPI {
         hideWatchedTrakt: 0,
         hideWatchedAnilist: 0,
         hideWatchedMdblist: 0,
+        hideWatchedSimkl: 0,
         exclusionKeywords: 0,
         posterProxy: 0,
         forceAnimeDetection: 0,

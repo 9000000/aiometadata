@@ -368,6 +368,7 @@ export function DashboardSystem({ data }: DashboardSystemProps) {
               <FeaturePercent label="Hide Watched (Trakt)" value={contentFilters.hideWatchedTrakt || 0} />
               <FeaturePercent label="Hide Watched (AniList)" value={contentFilters.hideWatchedAnilist || 0} />
               <FeaturePercent label="Hide Watched (MDBList)" value={contentFilters.hideWatchedMdblist || 0} />
+              <FeaturePercent label="Hide Watched (Simkl)" value={contentFilters.hideWatchedSimkl || 0} />
               <FeaturePercent label="Exclusion Keywords" value={contentFilters.exclusionKeywords || 0} />
             </div>
           </CardContent>

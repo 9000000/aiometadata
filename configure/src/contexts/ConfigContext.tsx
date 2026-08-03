@@ -116,6 +116,7 @@ const initialConfig: AppConfig = {
   hideWatchedTrakt: false,
   hideWatchedAnilist: false,
   hideWatchedMdblist: false,
+  hideWatchedSimkl: false,
   providers: { movie: 'tmdb', series: 'tvdb', anime: 'mal', anime_id_provider: 'imdb', forceAnimeForDetectedImdb: false },
   artProviders: { 
     movie: { poster: 'meta', background: 'meta', logo: 'meta' },

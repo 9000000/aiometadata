@@ -1130,11 +1130,10 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'SIMKL_ACTIVITIES_TTL',
     envVar: 'SIMKL_ACTIVITIES_TTL',
     label: 'Simkl Activities TTL (sec)',
-    description: 'Cache lifetime for Simkl activity checks to avoid repeated polling',
+    description: 'Cache lifetime for Simkl activity checks to avoid repeated polling. Also sets how long a newly completed item can still show in catalogs when Hide Simkl Watched is on.',
     category: 'Cache',
     type: 'number',
     default: 21600,
-    requiresRestart: true,
   },
   {
     key: 'TMDB_KEYWORD_EXPORT_TTL',

@@ -162,15 +162,16 @@ export function FiltersSettings() {
       </div>
 
       {/* Hide Watched Card */}
-      {(config.apiKeys?.traktTokenId || config.apiKeys?.anilistTokenId || config.apiKeys?.mdblist) && (
+      {(config.apiKeys?.traktTokenId || config.apiKeys?.anilistTokenId || config.apiKeys?.mdblist || config.apiKeys?.simklTokenId) && (
         <Card>
           <CardHeader>
             <CardTitle>Hide Watched</CardTitle>
             <CardDescription className="space-y-2 mt-2">
-              <p>Hide items you've already watched on Trakt, AniList, or MDBList from all catalogs.</p>
+              <p>Hide items you've already watched on Trakt, AniList, MDBList or Simkl from all catalogs.</p>
               <ul className="list-disc list-inside ml-2 space-y-1">
                 <li><strong>Trakt & MDBList:</strong> Refreshes every 5 minutes</li>
                 <li><strong>AniList:</strong> Refreshes every 24 hours</li>
+                <li><strong>Simkl:</strong> Refreshes every 6 hours by default</li>
               </ul>
               <p className="text-muted-foreground mt-2">
                 Note: Does not apply to search results, watchlists, or up-next catalogs.
@@ -206,6 +207,16 @@ export function FiltersSettings() {
                   onCheckedChange={(checked) => setConfig(prev => ({ ...prev, hideWatchedMdblist: checked }))}
                 />
                 <Label htmlFor="hide-watched-mdblist">Hide MDBList Watched Items</Label>
+              </div>
+            )}
+            {config.apiKeys?.simklTokenId && (
+              <div className="flex items-center space-x-2">
+                <Switch
+                  id="hide-watched-simkl"
+                  checked={config.hideWatchedSimkl ?? false}
+                  onCheckedChange={(checked) => setConfig(prev => ({ ...prev, hideWatchedSimkl: checked }))}
+                />
+                <Label htmlFor="hide-watched-simkl">Hide Simkl Watched Items</Label>
               </div>
             )}
           </CardContent>

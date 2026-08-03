@@ -196,20 +196,26 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: 'filters.hideWatchedTrakt', section: 'filters', anchor: 'hide-watched-trakt',
     label: 'Hide Trakt Watched Items',
-    description: "Hide items you've already watched on Trakt, AniList, or MDBList from all catalogs.",
+    description: "Hide items you've already watched on Trakt, AniList, MDBList or Simkl from all catalogs.",
     keywords: ['watched', 'seen', 'trakt'],
   },
   {
     id: 'filters.hideWatchedAnilist', section: 'filters', anchor: 'hide-watched-anilist',
     label: 'Hide AniList Watched Items',
-    description: "Hide items you've already watched on Trakt, AniList, or MDBList from all catalogs.",
+    description: "Hide items you've already watched on Trakt, AniList, MDBList or Simkl from all catalogs.",
     keywords: ['watched', 'seen', 'anime'],
   },
   {
     id: 'filters.hideWatchedMdblist', section: 'filters', anchor: 'hide-watched-mdblist',
     label: 'Hide MDBList Watched Items',
-    description: "Hide items you've already watched on Trakt, AniList, or MDBList from all catalogs.",
+    description: "Hide items you've already watched on Trakt, AniList, MDBList or Simkl from all catalogs.",
     keywords: ['watched', 'seen'],
+  },
+  {
+    id: 'filters.hideWatchedSimkl', section: 'filters', anchor: 'hide-watched-simkl',
+    label: 'Hide Simkl Watched Items',
+    description: "Hide items you've already watched on Trakt, AniList, MDBList or Simkl from all catalogs.",
+    keywords: ['watched', 'seen', 'anime', 'simkl'],
   },
   {
     id: 'filters.exclusionGenres', section: 'filters', anchor: 'exclusion-genres',

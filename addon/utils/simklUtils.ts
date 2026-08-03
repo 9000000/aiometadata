@@ -17,7 +17,12 @@ const SIMKL_BASE_URL = 'https://api.simkl.com';
 const SIMKL_CLIENT_ID = process.env.SIMKL_CLIENT_ID || '';
 const SIMKL_TRENDING_TTL = 12 * 60 * 60; // 12 hours
 const SIMKL_WATCHLIST_TTL = 24 * 60 * 60; // Cache in Redis for 24h, relies on activity check to invalidate
-const SIMKL_ACTIVITIES_TTL = parseInt(process.env.SIMKL_ACTIVITIES_TTL || '21600'); // Cache activity check for 6 hours (21600s) to prevent spamming on pagination
+const SIMKL_ACTIVITIES_TTL_DEFAULT = 6 * 60 * 60; // Cache activity check for 6h to prevent spamming on pagination
+
+function getSimklActivitiesTtl(): number {
+  const parsed = parseInt(process.env.SIMKL_ACTIVITIES_TTL || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : SIMKL_ACTIVITIES_TTL_DEFAULT;
+}
 const SIMKL_TRENDING_DATA_URL = 'https://data.simkl.in/discover/trending';
 const SIMKL_DISCOVER_DATA_URL = 'https://data.simkl.in/discover';
 const SIMKL_APP_NAME = 'aiometadata';
@@ -370,7 +375,7 @@ async function fetchSimklLastActivities(accessToken: string): Promise<any> {
       );
       return response.data;
     },
-    SIMKL_ACTIVITIES_TTL, 
+    getSimklActivitiesTtl(),
     { upstream: true }
   );
 }
@@ -834,6 +839,72 @@ async function fetchSimklWatchingItems(
   } catch (error: any) {
     logger.error(`Error fetching Simkl watching items: ${error.message}`);
     return [];
+  }
+}
+
+export interface SimklWatchedIds {
+  movieImdbIds: Set<string>;
+  showImdbIds: Set<string>;
+  malIds: Set<number>;
+  anilistIds: Set<number>;
+}
+
+async function getSimklWatchedIds(config: any): Promise<SimklWatchedIds | null> {
+  try {
+    const token = await getSimklToken(config?.apiKeys?.simklTokenId);
+    const accessToken = token?.access_token;
+    if (!accessToken) return null;
+
+    const types = ['movies', 'shows', 'anime'] as const;
+    const tokenHash = crypto.createHash('sha256').update(accessToken).digest('hex').substring(0, 16);
+    const fingerprints = await Promise.all(
+      types.map(type => getSimklActivityFingerprint(accessToken, type, 'completed'))
+    );
+    const fingerprint = crypto.createHash('sha256')
+      .update(fingerprints.join('|'))
+      .digest('hex')
+      .substring(0, 16);
+
+    const watched = await cacheWrapGlobal(`simkl_watched_ids:${tokenHash}:${fingerprint}`, async () => {
+      const movieImdbIds: string[] = [];
+      const showImdbIds: string[] = [];
+      const malIds: number[] = [];
+      const anilistIds: number[] = [];
+
+      for (const type of types) {
+        const { items } = await fetchSimklWatchlistItems(accessToken, type, 'completed');
+        for (const item of items) {
+          const ids = (item?.movie || item?.show)?.ids;
+          if (!ids) continue;
+
+          const imdb = ids.imdb ? String(ids.imdb).trim() : '';
+          if (imdb) {
+            const isMovie = type === 'movies'
+              || (type === 'anime' && (item.anime_type === 'movie' || item.anime_type === 'ona'));
+            (isMovie ? movieImdbIds : showImdbIds).push(imdb.startsWith('tt') ? imdb : `tt${imdb}`);
+          }
+
+          if (type !== 'anime') continue;
+          const malId = resolveMalIdFromIds(ids);
+          if (malId) malIds.push(malId);
+          const anilistId = ids.anilist || (malId ? idMapper.getMappingByMalId(malId)?.anilist_id : null);
+          if (anilistId) anilistIds.push(Number(anilistId));
+        }
+      }
+
+      logger.info(`[Watched IDs] ${movieImdbIds.length} movies, ${showImdbIds.length} shows, ${malIds.length} anime completed on Simkl`);
+      return { movieImdbIds, showImdbIds, malIds, anilistIds };
+    }, SIMKL_WATCHLIST_TTL);
+
+    return {
+      movieImdbIds: new Set(watched.movieImdbIds),
+      showImdbIds: new Set(watched.showImdbIds),
+      malIds: new Set(watched.malIds),
+      anilistIds: new Set(watched.anilistIds),
+    };
+  } catch (err: any) {
+    logger.warn(`[Watched IDs] Error fetching Simkl watched IDs: ${err.message}`);
+    return null;
   }
 }
 
@@ -1391,6 +1462,7 @@ export {
   makeAuthenticatedSimklRequest,
   getSimklRatings,
   getSimklToken,
+  getSimklWatchedIds,
   getSimklActivityFingerprint,
   fetchSimklTrendingItems,
   fetchSimklRecipeItems,

@@ -2285,7 +2285,7 @@ async function parseAnimeCatalogMetaBatch(animes, config, language, includeVideo
         let genres = getKitsuGenresForItem(item, kitsuData?.included, kitsuItems.length <= 1);
         
         let releaseDates = null;
-        if (config.hideUnreleasedDigital && stremioType === 'movie' && tmdbId) {
+        if (stremioType === 'movie' && tmdbId) {
           try {
             releaseDates = await tmdb.getMovieCertifications({ id: tmdbId }, config);
           } catch (error) {
@@ -2444,9 +2444,8 @@ async function parseAnimeCatalogMetaBatch(animes, config, language, includeVideo
           }
         }
       }
-      // Only fetch TMDB release dates if digital release filter is enabled and it's a movie with TMDB ID
       let releaseDates = null;
-      const shouldFetchReleaseDates = config.hideUnreleasedDigital && stremioType === 'movie' && tmdbId;
+      const shouldFetchReleaseDates = stremioType === 'movie' && tmdbId;
       
       const [logo, background, releaseDatesResult] = await Promise.all([
         getAnimeLogo({malId, imdbId, tvdbId, tmdbId, mediaType: stremioType}, config),

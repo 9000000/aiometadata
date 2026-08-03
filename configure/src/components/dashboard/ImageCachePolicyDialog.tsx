@@ -44,11 +44,15 @@ import {
   pendingChanges,
   rowProblem,
   rowsFromRules,
+  type FlatSetting,
+  type PolicyContext,
   type PolicyFormState,
+  type PolicyMode,
   type PolicyRow,
   type ProviderPolicyRule,
   type TtlPolicy,
 } from "@/lib/providerPolicyRules";
+import { IMAGE_TYPE_LABELS } from "@/lib/imageClassLabels";
 
 const POLICY_LABELS: Record<TtlPolicy, string> = {
   default: "Default",
@@ -57,8 +61,28 @@ const POLICY_LABELS: Record<TtlPolicy, string> = {
   bypass: "Never store",
 };
 
+// Nothing is stored in proxy mode, so "never store" would name the wrong thing.
+const PROXY_POLICY_LABELS: Record<TtlPolicy, string> = { ...POLICY_LABELS, bypass: "Never cache" };
+
 /** What each policy does, stated rather than measured off the cache. */
-function explain(policy: TtlPolicy, ttl: string, flat: string | null): string {
+function explain(mode: PolicyMode, policy: TtlPolicy, ttl: string, flat: string | null): string {
+  if (mode === "proxy") {
+    switch (policy) {
+      case "default":
+        return flat
+          ? `Served with a max-age of ${flat} — the lifetime set above.`
+          : "Served with the lifetime set above.";
+      case "infer":
+        return "Passes the provider's own Cache-Control through, capped at the lifetime above.";
+      case "custom":
+        return ttl.trim()
+          ? `Every image from this provider is served with a max-age of ${ttl.trim()}, whatever its own headers say.`
+          : "Enter a duration — 30s, 15m, 12h, 30d, 2w or 1y.";
+      case "bypass":
+        return "Served with no-store — no CDN or player keeps a copy, and conditional requests are not revalidated.";
+    }
+  }
+
   switch (policy) {
     case "default":
       return flat
@@ -76,6 +100,13 @@ function explain(policy: TtlPolicy, ttl: string, flat: string | null): string {
       return "Served straight through and never stored. Anything already cached for this provider stays "
         + "on disk until it is purged.";
   }
+}
+
+/** "Logos and Backgrounds", from the class names the backend reports. */
+function listClasses(classes: string[]): string {
+  const labels = classes.map((imageClass) => IMAGE_TYPE_LABELS[imageClass] || imageClass);
+  if (labels.length <= 1) return labels[0] ?? "";
+  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
 }
 
 export function ImageCachePolicyDialog({
@@ -110,7 +141,23 @@ export function ImageCachePolicyDialog({
     infer_ttl?: boolean;
     ttl_days?: number;
     domain_purge?: { domain: string; running: boolean; removed: number } | null;
+    builtin?: boolean;
+    presets_enabled?: boolean;
+    follow_upstream?: boolean;
+    proxy_max_age_days?: number;
+    passthrough_classes?: string[];
   } | null | undefined;
+
+  // Absent means the built-in store answered; only the cache-off branch sets it.
+  const mode: PolicyMode = data?.builtin === false ? "proxy" : "store";
+  const proxy = mode === "proxy";
+  const followUpstream = !!data?.follow_upstream;
+  const presetsEnabled = data?.presets_enabled !== false;
+  const labels = proxy ? PROXY_POLICY_LABELS : POLICY_LABELS;
+  const flatSetting: FlatSetting = proxy
+    ? { key: "POSTER_PROXY_MAX_AGE_DAYS", label: "the default lifetime" }
+    : { key: "POSTER_CACHE_TTL_DAYS", label: "the default validity" };
+  const ctx: PolicyContext = { mode, inferEnabled: infer, followUpstream, presetsEnabled };
 
   const saved = useMemo(() => data?.provider_policies ?? [], [data]);
   const providers = useMemo(() => data?.known_providers ?? [], [data]);
@@ -130,16 +177,24 @@ export function ImageCachePolicyDialog({
     if (seeded.current || !data) return;
     seeded.current = true;
     const inferEnabled = !!data.infer_ttl;
-    const days = String(data.ttl_days ?? 30);
+    // Proxy mode edits POSTER_PROXY_MAX_AGE_DAYS, whose default is 1 — seeding it
+    // from the store's 30 would display, and on the next Save write, thirty times
+    // the real lifetime.
+    const days = proxy ? String(data.proxy_max_age_days ?? 1) : String(data.ttl_days ?? 30);
 
     setInfer(inferEnabled);
     setFlatDays(days);
-    setRows(rowsFromRules(saved, providers, inferEnabled));
+    setRows(rowsFromRules(saved, providers, {
+      mode,
+      inferEnabled,
+      followUpstream: !!data.follow_upstream,
+      presetsEnabled: data.presets_enabled !== false,
+    }));
     // What Save diffs against, so only what you actually moved is written.
     setBaseline({ flatDays: days, infer: inferEnabled, rules: saved });
     setShowHelp(false);
     setNewDomain("");
-  }, [open, data, saved, providers]);
+  }, [open, data, saved, providers, mode, proxy]);
 
   const updateRow = (domain: string, patch: Partial<PolicyRow>) => {
     setRows((current) => current.map((row) => (row.domain === domain ? { ...row, ...patch } : row)));
@@ -148,7 +203,7 @@ export function ImageCachePolicyDialog({
   /** Back to whatever the row would show untouched — its preset, or the toggle. */
   const resetRow = (domain: string) =>
     setRows((current) => current.map((row) => (row.domain === domain
-      ? { ...row, explicit: false, policy: inheritedPolicy(infer, row.preset), ttl: "" }
+      ? { ...row, explicit: false, policy: inheritedPolicy(ctx, row.preset), ttl: "" }
       : row)));
 
   const removeRow = (domain: string) =>
@@ -174,7 +229,7 @@ export function ImageCachePolicyDialog({
 
   const flatEcho = describeDays(flatDays);
   const current: PolicyFormState = { flatDays, infer, rules: buildPolicyRules(rows) };
-  const changes = baseline ? pendingChanges(current, baseline) : [];
+  const changes = baseline ? pendingChanges(current, baseline, flatSetting) : [];
   const blocked = rows.some((row) => rowProblem(row) !== null) || flatEcho === null;
 
   const handleSave = async () => {
@@ -188,7 +243,7 @@ export function ImageCachePolicyDialog({
       try {
         await updateSetting.mutateAsync({ key: change.key, value: change.value });
         applied.push(change.label);
-        landed = applyChange(landed, change);
+        landed = applyChange(landed, change, flatSetting.key);
         setBaseline(landed);
       } catch (error: any) {
         // Stop at the first failure and say exactly how far we got — reporting
@@ -205,10 +260,10 @@ export function ImageCachePolicyDialog({
 
     setSaving(false);
     const count = current.rules.length;
-    toast.success("Image cache policies saved", {
+    toast.success(proxy ? "Proxy policies saved" : "Image cache policies saved", {
       description: count === 0
-        ? "No per-provider rules. Every provider uses the default validity above."
-        : `${count} provider rule${count === 1 ? "" : "s"} in effect, applied to images already cached on their next request.`,
+        ? `No per-provider rules. Every provider uses ${proxy ? "the default lifetime" : "the default validity"} above.`
+        : `${count} provider rule${count === 1 ? "" : "s"} in effect, applied ${proxy ? "on the next request" : "to images already cached on their next request"}.`,
     });
     statsQuery.refetch();
     onOpenChange(false);
@@ -261,8 +316,8 @@ export function ImageCachePolicyDialog({
             >
               <SelectTrigger className="w-[150px] h-9"><SelectValue /></SelectTrigger>
               <SelectContent>
-                {(Object.keys(POLICY_LABELS) as TtlPolicy[]).map((policy) => (
-                  <SelectItem key={policy} value={policy}>{POLICY_LABELS[policy]}</SelectItem>
+                {(Object.keys(labels) as TtlPolicy[]).map((policy) => (
+                  <SelectItem key={policy} value={policy}>{labels[policy]}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -271,7 +326,7 @@ export function ImageCachePolicyDialog({
                 className={`w-[92px] h-9 ${problem ? "border-red-500/60" : ""}`}
                 placeholder="12h"
                 value={row.ttl}
-                aria-label={`Cache duration for ${row.domain}`}
+                aria-label={`${proxy ? "Client lifetime" : "Cache duration"} for ${row.domain}`}
                 onChange={(e) => updateRow(row.domain, { explicit: true, ttl: e.target.value })}
               />
             )}
@@ -302,9 +357,9 @@ export function ImageCachePolicyDialog({
         {row.explicit && (
           <div className="pl-1 pr-10 pt-1 space-y-1">
             <p className={`text-xs ${problem ? "text-red-500" : "text-muted-foreground"}`}>
-              {problem || explain(row.policy, row.ttl, flatEcho)}
+              {problem || explain(mode, row.policy, row.ttl, flatEcho)}
             </p>
-            {row.policy === "bypass" && (
+            {!proxy && row.policy === "bypass" && (
               <Button
                 variant="ghost" size="sm"
                 className="h-7 px-2 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
@@ -331,21 +386,22 @@ export function ImageCachePolicyDialog({
           axis to clip too. */}
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Per-provider cache policies</DialogTitle>
+          <DialogTitle>{proxy ? "Per-provider proxy policies" : "Per-provider cache policies"}</DialogTitle>
           <DialogDescription>
-            Overrides how one provider's images are cached, leaving the rest alone. A domain
-            covers its subdomains. Changes apply to images already cached, on their next request.
+            {proxy
+              ? "Overrides what Cache-Control one provider's images are served with, leaving the rest alone. A domain covers its subdomains. Applies to art that passes through this addon, on the next request."
+              : "Overrides how one provider's images are cached, leaving the rest alone. A domain covers its subdomains. Changes apply to images already cached, on their next request."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="rounded-md border p-3 space-y-3">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            Default validity
+            {proxy ? "Default lifetime" : "Default validity"}
           </p>
 
           <div className="flex items-center gap-3">
             <Label htmlFor="ttl-flat" className="flex-1 min-w-0 text-sm font-normal">
-              Cache validity
+              {proxy ? "Client lifetime" : "Cache validity"}
             </Label>
             <Input
               id="ttl-flat"
@@ -361,11 +417,31 @@ export function ImageCachePolicyDialog({
 
           {/* Not editable here. It is a server-wide setting, it is reachable from
               the settings section, and every provider listed below already has a
-              policy of its own — so the only thing worth saying is that it is on. */}
-          {infer && (
+              policy of its own — so the only thing worth saying is that it is on.
+              In proxy mode it says more than that: with FOLLOW_UPSTREAM on, no
+              unruled row's displayed policy is in force, presets included. */}
+          {proxy ? (followUpstream && (
+            <p className="pt-3 border-t text-xs text-muted-foreground">
+              <code className="font-mono">POSTER_PROXY_FOLLOW_UPSTREAM</code> is enabled — anything
+              without a rule below is relayed with the provider's own{" "}
+              <code className="font-mono">Cache-Control</code>, uncapped. Built-in policies do not
+              apply while it is on.
+            </p>
+          )) : (infer && (
             <p className="pt-3 border-t text-xs text-muted-foreground">
               <code className="font-mono">POSTER_CACHE_INFER_TTL</code> is enabled — anything
               without a rule or a built-in policy defaults to Follow source.
+            </p>
+          ))}
+
+          {/* The one combination where the two chains visibly disagree: a class
+              this install does not store has its headers decided by the proxy
+              chain, where FOLLOW_UPSTREAM outranks the presets. */}
+          {!proxy && followUpstream && !!data?.passthrough_classes?.length && (
+            <p className="pt-3 border-t text-xs text-muted-foreground">
+              {listClasses(data.passthrough_classes)} are not stored on this install, so their
+              headers follow <code className="font-mono">POSTER_PROXY_FOLLOW_UPSTREAM</code> rather
+              than the policies below.
             </p>
           )}
         </div>
@@ -381,15 +457,19 @@ export function ImageCachePolicyDialog({
         {showHelp && (
           <dl className="text-xs text-muted-foreground space-y-1.5 pl-5">
             {/* Answers the question a row cannot: why a provider already shows a
-                policy when you never gave it one. */}
-            <p className="pb-0.5">
-              Each provider below already has a policy, measured from what it actually sends.
-              Choose one yourself only where you want something different.
-            </p>
-            {(Object.keys(POLICY_LABELS) as TtlPolicy[]).map((policy) => (
+                policy when you never gave it one — but only where that is true.
+                FOLLOW_UPSTREAM displaces the presets on the proxy path; it does
+                not on the store path, where they outrank POSTER_CACHE_INFER_TTL. */}
+            {presetsEnabled && !(proxy && followUpstream) && (
+              <p className="pb-0.5">
+                Each provider below already has a policy, measured from what it actually sends.
+                Choose one yourself only where you want something different.
+              </p>
+            )}
+            {(Object.keys(labels) as TtlPolicy[]).map((policy) => (
               <div key={policy}>
-                <dt className="inline font-medium text-foreground">{POLICY_LABELS[policy]}: </dt>
-                <dd className="inline">{explain(policy, "12h", flatEcho)}</dd>
+                <dt className="inline font-medium text-foreground">{labels[policy]}: </dt>
+                <dd className="inline">{explain(mode, policy, "12h", flatEcho)}</dd>
               </div>
             ))}
           </dl>

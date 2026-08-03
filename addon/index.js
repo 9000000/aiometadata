@@ -6385,13 +6385,7 @@ addon.post("/api/dashboard/cache/clear-by-id", requireDashboardAdmin, async (req
 });
 
 addon.post("/api/dashboard/poster-cache/purge", requireDashboardAdmin, async (req, res) => {
-  // Omitting `type` purges everything, which is the shape the dashboard has
-  // always sent — existing callers keep working unchanged.
   const requestedType = req.body?.type;
-  // A provider's art spans poster, background, logo and processed, so a domain
-  // purge is across all of them and `type` does not apply to it. Asking for a
-  // domain at all routes here — a blank one is a bad request, never a licence to
-  // fall through and purge everything.
   const askedForDomain = typeof req.body?.domain === 'string';
 
   if (posterCacheConfig.isBuiltinPosterCacheEnabled()) {
@@ -6401,9 +6395,6 @@ addon.post("/api/dashboard/poster-cache/purge", requireDashboardAdmin, async (re
     try {
       const posterCacheStore = require('./lib/posterCache/store.js');
       if (askedForDomain) {
-        // Started rather than awaited: the walk covers the whole tree and takes
-        // minutes on a large cache, which outlives the dashboard's fetch. Progress
-        // is reported back through the stats endpoint's `domain_purge` field.
         try {
           const status = posterCacheStore.startDomainPurge(req.body.domain);
           consola.info(`[API] Poster cache domain purge started: ${status.domain}`);
@@ -6539,41 +6530,45 @@ addon.post("/api/dashboard/poster-cache/invalidate", requireDashboardAdmin, asyn
 addon.get("/api/dashboard/poster-cache/stats", requireDashboardAdmin, async (req, res) => {
   if (posterCacheConfig.isBuiltinPosterCacheEnabled()) {
     const posterCacheStore = require('./lib/posterCache/store.js');
-    // Everything the policy UI needs, and all of it O(1): the domains worth
-    // offering and the rules currently in force. Deliberately not per-provider
-    // cache figures — those would cost a pass over the whole tree, and knowing
-    // what a policy means does not require knowing what is already stored.
     return res.json({
       ...posterCacheStore.stats(),
       enabled_types: posterCacheConfig.getEnabledClasses(),
       known_providers: posterCacheConfig.KNOWN_ART_PROVIDERS,
-      // Progress for a domain purge, which runs in the background — null until one
-      // has been asked for in this process.
       domain_purge: posterCacheStore.domainPurgeStatus(),
       provider_policies: posterCacheConfig.parseProviderPolicies(process.env.POSTER_CACHE_PROVIDER_POLICIES) || [],
-      // What a provider with no rule of its own resolves to, so the modal can show
-      // the policy actually in force rather than a placeholder.
       infer_ttl: posterCacheConfig.isInferTtlEnabled(),
-      // `ttl_days` — the raw number the modal edits, and the value it phrases the
-      // `default` policy from — arrives with the stats() spread above. The card's
-      // `ttl` string is separate: it carries an "(origin where inferable)" caveat,
-      // which is exactly what choosing `default` means not to do.
+      presets_enabled: posterCacheConfig.arePresetsEnabled(),
+      follow_upstream: posterCacheConfig.followsUpstreamCacheControl(),
+      passthrough_classes: posterCacheConfig.IMAGE_CLASSES.filter(
+        (imageClass) => !posterCacheConfig.isClassEnabled(imageClass)
+      ),
     });
   }
+
+  const policyPayload = {
+    builtin: false,
+    known_providers: posterCacheConfig.KNOWN_ART_PROVIDERS,
+    provider_policies: posterCacheConfig.parseProviderPolicies(process.env.POSTER_CACHE_PROVIDER_POLICIES) || [],
+    presets_enabled: posterCacheConfig.arePresetsEnabled(),
+    follow_upstream: posterCacheConfig.followsUpstreamCacheControl(),
+    proxy_max_age_days: posterCacheConfig.getProxyMaxAgeDays(),
+  };
 
   // Standalone nginx cannot report a per-type breakdown, so `by_type` is absent
   // here and the dashboard renders only the totals.
   const posterCacheUrl = posterCacheConfig.getPosterWarmupBase();
   if (!posterCacheUrl) {
-    return res.status(400).json({ error: 'No poster cache URL configured' });
+    return res.json({ ...policyPayload, external: 'none' });
   }
 
   try {
     const response = await fetch(`${posterCacheUrl}/stats`);
+    if (!response.ok) throw new Error(`Poster cache answered ${response.status}`);
     const stats = await response.json();
-    res.json(stats);
+    res.json({ ...policyPayload, ...stats, external: 'ok' });
   } catch (error) {
-    res.status(502).json({ error: 'Failed to reach poster cache', details: error.message });
+    consola.debug(`[API] Poster cache stats unreachable at ${posterCacheUrl}: ${error.message}`);
+    res.json({ ...policyPayload, external: 'unreachable' });
   }
 });
 

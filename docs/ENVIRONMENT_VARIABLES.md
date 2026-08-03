@@ -738,6 +738,8 @@ Two terms used throughout this section. The **proxy routes** are `/poster`, `/lo
 
 **How long an image stays fresh** is decided most-specific-first: a rule in [`POSTER_CACHE_PROVIDER_POLICIES`](#poster_cache_provider_policies), then the provider's built-in policy ([`POSTER_CACHE_PROVIDER_PRESETS`](#poster_cache_provider_presets)), then [`POSTER_CACHE_INFER_TTL`](#poster_cache_infer_ttl), then the flat [`POSTER_CACHE_TTL_DAYS`](#poster_cache_ttl_days).
 
+Art the addon **passes through without storing** is decided by a chain of its own, differing in one step: a rule, then [`POSTER_PROXY_FOLLOW_UPSTREAM`](#poster_proxy_follow_upstream), then the provider's built-in policy, then [`POSTER_PROXY_MAX_AGE_DAYS`](#poster_proxy_max_age_days). Turning `POSTER_PROXY_FOLLOW_UPSTREAM` on is an install-wide decision to relay verbatim, so a built-in policy does not override it — a rule you write yourself still does.
+
 ### `ENABLE_BUILTIN_POSTER_CACHE`
 - **Default**: `false`
 - **Description**: Turns the image cache on. Requires a restart. Posters are cached immediately; every other image class is opt-in below, so enabling this never changes disk usage unexpectedly. Each replica in a multi-replica deployment keeps its own independent cache.
@@ -876,6 +878,12 @@ Two terms used throughout this section. The **proxy routes** are `/poster`, `/lo
   | `custom` | A fixed duration given as `ttl`. Units are required: `30s`, `15m`, `12h`, `30d`, `2w`, `1y`. |
   | `bypass` | Serve the provider's images without ever storing them. |
 
+  **These rules apply whether or not the built-in cache is on.** With it on, they decide how long an image is stored. With it off — or for a class you have not enabled — art still reaches the addon's `/poster-cache/proxy/…` routes when **Proxy Rating & Custom Art** is enabled, and the rule decides the `Cache-Control` those bytes are served with. That covers rating posters and custom art patterns; ordinary TMDB or TVDB art is handed to players by its own URL and never passes through here.
+
+  A rule sets **one** lifetime for both audiences: it sends `Cache-Control` and no `CDN-Cache-Control`, so a CDN and a player both honour the same figure. The cost is that browser and player copies are pinned for the full duration and outlive a CDN purge — choose a lifetime you are willing to have clients keep.
+
+  `bypass` on a passed-through provider sends `no-store` and stops forwarding the client's conditional request, so every fetch transfers a full body rather than revalidating. That is the point of declining to cache, but it is bandwidth you are choosing to spend.
+
   A rule outranks everything else, including a provider's built-in policy — so `default` pins one provider to the flat number while the global toggle is on. Matching is on the host in the cache key, so one rule covers that provider's posters, backgrounds, logos, thumbnails and processed art alike. A domain covers its subdomains (`elfhosted.com` matches `postersplus.elfhosted.com`), and where two rules match, the more specific wins regardless of order.
 
   You do not have to write this by hand: **Dashboard → Operations → Image Cache → Advanced…** edits the same setting. Malformed JSON is refused on save; a bad value reaching the engine another way is logged once and ignored, falling back to the flat validity.
@@ -892,7 +900,7 @@ Two terms used throughout this section. The **proxy routes** are `/poster`, `/lo
 - **Description**: The `Cache-Control: max-age` the proxy routes send to players and browsers. Applies whether or not the built-in cache is on. Fractional values work (`0.25` = 6 hours); `0` lifts the ceiling to a year, and anything below a minute is rounded up to one.
 
   - **Served from the cache**: the entry's own remaining validity, capped by this figure.
-  - **Passed straight through**: this is a *ceiling* on what the provider asked for, and the figure sent outright when it asked for nothing. The addon is a plain proxy for those bytes, so the provider decides — its figure less the `Age` it arrived with, and its `no-store` / `no-cache` / `must-revalidate` relayed as sent. Provider policies are deliberately not consulted here; they decide what the *store* keeps.
+  - **Passed straight through**: this is a *ceiling* on what the provider asked for, and the figure sent outright when it asked for nothing. The addon is a plain proxy for those bytes, so the provider decides — its figure less the `Age` it arrived with, and its `no-store` / `no-cache` / `must-revalidate` relayed as sent. A per-provider rule or built-in policy overrides all of this outright; see [`POSTER_CACHE_PROVIDER_POLICIES`](#poster_cache_provider_policies).
 
   Both kinds carry a validator, so an unchanged image costs a bodyless `304`: a cached one uses the store's body hash, a passed-through one the origin's own `ETag`, with the client's conditional request relayed upstream.
 
@@ -904,6 +912,8 @@ Two terms used throughout this section. The **proxy routes** are `/poster`, `/lo
 - **Description**: Forwards the provider's `Cache-Control` **verbatim** on passed-through images, with no floor or ceiling applied. Its `CDN-Cache-Control` travels with it, so a CDN in front of the addon gets the directive the provider addressed to it — btttr, for one, tells caches five minutes while telling browsers to revalidate every time. Affects the proxy routes only; a stored image is still advertised on its own remaining validity, and the addon has already consumed the targeted directive itself.
 
   You rarely need this. Passed-through images already follow their provider, bounded by [`POSTER_PROXY_MAX_AGE_DAYS`](#poster_proxy_max_age_days) — this only removes that bound. Think twice, because with it a provider sending `immutable` or a year-long `max-age` pins art in your CDN for exactly that long, and one that starts sending `no-store` makes your art uncacheable downstream without you changing anything. Where the provider sent no `Cache-Control`, the addon's own figure still applies.
+
+  It also displaces the built-in provider policies on this path — turning it on is a decision to relay what the provider says, and a policy measured for you must not silently undo that. A rule in [`POSTER_CACHE_PROVIDER_POLICIES`](#poster_cache_provider_policies) still wins, and suppresses the relayed `CDN-Cache-Control` and `Age` along with it, so a CDN cannot be left on the provider's figure while a player is on yours.
 - **Example**: `POSTER_PROXY_FOLLOW_UPSTREAM=true`
 
 ### `POSTER_CACHE_INACTIVE_DAYS`

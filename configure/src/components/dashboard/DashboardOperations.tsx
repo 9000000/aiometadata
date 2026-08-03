@@ -55,6 +55,7 @@ import {
 } from "@/hooks/useDashboardQueries";
 import { AnimatedNumber } from "../AnimatedNumber";
 import { ImageCachePolicyDialog } from "./ImageCachePolicyDialog";
+import { IMAGE_TYPE_LABELS } from "@/lib/imageClassLabels";
 
 const formatBytes = (bytes: number): string => {
   if (!bytes || bytes === 0) return "0 MB";
@@ -95,14 +96,6 @@ const COLD_TIER_HINTS: Record<string, string> = {
   stable: "Recently finished — shorter disk TTL",
 };
 
-const IMAGE_TYPE_LABELS: Record<string, string> = {
-  poster: "Posters",
-  background: "Backgrounds",
-  landscape: "Landscape Posters",
-  logo: "Logos",
-  thumbnail: "Episode Thumbnails",
-  processed: "Processed Images",
-};
 
 export function DashboardOperations({ data, loading, activeTab }: { data: any; loading: boolean; activeTab: DashboardTab }) {
   const memoryQuery = useDashboardMemory({ activeTab });
@@ -118,6 +111,17 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
   const posterCacheStatsQuery = usePosterCacheStats({ activeTab });
   const invalidateImageMutation = useInvalidateCachedImage();
   const clearArtByIdMutation = useClearArtById();
+
+  // Three states, not two. An operator running standalone nginx (README Option B)
+  // has real figures and a working purge with the built-in store off, and must
+  // keep both — `builtin === false` on its own is the wrong gate for hiding them.
+  const posterCacheStats = posterCacheStatsQuery.data as
+    | { builtin?: boolean; external?: 'ok' | 'unreachable' | 'none'; by_type?: unknown; [key: string]: any }
+    | null
+    | undefined;
+  const posterProxyMode = posterCacheStats?.builtin === false;
+  const posterExternal = posterCacheStats?.external;
+  const posterHasFigures = !posterProxyMode || posterExternal === 'ok';
 
   const coldStoreStatsQuery = useColdStoreStats({ activeTab });
   const purgeColdStoreMutation = usePurgeColdStore();
@@ -629,26 +633,42 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
           <CardContent className="pt-0">
             {posterCacheStatsQuery.data ? (
               <>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">Cached Images</span>
-                    <p className="text-lg font-semibold"><AnimatedNumber value={posterCacheStatsQuery.data.cached_images} /></p>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Disk Usage</span>
-                    <p className="text-lg font-semibold">{posterCacheStatsQuery.data.disk_usage}</p>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Max Size</span>
-                    <p className="text-lg font-semibold">{posterCacheStatsQuery.data.max_size}</p>
-                  </div>
-                  {posterCacheStatsQuery.data.ttl && (
+                {posterHasFigures && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
                     <div>
-                      <span className="text-muted-foreground">Validity</span>
-                      <p className="text-lg font-semibold">{posterCacheStatsQuery.data.ttl}</p>
+                      <span className="text-muted-foreground">Cached Images</span>
+                      <p className="text-lg font-semibold"><AnimatedNumber value={posterCacheStatsQuery.data.cached_images} /></p>
                     </div>
-                  )}
-                </div>
+                    <div>
+                      <span className="text-muted-foreground">Disk Usage</span>
+                      <p className="text-lg font-semibold">{posterCacheStatsQuery.data.disk_usage}</p>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Max Size</span>
+                      <p className="text-lg font-semibold">{posterCacheStatsQuery.data.max_size}</p>
+                    </div>
+                    {posterCacheStatsQuery.data.ttl && (
+                      <div>
+                        <span className="text-muted-foreground">Validity</span>
+                        <p className="text-lg font-semibold">{posterCacheStatsQuery.data.ttl}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Nothing of ours is stored, and no external cache answered. The
+                    rules are still in force — they decide the response headers. */}
+                {posterProxyMode && posterExternal === 'unreachable' && (
+                  <p className="text-sm text-muted-foreground">
+                    Image cache not configured or unreachable.
+                  </p>
+                )}
+                {posterProxyMode && posterExternal === 'none' && (
+                  <p className="text-sm text-muted-foreground">
+                    Nothing is stored here — art passes through and is served with the
+                    headers your per-provider rules decide. Open <em>Advanced…</em> to set them.
+                  </p>
+                )}
 
                 {/* Per-type breakdown. Absent when an external proxy serves the
                     cache, since it cannot report which class an image belongs to. */}
@@ -825,30 +845,36 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
                       </DialogContent>
                     </Dialog>
                   )}
-                  {/* Per-provider policies. Only offered for the built-in cache:
-                      a standalone nginx proxy has no per-host validity to set. */}
-                  {posterCacheStatsQuery.data.by_type && (
+                  {/* Per-provider policies. Offered whenever they decide something:
+                      for the built-in cache, and for the headers on art we merely
+                      pass through. */}
+                  {(posterCacheStatsQuery.data.by_type || posterProxyMode) && (
                     <Button variant="outline" size="sm" onClick={() => setPolicyDialogOpen(true)}>
                       <Sliders className="h-4 w-4 mr-1.5" />
                       Advanced…
                     </Button>
                   )}
-                  <Button
-                    onClick={() => handlePurgePosterCache()}
-                    variant="outline"
-                    size="sm"
-                    disabled={purgePosterCacheMutation.isPending}
-                    className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
-                  >
-                    {purgePosterCacheMutation.isPending && purgingType === "all" ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <>
-                        <Trash2 className="h-4 w-4 mr-1.5" />
-                        Clear All Images
-                      </>
-                    )}
-                  </Button>
+                  {/* Gated on there being something to clear, not on which store it
+                      is: with the built-in cache off the purge endpoint forwards to
+                      the external proxy, so this still works there. */}
+                  {posterHasFigures && (
+                    <Button
+                      onClick={() => handlePurgePosterCache()}
+                      variant="outline"
+                      size="sm"
+                      disabled={purgePosterCacheMutation.isPending}
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
+                    >
+                      {purgePosterCacheMutation.isPending && purgingType === "all" ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <>
+                          <Trash2 className="h-4 w-4 mr-1.5" />
+                          Clear All Images
+                        </>
+                      )}
+                    </Button>
+                  )}
                 </div>
               </>
             ) : (

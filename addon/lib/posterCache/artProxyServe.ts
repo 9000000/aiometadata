@@ -1,4 +1,4 @@
-import type { ImageClass, UpstreamCacheMeta } from './config.js';
+import { resolveProxyPolicy, type ImageClass, type UpstreamCacheMeta } from './config.js';
 import { recordRevalidated, recordServe } from './handler.js';
 import { applyProxyResponseHeaders, etagMatches } from './proxyResponse.js';
 import { UpstreamRejected, openImageStream } from './upstream.js';
@@ -66,6 +66,8 @@ export async function servePassThrough(req: any, res: any, opts: PassThroughOpti
   const validators = bypassed ? undefined : clientValidators(req);
   const upstream = await open(validators);
 
+  const policy = resolveProxyPolicy(url);
+
   if (bypassed) res.setHeader('X-Cache-Status', 'BYPASS');
 
   if (upstream.status === 304) {
@@ -73,6 +75,7 @@ export async function servePassThrough(req: any, res: any, opts: PassThroughOpti
     applyProxyResponseHeaders(res, {
       status: bypassed ? 'BYPASS' : null,
       upstreamHeaders: upstream.headers,
+      policy,
     });
     recordRevalidated(imageClass, 'REVALIDATED', req.method, url);
     res.status(304).end();
@@ -83,6 +86,7 @@ export async function servePassThrough(req: any, res: any, opts: PassThroughOpti
   applyProxyResponseHeaders(res, {
     status: bypassed ? 'BYPASS' : null,
     upstreamHeaders: upstream.headers,
+    policy,
   });
   upstream.data.pipe(res);
 }

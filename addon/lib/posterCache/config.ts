@@ -507,6 +507,15 @@ function resolvedFrom(rule: ProviderPolicy): ResolvedPolicy {
     : { policy: rule.policy };
 }
 
+/**
+ * Lives here rather than in `proxyResponse.ts` because `resolveProxyPolicy`
+ * consults it and `proxyResponse.ts` imports this module — the other direction
+ * would be a cycle.
+ */
+export function followsUpstreamCacheControl(): boolean {
+  return isTruthy(process.env.POSTER_PROXY_FOLLOW_UPSTREAM);
+}
+
 export function resolvePolicyFor(key: string): ResolvedPolicy {
   const rules = activeRules();
   const presets = arePresetsEnabled();
@@ -525,8 +534,44 @@ export function resolvePolicyFor(key: string): ResolvedPolicy {
   return { policy: isInferTtlEnabled() ? 'infer' : 'default' };
 }
 
+/**
+ * What the art proxy should tell a client, for art that passes through without
+ * being stored. Ordered by explicitness rather than by layer, and independent of
+ * whether the built-in store is on.
+ *
+ * `null` means nobody spoke — the caller keeps its existing behaviour, which is
+ * what makes this inert on installs with no rules.
+ */
+export function resolveProxyPolicy(key: string): ResolvedPolicy | null {
+  const rules = activeRules();
+  const presets = arePresetsEnabled();
+  // Lazy, as in `resolvePolicyFor`: this runs on every proxied art request, and
+  // with no rules and presets off there is nothing to match a host against.
+  const host = rules.length > 0 || presets ? hostFromKey(key) : null;
+
+  if (host && rules.length > 0) {
+    const rule = ruleFor(host, rules);
+    if (rule) return resolvedFrom(rule);
+  }
+
+  // An install-wide choice to relay verbatim outranks a preset we chose for them.
+  if (followsUpstreamCacheControl()) return null;
+
+  if (host && presets) {
+    const preset = ruleFor(host, PRESET_RULES);
+    if (preset) return resolvedFrom(preset);
+  }
+
+  return null;
+}
+
+/**
+ * A `bypass` rule is a statement about the provider, not about our storage — with
+ * the store off it still means "serve this without anyone keeping a copy". The two
+ * call sites that record BYPASS metrics test the store themselves
+ * (`addon/index.js:5077`, `:5133`), so nothing else has to move.
+ */
 export function isBypassed(key: string): boolean {
-  if (!isBuiltinPosterCacheEnabled()) return false;
   return resolvePolicyFor(key).policy === 'bypass';
 }
 
@@ -590,19 +635,18 @@ export function browserMaxAgeFor(expiresAt: number): number {
 
 export const DEFAULT_PROXY_MAX_AGE_DAYS = 1;
 
-export function getProxyMaxAgeSeconds(): number {
+export function getProxyMaxAgeDays(): number {
   const raw = (process.env.POSTER_PROXY_MAX_AGE_DAYS ?? '').trim();
-  let days = DEFAULT_PROXY_MAX_AGE_DAYS;
-  if (raw !== '') {
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed) && parsed >= 0) days = parsed;
-  }
+  if (raw === '') return DEFAULT_PROXY_MAX_AGE_DAYS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_PROXY_MAX_AGE_DAYS;
+}
 
-  const seconds = days > 0
+export function getProxyMaxAgeSeconds(): number {
+  const days = getProxyMaxAgeDays();
+  return days > 0
     ? Math.min(MAX_BROWSER_MAX_AGE, Math.max(60, Math.floor(days * 24 * 60 * 60)))
     : MAX_BROWSER_MAX_AGE;
-
-  return seconds;
 }
 
 export function getInactiveDays(): number {

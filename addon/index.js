@@ -5621,7 +5621,8 @@ addon.delete('/api/config/delete-user/:userUUID', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Verify password
+    // Deleting is irreversible, so the password is asked for again even when the
+    // account already owns this configuration.
     const isValidPassword = await database.verifyPassword(userUUID, password);
     if (!isValidPassword) {
       return res.status(401).json({ error: 'Invalid password' });
@@ -5710,22 +5711,16 @@ addon.post('/api/cache/invalidate-user/:userUUID', async (req, res) => {
   try {
     const { userUUID } = req.params;
     const { password } = req.body;
-    
-    if (!userUUID || !password) {
-      return res.status(400).json({ error: 'userUUID and password are required' });
+
+    if (!userUUID) {
+      return res.status(400).json({ error: 'userUUID is required' });
     }
-    
-    // Verify the user exists and password is correct
-    const user = await database.getUser(userUUID);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    
-    const isValidPassword = await database.verifyPassword(userUUID, password);
-    if (!isValidPassword) {
+
+    const access = await resolveConfigAccess(req, userUUID, password);
+    if (!access) {
       return res.status(401).json({ error: 'Invalid password' });
     }
-    
+
     // Clear all cache entries for this user (safe SCAN-based deletion)
     const userCachePattern = `*${userUUID}*`;
     const deleted = await deleteKeysByPattern(userCachePattern);

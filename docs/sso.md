@@ -47,8 +47,12 @@ All of these are in the dashboard under **Server**, or as environment variables.
 
 Two permissions exist:
 
-- **`admin`** — reaches the dashboard.
-- **`createConfig`** — may create and save configurations.
+- **`admin`** — reaches the dashboard. It is a superset: holding it grants everything else, so a group mapped to `admin` alone needs nothing added.
+- **`createConfig`** — may create new configurations.
+
+`createConfig` is only consulted on an instance that sets `ADDON_PASSWORD`, and only for someone signed in. Without an addon password anyone may create a configuration, so the permission would decide nothing; and a visitor who is not signed in cannot hold a permission at all, so they are left to the addon password as before.
+
+Editing an existing configuration needs no permission. Knowing the configuration's own password, or having it saved to your account, is already the gate.
 
 `OIDC_GROUP_PERMISSIONS` maps groups to them, as `group=permission|permission`, comma separated:
 

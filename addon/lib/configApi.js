@@ -3,6 +3,7 @@ const { request, Agent, ProxyAgent } = require("undici");
 const database = require('./database');
 const buildInfo = require('./buildInfo');
 const { buildInstallUrl } = require('./installUrl');
+const { hasPermission } = require('./authSession');
 const KEY_VALIDATION_STATUS_SET = new Set(['valid', 'invalid', 'timeout', 'error']);
 const isKnownKeyValidationStatus = (status) =>
   typeof status === 'string' && KEY_VALIDATION_STATUS_SET.has(status);
@@ -266,6 +267,16 @@ class ConfigApi {
 
       if (!password) {
         return res.status(400).json({ error: 'Password is required' });
+      }
+
+      // Only worth asking on an instance that gates creation at all: with no addon
+      // password, anyone may create a configuration and the permission decides
+      // nothing. Signing in is likewise the only way to hold one, so a request
+      // without a session is left to the addon password below.
+      if (process.env.ADDON_PASSWORD && req.session && !hasPermission(req, 'createConfig')) {
+        return res.status(403).json({
+          error: 'Your account is not allowed to create configurations',
+        });
       }
 
       // Check addon password if one is set

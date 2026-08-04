@@ -139,7 +139,9 @@ export async function attachSession(req: any, _res: any, next: any): Promise<voi
   next();
 }
 
+/** `admin` is a superset, so mapping a group to it alone grants everything. */
 export function hasPermission(req: any, permission: Permission): boolean {
   const permissions: Permission[] | undefined = req?.session?.permissions;
-  return Array.isArray(permissions) && permissions.includes(permission);
+  if (!Array.isArray(permissions)) return false;
+  return permissions.includes(permission) || permissions.includes('admin');
 }

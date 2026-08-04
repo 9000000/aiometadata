@@ -143,7 +143,7 @@ export function SaveProvider({ children }: { children: ReactNode }) {
       setIsSaving(false);
       return;
     }
-    const isAuthenticated = auth.authenticated && auth.userUUID && auth.password;
+    const isAuthenticated = Boolean(auth.authenticated && auth.userUUID);
     try {
       const trimmedApiKeys = Object.fromEntries(
         Object.entries(config.apiKeys).map(([k, v]) => [k, typeof v === 'string' ? v.trim() : v])

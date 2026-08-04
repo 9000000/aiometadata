@@ -16,6 +16,7 @@ const { getManifest, DEFAULT_LANGUAGE } = require("./lib/getManifest");
 const { getMeta } = require("./lib/getMeta");
 const { cacheWrapMetaSmart, cacheWrapCatalog, cacheWrapSearch, cacheWrapJikanApi, cacheWrapStaticCatalog, cacheWrapGlobal, getCacheHealth, clearCacheHealth, logCacheHealth, stableStringify, deleteKeysByPattern, scanKeys } = require("./lib/getCache");
 const { hasPermission } = require("./lib/authSession");
+const { resolveConfigAccess } = require("./lib/configAccess");
 const redis = require("./lib/redisClient");
 const { warmEssentialContent, warmPopularContent, scheduleEssentialWarming } = require("./lib/cacheWarmer");
 const requestTracker = require("./lib/requestTracker");
@@ -891,13 +892,11 @@ addon.post("/api/movielens/sync/:userUUID", async (req, res) => {
   try {
     const { userUUID } = req.params;
     const { password, full, credId: bodyCredId } = req.body || {};
-    if (!password) {
-      return res.status(401).json({ error: "Password is required" });
-    }
-    const config = await database.verifyUserAndGetConfig(userUUID, password);
-    if (!config) {
+    const access = await resolveConfigAccess(req, userUUID, password);
+    if (!access) {
       return res.status(401).json({ error: "Invalid UUID or password" });
     }
+    const config = access.config;
     if (!config.apiKeys?.movieLensCredId && bodyCredId) {
       const credRow = await database.getOAuthToken(bodyCredId);
       if (credRow && credRow.provider === 'movielens') {
@@ -934,14 +933,11 @@ addon.post("/api/movielens/lists/:userUUID", async (req, res) => {
   try {
     const { userUUID } = req.params;
     const { password } = req.body || {};
-    if (!password) {
-      return res.status(401).json({ error: "Password is required" });
-    }
-    const config = await database.verifyUserAndGetConfig(userUUID, password);
-    if (!config) {
+    const access = await resolveConfigAccess(req, userUUID, password);
+    if (!access) {
       return res.status(401).json({ error: "Invalid UUID or password" });
     }
-    const credId = config.apiKeys?.movieLensCredId;
+    const credId = access.config.apiKeys?.movieLensCredId;
     if (!credId) {
       return res.status(400).json({ error: "No MovieLens account is connected." });
     }
@@ -2004,8 +2000,8 @@ addon.post("/api/ai/create-catalog", async (req, res) => {
   try {
     const { userUUID, password, query, provider, generationMode, model: requestedModel, geminiKey: clientGeminiKey, openrouterKey: clientOpenrouterKey } = req.body;
 
-    if (!userUUID || !password) {
-      return res.status(400).json({ error: 'User UUID and password are required' });
+    if (!userUUID) {
+      return res.status(400).json({ error: 'User UUID is required' });
     }
     if (!query || typeof query !== 'string' || !query.trim()) {
       return res.status(400).json({ error: 'Query is required' });
@@ -2027,10 +2023,11 @@ addon.post("/api/ai/create-catalog", async (req, res) => {
     aiCatalogRateLimit.set(userRateKey, recentRequests);
 
     // Authenticate
-    const config = await database.verifyUserAndGetConfig(userUUID, password);
-    if (!config) {
+    const access = await resolveConfigAccess(req, userUUID, password);
+    if (!access) {
       return res.status(401).json({ error: 'Invalid UUID or password' });
     }
+    const config = access.config;
 
     const openrouterKey = config.apiKeys?.openrouter || clientOpenrouterKey;
     const geminiKey = config.apiKeys?.gemini || clientGeminiKey;
@@ -3324,19 +3321,19 @@ addon.get("/api/publicmetadb/picks", async (req, res) => {
 addon.post("/api/managers/credentials", async (req, res) => {
   try {
     const { userUUID, password, managerId, instanceUrl, apiKey } = req.body || {};
-    if (!userUUID || !password || !managerId || !instanceUrl || !apiKey) {
-      return res.status(400).json({ error: "userUUID, password, managerId, instanceUrl and apiKey are required" });
+    if (!userUUID || !managerId || !instanceUrl || !apiKey) {
+      return res.status(400).json({ error: "userUUID, managerId, instanceUrl and apiKey are required" });
     }
-    const existingConfig = await database.verifyUserAndGetConfig(userUUID, password);
-    if (!existingConfig) {
+    const access = await resolveConfigAccess(req, userUUID, password);
+    if (!access || !access.passwordHash) {
       return res.status(401).json({ error: "Invalid UUID or password" });
     }
+    const existingConfig = access.config;
     existingConfig.managers = {
       ...(existingConfig.managers || {}),
       [managerId]: { instanceUrl, apiKey }
     };
-    const passwordHash = await database.hashPassword(password);
-    await database.saveUserConfig(userUUID, passwordHash, existingConfig);
+    await database.saveUserConfig(userUUID, access.passwordHash, existingConfig);
     res.json({ success: true });
   } catch (error) {
     consola.error(`[Managers] Failed to save credentials: ${error.message}`);

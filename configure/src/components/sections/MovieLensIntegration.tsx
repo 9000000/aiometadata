@@ -87,7 +87,7 @@ export function MovieLensIntegration({ isOpen, onClose }: MovieLensIntegrationPr
   };
 
   const handleSyncNow = async () => {
-    if (!auth.authenticated || !auth.userUUID || !auth.password) {
+    if (!auth.authenticated || !auth.userUUID) {
       toast.error("Save your configuration first, then sync");
       return;
     }
@@ -118,7 +118,7 @@ export function MovieLensIntegration({ isOpen, onClose }: MovieLensIntegrationPr
   };
 
   const handleLoadLists = async () => {
-    if (!auth.authenticated || !auth.userUUID || !auth.password) {
+    if (!auth.authenticated || !auth.userUUID) {
       toast.error("Save your configuration first, then load your lists");
       return;
     }

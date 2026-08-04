@@ -101,7 +101,7 @@ export function ManagerSync({ manifestUrl, onSynced }: ManagerSyncProps) {
         ...prev,
         managers: { ...prev.managers, [activeManager.id]: { instanceUrl: trimmedUrl, apiKey: trimmedKey } }
       }));
-      if (remember && auth.authenticated && auth.userUUID && auth.password) {
+      if (remember && auth.authenticated && auth.userUUID) {
         const saveResponse = await fetch('/api/managers/credentials', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

@@ -1232,20 +1232,22 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
               ))}
             </div>
 
-            {memoryData.v8?.maxOldSpace > 0 && (
+            {memoryData.v8?.heapLimitMb > 0 && (
               <div className="mb-4">
                 <div className="flex justify-between text-sm mb-1">
-                  <span className="text-muted-foreground">Heap Used / Max Old Space</span>
+                  <span className="text-muted-foreground">
+                    Heap Used / Heap Limit{memoryData.v8.heapLimitConfigured ? "" : " (V8 default)"}
+                  </span>
                   <span className="font-medium">
-                    {formatBytes(memoryData.process?.heapUsed)} / {memoryData.v8.maxOldSpace} MB
+                    {formatBytes(memoryData.process?.heapUsed)} / {memoryData.v8.heapLimitMb} MB
                   </span>
                 </div>
                 <Progress
-                  value={Math.round((memoryData.process?.heapUsed / (memoryData.v8.maxOldSpace * 1024 * 1024)) * 100)}
+                  value={memoryData.v8.heapUsedPct}
                   className={`h-2 ${
-                    memoryData.process?.heapUsed / (memoryData.v8.maxOldSpace * 1024 * 1024) > 0.9
+                    memoryData.v8.heapUsedPct > 90
                       ? "[&>div]:bg-red-600"
-                      : memoryData.process?.heapUsed / (memoryData.v8.maxOldSpace * 1024 * 1024) > 0.75
+                      : memoryData.v8.heapUsedPct > 75
                         ? "[&>div]:bg-orange-600"
                         : ""
                   }`}

@@ -1,5 +1,6 @@
 const os = require("os");
 const process = require("process");
+const v8 = require("node:v8");
 const consola = require('consola');
 const logger = consola.withTag('DashboardAPI');
 
@@ -1365,6 +1366,8 @@ class DashboardAPI {
       caches.configCache = { entries: configCache.cache.size, pendingLoads: configCache.pendingLoads.size };
     } catch {}
 
+    const heapLimit = v8.getHeapStatistics().heap_size_limit;
+
     return {
       process: {
         rss: mem.rss,
@@ -1373,9 +1376,15 @@ class DashboardAPI {
         external: mem.external,
         arrayBuffers: mem.arrayBuffers,
       },
+      // Against the limit V8 will actually enforce, not the heap it has committed
+      // so far. heapTotal grows on demand, so a ratio against it reads near 100%
+      // on a perfectly healthy process and says nothing about how much room is
+      // left. The limit is read from V8 rather than NODE_OPTIONS so it is present
+      // whether or not anyone configured one.
       v8: {
-        maxOldSpace: parseInt(process.env.NODE_OPTIONS?.match(/--max-old-space-size=(\d+)/)?.[1] || '0', 10),
-        heapUsedPct: mem.heapTotal > 0 ? Math.round((mem.heapUsed / mem.heapTotal) * 100) : 0,
+        heapLimitMb: Math.round(heapLimit / 1024 / 1024),
+        heapLimitConfigured: /--max-old-space-size=\d+/.test(process.env.NODE_OPTIONS || ''),
+        heapUsedPct: heapLimit > 0 ? Math.round((mem.heapUsed / heapLimit) * 100) : 0,
       },
       caches,
       timestamp: Date.now(),

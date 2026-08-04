@@ -216,7 +216,27 @@ class Database {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )`
+      )`,
+      `CREATE TABLE IF NOT EXISTS accounts (
+        id TEXT PRIMARY KEY,
+        issuer TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        username TEXT NOT NULL,
+        email TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_identity ON accounts(issuer, subject)`,
+      `CREATE TABLE IF NOT EXISTS account_configs (
+        account_id TEXT NOT NULL,
+        user_uuid TEXT NOT NULL,
+        label TEXT NOT NULL,
+        linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_opened_at DATETIME,
+        PRIMARY KEY (account_id, user_uuid),
+        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_account_configs_uuid ON account_configs(user_uuid)`
     ];
 
     for (const query of queries) {
@@ -277,7 +297,26 @@ class Database {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )`
+      )`,
+      `CREATE TABLE IF NOT EXISTS accounts (
+        id VARCHAR(64) PRIMARY KEY,
+        issuer TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        username VARCHAR(255) NOT NULL,
+        email VARCHAR(320),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_identity ON accounts(issuer, subject)`,
+      `CREATE TABLE IF NOT EXISTS account_configs (
+        account_id VARCHAR(64) NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        user_uuid VARCHAR(255) NOT NULL,
+        label VARCHAR(64) NOT NULL,
+        linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_opened_at TIMESTAMP,
+        PRIMARY KEY (account_id, user_uuid)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_account_configs_uuid ON account_configs(user_uuid)`
     ];
 
     for (const query of queries) {
@@ -562,6 +601,7 @@ class Database {
       ? 'DELETE FROM user_configs WHERE user_uuid = ?'
       : 'DELETE FROM user_configs WHERE user_uuid = $1';
     await this.runQuery(query, [userUUID]);
+    await this.unlinkConfigFromAllAccounts(userUUID);
   }
 
   async deleteUser(userUUID: string): Promise<boolean> {
@@ -581,6 +621,7 @@ class Database {
         ? 'DELETE FROM user_aliases WHERE user_uuid = ?'
         : 'DELETE FROM user_aliases WHERE user_uuid = $1';
       await this.runAliasCleanup(deleteAliasQuery, [userUUID]);
+      await this.unlinkConfigFromAllAccounts(userUUID);
 
       logger.info(`Successfully deleted user ${userUUID} and all associated data`);
       return userDeleted;
@@ -1070,6 +1111,126 @@ class Database {
       logger.error('Error getting OAuth tokens by provider:', error);
       return [];
     }
+  }
+
+  // --- Accounts and config profiles ---
+
+  /**
+   * Keyed on (issuer, subject) rather than the username, because a provider
+   * rename would otherwise orphan every profile the account owns.
+   */
+  async upsertAccount(issuer: string, subject: string, username: string, email: string | null): Promise<any> {
+    const existing = await this.getQuery(
+      this.type === 'sqlite'
+        ? 'SELECT * FROM accounts WHERE issuer = ? AND subject = ?'
+        : 'SELECT * FROM accounts WHERE issuer = $1 AND subject = $2',
+      [issuer, subject]
+    );
+
+    if (existing) {
+      await this.runQuery(
+        this.type === 'sqlite'
+          ? 'UPDATE accounts SET username = ?, email = ?, last_seen_at = CURRENT_TIMESTAMP WHERE id = ?'
+          : 'UPDATE accounts SET username = $1, email = $2, last_seen_at = CURRENT_TIMESTAMP WHERE id = $3',
+        [username, email, existing.id]
+      );
+      return { ...existing, username, email };
+    }
+
+    const id = crypto.randomUUID();
+    await this.runQuery(
+      this.type === 'sqlite'
+        ? 'INSERT INTO accounts (id, issuer, subject, username, email) VALUES (?, ?, ?, ?, ?)'
+        : 'INSERT INTO accounts (id, issuer, subject, username, email) VALUES ($1, $2, $3, $4, $5)',
+      [id, issuer, subject, username, email]
+    );
+    return { id, issuer, subject, username, email };
+  }
+
+  async getAccount(accountId: string): Promise<any> {
+    return await this.getQuery(
+      this.type === 'sqlite'
+        ? 'SELECT * FROM accounts WHERE id = ?'
+        : 'SELECT * FROM accounts WHERE id = $1',
+      [accountId]
+    );
+  }
+
+  /** Profiles with the config still present, newest use first. */
+  async getAccountConfigs(accountId: string): Promise<any[]> {
+    return await this.allQuery(
+      this.type === 'sqlite'
+        ? `SELECT ac.user_uuid, ac.label, ac.linked_at, ac.last_opened_at
+             FROM account_configs ac
+             JOIN user_configs uc ON uc.user_uuid = ac.user_uuid
+            WHERE ac.account_id = ?
+            ORDER BY ac.last_opened_at DESC NULLS LAST, ac.linked_at DESC`
+        : `SELECT ac.user_uuid, ac.label, ac.linked_at, ac.last_opened_at
+             FROM account_configs ac
+             JOIN user_configs uc ON uc.user_uuid = ac.user_uuid
+            WHERE ac.account_id = $1
+            ORDER BY ac.last_opened_at DESC NULLS LAST, ac.linked_at DESC`,
+      [accountId]
+    );
+  }
+
+  async ownsConfig(accountId: string, userUUID: string): Promise<boolean> {
+    const row = await this.getQuery(
+      this.type === 'sqlite'
+        ? 'SELECT 1 AS ok FROM account_configs WHERE account_id = ? AND user_uuid = ?'
+        : 'SELECT 1 AS ok FROM account_configs WHERE account_id = $1 AND user_uuid = $2',
+      [accountId, userUUID]
+    );
+    return Boolean(row);
+  }
+
+  async countAccountConfigs(accountId: string): Promise<number> {
+    const row = await this.getQuery(
+      this.type === 'sqlite'
+        ? 'SELECT COUNT(*) AS n FROM account_configs WHERE account_id = ?'
+        : 'SELECT COUNT(*) AS n FROM account_configs WHERE account_id = $1',
+      [accountId]
+    );
+    return Number(row?.n || 0);
+  }
+
+  async linkAccountConfig(accountId: string, userUUID: string, label: string): Promise<void> {
+    await this.runQuery(
+      this.type === 'sqlite'
+        ? `INSERT INTO account_configs (account_id, user_uuid, label) VALUES (?, ?, ?)
+             ON CONFLICT(account_id, user_uuid) DO UPDATE SET label = excluded.label`
+        : `INSERT INTO account_configs (account_id, user_uuid, label) VALUES ($1, $2, $3)
+             ON CONFLICT (account_id, user_uuid) DO UPDATE SET label = EXCLUDED.label`,
+      [accountId, userUUID, label]
+    );
+  }
+
+  async unlinkAccountConfig(accountId: string, userUUID: string): Promise<void> {
+    await this.runQuery(
+      this.type === 'sqlite'
+        ? 'DELETE FROM account_configs WHERE account_id = ? AND user_uuid = ?'
+        : 'DELETE FROM account_configs WHERE account_id = $1 AND user_uuid = $2',
+      [accountId, userUUID]
+    );
+  }
+
+  async touchAccountConfig(accountId: string, userUUID: string): Promise<void> {
+    await this.runQuery(
+      this.type === 'sqlite'
+        ? 'UPDATE account_configs SET last_opened_at = CURRENT_TIMESTAMP WHERE account_id = ? AND user_uuid = ?'
+        : 'UPDATE account_configs SET last_opened_at = CURRENT_TIMESTAMP WHERE account_id = $1 AND user_uuid = $2',
+      [accountId, userUUID]
+    );
+  }
+
+  /** Called when a config goes away, since the link has no meaning without it. */
+  async unlinkConfigFromAllAccounts(userUUID: string): Promise<void> {
+    await this.runQuery(
+      this.type === 'sqlite'
+        ? 'DELETE FROM account_configs WHERE user_uuid = ?'
+        : 'DELETE FROM account_configs WHERE user_uuid = $1',
+      [userUUID]
+    );
   }
 }
 

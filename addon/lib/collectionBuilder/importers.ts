@@ -13,6 +13,29 @@ import {
   type SourceDraft,
   type TileShape,
 } from './types';
+import {
+  dedupeBlueprints,
+  fromEmbedded,
+  fromNativeSource,
+  nativePassthrough,
+  type CatalogBlueprint,
+} from './catalogReconstruction';
+
+export interface ImportOptions {
+  /**
+   * Turn sources Nuvio resolves itself into catalogs served by this addon. Off
+   * by default: a native source costs the instance nothing, while a converted
+   * one becomes a config entry and a manifest entry for every user who imports
+   * it. Worth it for our artwork, ratings and filters, but only on request.
+   */
+  convertNative?: boolean;
+}
+
+interface ImportContext {
+  convertNative: boolean;
+  nativeCount: number;
+  convertibleCount: number;
+}
 
 export type ImportFormat = 'nuvio' | 'fusion' | 'builder' | 'unknown';
 
@@ -20,6 +43,12 @@ export interface ImportResult {
   format: ImportFormat;
   entries: BuilderEntry[];
   notes: string[];
+  /** Catalogs the file carries enough information to recreate. */
+  blueprints: CatalogBlueprint[];
+  /** Sources Nuvio resolves itself, which conversion would take on. */
+  nativeCount: number;
+  /** How many of those conversion could actually turn into catalogs. */
+  convertibleCount: number;
 }
 
 function trimmed(value: unknown): string {
@@ -89,19 +118,45 @@ export function detectFormat(input: unknown): ImportFormat {
 
 // ---- Nuvio ----
 
-function nuvioSource(raw: unknown, folderTitle: string, notes: string[]): SourceDraft | null {
+function nuvioSource(
+  raw: unknown,
+  folderTitle: string,
+  notes: string[],
+  blueprints: CatalogBlueprint[],
+  context: ImportContext
+): SourceDraft | null {
   if (!isRecord(raw)) return null;
+
   const provider = trimmed(raw.provider || 'addon').toLowerCase();
   if (provider !== 'addon') {
-    notes.push(`"${folderTitle}": skipped a ${provider} source. Only addon catalogs can be edited here.`);
+    context.nativeCount += 1;
+    const rebuilt = fromNativeSource(raw);
+    if (rebuilt.ok === true) context.convertibleCount += 1;
+
+    if (context.convertNative && rebuilt.ok === true) {
+      blueprints.push(rebuilt.blueprint);
+      return rebuilt.source;
+    }
+
+    const passthrough = nativePassthrough(raw);
+    if (passthrough) return passthrough;
+
+    // No folder title here on purpose: identical reasons collapse into one note,
+    // and a file can hold hundreds of the same unsupported source.
+    notes.push(`Skipped ${rebuilt.ok === true ? 'a source this editor cannot hold' : rebuilt.reason}.`);
     return null;
   }
+
   const catalogId = trimmed(raw.catalogId || raw.catalog_id);
   const type = trimmed(raw.type || raw.apiType);
   if (!catalogId || !type) {
     notes.push(`"${folderTitle}": skipped a source with no catalog id or type.`);
     return null;
   }
+
+  const embedded = fromEmbedded(raw);
+  if (embedded) blueprints.push(embedded);
+
   return {
     catalogId,
     type,
@@ -110,7 +165,12 @@ function nuvioSource(raw: unknown, folderTitle: string, notes: string[]): Source
   };
 }
 
-function nuvioFolder(raw: unknown, notes: string[]): FolderDraft | null {
+function nuvioFolder(
+  raw: unknown,
+  notes: string[],
+  blueprints: CatalogBlueprint[],
+  context: ImportContext
+): FolderDraft | null {
   if (!isRecord(raw)) return null;
   const title = trimmed(raw.title);
   if (!title) {
@@ -123,8 +183,24 @@ function nuvioFolder(raw: unknown, notes: string[]): FolderDraft | null {
     : Array.isArray(raw.catalogSources) ? raw.catalogSources : [];
 
   const sources = rawSources
-    .map((source: unknown) => nuvioSource(isRecord(source) && !source.provider ? { ...source, provider: 'addon' } : source, title, notes))
+    .map((source: unknown) => nuvioSource(
+      isRecord(source) && !source.provider ? { ...source, provider: 'addon' } : source,
+      title,
+      notes,
+      blueprints,
+      context
+    ))
     .filter((source): source is SourceDraft => source !== null);
+
+  // Two native sources can rebuild to the same catalog, which would leave the
+  // folder holding one row twice.
+  const seen = new Set<string>();
+  const unique = sources.filter((source: SourceDraft) => {
+    const key = `${source.catalogId}:${source.type}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 
   return {
     ...createFolderDraft(title),
@@ -139,11 +215,16 @@ function nuvioFolder(raw: unknown, notes: string[]): FolderDraft | null {
     heroBackdropUrl: trimmed(raw.heroBackdropUrl),
     heroVideoUrl: trimmed(raw.heroVideoUrl),
     titleLogoUrl: trimmed(raw.titleLogoUrl),
-    sources,
+    sources: unique,
   };
 }
 
-export function fromNuvioCollections(input: unknown, notes: string[]): CollectionDraft[] {
+export function fromNuvioCollections(
+  input: unknown,
+  notes: string[],
+  blueprints: CatalogBlueprint[] = [],
+  context: ImportContext = { convertNative: false, nativeCount: 0, convertibleCount: 0 }
+): CollectionDraft[] {
   const list = Array.isArray(input)
     ? input
     : isRecord(input) && Array.isArray(input.collections) ? input.collections : [];
@@ -157,7 +238,7 @@ export function fromNuvioCollections(input: unknown, notes: string[]): Collectio
       continue;
     }
     const folders = (Array.isArray(raw.folders) ? raw.folders : [])
-      .map((folder: unknown) => nuvioFolder(folder, notes))
+      .map((folder: unknown) => nuvioFolder(folder, notes, blueprints, context))
       .filter((folder): folder is FolderDraft => folder !== null);
 
     entries.push({
@@ -209,7 +290,12 @@ function splitCatalogGenre(value: string): { id: string; genre: string | null } 
   return { id, genre };
 }
 
-function fusionSource(raw: unknown, label: string, notes: string[]): SourceDraft | null {
+function fusionSource(
+  raw: unknown,
+  label: string,
+  notes: string[],
+  blueprints: CatalogBlueprint[]
+): SourceDraft | null {
   if (!isRecord(raw)) return null;
   if (raw.kind && raw.kind !== 'addonCatalog') {
     notes.push(`"${label}": skipped a ${trimmed(raw.kind)} source. Only addon catalogs can be edited here.`);
@@ -221,11 +307,15 @@ function fusionSource(raw: unknown, label: string, notes: string[]): SourceDraft
     notes.push(`"${label}": skipped a source with no catalog id.`);
     return null;
   }
+
+  const embedded = fromEmbedded(payload);
+  if (embedded) blueprints.push(embedded);
+
   return { catalogId: split.catalogId, type: split.type, name: split.catalogId, genre: split.genre };
 }
 
 /** Widget files spell a tile title/imageAspect/imageURL, collection files name/layout/backgroundImageURL. */
-function fusionItem(raw: unknown, notes: string[]): FolderDraft | null {
+function fusionItem(raw: unknown, notes: string[], blueprints: CatalogBlueprint[]): FolderDraft | null {
   if (!isRecord(raw)) return null;
   const title = trimmed(raw.title || raw.name);
   if (!title) {
@@ -236,7 +326,7 @@ function fusionItem(raw: unknown, notes: string[]): FolderDraft | null {
     ? raw.dataSources
     : isRecord(raw.dataSource) ? [raw.dataSource] : [];
   const sources = rawSources
-    .map((source: unknown) => fusionSource(source, title, notes))
+    .map((source: unknown) => fusionSource(source, title, notes, blueprints))
     .filter((source): source is SourceDraft => source !== null);
 
   return {
@@ -250,10 +340,14 @@ function fusionItem(raw: unknown, notes: string[]): FolderDraft | null {
   };
 }
 
-export function fromFusionWidgets(input: unknown, notes: string[]): BuilderEntry[] {
+export function fromFusionWidgets(
+  input: unknown,
+  notes: string[],
+  blueprints: CatalogBlueprint[] = []
+): BuilderEntry[] {
   if (Array.isArray(input) && input.some(looksLikeFusionTile)) {
     const folders = input
-      .map((tile: unknown) => fusionItem(tile, notes))
+      .map((tile: unknown) => fusionItem(tile, notes, blueprints))
       .filter((folder): folder is FolderDraft => folder !== null);
     notes.push('This is a collection file, which holds tiles but no row. They were put in one collection you can rename.');
     return [{ ...createCollectionDraft('Imported collection'), folders }];
@@ -273,7 +367,7 @@ export function fromFusionWidgets(input: unknown, notes: string[]): BuilderEntry
     }
 
     if (trimmed(raw.type).startsWith('row.classic')) {
-      const source = fusionSource(raw.dataSource, title, notes);
+      const source = fusionSource(raw.dataSource, title, notes, blueprints);
       const presentation = isRecord(raw.presentation) ? raw.presentation : {};
       const badges = isRecord(presentation.badges) ? presentation.badges : {};
       const row: ClassicRowDraft = {
@@ -298,7 +392,7 @@ export function fromFusionWidgets(input: unknown, notes: string[]): BuilderEntry
     const payload = isRecord(dataSource.payload) ? dataSource.payload : {};
     const items = Array.isArray(payload.items) ? payload.items : [];
     const folders = items
-      .map((item: unknown) => fusionItem(item, notes))
+      .map((item: unknown) => fusionItem(item, notes, blueprints))
       .filter((folder): folder is FolderDraft => folder !== null);
 
     entries.push({
@@ -340,25 +434,60 @@ function fromBuilderEntries(input: unknown, notes: string[]): BuilderEntry[] {
  * or a raw config backup. Anything that cannot be represented in the editor is
  * reported rather than dropped quietly.
  */
-export function importEntries(raw: unknown): ImportResult {
-  const notes: string[] = [];
-  const format = detectFormat(raw);
-
-  if (format === 'nuvio') return { format, entries: fromNuvioCollections(raw, notes), notes };
-  if (format === 'fusion') return { format, entries: fromFusionWidgets(raw, notes), notes };
-  if (format === 'builder') return { format, entries: fromBuilderEntries(raw, notes), notes };
-
-  return { format: 'unknown', entries: [], notes: ['Could not tell what this file is.'] };
+function collapseNotes(notes: string[]): string[] {
+  const counts = new Map<string, number>();
+  for (const note of notes) counts.set(note, (counts.get(note) || 0) + 1);
+  return [...counts.entries()].map(([note, count]) => (count > 1 ? `${note} (×${count})` : note));
 }
 
-export function parseImport(text: string): ImportResult {
+export function importEntries(raw: unknown, options: ImportOptions = {}): ImportResult {
+  const notes: string[] = [];
+  const blueprints: CatalogBlueprint[] = [];
+  const context: ImportContext = {
+    convertNative: options.convertNative === true,
+    nativeCount: 0,
+    convertibleCount: 0,
+  };
+  const format = detectFormat(raw);
+
+  const done = (entries: BuilderEntry[]): ImportResult => ({
+    format,
+    entries,
+    notes: collapseNotes(notes),
+    blueprints: dedupeBlueprints(blueprints),
+    nativeCount: context.nativeCount,
+    convertibleCount: context.convertibleCount,
+  });
+
+  if (format === 'nuvio') return done(fromNuvioCollections(raw, notes, blueprints, context));
+  if (format === 'fusion') return done(fromFusionWidgets(raw, notes, blueprints));
+  if (format === 'builder') return done(fromBuilderEntries(raw, notes));
+
+  return {
+    format: 'unknown',
+    entries: [],
+    notes: ['Could not tell what this file is.'],
+    blueprints: [],
+    nativeCount: 0,
+    convertibleCount: 0,
+  };
+}
+
+export function parseImport(text: string, options: ImportOptions = {}): ImportResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    return { format: 'unknown', entries: [], notes: ['That is not valid JSON.'] };
+    return {
+      format: 'unknown',
+      entries: [],
+      notes: ['That is not valid JSON.'],
+      blueprints: [],
+      nativeCount: 0,
+      convertibleCount: 0,
+    };
   }
-  return importEntries(parsed);
+  return importEntries(parsed, options);
 }
 
 /** One missing catalog, plus every place it is referenced. */

@@ -13,6 +13,9 @@ import {
   type SourceDraft,
   type TileShape,
 } from './types';
+import { createBlueprintWriter, isNativeSource, type BlueprintLookup } from './catalogReconstruction';
+
+type AttachBlueprint = ReturnType<typeof createBlueprintWriter>;
 
 function trimmed(value: unknown): string {
   return String(value ?? '').trim();
@@ -101,7 +104,8 @@ function resolveAddonId(identity: AddonIdentity, usePlaceholder: boolean): strin
 
 function toDataSource(
   source: SourceDraft,
-  addonId: string
+  addonId: string,
+  attach: AttachBlueprint
 ): FusionAddonCatalogSource | null {
   const plainId = trimmed(source.catalogId);
   const manifestType = trimmed(source.type);
@@ -111,11 +115,11 @@ function toDataSource(
   const catalogType = resolveFusionCatalogType(composite, manifestType);
   return {
     kind: 'addonCatalog',
-    payload: {
+    payload: attach({
       addonId,
       catalogId: normalizeCatalogId(composite, catalogType),
       type: catalogType,
-    },
+    }, `${plainId}:${source.type}`),
   };
 }
 
@@ -123,7 +127,8 @@ function toCollectionItem(
   folder: FolderDraft,
   addonId: string,
   collectionTitle: string,
-  notes: ExportNote[]
+  notes: ExportNote[],
+  attach: AttachBlueprint
 ): FusionCollectionItem | null {
   const id = trimmed(folder.id);
   const name = trimmed(folder.title);
@@ -137,8 +142,13 @@ function toCollectionItem(
   }
 
   const dataSources: FusionAddonCatalogSource[] = [];
+  let nativeSkipped = 0;
   for (const source of folder.sources) {
-    const mapped = toDataSource(source, addonId);
+    if (isNativeSource(source)) {
+      nativeSkipped += 1;
+      continue;
+    }
+    const mapped = toDataSource(source, addonId, attach);
     if (!mapped) {
       notes.push({
         entryId: folder.id,
@@ -155,6 +165,15 @@ function toCollectionItem(
       });
     }
     dataSources.push(mapped);
+  }
+
+  // One note per folder rather than per source: a collection can hold hundreds.
+  if (nativeSkipped > 0) {
+    notes.push({
+      entryId: folder.id,
+      entryTitle: name,
+      message: `"${name}": ${nativeSkipped} source${nativeSkipped === 1 ? ' is' : 's are'} resolved by Nuvio itself. Fusion has no equivalent, so ${nativeSkipped === 1 ? 'it is' : 'they are'} only in the Nuvio export.`,
+    });
   }
 
   if (dataSources.length === 0) {
@@ -189,11 +208,12 @@ function prefixedId(id: string, prefix: string): string {
 export function toFusionWidgets(
   entries: BuilderEntry[],
   identity: AddonIdentity,
-  options: { usePlaceholder?: boolean } = {}
+  options: { usePlaceholder?: boolean; blueprints?: BlueprintLookup } = {}
 ): ExportResult<FusionWidgetsConfig> {
   const notes: ExportNote[] = [];
   const widgets: FusionWidget[] = [];
   const addonId = resolveAddonId(identity, options.usePlaceholder === true);
+  const attach = createBlueprintWriter(options.blueprints || {});
 
   for (const entry of entries) {
     const id = trimmed(entry.id);
@@ -209,7 +229,7 @@ export function toFusionWidgets(
 
     if (entry.kind === 'collection') {
       const items = entry.folders
-        .map(folder => toCollectionItem(folder, addonId, title, notes))
+        .map(folder => toCollectionItem(folder, addonId, title, notes, attach))
         .filter((item): item is FusionCollectionItem => item !== null);
 
       widgets.push({
@@ -222,7 +242,7 @@ export function toFusionWidgets(
       continue;
     }
 
-    const dataSource = entry.source ? toDataSource(entry.source, addonId) : null;
+    const dataSource = entry.source ? toDataSource(entry.source, addonId, attach) : null;
     if (!dataSource) {
       notes.push({
         entryId: entry.id,

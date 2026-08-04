@@ -1,5 +1,5 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { motion } from 'framer-motion';
 import { MDBListIntegration } from './MDBListIntegration';
 import { TraktIntegration } from './TraktIntegration';
 import { SimklIntegration } from './SimklIntegration';
@@ -62,6 +62,8 @@ interface CustomizeTemplate {
   name: string;
   formState: Record<string, any>;
 }
+
+const LARGE_LIST_THRESHOLD = 150;
 
 const DEFAULT_CATALOG_TEMPLATES: Record<string, (catalog: any) => CustomizeTemplate> = {
   'tmdb.top': (c) => ({
@@ -2740,7 +2742,7 @@ const MergedCatalogCard = ({
   );
 };
 
-const SortableCatalogItem = ({ catalog, onEditDiscover, onCustomize, onDuplicateDiscover }: {
+const SortableCatalogItem = React.memo(({ catalog, onEditDiscover, onCustomize, onDuplicateDiscover }: {
   catalog: CatalogConfig & { source?: string };
   onEditDiscover?: (catalog: CatalogConfig) => void;
   onCustomize?: (catalog: CatalogConfig) => void;
@@ -3689,7 +3691,8 @@ const SortableCatalogItem = ({ catalog, onEditDiscover, onCustomize, onDuplicate
       />
     </Card>
   );
-};
+});
+SortableCatalogItem.displayName = 'SortableCatalogItem';
 
 const StreamingProvidersSettings = ({ open, onClose, selectedProviders, setSelectedProviders, onSave }) => {
   const [selectedCountry, setSelectedCountry] = useState('Any');
@@ -3858,15 +3861,21 @@ function CatalogsSettingsContent({
     }
   }, [config.catalogSetupComplete]);
 
-  const handleCustomize = (catalog: CatalogConfig) => {
+  // Stable so a memoized row is not re-rendered by a new function identity.
+  const handleEditDiscover = useCallback((catalog: CatalogConfig) => {
+    setEditingDiscoverCatalog(catalog);
+    setIsTmdbDiscoverBuilderOpen(true);
+  }, []);
+
+  const handleCustomize = useCallback((catalog: CatalogConfig) => {
     const getTemplate = DEFAULT_CATALOG_TEMPLATES[catalog.id];
     if (getTemplate) {
       setCustomizeTemplate(getTemplate(catalog));
       setIsTmdbDiscoverBuilderOpen(true);
     }
-  };
+  }, []);
 
-  const handleDuplicateDiscover = (catalog: CatalogConfig) => {
+  const handleDuplicateDiscover = useCallback((catalog: CatalogConfig) => {
     const sanitizedName = (catalog.name + ' (Copy)')
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '_')
@@ -3909,8 +3918,8 @@ function CatalogsSettingsContent({
     toast.success('Catalog duplicated', {
       description: `${newCatalog.name} added to your catalog list`
     });
-  };
-  
+  }, [setConfig]);
+
   const handleLoadDefaults = () => {
     setConfig(prev => ({
       ...prev,
@@ -4051,7 +4060,16 @@ function CatalogsSettingsContent({
     });
   };
 
-  const catalogItemIds = filteredCatalogs.map(c => `${c.id}-${c.type}`);
+  const catalogItemIds = useMemo(
+    () => filteredCatalogs.map(c => `${c.id}-${c.type}`),
+    [filteredCatalogs]
+  );
+
+  /**
+   * Past this many rows the per-row work the list does on every change costs
+   * more than the polish it buys. An import can bring in thousands at once.
+   */
+  const isLargeList = filteredCatalogs.length > LARGE_LIST_THRESHOLD;
 
   // Helper function to get actual selected streaming services from catalogs
   const getActualSelectedStreamingServices = (): string[] => {
@@ -5228,20 +5246,13 @@ function CatalogsSettingsContent({
         )}
         
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          <SortableContext items={catalogItemIds} strategy={verticalListSortingStrategy}>
+          <SortableContext
+            items={catalogItemIds}
+            strategy={isLargeList ? undefined : verticalListSortingStrategy}
+          >
             <div className="space-y-2">
-            <AnimatePresence mode="popLayout" initial={false}>
-            {filteredCatalogs.map((catalog) => (
-              <motion.div
-                key={`${catalog.id}-${catalog.type}`}
-                layout
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{
-                  duration: 0.2,
-                }}
-              >
-              {catalog.source === 'merged' ? (
+            {filteredCatalogs.map((catalog) => {
+              const row = catalog.source === 'merged' ? (
                 <MergedCatalogCard
                   catalog={catalog}
                   allCatalogs={config.catalogs}
@@ -5250,17 +5261,31 @@ function CatalogsSettingsContent({
               ) : (
                 <SortableCatalogItem
                   catalog={catalog}
-                  onEditDiscover={(cat) => {
-                    setEditingDiscoverCatalog(cat);
-                    setIsTmdbDiscoverBuilderOpen(true);
-                  }}
+                  onEditDiscover={handleEditDiscover}
                   onCustomize={DEFAULT_CATALOG_TEMPLATES[catalog.id] ? handleCustomize : undefined}
                   onDuplicateDiscover={handleDuplicateDiscover}
                 />
-              )}
-              </motion.div>
-            ))}
-            </AnimatePresence>
+              );
+              const key = `${catalog.id}-${catalog.type}`;
+
+              // Layout animation measures every row on each change, which a list
+              // this long cannot absorb.
+              return isLargeList ? (
+                <div key={key}>{row}</div>
+              ) : (
+                <motion.div
+                  key={key}
+                  layout
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{
+                    duration: 0.2,
+                  }}
+                >
+                  {row}
+                </motion.div>
+              );
+            })}
             </div>
           </SortableContext>
         </DndContext>

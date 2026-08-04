@@ -11,6 +11,7 @@ const ALIAS_PATH_PREFIXES = new Set([
   'api/movielens/lists',
   'api/cache/invalidate-user',
   'api/admin/users',
+  'api/profiles',
 ]);
 
 const MAX_PREFIX_SEGMENTS = 3;

@@ -1,9 +1,20 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 
+export interface AuthSession {
+  accountId: string;
+  username: string;
+  email: string | null;
+  permissions: string[];
+}
+
 interface AdminContextType {
   isAdmin: boolean;
   isGuest: boolean;
   adminKey: string | null;
+  /** Set when signed in through the identity provider. */
+  session: AuthSession | null;
+  ssoEnabled: boolean;
+  signOut: () => Promise<void>;
   login: (key: string) => Promise<boolean>;
   loginAsGuest: () => void;
   logout: () => void;
@@ -28,6 +39,8 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [adminKeyConfigured, setAdminKeyConfigured] = useState(true);  // Assume configured until proven otherwise
   const [guestModeEnabled, setGuestModeEnabled] = useState(false);     // Guest mode disabled by default
+  const [session, setSession] = useState<AuthSession | null>(null);
+  const [ssoEnabled, setSsoEnabled] = useState(false);
 
   // Fetch dashboard config to determine guest mode availability
   const fetchDashboardConfig = async (): Promise<{ guestModeEnabled: boolean; adminKeyConfigured: boolean }> => {
@@ -52,6 +65,23 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error('Error fetching dashboard config:', error);
       return { guestModeEnabled: false, adminKeyConfigured: true };
+    }
+  };
+
+  const fetchAuthState = async (): Promise<{ ssoEnabled: boolean; session: AuthSession | null }> => {
+    try {
+      const statusResponse = await fetch('/api/auth/status');
+      const status = statusResponse.ok ? await statusResponse.json() : {};
+      if (!status.signedIn) {
+        return { ssoEnabled: Boolean(status.oidcEnabled), session: null };
+      }
+      const sessionResponse = await fetch('/api/auth/session');
+      if (!sessionResponse.ok) {
+        return { ssoEnabled: Boolean(status.oidcEnabled), session: null };
+      }
+      return { ssoEnabled: Boolean(status.oidcEnabled), session: await sessionResponse.json() };
+    } catch {
+      return { ssoEnabled: false, session: null };
     }
   };
 
@@ -96,6 +126,18 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         const config = await fetchDashboardConfig();
         setGuestModeEnabled(config.guestModeEnabled);
         setAdminKeyConfigured(config.adminKeyConfigured);
+
+        // A provider session outranks a pasted key, and carries its own
+        // permissions, so it is checked before anything is restored.
+        const auth = await fetchAuthState();
+        setSsoEnabled(auth.ssoEnabled);
+        if (auth.session) {
+          setSession(auth.session);
+          setIsAdmin(auth.session.permissions.includes('admin'));
+          setIsGuest(false);
+          setIsLoading(false);
+          return;
+        }
 
         // Check for existing guest session
         const guestSession = sessionStorage.getItem(GUEST_SESSION_STORAGE);
@@ -248,10 +290,24 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     sessionStorage.removeItem(ADMIN_SESSION_STORAGE);
   };
 
+  const signOut = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // The cookie is cleared server side; nothing useful to do here.
+    }
+    setSession(null);
+    setIsAdmin(false);
+    setIsGuest(false);
+  };
+
   const value: AdminContextType = {
     isAdmin,
     isGuest,
     adminKey,
+    session,
+    ssoEnabled,
+    signOut,
     login,
     loginAsGuest,
     logout,

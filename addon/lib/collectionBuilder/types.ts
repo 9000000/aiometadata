@@ -9,6 +9,13 @@ export interface SourceDraft {
   type: string;
   name: string;
   genre?: string | null;
+  /**
+   * A source Nuvio resolves against TMDB or Trakt itself (CollectionModels.kt
+   * checks `provider` before looking for an addon). It never reaches this addon,
+   * so it costs nothing to serve and cannot be edited here. Kept verbatim so
+   * importing a collection does not discard it.
+   */
+  native?: Record<string, any>;
 }
 
 /** A tile inside a collection: a Nuvio folder, or a Fusion collection item. */
@@ -82,6 +89,8 @@ export interface NuvioAddonSource {
   catalogName: string | null;
   title: string;
   genre: string | null;
+  /** See writeBlueprint in catalogReconstruction. Nuvio does not read this. */
+  aiometadata?: { version: number; catalog: Record<string, any> };
 }
 
 export interface NuvioCatalogSource {

@@ -20,6 +20,13 @@ export function Header() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameInput, setNameInput] = useState('');
   const [isLoginOpen, setIsLoginOpen] = useState(false);
+  const [profiles, setProfiles] = useState<Array<{ userUUID: string; label: string }>>([]);
+  const [ssoEnabled, setSsoEnabled] = useState(false);
+  const [signedIn, setSignedIn] = useState(false);
+  const [autoLoadTried, setAutoLoadTried] = useState(false);
+  const [saveToAccount, setSaveToAccount] = useState(true);
+  /** The URL may name an alias, so ownership is settled by the auto-load, not a string match. */
+  const [ownsUrlConfig, setOwnsUrlConfig] = useState(false);
   const [uuidInput, setUuidInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -113,6 +120,117 @@ export function Header() {
     }
   }, [uuidInput]);
 
+  // Only meaningful while the dialog is open, and silent when the instance has
+  // no identity provider.
+  useEffect(() => {
+    if (!isLoginOpen) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const status = await fetch('/api/auth/status').then(r => (r.ok ? r.json() : null));
+        if (cancelled || !status) return;
+        setSsoEnabled(Boolean(status.oidcEnabled));
+        setSignedIn(Boolean(status.signedIn));
+        if (!status.signedIn) {
+          setProfiles([]);
+          return;
+        }
+        const saved = await fetch('/api/profiles').then(r => (r.ok ? r.json() : null));
+        if (!cancelled && saved) setProfiles(saved.profiles || []);
+      } catch {
+        if (!cancelled) setProfiles([]);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [isLoginOpen]);
+
+  const applyLoadedConfig = (result: any, password: string, fallbackUUID: string) => {
+    setConfig(prev => ({
+      ...result.config,
+      catalogSetupComplete: true,
+      apiKeys: {
+        ...result.config.apiKeys,
+        customDescriptionBlurb: prev.apiKeys.customDescriptionBlurb,
+      },
+    }));
+    setAuth({
+      authenticated: true,
+      userUUID: result.userUUID || fallbackUUID,
+      password,
+      installUrl: result.installUrl ?? null,
+    });
+    try { sessionStorage.removeItem('fromStremioSettings'); } catch {}
+    toast.success('Configuration loaded');
+    setIsLoginOpen(false);
+    setUuidInput('');
+    setPasswordInput('');
+    setAddonPasswordInput('');
+  };
+
+  /**
+   * Arriving at a configure URL for a configuration saved to your account opens
+   * it straight away, which is the point of saving it. Anything not saved falls
+   * through to the usual prompt.
+   */
+  useEffect(() => {
+    if (!uuidFromUrl || auth.authenticated || autoLoadTried) return;
+    setAutoLoadTried(true);
+
+    (async () => {
+      try {
+        const status = await fetch('/api/auth/status').then(r => (r.ok ? r.json() : null));
+        if (!status?.signedIn) return;
+        // Just ask. The identifier in the URL may be an alias, which only the
+        // server can match against what the account owns; a refusal falls
+        // through to the usual prompt.
+        const opened = await handleLoadProfile(uuidFromUrl, { quiet: true });
+        setOwnsUrlConfig(opened);
+      } catch {
+        // Falls through to the normal prompt.
+      }
+    })();
+  }, [uuidFromUrl, auth.authenticated, autoLoadTried]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** No password: the session already proved this configuration is theirs. */
+  const handleLoadProfile = async (userUUID: string, options: { quiet?: boolean } = {}): Promise<boolean> => {
+    // The address bar names a configuration, and loading a different one in
+    // place would leave the two disagreeing about what is on screen and what a
+    // save would write to. Go to its own URL instead; it opens on arrival.
+    if (uuidFromUrl && uuidFromUrl !== userUUID) {
+      window.location.href = `/stremio/${encodeURIComponent(userUUID)}/configure`;
+      return false;
+    }
+
+    setIsLoading(true);
+    setLoginError('');
+    try {
+      const response = await fetch(`/api/config/load/${encodeURIComponent(userUUID)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => null);
+        throw new Error(err?.error || 'Failed to load configuration');
+      }
+      const result = await response.json();
+      if (!result?.success || !result?.config) throw new Error('Invalid response from server');
+      applyLoadedConfig(result, '', userUUID);
+      return true;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to load configuration';
+      if (!options.quiet) {
+        setLoginError(msg);
+        toast.error(msg);
+      }
+      return false;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleLogin = async () => {
     setIsLoading(true);
     setLoginError('');
@@ -139,28 +257,55 @@ export function Header() {
       if (!result?.success || !result?.config) {
         throw new Error('Invalid response from server');
       }
-      setConfig(prev => ({
-        ...result.config,
-        catalogSetupComplete: true,
-        apiKeys: {
-          ...result.config.apiKeys,
-          customDescriptionBlurb: prev.apiKeys.customDescriptionBlurb,
-        },
-      }));
+      // The password is in hand and verified, so this is the moment to link it.
+      // Making the user find another tab afterwards loses most of the benefit.
+      if (signedIn && saveToAccount) {
+        try {
+          const linked = await fetch('/api/profiles', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userUUID: result.userUUID || uuidInput,
+              password: passwordInput,
+              label: result.config?.addonName?.trim() || (result.userUUID || uuidInput).slice(0, 8),
+            }),
+          });
+          if (linked.ok) {
+            toast.success('Saved to your account', {
+              description: 'Signing in is enough to open it from now on.',
+            });
+          }
+        } catch {
+          // The configuration still loaded; linking can be retried later.
+        }
+      }
+
+      // The password is verified and in hand, so this is where linking belongs.
+      // Sending the user to another tab afterwards loses most of the benefit.
+      if (signedIn && saveToAccount) {
+        try {
+          const linked = await fetch('/api/profiles', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userUUID: result.userUUID || uuidInput,
+              password: passwordInput,
+              label: result.config?.addonName?.trim() || (result.userUUID || uuidInput).slice(0, 8),
+            }),
+          });
+          if (linked.ok) {
+            toast.success('Saved to your account', {
+              description: 'Signing in is enough to open it from now on.',
+            });
+          }
+        } catch {
+          // The configuration still loaded; it can be linked later.
+        }
+      }
+
       // Prefer the canonical UUID the server resolved, so an alias typed at
       // login does not propagate into later update calls and OAuth redirects.
-      setAuth({
-        authenticated: true,
-        userUUID: result.userUUID || uuidInput,
-        password: passwordInput,
-        installUrl: result.installUrl ?? null,
-      });
-      try { sessionStorage.removeItem('fromStremioSettings'); } catch {}
-      toast.success('Configuration loaded');
-      setIsLoginOpen(false);
-      setUuidInput('');
-      setPasswordInput('');
-      setAddonPasswordInput('');
+      applyLoadedConfig(result, passwordInput, uuidInput);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to load configuration';
       setLoginError(msg);
@@ -344,6 +489,74 @@ export function Header() {
             <DialogTitle>Load Saved Configuration</DialogTitle>
             <DialogDescription>Enter your UUID and password{requireAddonPassword ? ' and addon password' : ''} to load your saved configuration.</DialogDescription>
           </DialogHeader>
+
+          {/* The URL names one configuration; saved ones for anything else are a
+              detour, so they are labelled as such rather than sitting on top. */}
+          {signedIn && uuidFromUrl && !ownsUrlConfig && (
+            <p className="rounded-md border bg-muted/30 p-2 text-[11px] text-muted-foreground">
+              This configuration is not saved to your account yet. Enter its password once with the box below
+              ticked and it will open on its own from now on.
+            </p>
+          )}
+
+          {profiles.length > 0 && (
+            <div className="space-y-2 border-b pb-4">
+              <Label className="text-xs text-muted-foreground">
+                {uuidFromUrl && !ownsUrlConfig
+                  ? 'Or open a different one you saved'
+                  : 'Saved to your account'}
+              </Label>
+              <div className="space-y-1">
+                {profiles.map(profile => (
+                  <Button
+                    key={profile.userUUID}
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-start"
+                    disabled={isLoading}
+                    onClick={() => handleLoadProfile(profile.userUUID)}
+                  >
+                    <span className="truncate">{profile.label}</span>
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {signedIn && (
+            <label className="flex items-start gap-2 rounded-md border bg-muted/30 p-2 text-[11px] text-muted-foreground">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={saveToAccount}
+                onChange={event => setSaveToAccount(event.target.checked)}
+              />
+              <span>
+                Save this to your account. You are signed in, so after this you can open it without its UUID
+                or password.
+              </span>
+            </label>
+          )}
+
+          {ssoEnabled && !signedIn && (
+            <div className="border-b pb-4">
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  const next = encodeURIComponent(window.location.pathname + window.location.search);
+                  window.location.href = `/api/auth/oidc/start?next=${next}`;
+                }}
+              >
+                Sign in with SSO
+              </Button>
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                Sign in to pick a saved configuration instead of typing its UUID and password.
+              </p>
+            </div>
+          )}
+
           <form
             onSubmit={(e) => {
               e.preventDefault(); // Prevent page reload

@@ -15,6 +15,7 @@ const { getSearch } = require("./lib/getSearch");
 const { getManifest, DEFAULT_LANGUAGE } = require("./lib/getManifest");
 const { getMeta } = require("./lib/getMeta");
 const { cacheWrapMetaSmart, cacheWrapCatalog, cacheWrapSearch, cacheWrapJikanApi, cacheWrapStaticCatalog, cacheWrapGlobal, getCacheHealth, clearCacheHealth, logCacheHealth, stableStringify, deleteKeysByPattern, scanKeys } = require("./lib/getCache");
+const { hasPermission } = require("./lib/authSession");
 const redis = require("./lib/redisClient");
 const { warmEssentialContent, warmPopularContent, scheduleEssentialWarming } = require("./lib/cacheWarmer");
 const requestTracker = require("./lib/requestTracker");
@@ -533,6 +534,8 @@ const respond = function (req, res, data, opts) {
       hasBuiltInTvdb: !!getSetting('BUILT_IN_TVDB_API_KEY'),
       hasBuiltInTmdb: !!getSetting('BUILT_IN_TMDB_API_KEY'),
       catalogTTL: parseInt(getSetting('CATALOG_TTL') || String(24 * 60 * 60), 10),
+      maxCatalogs: parseInt(getSetting('MAX_CATALOGS') || '', 10) || null,
+      collectionImportCatalogCap: parseInt(getSetting('COLLECTION_IMPORT_CATALOG_CAP') || '', 10) || 300,
       simklTrendingPageSizeOptions: resolvedOptions,
       traktSearchEnabled: getSetting('DISABLE_TRAKT_SEARCH') !== 'true',
       simklSearchEnabled: getSetting('DISABLE_SIMKL_SEARCH') !== 'true',
@@ -553,6 +556,9 @@ const respond = function (req, res, data, opts) {
       version: ADDON_VERSION,
     });
   });
+
+// --- Authentication and config profiles ---
+require('./lib/authRoutes').register(addon, { rateLimit: configLoadRateLimitMiddleware });
 
 // --- Configuration Database API Routes ---
 addon.post("/api/config/save", configApi.saveConfig.bind(configApi));
@@ -3406,19 +3412,11 @@ addon.get("/api/publicmetadb/picks/:pickId/items", async (req, res) => {
 });
 
 // --- Admin Configuration Routes ---
-addon.get("/api/config/stats", (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.get("/api/config/stats", requireDashboardAdmin, (req, res) => {
   configApi.getStats(req, res);
 });
 
-addon.get("/api/admin/cold-store/stats", (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.get("/api/admin/cold-store/stats", requireDashboardAdmin, (req, res) => {
   try {
     const metaColdStore = require('./lib/metaColdStore');
     res.json(metaColdStore.stats());
@@ -3427,11 +3425,7 @@ addon.get("/api/admin/cold-store/stats", (req, res) => {
   }
 });
 
-addon.post("/api/admin/cold-store/purge", (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.post("/api/admin/cold-store/purge", requireDashboardAdmin, (req, res) => {
   try {
     const metaColdStore = require('./lib/metaColdStore');
     const metaId = req.query.metaId;
@@ -3443,12 +3437,7 @@ addon.post("/api/admin/cold-store/purge", (req, res) => {
 });
 
 // --- Cache Warming Endpoints (Admin only) ---
-addon.post("/api/cache/warm", async (req, res) => {
-  // Simple admin check - you might want to implement proper authentication
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.post("/api/cache/warm", requireDashboardAdmin, async (req, res) => {
   
   try {
     consola.info('[API] Manual API content warming requested');
@@ -3466,11 +3455,7 @@ addon.post("/api/cache/warm", async (req, res) => {
   }
 });
 
-addon.get("/api/cache/status", (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.get("/api/cache/status", requireDashboardAdmin, (req, res) => {
   
   const { isInitialWarmingComplete } = require('./lib/cacheWarmer');
   
@@ -3484,11 +3469,7 @@ addon.get("/api/cache/status", (req, res) => {
 });
 
 // Cache health monitoring endpoints
-addon.get("/api/cache/health", (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.get("/api/cache/health", requireDashboardAdmin, (req, res) => {
   
   const health = getCacheHealth();
   res.json({
@@ -3498,11 +3479,7 @@ addon.get("/api/cache/health", (req, res) => {
   });
 });
 
-addon.post("/api/cache/health/clear", (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.post("/api/cache/health/clear", requireDashboardAdmin, (req, res) => {
   
   clearCacheHealth();
   res.json({
@@ -3511,11 +3488,7 @@ addon.post("/api/cache/health/clear", (req, res) => {
   });
 });
 
-addon.post("/api/cache/health/log", (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.post("/api/cache/health/log", requireDashboardAdmin, (req, res) => {
   
   logCacheHealth();
   res.json({
@@ -3525,11 +3498,7 @@ addon.post("/api/cache/health/log", (req, res) => {
 });
 
 // Clear specific cache key
-addon.delete("/api/cache/clear/:key", async (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.delete("/api/cache/clear/:key", requireDashboardAdmin, async (req, res) => {
   
   const { key } = req.params;
   const { pattern } = req.query;
@@ -5448,11 +5417,7 @@ addon.get('/api/config/addon-info', (req, res) => {
 });
 
 // --- Admin: Prune all ID mappings ---
-addon.post('/api/admin/prune-id-mappings', async (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.post('/api/admin/prune-id-mappings', requireDashboardAdmin, async (req, res) => {
   try {
     await database.pruneAllIdMappings();
     res.json({ success: true, message: 'All id_mappings pruned.' });
@@ -5464,11 +5429,7 @@ addon.post('/api/admin/prune-id-mappings', async (req, res) => {
 // --- Admin: User Management Endpoints ---
 
 // Get all users with basic info
-addon.get('/api/admin/users', async (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-       return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.get('/api/admin/users', requireDashboardAdmin, async (req, res) => {
   
   try {
     const users = await database.getAllUsersWithStats();
@@ -5481,11 +5442,7 @@ addon.get('/api/admin/users', async (req, res) => {
 
 // Get detailed user information
 // Export all user data
-addon.get('/api/admin/users/export', async (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.get('/api/admin/users/export', requireDashboardAdmin, async (req, res) => {
   
   try {
     const userData = await database.exportAllUserData();
@@ -5498,11 +5455,7 @@ addon.get('/api/admin/users/export', async (req, res) => {
   }
 });
 
-addon.get('/api/admin/users/:userUUID', async (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.get('/api/admin/users/:userUUID', requireDashboardAdmin, async (req, res) => {
   
   try {
     const { userUUID } = req.params;
@@ -5520,11 +5473,7 @@ addon.get('/api/admin/users/:userUUID', async (req, res) => {
 });
 
 // Reset user password
-addon.post('/api/admin/users/:userUUID/reset-password', async (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.post('/api/admin/users/:userUUID/reset-password', requireDashboardAdmin, async (req, res) => {
   
   try {
     const { userUUID } = req.params;
@@ -5588,11 +5537,7 @@ addon.delete('/api/admin/users/:userUUID/alias', requireDashboardAdmin, async (r
 });
 
 // Delete user
-addon.delete('/api/admin/users/:userUUID', async (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.delete('/api/admin/users/:userUUID', requireDashboardAdmin, async (req, res) => {
   
   try {
     const { userUUID } = req.params;
@@ -5611,11 +5556,7 @@ addon.delete('/api/admin/users/:userUUID', async (req, res) => {
 
 
 // Bulk delete inactive users
-addon.post('/api/admin/users/bulk-delete-inactive', async (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.post('/api/admin/users/bulk-delete-inactive', requireDashboardAdmin, async (req, res) => {
   
   try {
     const { days = 30 } = req.body;
@@ -5818,11 +5759,7 @@ addon.post('/api/cache/invalidate-user/:userUUID', async (req, res) => {
 
 // Get cache invalidation status for a user
 // Test if essential cache keys exist
-addon.get('/api/cache/test-essential', async (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.get('/api/cache/test-essential', requireDashboardAdmin, async (req, res) => {
   
   try {
     // Jikan and genre lists are raw upstream payloads cached with `upstream`, so
@@ -5923,8 +5860,14 @@ const noCache = (req, res, next) => {
 
 // Middleware to require admin authentication for dashboard routes
 function requireDashboardAdmin(req, res, next) {
+  // A signed-in administrator needs no key. ADMIN_KEY stays the way in when the
+  // identity provider is unreachable or SSO was never set up.
+  if (hasPermission(req, 'admin')) {
+    return next();
+  }
+
   const adminKey = process.env.ADMIN_KEY;
-  
+
   // If ADMIN_KEY is not configured, deny access with specific message
   if (!adminKey) {
     return res.status(401).json({ 
@@ -7123,19 +7066,11 @@ addon.post("/api/dashboard/maintenance/execute", requireDashboardAdmin, async (r
 // --- Admin: Settings Management ---
 const settingsService = require('./lib/settingsService');
 
-addon.get('/api/dashboard/settings', (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.get('/api/dashboard/settings', requireDashboardAdmin, (req, res) => {
   res.json({ settings: settingsService.getAllSettings(), canRestart: canUiRestart() });
 });
 
-addon.put('/api/dashboard/settings/:key', async (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.put('/api/dashboard/settings/:key', requireDashboardAdmin, async (req, res) => {
   try {
     const { value } = req.body || {};
     if (value === undefined) return res.status(400).json({ error: 'Missing value' });
@@ -7146,11 +7081,7 @@ addon.put('/api/dashboard/settings/:key', async (req, res) => {
   }
 });
 
-addon.post('/api/dashboard/settings/reset/:key', async (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.post('/api/dashboard/settings/reset/:key', requireDashboardAdmin, async (req, res) => {
   try {
     await settingsService.resetSetting(req.params.key);
     res.json({ success: true });
@@ -7176,11 +7107,7 @@ addon.get('/api/dashboard/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime(), bootId: SERVER_BOOT_ID });
 });
 
-addon.post('/api/dashboard/restart', (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (adminKey && req.headers['x-admin-key'] !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+addon.post('/api/dashboard/restart', requireDashboardAdmin, (req, res) => {
   if (!canUiRestart()) {
     return res.status(400).json({ error: 'UI restart is not available in this environment' });
   }

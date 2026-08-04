@@ -24,6 +24,10 @@ interface ConfigContextType {
   traktSearchEnabled: boolean;
   simklSearchEnabled: boolean;
   catalogTTL: number;
+  /** Instance ceiling on enabled catalogs, null when unset. */
+  maxCatalogs: number | null;
+  /** Fallback ceiling for a collection import when maxCatalogs is unset. */
+  collectionImportCatalogCap: number;
   isLoading: boolean;
   sessionId: string;
   setSessionId: (sessionId: string) => void;
@@ -383,6 +387,8 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
   const [traktSearchEnabled, setTraktSearchEnabled] = useState(true);
   const [simklSearchEnabled, setSimklSearchEnabled] = useState(true);
   const [catalogTTL, setCatalogTTL] = useState(86400); // Default to 24 hours
+  const [maxCatalogs, setMaxCatalogs] = useState<number | null>(null);
+  const [collectionImportCatalogCap, setCollectionImportCatalogCap] = useState(300);
   const manifestFingerprint = useRef<string | null>(null);
 
   // --- THIS IS THE CORRECTED EFFECT ---
@@ -399,6 +405,8 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
         setTraktSearchEnabled(envApiKeys.traktSearchEnabled ?? true);
         setSimklSearchEnabled(envApiKeys.simklSearchEnabled ?? true);
         setCatalogTTL(envApiKeys.catalogTTL || 86400);
+        setMaxCatalogs(envApiKeys.maxCatalogs ?? null);
+        setCollectionImportCatalogCap(envApiKeys.collectionImportCatalogCap || 300);
 
         // Layer in the server keys with the correct priority.
         // We use `preloadedConfig` because it holds the user's saved data.
@@ -470,7 +478,7 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <ConfigContext.Provider value={{ config, setConfig, addonVersion, resetConfig, auth, setAuth, hasBuiltInTvdb, hasBuiltInTmdb, catalogTTL, isLoading, sessionId, setSessionId, traktSearchEnabled, simklSearchEnabled, manifestFingerprint, manifestChangedSinceInstall, markManifestInstalled }}>
+    <ConfigContext.Provider value={{ config, setConfig, addonVersion, resetConfig, auth, setAuth, hasBuiltInTvdb, hasBuiltInTmdb, catalogTTL, maxCatalogs, collectionImportCatalogCap, isLoading, sessionId, setSessionId, traktSearchEnabled, simklSearchEnabled, manifestFingerprint, manifestChangedSinceInstall, markManifestInstalled }}>
       {children}
     </ConfigContext.Provider>
   );

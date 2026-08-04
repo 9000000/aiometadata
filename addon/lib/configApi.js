@@ -555,6 +555,27 @@ class ConfigApi {
       if (!userUUID) {
         return res.status(400).json({ error: 'User UUID is required' });
       }
+
+      // A signed-in owner has already proved who they are, so the configuration
+      // password is not asked for again. It was verified once, when the
+      // configuration was saved to the account.
+      const accountId = req.session?.accountId;
+      if (accountId && await database.ownsConfig(accountId, userUUID)) {
+        const owned = await database.getUserConfig(userUUID);
+        if (owned) {
+          await database.touchAccountConfig(accountId, userUUID);
+          return res.json({
+            success: true,
+            userUUID,
+            installUrl: buildInstallUrl(process.env.HOST_NAME, req.get('host'), manifestIdentifier(userUUID)),
+            config: {
+              ...owned,
+              apiKeys: { ...owned.apiKeys, customDescriptionBlurb: undefined },
+            },
+          });
+        }
+      }
+
       if (!password) {
         return res.status(400).json({ error: 'Password is required' });
       }
@@ -611,7 +632,13 @@ class ConfigApi {
         return res.status(400).json({ error: 'User UUID is required' });
       }
 
-      if (!password) {
+      // A signed-in owner saves without the password. Its hash is left exactly
+      // as it was, so the configuration keeps working for anyone loading it the
+      // usual way.
+      const accountId = req.session?.accountId;
+      const ownsConfig = Boolean(accountId) && await database.ownsConfig(accountId, userUUID);
+
+      if (!password && !ownsConfig) {
         return res.status(400).json({ error: 'Password is required' });
       }
 
@@ -619,9 +646,10 @@ class ConfigApi {
         return res.status(400).json({ error: 'Configuration data is required' });
       }
 
-      // Check if UUID is trusted
+      // Check if UUID is trusted. An owner signed in to this instance has
+      // already been let in, so the shared addon password is not asked again.
       const isTrusted = await database.isUUIDTrusted(userUUID);
-      if (!isTrusted && process.env.ADDON_PASSWORD && process.env.ADDON_PASSWORD.length > 0) {
+      if (!ownsConfig && !isTrusted && process.env.ADDON_PASSWORD && process.env.ADDON_PASSWORD.length > 0) {
         if (!addonPassword || addonPassword !== process.env.ADDON_PASSWORD) {
           return res.status(401).json({ error: 'Invalid addon password. Contact the addon administrator.' });
         }
@@ -667,13 +695,21 @@ class ConfigApi {
       await this.sanitizeSimklToken(config);
 
       // Verify existing config exists
-      const existingConfig = await database.verifyUserAndGetConfig(userUUID, password);
-      if (!existingConfig) {
-        return res.status(401).json({ error: 'Invalid UUID or password' });
+      let passwordHash;
+      if (ownsConfig && !password) {
+        const existingUser = await database.getUser(userUUID);
+        if (!existingUser) {
+          return res.status(404).json({ error: 'Configuration not found' });
+        }
+        passwordHash = existingUser.password_hash;
+      } else {
+        const existingConfig = await database.verifyUserAndGetConfig(userUUID, password);
+        if (!existingConfig) {
+          return res.status(401).json({ error: 'Invalid UUID or password' });
+        }
+        // Hash the password with bcrypt
+        passwordHash = await database.hashPassword(password);
       }
-
-      // Hash the password with bcrypt
-      const passwordHash = await database.hashPassword(password);
       
       // Get old config to compare changes
       let oldConfig = null;

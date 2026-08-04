@@ -10,6 +10,11 @@ import type {
   NuvioFolder,
   SourceDraft,
 } from './types';
+import { createBlueprintWriter, isNativeSource, type BlueprintLookup } from './catalogReconstruction';
+
+export type { BlueprintLookup };
+
+type AttachBlueprint = ReturnType<typeof createBlueprintWriter>;
 
 function trimmed(value: unknown): string {
   return String(value ?? '').trim();
@@ -19,14 +24,18 @@ function orNull(value: unknown): string | null {
   return trimmed(value) || null;
 }
 
-function toAddonSource(source: SourceDraft, identity: AddonIdentity): NuvioAddonSource | null {
+function toAddonSource(
+  source: SourceDraft,
+  identity: AddonIdentity,
+  attach: AttachBlueprint
+): NuvioAddonSource | null {
   const catalogId = trimmed(source.catalogId);
   const type = trimmed(source.type).toLowerCase();
   const addonId = trimmed(identity.addonId);
   if (!addonId || !type || !catalogId) return null;
 
   const name = trimmed(source.name) || catalogId;
-  return {
+  const mapped: NuvioAddonSource = {
     provider: 'addon',
     addonId,
     addonBaseUrl: orNull(identity.addonBaseUrl),
@@ -37,6 +46,8 @@ function toAddonSource(source: SourceDraft, identity: AddonIdentity): NuvioAddon
     title: name,
     genre: orNull(source.genre),
   };
+
+  return attach(mapped, `${catalogId}:${source.type}`);
 }
 
 function toCatalogSource(source: NuvioAddonSource): NuvioCatalogSource {
@@ -56,7 +67,8 @@ function toFolder(
   folder: FolderDraft,
   identity: AddonIdentity,
   collectionTitle: string,
-  notes: ExportNote[]
+  notes: ExportNote[],
+  attach: AttachBlueprint
 ): NuvioFolder | null {
   const id = trimmed(folder.id);
   const title = trimmed(folder.title);
@@ -71,7 +83,12 @@ function toFolder(
 
   const sources: NuvioAddonSource[] = [];
   for (const source of folder.sources) {
-    const mapped = toAddonSource(source, identity);
+    // Written back exactly as it arrived: Nuvio resolves it, we never see it.
+    if (isNativeSource(source) && source.native) {
+      sources.push(source.native as NuvioAddonSource);
+      continue;
+    }
+    const mapped = toAddonSource(source, identity, attach);
     if (mapped) {
       sources.push(mapped);
       continue;
@@ -102,7 +119,7 @@ function toFolder(
     tileShape: folder.shape,
     hideTitle: Boolean(folder.hideTitle),
     sources,
-    catalogSources: sources.map(toCatalogSource),
+    catalogSources: sources.filter(entry => entry.provider === 'addon').map(toCatalogSource),
     heroBackdropUrl: orNull(folder.heroBackdropUrl),
     heroVideoUrl: orNull(folder.heroVideoUrl),
     titleLogoUrl: orNull(folder.titleLogoUrl),
@@ -116,10 +133,12 @@ function toFolder(
  */
 export function toNuvioCollections(
   entries: BuilderEntry[],
-  identity: AddonIdentity
+  identity: AddonIdentity,
+  blueprints: BlueprintLookup = {}
 ): ExportResult<NuvioCollection[]> {
   const notes: ExportNote[] = [];
   const output: NuvioCollection[] = [];
+  const attach = createBlueprintWriter(blueprints);
 
   for (const entry of entries) {
     if (entry.kind === 'classicRow') {
@@ -143,7 +162,7 @@ export function toNuvioCollections(
     }
 
     const folders = entry.folders
-      .map(folder => toFolder(folder, identity, title, notes))
+      .map(folder => toFolder(folder, identity, title, notes, attach))
       .filter((folder): folder is NuvioFolder => folder !== null);
 
     output.push({

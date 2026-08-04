@@ -90,7 +90,6 @@ import {
   buildIdentity,
   buildManifestUrl,
   catalogKey,
-  entryHasUnknownSource,
   findSourceIssues,
   findUnknownSources,
   healSourceNames,
@@ -99,9 +98,31 @@ import {
   type CatalogSourceList,
   type ManifestCatalog,
 } from '@/lib/collectionBuilder/manifestSources';
+import { buildBlueprintLookup } from '@shared/blueprintLookup';
+import {
+  additionCount,
+  additionLabels,
+  applyCatalogAdditions,
+  resolveCatalogAdditions,
+  type CatalogAdditions,
+} from '@/lib/collectionBuilder/catalogBlueprints';
+import {
+  dedupeBlueprints,
+  fromNativeSource,
+  isNativeSource,
+  nativeLabel,
+  type CatalogBlueprint,
+} from '@shared/catalogReconstruction';
+import type { ShareableCatalog } from '@shared/catalogSharing';
 import type { AddonIdentity } from '@shared/types';
 
 const SETTINGS_LAYOUT_NAVIGATE_EVENT = 'settings-layout:navigate';
+
+/**
+ * Above this many catalogs an import stops to ask. A community file can carry
+ * thousands, and every one added becomes a manifest entry.
+ */
+const BULK_ADD_THRESHOLD = 100;
 
 interface CollectionBuilderDialogProps {
   isOpen: boolean;
@@ -357,6 +378,7 @@ function SortableEntryRow({
   isActive,
   excluded,
   hasUnknown,
+  allNative,
   canMoveUp,
   canMoveDown,
   onMove,
@@ -369,6 +391,8 @@ function SortableEntryRow({
   excluded: boolean;
   /** True when it points at a catalog that is not in the user's setup. */
   hasUnknown: boolean;
+  /** Every source here is resolved by the client, so none of it reaches us. */
+  allNative?: boolean;
   canMoveUp: boolean;
   canMoveDown: boolean;
   onMove: (delta: number) => void;
@@ -411,6 +435,11 @@ function SortableEntryRow({
         {hasUnknown && (
           <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
         )}
+        {allNative && (
+          <span className="shrink-0 text-[10px] text-muted-foreground" title="Nuvio fetches these itself, so they cost this addon nothing">
+            Nuvio
+          </span>
+        )}
         <span
           className={`shrink-0 rounded-full px-1.5 text-[10px] font-medium ${
             count === 0 ? 'bg-amber-800/60 text-amber-200' : 'bg-muted text-muted-foreground'
@@ -431,6 +460,7 @@ function SortableEntryRow({
 function CatalogPicker({
   isOpen,
   catalogs,
+  pendingKeys,
   multiple,
   existingKeys,
   onConfirm,
@@ -438,6 +468,7 @@ function CatalogPicker({
 }: {
   isOpen: boolean;
   catalogs: ManifestCatalog[];
+  pendingKeys?: Set<string>;
   /** Classic rows hold a single catalog, so selection collapses to one there. */
   multiple: boolean;
   /** Already on the tile, shown as such instead of being silently deduped. */
@@ -590,26 +621,33 @@ function CatalogPicker({
 function SourceRow({
   source,
   catalogs,
+  pendingKeys,
   onChange,
   onRemove,
   onReplace,
 }: {
   source: SourceDraft;
   catalogs: ManifestCatalog[];
+  /** Sources an apply would add a catalog for, so not missing, just not saved yet. */
+  pendingKeys?: Set<string>;
   onChange: (next: SourceDraft) => void;
   onRemove: () => void;
   /** Swap this one for a catalog the user has. */
   onReplace?: () => void;
 }) {
-  const match = catalogs.find(catalog => catalogKey(catalog) === catalogKey(source));
+  const native = isNativeSource(source);
+  const match = native ? undefined : catalogs.find(catalog => catalogKey(catalog) === catalogKey(source));
   const genres = match?.genres || [];
   const genreRequired = Boolean(match?.genreRequired);
-  const unknown = !match;
+  const pending = !native && !match && Boolean(pendingKeys?.has(catalogKey(source)));
+  const unknown = !native && !match && !pending;
 
   return (
     <div
       className={`flex flex-col gap-2 rounded-md border px-2 py-2 sm:flex-row sm:flex-wrap sm:items-center ${
-        unknown ? 'border-amber-600/60 bg-amber-950/20' : 'bg-muted/30'
+        unknown
+          ? 'border-amber-600/60 bg-amber-950/20'
+          : pending ? 'border-emerald-600/50 bg-emerald-950/20' : 'bg-muted/30'
       }`}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -620,7 +658,18 @@ function SourceRow({
       >
         {match?.name || source.name || source.catalogId}
       </span>
-      {unknown ? (
+      {native ? (
+        <>
+          <Badge variant="outline" className="shrink-0 text-[10px] font-semibold">
+            {nativeLabel(source)}
+          </Badge>
+          <span className="shrink-0 text-[10px] text-muted-foreground">served by Nuvio</span>
+        </>
+      ) : pending ? (
+        <span className="shrink-0 text-[10px] text-emerald-500" title={`${source.catalogId} (${source.type})`}>
+          added on apply
+        </span>
+      ) : unknown ? (
         <>
           <span className="shrink-0 text-[10px] text-amber-500" title={`${source.catalogId} (${source.type})`}>
             not in your catalogs
@@ -676,6 +725,7 @@ function SourceRow({
 function SortableFolderRow({
   folder,
   hasUnknown,
+  allNative,
   placeholder,
   isActive,
   canMoveUp,
@@ -686,6 +736,8 @@ function SortableFolderRow({
 }: {
   folder: FolderDraft;
   hasUnknown: boolean;
+  /** Every source here is resolved by the client, so none of it reaches us. */
+  allNative?: boolean;
   placeholder: string;
   isActive: boolean;
   canMoveUp: boolean;
@@ -723,6 +775,11 @@ function SortableFolderRow({
         <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate">{folder.title || placeholder}</span>
         {hasUnknown && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />}
+        {allNative && (
+          <span className="shrink-0 text-[10px] text-muted-foreground" title="Nuvio fetches these itself, so they cost this addon nothing">
+            Nuvio
+          </span>
+        )}
         <span
           className={`shrink-0 rounded-full px-1.5 text-[10px] font-medium ${
             count === 0 ? 'bg-amber-800/60 text-amber-200' : 'bg-muted text-muted-foreground'
@@ -743,6 +800,7 @@ function SortableFolderRow({
 function FolderCard({
   folder,
   catalogs,
+  pendingKeys,
   target,
   onChange,
   onRemove,
@@ -753,6 +811,7 @@ function FolderCard({
 }: {
   folder: FolderDraft;
   catalogs: ManifestCatalog[];
+  pendingKeys?: Set<string>;
   target: Target;
   onChange: (next: FolderDraft) => void;
   onRemove: () => void;
@@ -862,6 +921,7 @@ function FolderCard({
             key={`${catalogKey(source)}-${index}`}
             source={source}
             catalogs={catalogs}
+            pendingKeys={pendingKeys}
             onChange={next => update({ sources: folder.sources.map((s, i) => (i === index ? next : s)) })}
             onRemove={() => update({ sources: folder.sources.filter((_, i) => i !== index) })}
             onReplace={() => onReplaceSource(index)}
@@ -935,21 +995,28 @@ function FolderCard({
 function CollectionEditor({
   entry,
   catalogs,
+  pendingKeys,
   target,
   onChange,
   onAddSource,
   onReplaceSource,
   tagOptions,
   onAddByTag,
+  nativeCount,
+  onConvertNative,
 }: {
   entry: CollectionDraft;
   catalogs: ManifestCatalog[];
+  pendingKeys?: Set<string>;
   target: Target;
   onChange: (next: CollectionDraft) => void;
   onAddSource: (folderId: string) => void;
   onReplaceSource: (folderId: string, index: number) => void;
   tagOptions: TagOption[];
   onAddByTag: (folderId: string, tag: string) => void;
+  /** Sources here that Nuvio resolves itself and this addon could take over. */
+  nativeCount: number;
+  onConvertNative: () => void;
 }) {
   const terms = TERMS[target];
   const [showNuvioBox, setShowNuvioBox] = useState(target === 'nuvio');
@@ -1073,6 +1140,20 @@ function CollectionEditor({
       </div>
       )}
 
+      {nativeCount > 0 && (
+        <div className="flex flex-col gap-2 rounded-md border p-2 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-[11px] text-muted-foreground">
+            <span className="font-medium text-foreground">{nativeCount}</span> source
+            {nativeCount === 1 ? '' : 's'} here {nativeCount === 1 ? 'is' : 'are'} fetched by Nuvio straight from
+            TMDB or Trakt. They cost this addon nothing. Routing them through it adds your artwork, ratings and
+            filters, and a catalog to your setup for each.
+          </p>
+          <Button variant="outline" size="sm" className="shrink-0" onClick={onConvertNative}>
+            <Replace className="mr-1.5 h-4 w-4" /> Route through AIOMetadata
+          </Button>
+        </div>
+      )}
+
       <div className="flex items-center justify-between border-t pt-3">
         <Label className="text-sm font-medium">{terms.children}</Label>
         <Button variant="outline" size="sm" onClick={addFolder}>
@@ -1094,7 +1175,12 @@ function CollectionEditor({
                     key={folder.id}
                     folder={folder}
                     placeholder={`Untitled ${terms.child.toLowerCase()}`}
-                    hasUnknown={folder.sources.some(source => !knownKeys.has(catalogKey(source)))}
+                    hasUnknown={folder.sources.some(source =>
+                      !isNativeSource(source)
+                      && !knownKeys.has(catalogKey(source))
+                      && !pendingKeys?.has(catalogKey(source))
+                    )}
+                    allNative={folder.sources.length > 0 && folder.sources.every(isNativeSource)}
                     isActive={index === activeIndex}
                     canMoveUp={index > 0}
                     canMoveDown={index < entry.folders.length - 1}
@@ -1113,6 +1199,7 @@ function CollectionEditor({
                 key={activeFolder.id}
                 folder={activeFolder}
                 catalogs={catalogs}
+            pendingKeys={pendingKeys}
                 target={target}
                 onChange={next =>
                   update({ folders: entry.folders.map((f, i) => (i === activeIndex ? next : f)) })}
@@ -1135,12 +1222,14 @@ function CollectionEditor({
 function ClassicRowEditor({
   entry,
   catalogs,
+  pendingKeys,
   target,
   onChange,
   onAddSource,
 }: {
   entry: ClassicRowDraft;
   catalogs: ManifestCatalog[];
+  pendingKeys?: Set<string>;
   target: Target;
   onChange: (next: ClassicRowDraft) => void;
   onAddSource: () => void;
@@ -1179,6 +1268,7 @@ function ClassicRowEditor({
           <SourceRow
             source={entry.source}
             catalogs={catalogs}
+            pendingKeys={pendingKeys}
             onChange={next => update({ source: next })}
             onRemove={() => update({ source: null })}
             onReplace={onAddSource}
@@ -1285,7 +1375,7 @@ function ClassicRowEditor({
 // ---- Main dialog ----
 
 export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDialogProps) {
-  const { config, setConfig, auth } = useConfig();
+  const { config, setConfig, auth, maxCatalogs, collectionImportCatalogCap } = useConfig();
 
   const [entries, setEntries] = useState<BuilderEntry[]>([]);
   /** Entries as they stood when opened or last applied, to spot real edits. */
@@ -1302,6 +1392,10 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState('');
   const [importPreview, setImportPreview] = useState<ImportResult | null>(null);
+  const [stagedBlueprints, setStagedBlueprints] = useState<CatalogBlueprint[]>([]);
+  const [convertNative, setConvertNative] = useState(false);
+  const [overLimitOpen, setOverLimitOpen] = useState(false);
+  const [nativeBlockFor, setNativeBlockFor] = useState<'apply' | 'copy' | 'download' | 'link' | null>(null);
   const terms = TERMS[target];
 
   const sensors = useSensors(
@@ -1316,6 +1410,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setEntries(saved);
     setBaseline(JSON.stringify(saved));
     setSelectedId(saved[0]?.id ?? null);
+    setStagedBlueprints([]);
     setManifestUrl(buildManifestUrl(auth.userUUID));
   }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1347,10 +1442,20 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     [config, manifestUrl, manifestIdentity]
   );
 
-  const nuvioResult = useMemo(() => toNuvioCollections(entries, identity), [entries, identity]);
+  // Catalogs ride along with the file so an importer who does not have them can
+  // rebuild them instead of adding each one by hand.
+  const blueprints = useMemo(
+    () => buildBlueprintLookup(config.catalogs as ShareableCatalog[]),
+    [config.catalogs]
+  );
+
+  const nuvioResult = useMemo(
+    () => toNuvioCollections(entries, identity, blueprints),
+    [entries, identity, blueprints]
+  );
   const fusionResult = useMemo(
-    () => toFusionWidgets(entries, identity, { usePlaceholder }),
-    [entries, identity, usePlaceholder]
+    () => toFusionWidgets(entries, identity, { usePlaceholder, blueprints }),
+    [entries, identity, usePlaceholder, blueprints]
   );
 
   const json = useMemo(
@@ -1531,11 +1636,26 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setPickerTarget(null);
   };
 
-  const applyToConfig = (thenGoToConfiguration = false) => {
-    setConfig(prev => ({ ...prev, collections: clone(entries) }));
+  const applyToConfig = (
+    thenGoToConfiguration = false,
+    options: { withCatalogs?: boolean } = {}
+  ) => {
+    const addCatalogs = options.withCatalogs !== false && pendingCount > 0;
+
+    setConfig(prev => ({
+      ...prev,
+      collections: clone(entries),
+      ...(addCatalogs && { catalogs: applyCatalogAdditions(prev.catalogs || [], pendingAdditions) }),
+    }));
     setBaseline(JSON.stringify(entries));
+    if (addCatalogs) setStagedBlueprints([]);
+
+    const catalogNote = addCatalogs
+      ? ` ${pendingCount} catalog${pendingCount === 1 ? '' : 's'} added.`
+      : '';
+
     if (thenGoToConfiguration) {
-      toast.success('Applied. Save your configuration to store it.');
+      toast.success(`Applied.${catalogNote} Save your configuration to store it.`);
       onClose();
       window.dispatchEvent(
         new CustomEvent(SETTINGS_LAYOUT_NAVIGATE_EVENT, {
@@ -1545,16 +1665,30 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       return;
     }
     toast.success(
-      entries.length === 1
-        ? '1 entry applied. Save your configuration to store it.'
-        : `${entries.length} entries applied. Save your configuration to store it.`
+      (entries.length === 1 ? '1 entry applied.' : `${entries.length} entries applied.`) +
+      `${catalogNote} Save your configuration to store it.`
     );
   };
 
   const handleSave = (thenGoToConfiguration = false) => {
-    // Unknown catalogs render as empty rows rather than breaking anything, so
-    // this asks rather than refuses.
-    if (unknownSources.length > 0) {
+    // The design stays valid for Nuvio, but applying it while building for
+    // Fusion also publishes the hosted widgets URL, which would serve tiles the
+    // export cannot fill.
+    if (target === 'fusion' && totalNative > 0) {
+      setPendingNavigate(thenGoToConfiguration);
+      setNativeBlockFor('apply');
+      return;
+    }
+    // A config over the ceiling is refused on save, so this has to stop here
+    // rather than let the catalogs through and fail later.
+    if (overBy > 0) {
+      setPendingNavigate(thenGoToConfiguration);
+      setOverLimitOpen(true);
+      return;
+    }
+    // Catalogs nothing can rebuild render as empty rows rather than breaking
+    // anything, so this asks rather than refuses.
+    if (unresolvedSources.length > 0) {
       setPendingNavigate(thenGoToConfiguration);
       setConfirmApply(true);
       return;
@@ -1575,9 +1709,14 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     return `${base}/${file}${query}`;
   }, [manifestUrl, target]);
 
-  const previewImport = (text: string) => {
+  const previewImport = (text: string, convert = convertNative) => {
     setImportText(text);
-    setImportPreview(text.trim() ? parseImport(text) : null);
+    setImportPreview(text.trim() ? parseImport(text, { convertNative: convert }) : null);
+  };
+
+  const toggleConvertNative = (next: boolean) => {
+    setConvertNative(next);
+    if (importText.trim()) previewImport(importText, next);
   };
 
   const handleImportFile = async (file: File | undefined) => {
@@ -1585,12 +1724,192 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     previewImport(await file.text());
   };
 
-  const applyImport = (mode: 'replace' | 'merge') => {
+  const importUnknown = useMemo(
+    () => (importPreview ? findUnknownSources(importPreview.entries, sourceList.catalogs) : []),
+    [importPreview, sourceList.catalogs]
+  );
+
+  /** What the file being previewed would add on its own, for the import panel. */
+  const importAdditions: CatalogAdditions = useMemo(
+    () => (importPreview
+      ? resolveCatalogAdditions(
+          config.catalogs || [],
+          importPreview.blueprints,
+          importUnknown,
+          config.apiKeys || {}
+        )
+      : { added: [], enabled: [], resolved: new Set<string>(), needsAccount: [] }),
+    [importPreview, importUnknown, config.catalogs, config.apiKeys]
+  );
+
+  const rebuildable = additionCount(importAdditions);
+
+  const importUnresolved = useMemo(
+    () => importUnknown.filter(
+      source => !importAdditions.resolved.has(`${source.catalogId}:${source.type}`)
+    ),
+    [importUnknown, importAdditions]
+  );
+
+  /**
+   * Imported catalogs wait here rather than going straight into the config. A
+   * community file can reference thousands, and which of them are actually
+   * needed depends on what survives editing, so they are resolved against the
+   * current design and only written on apply.
+   */
+  const pendingAdditions: CatalogAdditions = useMemo(
+    () => resolveCatalogAdditions(
+      config.catalogs || [],
+      stagedBlueprints,
+      unknownSources,
+      config.apiKeys || {}
+    ),
+    [config.catalogs, stagedBlueprints, unknownSources, config.apiKeys]
+  );
+
+  const pendingCount = additionCount(pendingAdditions);
+
+  /**
+   * Sources that resolve to a catalog an apply would add. They are absent from
+   * the manifest, so without this they would read as missing rather than staged.
+   */
+  const pendingKeys = useMemo(
+    () => (pendingCount > 0 ? pendingAdditions.resolved : new Set<string>()),
+    [pendingAdditions, pendingCount]
+  );
+
+  /** Entries still pointing at a catalog neither the config nor the import can serve. */
+  const entriesWithUnresolved = useMemo(() => {
+    const ids = new Set<string>();
+    for (const entry of entries) {
+      const missing = findUnknownSources([entry], sourceList.catalogs);
+      if (missing.some(source => !pendingKeys.has(catalogKey(source)))) ids.add(entry.id);
+    }
+    return ids;
+  }, [entries, sourceList.catalogs, pendingKeys]);
+
+  const countNative = useCallback((entry: BuilderEntry) => {
+    const sources = entry.kind === 'classicRow'
+      ? (entry.source ? [entry.source] : [])
+      : entry.folders.flatMap(folder => folder.sources);
+    return sources.filter(isNativeSource).length;
+  }, []);
+
+  /**
+   * Takes over client-resolved sources. Scoped to one collection by default so
+   * the cost is taken on only where it buys something, and to everything when a
+   * target cannot serve them at all.
+   */
+  const convertNativeSources = useCallback((entryId?: string) => {
+    const rebuilt: CatalogBlueprint[] = [];
+    let converted = 0;
+    let kept = 0;
+
+    setEntries(prev => prev.map(entry => {
+      if (entryId !== undefined && entry.id !== entryId) return entry;
+      if (entry.kind !== 'collection') return entry;
+
+      return {
+        ...entry,
+        folders: entry.folders.map(folder => {
+          const seen = new Set<string>();
+          const sources: SourceDraft[] = [];
+          for (const source of folder.sources) {
+            let next = source;
+            if (isNativeSource(source) && source.native) {
+              const result = fromNativeSource(source.native);
+              if (result.ok === true) {
+                rebuilt.push(result.blueprint);
+                next = result.source;
+                converted += 1;
+              } else {
+                kept += 1;
+              }
+            }
+            const key = `${next.catalogId}:${next.type}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            sources.push(next);
+          }
+          return { ...folder, sources };
+        }),
+      };
+    }));
+
+    if (rebuilt.length > 0) {
+      setStagedBlueprints(prev => dedupeBlueprints([...prev, ...rebuilt]));
+    }
+
+    if (converted === 0) {
+      toast.info('Nothing here could be routed through AIOMetadata');
+      return;
+    }
+    toast.success(
+      `${converted} source${converted === 1 ? '' : 's'} routed through AIOMetadata`,
+      kept > 0
+        ? { description: `${kept} had no equivalent here and stay with Nuvio.` }
+        : undefined
+    );
+  }, []);
+
+  /** How much of the design the selected target would drop, for the warning. */
+  const fusionTileTotal = useMemo(
+    () => entries.reduce((sum, entry) => sum + (entry.kind === 'collection' ? entry.folders.length : 0), 0),
+    [entries]
+  );
+
+  const fusionTileLoss = useMemo(() => {
+    const kept = fusionResult.output.widgets.reduce(
+      (sum, widget) => sum + ('dataSource' in widget && widget.dataSource?.kind === 'collection'
+        ? widget.dataSource.payload.items.length
+        : 0),
+      0
+    );
+    return Math.max(0, fusionTileTotal - kept);
+  }, [fusionResult, fusionTileTotal]);
+
+  const totalNative = useMemo(
+    () => entries.reduce((sum, entry) => sum + countNative(entry), 0),
+    [entries, countNative]
+  );
+
+  const entryIsNative = useCallback((entry: BuilderEntry) => {
+    const sources = entry.kind === 'classicRow'
+      ? (entry.source ? [entry.source] : [])
+      : entry.folders.flatMap(folder => folder.sources);
+    return sources.length > 0 && sources.every(isNativeSource);
+  }, []);
+
+  /** Sources the design points at that nothing in the config or the file can serve. */
+  const unresolvedSources = useMemo(
+    () => unknownSources.filter(
+      source => !pendingAdditions.resolved.has(`${source.catalogId}:${source.type}`)
+    ),
+    [unknownSources, pendingAdditions]
+  );
+
+  const enabledCatalogCount = useMemo(
+    () => (config.catalogs || []).filter(catalog => catalog.enabled !== false).length,
+    [config.catalogs]
+  );
+
+  // The instance ceiling when it has one, otherwise the import's own cap, which
+  // exists so an unlimited instance is not handed a manifest of thousands.
+  const catalogLimit = maxCatalogs ?? collectionImportCatalogCap;
+  const headroom = Math.max(0, catalogLimit - enabledCatalogCount);
+  const overBy = Math.max(0, pendingCount - headroom);
+
+  const runImport = (mode: 'replace' | 'merge') => {
     if (!importPreview || importPreview.entries.length === 0) return;
     const incoming = healSourceNames(
       clone(importPreview.entries) as BuilderEntry[],
       sourceList.catalogs
     );
+
+    setStagedBlueprints(prev => dedupeBlueprints(
+      mode === 'replace' ? importPreview.blueprints : [...prev, ...importPreview.blueprints]
+    ));
+
     setEntries(prev => {
       const next = mode === 'replace' ? incoming : [...prev, ...incoming];
       setSelectedId(next[0]?.id ?? null);
@@ -1599,17 +1918,20 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setImportOpen(false);
     setImportText('');
     setImportPreview(null);
+    setConvertNative(false);
     toast.success(
-      incoming.length === 1 ? '1 entry imported' : `${incoming.length} entries imported`
+      incoming.length === 1 ? '1 entry imported' : `${incoming.length} entries imported`,
+      rebuildable > 0
+        ? { description: `${rebuildable} catalog${rebuildable === 1 ? '' : 's'} will be added when you apply.` }
+        : undefined
     );
   };
 
-  const importUnknown = useMemo(
-    () => (importPreview ? findUnknownSources(importPreview.entries, sourceList.catalogs) : []),
-    [importPreview, sourceList.catalogs]
-  );
-
   const handleCopyUrl = async () => {
+    if (target === 'fusion' && totalNative > 0) {
+      setNativeBlockFor('link');
+      return;
+    }
     await navigator.clipboard.writeText(hostedUrl);
     setCopiedUrl(true);
     setTimeout(() => setCopiedUrl(false), 1500);
@@ -1617,6 +1939,10 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   };
 
   const handleCopy = async () => {
+    if (target === 'fusion' && totalNative > 0) {
+      setNativeBlockFor('copy');
+      return;
+    }
     await navigator.clipboard.writeText(json);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
@@ -1624,6 +1950,10 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   };
 
   const handleDownload = () => {
+    if (target === 'fusion' && totalNative > 0) {
+      setNativeBlockFor('download');
+      return;
+    }
     const name = target === 'nuvio' ? 'nuvio-collections' : 'fusion-widgets';
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1682,6 +2012,27 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             </div>
           </div>
 
+          {target === 'fusion' && totalNative > 0 && (
+            <div className="flex flex-col gap-2 rounded-md border border-amber-600/50 bg-amber-950/20 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="flex items-start gap-1.5 text-xs text-amber-500">
+                <AlertTriangle className="mt-px h-4 w-4 shrink-0" />
+                <span>
+                  Fusion cannot serve {totalNative} of these sources. Nuvio fetches them from TMDB and Trakt
+                  itself, and Fusion has no equivalent, so the tiles using them are left out of this export.
+                  Routing them through AIOMetadata is the only way to keep them.
+                </span>
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="shrink-0 border-amber-600/60 text-amber-200 hover:bg-amber-900/40"
+                onClick={() => convertNativeSources()}
+              >
+                <Replace className="mr-1.5 h-4 w-4" /> Route all through AIOMetadata
+              </Button>
+            </div>
+          )}
+
           <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
             <div className="space-y-2">
               <div className="flex gap-2">
@@ -1719,8 +2070,12 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       <SortableEntryRow
                         key={entry.id}
                         entry={entry}
-                        excluded={target === 'nuvio' && entry.kind === 'classicRow'}
-                        hasUnknown={entryHasUnknownSource(entry, sourceList.catalogs)}
+                        excluded={
+                          (target === 'nuvio' && entry.kind === 'classicRow')
+                          || (target === 'fusion' && entryIsNative(entry))
+                        }
+                        hasUnknown={entriesWithUnresolved.has(entry.id)}
+                        allNative={entryIsNative(entry)}
                         isActive={entry.id === selectedId}
                         canMoveUp={index > 0}
                         canMoveDown={index < entries.length - 1}
@@ -1760,6 +2115,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                     <CollectionEditor
                       entry={selected}
                       catalogs={sourceList.catalogs}
+                      pendingKeys={pendingKeys}
                       target={target}
                       onChange={updateEntry}
                       onAddSource={folderId => setPickerTarget({ entryId: selected.id, folderId })}
@@ -1767,12 +2123,15 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                         setPickerTarget({ entryId: selected.id, folderId, replaceIndex: index })}
                       tagOptions={tagOptions}
                       onAddByTag={(folderId, tag) => addSourcesByTag(selected.id, folderId, tag)}
+                      nativeCount={countNative(selected)}
+                      onConvertNative={() => convertNativeSources(selected.id)}
                     />
                   )}
                   {selected?.kind === 'classicRow' && (
                     <ClassicRowEditor
                       entry={selected}
                       catalogs={sourceList.catalogs}
+                      pendingKeys={pendingKeys}
                       target={target}
                       onChange={updateEntry}
                       onAddSource={() => setPickerTarget({ entryId: selected.id, folderId: null })}
@@ -1882,12 +2241,14 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                         <AlertTriangle className="h-4 w-4" /> Worth checking
                       </div>
                       <ul className="space-y-1 text-xs text-muted-foreground">
-                        {issues.map((issue, index) => (
+                        {issues.slice(0, 8).map((issue, index) => (
                           <li key={`issue-${index}`}>{issue.message}</li>
                         ))}
-                        {notes.map((note, index) => (
+                        {issues.length > 8 && <li>and {issues.length - 8} more</li>}
+                        {notes.slice(0, 8).map((note, index) => (
                           <li key={`note-${index}`}>{note.message}</li>
                         ))}
+                        {notes.length > 8 && <li>and {notes.length - 8} more</li>}
                       </ul>
                     </div>
                   )}
@@ -1897,13 +2258,24 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           </div>
 
           <div className="flex flex-col gap-2 border-t pt-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
-            {unknownSources.length > 0 ? (
+            {overBy > 0 ? (
+              <p className="flex items-start gap-1.5 text-[11px] text-amber-500 sm:mr-auto">
+                <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+                This design needs {pendingCount} new catalogs and there is room for {headroom}. Delete{' '}
+                {overBy} more catalog{overBy === 1 ? '' : 's'} worth of tiles to apply it.
+              </p>
+            ) : pendingCount > 0 ? (
+              <p className="text-[11px] text-emerald-500 sm:mr-auto">
+                {pendingCount} catalog{pendingCount === 1 ? '' : 's'} will be added when you apply, leaving{' '}
+                {headroom - pendingCount} of your {catalogLimit} spare.
+              </p>
+            ) : unresolvedSources.length > 0 ? (
               <>
                 <p className="flex items-start gap-1.5 text-[11px] text-amber-500 sm:mr-auto">
                   <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
-                  {unknownSources.length === 1
+                  {unresolvedSources.length === 1
                     ? '1 source points at a catalog you do not have.'
-                    : `${unknownSources.length} sources point at catalogs you do not have.`}{' '}
+                    : `${unresolvedSources.length} sources point at catalogs you do not have.`}{' '}
                   Swap them for yours, or leave them and those tiles come up empty.
                 </p>
                 <Button variant="outline" onClick={() => setRemapOpen(true)}>
@@ -1979,26 +2351,87 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                     : `${importPreview.entries.length} ${importPreview.entries.length === 1 ? 'entry' : 'entries'}, ` +
                       `${importPreview.entries.reduce((n, e) => n + entrySourceCount(e), 0)} sources`}
                 </span>
-                {importUnknown.length > 0 && (
+                {rebuildable > 0 && (
+                  <Badge variant="outline" className="border-emerald-600/50 bg-emerald-800/60 text-[10px] text-emerald-200">
+                    {rebuildable} catalog{rebuildable === 1 ? '' : 's'} rebuildable
+                  </Badge>
+                )}
+                {importUnresolved.length > 0 && (
                   <Badge variant="outline" className="border-amber-600/50 bg-amber-800/60 text-[10px] text-amber-200">
-                    {importUnknown.length} not in your catalogs
+                    {importUnresolved.length} not in your catalogs
                   </Badge>
                 )}
               </div>
 
-              {importUnknown.length > 0 && (
+              {importPreview.nativeCount > 0 && (
+                <div className="space-y-2 rounded-md border p-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <Label htmlFor="convert-native" className="text-xs font-medium">
+                        Route Nuvio's own sources through AIOMetadata
+                      </Label>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                        {importPreview.nativeCount} of this file's sources are fetched by Nuvio straight from
+                        TMDB or Trakt. Left alone they work as they are and cost nothing. Turning this on gives
+                        them your artwork, ratings and filters, at{' '}
+                        {importPreview.convertibleCount} catalog
+                        {importPreview.convertibleCount === 1 ? '' : 's'} added to your setup.
+                      </p>
+                    </div>
+                    <Switch
+                      id="convert-native"
+                      checked={convertNative}
+                      onCheckedChange={toggleConvertNative}
+                    />
+                  </div>
+                  {convertNative && importPreview.convertibleCount < importPreview.nativeCount && (
+                    <p className="text-[11px] text-muted-foreground">
+                      {importPreview.nativeCount - importPreview.convertibleCount} of them have no equivalent
+                      here and stay with Nuvio.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {rebuildable > 0 && (
+                <div className="space-y-1 rounded-md border border-emerald-600/40 bg-emerald-950/20 p-2">
+                  <p className="text-[11px] text-emerald-500">
+                    This file carries the definitions for {rebuildable} catalog{rebuildable === 1 ? '' : 's'} you
+                    do not have. Only the ones your design still uses when you apply are added, so trimming the
+                    collections trims what you take on.
+                  </p>
+                  <ul className="space-y-0.5 text-[10px] text-muted-foreground">
+                    {additionLabels(importAdditions, 6).map((label, index) => (
+                      <li key={`${label}-${index}`}>{label}</li>
+                    ))}
+                    {importAdditions.added.length > 6 && (
+                      <li>and {importAdditions.added.length - 6} more</li>
+                    )}
+                  </ul>
+                </div>
+              )}
+
+              {importAdditions.needsAccount.length > 0 && (
+                <p className="rounded-md border border-amber-600/40 bg-amber-950/20 p-2 text-[11px] text-amber-500">
+                  This file uses your own {importAdditions.needsAccount.join(' and ')} catalogs, such as your
+                  watchlist. Connect {importAdditions.needsAccount.length === 1 ? 'that account' : 'those accounts'} and
+                  import again to have them added.
+                </p>
+              )}
+
+              {importUnresolved.length > 0 && (
                 <div className="space-y-1 rounded-md border border-amber-600/40 bg-amber-950/20 p-2">
                   <p className="text-[11px] text-amber-500">
-                    These catalogs are not in your setup. You can still import, but those tiles will come up
-                    empty until the catalogs are added and enabled.
+                    These catalogs are not in your setup and the file does not say how to rebuild them. You can
+                    still import, but those tiles will come up empty.
                   </p>
                   <ul className="space-y-0.5 font-mono text-[10px] text-muted-foreground">
-                    {importUnknown.slice(0, 6).map((source, index) => (
+                    {importUnresolved.slice(0, 6).map((source, index) => (
                       <li key={`${source.catalogId}-${source.type}-${index}`}>
                         {source.catalogId} <span className="opacity-60">({source.type})</span>
                       </li>
                     ))}
-                    {importUnknown.length > 6 && <li>and {importUnknown.length - 6} more</li>}
+                    {importUnresolved.length > 6 && <li>and {importUnresolved.length - 6} more</li>}
                   </ul>
                 </div>
               )}
@@ -2039,13 +2472,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             <Button
               variant="outline"
               disabled={!importPreview || importPreview.entries.length === 0}
-              onClick={() => applyImport('merge')}
+              onClick={() => runImport('merge')}
             >
               Add to existing
             </Button>
             <Button
               disabled={!importPreview || importPreview.entries.length === 0}
-              onClick={() => applyImport('replace')}
+              onClick={() => runImport('replace')}
             >
               Replace all
             </Button>
@@ -2201,12 +2634,81 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
         title="Some catalogs are missing"
         confirmText="Apply anyway"
         description={
-          `${unknownSources.length === 1 ? '1 source points' : `${unknownSources.length} sources point`} at a catalog ` +
-          `that is not in your setup: ${unknownSources.slice(0, 3).map(s => s.catalogId).join(', ')}` +
-          `${unknownSources.length > 3 ? `, and ${unknownSources.length - 3} more` : ''}. ` +
+          `${unresolvedSources.length === 1 ? '1 source points' : `${unresolvedSources.length} sources point`} at a catalog ` +
+          `that is not in your setup: ${unresolvedSources.slice(0, 3).map(s => s.catalogId).join(', ')}` +
+          `${unresolvedSources.length > 3 ? `, and ${unresolvedSources.length - 3} more` : ''}. ` +
           'Those tiles will come up empty until you add and enable the catalogs. Everything else works as normal.'
         }
       />
+
+      <Dialog open={nativeBlockFor !== null} onOpenChange={open => { if (!open) setNativeBlockFor(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-500" /> Fusion cannot serve most of this
+            </DialogTitle>
+            <DialogDescription>
+              {totalNative} source{totalNative === 1 ? '' : 's'} in this design {totalNative === 1 ? 'is' : 'are'}{' '}
+              fetched by Nuvio itself, and Fusion has no equivalent. {fusionTileLoss > 0
+                ? `${fusionTileLoss} of ${fusionTileTotal} tiles would come out empty.`
+                : 'The tiles using them are left out.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <p className="rounded-md border bg-muted/30 p-2 text-[11px] text-muted-foreground">
+            {nativeBlockFor === 'apply'
+              ? 'The design is fine for Nuvio, so you can apply it and build for Nuvio instead. Applying also publishes your hosted widgets URL, which would hand out the same empty export.'
+              : 'Switching to Nuvio gives you the complete export. Routing the sources through AIOMetadata keeps them on both targets, at one catalog each.'}
+          </p>
+
+          <div className="flex flex-wrap justify-end gap-2 border-t pt-3">
+            <Button variant="ghost" onClick={() => setNativeBlockFor(null)}>Cancel</Button>
+            <Button
+              variant="outline"
+              onClick={() => { setTarget('nuvio'); setNativeBlockFor(null); }}
+            >
+              <Tv className="mr-1.5 h-4 w-4" /> Build for Nuvio
+            </Button>
+            <Button onClick={() => { convertNativeSources(); setNativeBlockFor(null); }}>
+              <Replace className="mr-1.5 h-4 w-4" /> Route through AIOMetadata
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={overLimitOpen} onOpenChange={open => { if (!open) setOverLimitOpen(false); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-500" /> Too many catalogs to add
+            </DialogTitle>
+            <DialogDescription>
+              This design needs {pendingCount} catalog{pendingCount === 1 ? '' : 's'} you do not have, but there
+              is room for {headroom}
+              {maxCatalogs === null
+                ? ' in a single import'
+                : ` before this instance's limit of ${maxCatalogs}`}. Remove {overBy} more
+              catalog{overBy === 1 ? '' : 's'} worth of tiles, or delete a collection you do not need, and the
+              rest will be added.
+            </DialogDescription>
+          </DialogHeader>
+
+          <p className="rounded-md border bg-muted/30 p-2 text-[11px] text-muted-foreground">
+            You have {enabledCatalogCount} catalog{enabledCatalogCount === 1 ? '' : 's'} enabled. Every catalog
+            added here becomes an entry in your manifest, which your client fetches each time it loads the addon.
+          </p>
+
+          <div className="flex flex-wrap justify-end gap-2 border-t pt-3">
+            <Button variant="ghost" onClick={() => setOverLimitOpen(false)}>Back to editing</Button>
+            <Button
+              variant="outline"
+              onClick={() => { setOverLimitOpen(false); applyToConfig(pendingNavigate, { withCatalogs: false }); }}
+            >
+              Apply layout only
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <CatalogPicker
         isOpen={pickerTarget !== null}

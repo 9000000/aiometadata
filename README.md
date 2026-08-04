@@ -438,7 +438,7 @@ Set this on the `aiometadata` service (in its `.env`). When both containers shar
 
 #### Compose stack
 
-Jikan needs four services (MongoDB stores data, Redis caches, Typesense is the default search engine). This stack runs search on MongoDB instead, see [Search-path patches](#search-path-patches-required). Typesense still starts but stays idle.
+Jikan runs as four services: `jikan_rest` serves the API, MongoDB holds the data, Redis caches responses, and Typesense answers `?q=`. [Search](#search) covers how the last two divide the work.
 
 Save as `apps/jikan-rest/compose.yaml` (or merge into your stack):
 
@@ -459,13 +459,8 @@ services:
     user: "10001:10001"
     restart: unless-stopped
     env_file: [ .env.compose ]
-    environment:
-      # Keep the inner quotes. Laravel coerces a bare `null` to PHP null and
-      # getSearchIndexDriver() crash-loops on it; the string "null" is what works.
-      SCOUT_DRIVER: '"null"'
     secrets: [ jikan_db_username, jikan_db_password, jikan_redis_password, jikan_typesense_api_key ]
     volumes:
-      - ./MongoSearchService.php:/app/app/Services/MongoSearchService.php:ro
       - ./RepositoryQuery.php:/app/app/Support/RepositoryQuery.php:ro
     expose: [ 8080 ]
     healthcheck:
@@ -544,7 +539,7 @@ DB_DATABASE=jikan
 DB_USERNAME__FILE=/run/secrets/jikan_db_username
 DB_ADMIN__FILE=/run/secrets/jikan_db_username
 DB_PASSWORD__FILE=/run/secrets/jikan_db_password
-# SCOUT_DRIVER goes in compose.yaml, not here. Compose strips quotes from env_file values.
+SCOUT_DRIVER=typesense
 SCOUT_QUEUE=false
 TYPESENSE_HOST=jikan_typesense
 TYPESENSE_PORT=8108
@@ -586,70 +581,9 @@ print("anime indexes created: " + db.anime.getIndexes().length);
 
 This only runs when the data directory is empty, so it covers new stacks. Existing ones need the [manual pass](#mongodb-indexes) below.
 
-#### Search-path patches (required)
+#### Query builder patch (required)
 
-Genre, theme, and demographic catalogs (`mal.genres` and friends) return one short page or nothing at all on a stock jikan-rest image. Three fixes are needed.
-
-**1. Typesense filtering.** Its index omits `themes` and `demographics` while the query scopes filter on dotted paths like `genres.mal_id`, which Typesense 404s on. `SCOUT_DRIVER: '"null"'` in the compose file above sends search to Mongo instead.
-
-**2. `$text` on filter-only queries.** Requests with no `?q=` still get a `$text` clause, which drops matches. Save as `apps/jikan-rest/MongoSearchService.php`:
-
-```php
-<?php
-
-namespace App\Services;
-
-use Jenssegers\Mongodb\Query\Builder as MongoBuilder;
-
-final class MongoSearchService extends SearchServiceBase
-{
-    public function search(string $searchTerms, ?string $orderByFields = null, bool $sortDirectionDescending = false): \Laravel\Scout\Builder|\Illuminate\Database\Eloquent\Builder
-    {
-        /**
-         * @var MongoBuilder $query
-         */
-        $query = $this->query();
-
-        // Filter-only requests (?genres=, ?type=, ... with no ?q=) arrive here with an
-        // empty term. Applying $text then requires a text index and silently drops
-        // matches, so skip it and let the filters run on their own.
-        if (trim($searchTerms) === '') {
-            $builder = $query;
-
-            if ($orderByFields !== null) {
-                $order = explode(",", $orderByFields);
-                foreach ($order as $o) {
-                    $builder = $builder->orderBy($o, $sortDirectionDescending ? 'desc' : 'asc');
-                }
-            }
-
-            return $builder;
-        }
-
-        /** @noinspection PhpParamsInspection */
-        $builder = $query->whereRaw([
-            '$text' => [
-                '$search' => $searchTerms
-            ],
-        ], [
-            'textMatchScore' => [
-                '$meta' => 'textScore'
-            ]
-        ])->orderBy('textMatchScore', 'desc');
-
-        if ($orderByFields !== null) {
-            $order = explode(",", $orderByFields);
-            foreach ($order as $o) {
-                $builder = $builder->orderBy($o, $sortDirectionDescending ? 'desc' : 'asc');
-            }
-        }
-
-        return $builder;
-    }
-}
-```
-
-**3. Query builder state leaking between requests.** `queryable()` memoises its builder on a singleton repository, and RoadRunner workers outlive requests, so a worker ANDs together the `where` clauses of everything it has served. Symptom is identical URLs returning different counts. Save as `apps/jikan-rest/RepositoryQuery.php`:
+`queryable()` memoises its builder on a singleton repository, and RoadRunner workers outlive requests, so a worker ANDs together the `where` clauses of everything it has served. The symptom is identical URLs returning different counts, and a `sfw=true` that returns nothing. Save as `apps/jikan-rest/RepositoryQuery.php`:
 
 ```php
 <?php
@@ -684,9 +618,7 @@ class RepositoryQuery extends RepositoryQueryBase implements RepositoryQueryCont
 }
 ```
 
-A `sfw=true` that returns zero results is this same bug, not the sfw scope.
-
-Create both files before the first `docker compose up -d`, otherwise Docker creates directories at those mount paths.
+Create this file before the first `docker compose up -d`, otherwise Docker creates a directory at that mount path.
 
 Generate the secret files (note the `chmod 644` — Mongo and the app run as non-root and must be able to read the bind-mounted secrets):
 
@@ -702,6 +634,70 @@ chmod 644 secrets/*.txt
 ```
 
 Then start it: `docker compose up -d`
+
+#### Search
+
+Jikan splits a search in two. Typesense matches `?q=`, and MongoDB applies everything else: `SearchEngineSearchService` hands the filters to Scout's `query()` hook, which runs them against the Eloquent builder that hydrates the results. So `genres`, `genres_exclude`, `producers`, `sfw`, `min_score`, `max_score`, `start_date` and `end_date` behave exactly as they would with no search engine at all, while `?q=` gets typo tolerance and matching on part of a word. The compose stack above is already wired this way, and no part of it needs patching.
+
+The other option is `SCOUT_DRIVER=null`, which sends the whole query to `MongoSearchService` instead. It is not worth taking: `$text` indexes whole tokens and tolerates no typos, so `999` never reaches *Lv999 no Murabito*, and a misspelled title returns nothing.
+
+##### Coming from an earlier version of this guide
+
+Revisions of this section before August 2026 recommended exactly that, through a `SCOUT_DRIVER: '"null"'` entry under `environment:` and a patched `MongoSearchService.php` mount. Both are now unnecessary — delete them from `compose.yaml`, keeping the `RepositoryQuery.php` mount, and recreate the container:
+
+```bash
+docker compose up -d jikan_rest
+```
+
+`SCOUT_DRIVER=typesense` in `.env.compose` then takes effect. The `MongoSearchService.php` file itself can be deleted once nothing mounts it.
+
+##### Populating the index
+
+Scout keeps Typesense current through model observers, and the `null` driver disables them. Any stack that ran with search off therefore has an index that is empty or frozen at the day it was switched off, and needs a one-off import per model:
+
+```bash
+for m in Anime Manga Character Person Club Magazine Producers; do
+  docker exec jikan_rest php artisan scout:import "App\\$m"
+done
+```
+
+Thirty thousand anime take about a minute. After that the observers keep the index in step with the indexer commands, so this is not a recurring job.
+
+Importing a model whose Mongo collection is still empty creates a collection with no fields, and searching it then returns HTTP 500 rather than an empty list, because the sort and query-by fields the model names do not exist. Run the import after the corresponding indexer, or create the collection with the fields up front. Typesense's `.*` auto field fills in the rest once real documents arrive:
+
+```bash
+docker exec jikan_rest php -r '
+$key = trim(file_get_contents("/run/secrets/jikan_typesense_api_key"));
+$auto = ["name" => ".*", "type" => "auto", "optional" => true];
+// A query of three characters or fewer is sorted by the title attribute, which a
+// string field only allows when it is declared sortable.
+$string = fn($n, $sort = false) => ["name" => $n, "type" => "string", "optional" => true, "sort" => $sort];
+$strings = fn($n) => ["name" => $n, "type" => "string[]", "optional" => true];
+$int = fn($n) => ["name" => $n, "type" => "int64", "optional" => true];
+$schemas = [
+  "manga_index" => [$auto, $string("title", true), $string("title_transformed"),
+    $string("title_english"), $string("title_english_transformed"),
+    $string("title_japanese"), $string("title_japanese_transformed"),
+    $strings("title_synonyms"), $int("popularity"), $int("rank")],
+  "characters_index" => [$auto, $string("name", true), $string("name_kanji"), $int("member_favorites")],
+  "people_index" => [$auto, $string("name", true), $string("given_name"), $string("family_name"),
+    $strings("alternate_names"), $int("member_favorites")],
+];
+foreach ($schemas as $name => $fields) {
+  $c = curl_init("http://jikan_typesense:8108/collections");
+  curl_setopt_array($c, [CURLOPT_RETURNTRANSFER => true, CURLOPT_POST => true,
+    CURLOPT_HTTPHEADER => ["X-TYPESENSE-API-KEY: $key", "Content-Type: application/json"],
+    CURLOPT_POSTFIELDS => json_encode(["name" => $name, "fields" => $fields])]);
+  curl_exec($c);
+  echo $name, " ", curl_getinfo($c, CURLINFO_HTTP_CODE), PHP_EOL;
+}'
+```
+
+Restart `jikan_rest` afterwards. Its collection descriptor caches a schema per RoadRunner worker, so workers started before an index existed keep serving the old answer.
+
+##### Result ordering
+
+`TYPESENSE_TEXT_MATCH_BUCKETS` (default 1) groups results into relevance bands before the secondary sort applies. Raising it leans the order towards popularity, lowering it towards the exact wording of the query.
 
 #### MongoDB indexes
 

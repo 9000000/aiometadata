@@ -324,7 +324,7 @@ export function useDashboardOperations(options: DashboardQueryOptions = {}) {
       }
     },
     // Only fetch when operations tab is active
-    enabled: enabled && isAdmin && !!adminKey && isActiveTab,
+    enabled: enabled && isAdmin && isActiveTab,
     refetchInterval: shouldPoll ? POLLING_INTERVALS.OPERATIONS : false,
     refetchIntervalInBackground: false,
   });
@@ -356,7 +356,7 @@ export function useDashboardMemory(options: DashboardQueryOptions = {}) {
         throw error;
       }
     },
-    enabled: enabled && isAdmin && !!adminKey && isActiveTab,
+    enabled: enabled && isAdmin && isActiveTab,
     refetchInterval: shouldPoll ? POLLING_INTERVALS.SYSTEM : false,
     refetchIntervalInBackground: false,
   });
@@ -390,7 +390,7 @@ export function useDashboardUsers(options: DashboardQueryOptions = {}) {
       }
     },
     // Only fetch when users tab is active
-    enabled: enabled && isAdmin && !!adminKey && isActiveTab,
+    enabled: enabled && isAdmin && isActiveTab,
     refetchInterval: shouldPoll ? POLLING_INTERVALS.USERS : false,
     refetchIntervalInBackground: false,
   });
@@ -421,7 +421,7 @@ export function useDashboardHeatmap(options: DashboardQueryOptions & { days?: nu
         throw error;
       }
     },
-    enabled: enabled && isAdmin && !!adminKey && isActiveTab,
+    enabled: enabled && isAdmin && isActiveTab,
     refetchInterval: false,
     refetchIntervalInBackground: false,
   });
@@ -458,7 +458,7 @@ export function useDashboardLogs(options: DashboardQueryOptions & { paused?: boo
   const { activeTab = 'overview', enabled = true, paused = false } = options;
 
   const isActiveTab = activeTab === 'logs';
-  const shouldStream = isVisible && isActiveTab && isAdmin && !!adminKey && enabled && !paused;
+  const shouldStream = isVisible && isActiveTab && isAdmin && enabled && !paused;
 
   const cursorRef = useRef(0);
   const [accumulated, setAccumulated] = useState<LogsData>({ entries: [], cursor: 0, tags: [], services: [] });
@@ -920,7 +920,7 @@ export function useColdStoreStats(options: DashboardQueryOptions = {}) {
       if (!response.ok) return null;
       return response.json();
     },
-    enabled: enabled && isAdmin && !!adminKey && isActiveTab,
+    enabled: enabled && isAdmin && isActiveTab,
     refetchInterval: shouldPoll ? POLLING_INTERVALS.COLD_STORE : false,
     refetchIntervalInBackground: false,
   });
@@ -1021,7 +1021,7 @@ export function usePosterCacheStats(options: DashboardQueryOptions = {}) {
       if (!response.ok) return null;
       return response.json();
     },
-    enabled: enabled && isAdmin && !!adminKey && isActiveTab,
+    enabled: enabled && isAdmin && isActiveTab,
     refetchInterval: shouldPoll ? POLLING_INTERVALS.OPERATIONS : false,
     refetchIntervalInBackground: false,
   });
@@ -1109,7 +1109,7 @@ export function useDashboardSettings(options: DashboardQueryOptions = {}) {
         throw error;
       }
     },
-    enabled: enabled && isAdmin && !!adminKey && activeTab === 'settings',
+    enabled: enabled && isAdmin && activeTab === 'settings',
     staleTime: 30 * 1000,
   });
 }

@@ -160,7 +160,7 @@ function ActivityHeatmap({ data, days, onDaysChange }: { data: HeatmapData | und
 }
 
 export function DashboardUsers({ data, loading, activeTab }: { data: any; loading: boolean; activeTab: DashboardTab }) {
-  const { adminKey } = useAdmin();
+  const { isAdmin, adminKey } = useAdmin();
   const [heatmapDays, setHeatmapDays] = useState(7);
   const heatmapQuery = useDashboardHeatmap({ activeTab, days: heatmapDays });
 
@@ -187,8 +187,8 @@ export function DashboardUsers({ data, loading, activeTab }: { data: any; loadin
   const [showUserDetails, setShowUserDetails] = useState(false);
 
   const handleClearUserData = () => {
-    if (!adminKey) {
-      toast.error("Admin key required", {
+    if (!isAdmin) {
+      toast.error("Administrator access required", {
         description: "You need admin access to clear user data",
       });
       return;

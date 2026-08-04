@@ -31,6 +31,7 @@ import {
   Shield,
   Users,
   Key,
+  LogIn,
   LogOut,
   AlertCircle,
   ChevronLeft,
@@ -70,7 +71,7 @@ function AdminLoginModal({
   adminKeyNotConfigured,
   guestModeEnabled 
 }: AdminLoginModalProps) {
-  const { login, loginAsGuest, isLoading } = useAdmin();
+  const { login, loginAsGuest, isLoading, ssoEnabled } = useAdmin();
   const [inputAdminKey, setInputAdminKey] = useState("");
   const [error, setError] = useState("");
   const [showAdminInput, setShowAdminInput] = useState(false);
@@ -229,13 +230,33 @@ function AdminLoginModal({
             Dashboard Access
           </DialogTitle>
           <DialogDescription>
-            {guestModeEnabled 
+            {guestModeEnabled || ssoEnabled
               ? "Choose how you'd like to access the dashboard."
               : "Enter your admin key to access the dashboard."
             }
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
+          {/* SSO Option - Only shown when a provider is configured */}
+          {ssoEnabled && (
+            <Button
+              className="w-full justify-start h-auto py-4"
+              variant="outline"
+              onClick={() => {
+                const next = encodeURIComponent(window.location.pathname + window.location.search);
+                window.location.href = `/api/auth/oidc/start?next=${next}`;
+              }}
+            >
+              <div className="flex items-center gap-3">
+                <LogIn className="h-5 w-5 text-primary" />
+                <div className="text-left">
+                  <p className="font-medium">Sign in with SSO</p>
+                  <p className="text-xs text-muted-foreground">Your permissions come from your identity provider</p>
+                </div>
+              </div>
+            </Button>
+          )}
+
           {/* Admin Login Option */}
           <Button 
             className="w-full justify-start h-auto py-4" 
@@ -246,7 +267,9 @@ function AdminLoginModal({
               <Key className="h-5 w-5 text-primary" />
               <div className="text-left">
                 <p className="font-medium">Admin Login</p>
-                <p className="text-xs text-muted-foreground">Full access to all dashboard features</p>
+                <p className="text-xs text-muted-foreground">
+                  {ssoEnabled ? 'Use the admin key instead' : 'Full access to all dashboard features'}
+                </p>
               </div>
             </div>
           </Button>
@@ -286,12 +309,15 @@ type AccessLevel = 'none' | 'guest' | 'admin';
 interface AdminStatusBadgeProps {}
 
 function AdminStatusBadge({}: AdminStatusBadgeProps) {
-  const { isAdmin, isGuest, adminKey, logout } = useAdmin();
+  const { isAdmin, isGuest, adminKey, session, logout, signOut } = useAdmin();
 
   // Determine current access level based on AdminContext state
   const accessLevel: AccessLevel = isAdmin ? 'admin' : isGuest ? 'guest' : 'none';
 
-  const handleLogout = () => {
+  // A provider session lives on the server, so clearing local state alone would
+  // leave the user signed in.
+  const handleLogout = async () => {
+    if (session) await signOut();
     logout();
   };
 
@@ -305,7 +331,7 @@ function AdminStatusBadge({}: AdminStatusBadgeProps) {
       {accessLevel === 'admin' ? (
         <Badge variant="default" className="bg-green-600">
           <Shield className="h-3 w-3 mr-1" />
-          Admin
+          {session?.username || 'Admin'}
         </Badge>
       ) : (
         <Badge variant="secondary" className="bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
@@ -313,7 +339,7 @@ function AdminStatusBadge({}: AdminStatusBadgeProps) {
           Guest
         </Badge>
       )}
-      {(adminKey || isGuest) && (
+      {(adminKey || isGuest || session) && (
         <Button variant="outline" size="sm" onClick={handleLogout}>
           <LogOut className="h-4 w-4 mr-1" />
           Logout

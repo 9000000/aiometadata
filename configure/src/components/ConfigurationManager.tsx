@@ -140,6 +140,57 @@ export function ConfigurationManager() {
     }
   };
 
+  // Linking needs the password once, so it is only offered while the
+  // configuration is open with one in hand.
+  const [ssoState, setSsoState] = useState<{ signedIn: boolean; saved: boolean }>({ signedIn: false, saved: false });
+  const [linking, setLinking] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await fetch('/api/auth/status').then(r => (r.ok ? r.json() : null));
+        if (cancelled || !status?.signedIn) return;
+        const saved = await fetch('/api/profiles').then(r => (r.ok ? r.json() : null));
+        const uuid = identity?.userUUID;
+        if (cancelled) return;
+        setSsoState({
+          signedIn: true,
+          saved: Boolean(uuid && (saved?.profiles || []).some((p: any) => p.userUUID === uuid)),
+        });
+      } catch {
+        if (!cancelled) setSsoState({ signedIn: false, saved: false });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [identity?.userUUID]);
+
+  const handleSaveToAccount = async () => {
+    if (!identity?.userUUID || !auth.password) return;
+    setLinking(true);
+    try {
+      const response = await fetch('/api/profiles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userUUID: identity.userUUID,
+          password: auth.password,
+          label: config.addonName?.trim() || identity.userUUID.slice(0, 8),
+        }),
+      });
+      const result = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(result?.error || 'Could not save this configuration');
+      setSsoState(prev => ({ ...prev, saved: true }));
+      toast.success('Saved to your account', {
+        description: 'Sign in and pick it from the list instead of typing its UUID and password.',
+      });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not save this configuration');
+    } finally {
+      setLinking(false);
+    }
+  };
+
   const saveHint = auth.authenticated
     ? "Updates your saved configuration in the database."
     : "You'll create a password, then get a UUID and install URL.";
@@ -235,6 +286,23 @@ export function ConfigurationManager() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {ssoState.signedIn && (
+              ssoState.saved ? (
+                <p className="rounded-md border border-emerald-600/40 bg-emerald-950/20 p-2 text-[11px] text-emerald-500">
+                  Saved to your account. Signing in is enough to open it from now on.
+                </p>
+              ) : auth.password ? (
+                <div className="flex flex-col gap-2 rounded-md border p-2 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-[11px] text-muted-foreground">
+                    Save this to your account and you will not need its UUID or password again.
+                  </p>
+                  <Button size="sm" variant="outline" disabled={linking} onClick={handleSaveToAccount}>
+                    {linking ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
+                    Save to my account
+                  </Button>
+                </div>
+              ) : null
+            )}
             <div className="space-y-3">
               <div>
                 <Label className="text-sm font-medium">Your UUID</Label>

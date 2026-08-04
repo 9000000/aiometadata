@@ -2,6 +2,7 @@ const consola = require('consola');
 const database = require('./database');
 const { toFusionWidgets } = require('./collectionBuilder/fusionExport');
 const { toNuvioCollections } = require('./collectionBuilder/nuvioExport');
+const { buildBlueprintLookup } = require('./collectionBuilder/blueprintLookup');
 const { isAliasFeatureEnabled, getAliasForUuid } = require('./aliasResolver');
 const buildInfo = require('./buildInfo');
 
@@ -67,7 +68,8 @@ function register(addon) {
       }
 
       const identity = buildIdentity(req, userUUID, config, readTag(req));
-      const { output } = toFusionWidgets(entries, identity);
+      const blueprints = buildBlueprintLookup(config.catalogs);
+      const { output } = toFusionWidgets(entries, identity, { blueprints });
       logger.debug(`Served ${output.widgets.length} Fusion widgets for ${userUUID.substring(0, 8)}`);
       sendJson(res, output);
     } catch (err) {
@@ -85,7 +87,8 @@ function register(addon) {
       }
 
       const identity = buildIdentity(req, userUUID, config, readTag(req));
-      const { output } = toNuvioCollections(entries, identity);
+      const blueprints = buildBlueprintLookup(config.catalogs);
+      const { output } = toNuvioCollections(entries, identity, blueprints);
       logger.debug(`Served ${output.length} Nuvio collections for ${userUUID.substring(0, 8)}`);
       sendJson(res, output);
     } catch (err) {

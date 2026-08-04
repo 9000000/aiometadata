@@ -1,6 +1,7 @@
 import { allCatalogDefinitions } from '@/data/catalogs';
 import type { AppConfig, CatalogConfig } from '@/contexts/config';
 import type { AddonIdentity, BuilderEntry, SourceDraft } from '@shared/types';
+import { isNativeSource } from '@shared/catalogReconstruction';
 
 /** A catalog as it is addressable in the generated manifest. */
 export interface ManifestCatalog {
@@ -235,17 +236,11 @@ export function findUnknownSources(
       ? (entry.source ? [entry.source] : [])
       : entry.folders.flatMap(folder => folder.sources);
     for (const source of sources) {
+      if (isNativeSource(source)) continue;
       if (!known.has(catalogKey(source))) unknown.push(source);
     }
   }
   return unknown;
-}
-
-export function entryHasUnknownSource(
-  entry: BuilderEntry,
-  catalogs: ManifestCatalog[]
-): boolean {
-  return findUnknownSources([entry], catalogs).length > 0;
 }
 
 /**
@@ -260,6 +255,7 @@ export function healSourceNames(
   const byKey = new Map(catalogs.map(catalog => [catalogKey(catalog), catalog]));
 
   const heal = (source: SourceDraft): SourceDraft => {
+    if (isNativeSource(source)) return source;
     const match = byKey.get(catalogKey(source));
     return match && match.name && match.name !== source.name
       ? { ...source, name: match.name }
@@ -315,6 +311,7 @@ export function findSourceIssues(
   const issues: SourceIssue[] = [];
 
   const check = (source: SourceDraft, entryId: string, entryTitle: string) => {
+    if (isNativeSource(source)) return;
     const label = trimmed(source.name) || trimmed(source.catalogId) || 'unnamed';
     const match = byKey.get(catalogKey(source));
     if (!match) {

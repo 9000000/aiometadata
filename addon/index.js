@@ -533,6 +533,8 @@ const respond = function (req, res, data, opts) {
       hasBuiltInTvdb: !!getSetting('BUILT_IN_TVDB_API_KEY'),
       hasBuiltInTmdb: !!getSetting('BUILT_IN_TMDB_API_KEY'),
       catalogTTL: parseInt(getSetting('CATALOG_TTL') || String(24 * 60 * 60), 10),
+      maxCatalogs: parseInt(getSetting('MAX_CATALOGS') || '', 10) || null,
+      collectionImportCatalogCap: parseInt(getSetting('COLLECTION_IMPORT_CATALOG_CAP') || '', 10) || 300,
       simklTrendingPageSizeOptions: resolvedOptions,
       traktSearchEnabled: getSetting('DISABLE_TRAKT_SEARCH') !== 'true',
       simklSearchEnabled: getSetting('DISABLE_SIMKL_SEARCH') !== 'true',

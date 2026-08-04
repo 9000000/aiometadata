@@ -1,85 +1,17 @@
 
 import { CatalogConfig } from '@/contexts/config';
+import {
+  buildShareableCatalog,
+  isPrivateList,
+  isUserSpecific,
+  sanitizeMetadata,
+} from '@shared/catalogSharing';
 
 const SHARE_VERSION = 1;
 
-// ---- Privacy / Exclusion Rules ----
-
-const USER_SPECIFIC_PATTERNS = [
-  'tmdb.watchlist',
-  'tmdb.favorites',
-  'tmdb.list.',
-  'trakt.watchlist',
-  'trakt.favorites',
-  'trakt.recommendations',
-  'trakt.calendar',
-  'trakt.list.',
-  'trakt.upnext',
-  'trakt.unwatched',
-  'trakt.history',
-  'simkl.watchlist',
-  'simkl.watching',
-  'simkl.plantowatch',
-  'simkl.completed',
-  'simkl.dropped',
-  'simkl.hold',
-  'anilist.watching',
-  'anilist.planning',
-  'anilist.completed',
-  'anilist.dropped',
-  'anilist.paused',
-  'anilist.repeating',
-  'stremthru.',
-];
-
-function isUserSpecific(catalogId: string): boolean {
-  return USER_SPECIFIC_PATTERNS.some(pattern => catalogId.startsWith(pattern));
-}
-
-function isPrivateList(catalog: CatalogConfig): boolean {
-  // Trakt lists with privacy set to private
-  if (catalog.metadata?.privacy === 'private') return true;
-  // Letterboxd watchlists are user-specific
-  if (catalog.source === 'letterboxd' && catalog.metadata?.isWatchlist) return true;
-  return false;
-}
-
-// ---- Metadata Sanitization ----
-
-// Fields safe to include in export (used by the backend)
-function sanitizeMetadata(metadata: CatalogConfig['metadata']): CatalogConfig['metadata'] | undefined {
-  if (!metadata) return undefined;
-
-  const safe: Record<string, any> = {};
-
-  // Backend-critical fields
-  if (metadata.discover) safe.discover = metadata.discover;
-  if (metadata.discoverParams) safe.discoverParams = metadata.discoverParams;
-  if (metadata.interval) safe.interval = metadata.interval;
-  if (metadata.pageSize) safe.pageSize = metadata.pageSize;
-  if (metadata.useShowPosterForUpNext !== undefined) safe.useShowPosterForUpNext = metadata.useShowPosterForUpNext;
-  if (metadata.airingSoonDays !== undefined) safe.airingSoonDays = metadata.airingSoonDays;
-  if (metadata.status) safe.status = metadata.status;
-  if (metadata.description) safe.description = metadata.description;
-
-  // Public list metadata (safe to share)
-  if (metadata.itemCount !== undefined) safe.itemCount = metadata.itemCount;
-  if (metadata.url) safe.url = metadata.url;
-  if (metadata.identifier) safe.identifier = metadata.identifier;
-  if (metadata.isWatchlist !== undefined) safe.isWatchlist = metadata.isWatchlist;
-  if (metadata.isCustomList !== undefined) safe.isCustomList = metadata.isCustomList;
-  if ((metadata as any).mediatype) safe.mediatype = (metadata as any).mediatype;
-  if (metadata.username) safe.username = metadata.username;
-  if (metadata.listName) safe.listName = metadata.listName;
-  if (metadata.author) safe.author = metadata.author;
-  if (metadata.listId) safe.listId = metadata.listId;
-  if (metadata.listDescription) safe.listDescription = metadata.listDescription;
-
-  // Intentionally EXCLUDED:
-  // - privacy (stripped — we already filter out private lists)
-
-  return Object.keys(safe).length > 0 ? safe : undefined;
-}
+// The rules live in the shared collection-builder module so the collection
+// exports, which embed catalogs, cannot drift from what this exports.
+export { buildShareableCatalog, isUserSpecific };
 
 // ---- Export ----
 

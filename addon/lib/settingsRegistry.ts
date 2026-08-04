@@ -457,6 +457,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: '',
   },
   {
+    key: 'COLLECTION_IMPORT_CATALOG_CAP',
+    envVar: 'COLLECTION_IMPORT_CATALOG_CAP',
+    label: 'Collection Import Catalog Cap',
+    description: 'Most catalogs a collection import may add, used when Max Catalogs is empty. Community collection files can reference thousands, and every one added becomes a manifest entry.',
+    category: 'Features',
+    type: 'number',
+    default: 300,
+  },
+  {
     key: 'CATALOG_LIST_ITEMS_SIZE',
     envVar: 'CATALOG_LIST_ITEMS_SIZE',
     label: 'Catalog List Page Size',

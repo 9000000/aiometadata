@@ -1,0 +1,92 @@
+/**
+ * What may leave a config when a catalog is shared. Used by the catalog export in
+ * the configure UI and by the collection exports, which embed catalogs so an
+ * imported layout can rebuild them. Structural types: the frontend's CatalogConfig
+ * is not reachable from the addon.
+ */
+
+export interface ShareableCatalog {
+  id: string;
+  name: string;
+  type: string;
+  source: string;
+  enabled?: boolean;
+  showInHome?: boolean;
+  displayType?: string;
+  cacheTTL?: number;
+  sort?: string;
+  sortDirection?: string;
+  metadata?: Record<string, any>;
+  [key: string]: any;
+}
+
+const USER_SPECIFIC_PATTERNS = [
+  'tmdb.watchlist',
+  'tmdb.favorites',
+  'tmdb.list.',
+  'trakt.watchlist',
+  'trakt.favorites',
+  'trakt.recommendations',
+  'trakt.calendar',
+  'trakt.list.',
+  'trakt.upnext',
+  'trakt.unwatched',
+  'trakt.history',
+  'simkl.watchlist',
+  'simkl.watching',
+  'simkl.plantowatch',
+  'simkl.completed',
+  'simkl.dropped',
+  'simkl.hold',
+  'anilist.watching',
+  'anilist.planning',
+  'anilist.completed',
+  'anilist.dropped',
+  'anilist.paused',
+  'anilist.repeating',
+  'stremthru.',
+];
+
+export function isUserSpecific(catalogId: string): boolean {
+  return USER_SPECIFIC_PATTERNS.some(pattern => catalogId.startsWith(pattern));
+}
+
+export function isPrivateList(catalog: ShareableCatalog): boolean {
+  if (catalog.metadata?.privacy === 'private') return true;
+  if (catalog.source === 'letterboxd' && catalog.metadata?.isWatchlist) return true;
+  return false;
+}
+
+const SAFE_METADATA = [
+  'discover', 'discoverParams', 'interval', 'pageSize', 'useShowPosterForUpNext',
+  'airingSoonDays', 'status', 'description', 'itemCount', 'url', 'identifier',
+  'isWatchlist', 'isCustomList', 'mediatype', 'username', 'listName', 'author',
+  'listId', 'listDescription',
+];
+
+/** Everything not named here is dropped, `privacy` deliberately among them. */
+export function sanitizeMetadata(
+  metadata: Record<string, any> | undefined
+): Record<string, any> | undefined {
+  if (!metadata) return undefined;
+
+  const safe: Record<string, any> = {};
+  for (const key of SAFE_METADATA) {
+    const value = metadata[key];
+    if (value !== undefined) safe[key] = value;
+  }
+
+  return Object.keys(safe).length > 0 ? safe : undefined;
+}
+
+/** One catalog stripped of anything private, or null when the catalog is personal. */
+export function buildShareableCatalog<T extends ShareableCatalog>(catalog: T): T | null {
+  if (isUserSpecific(catalog.id) || isPrivateList(catalog)) return null;
+
+  const shared: Record<string, any> = { ...catalog };
+  const metadata = sanitizeMetadata(catalog.metadata);
+  if (metadata) shared.metadata = metadata;
+  else delete shared.metadata;
+
+  return shared as T;
+}

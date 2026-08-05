@@ -103,7 +103,7 @@ export function readCookie(req: any, name: string): string | undefined {
   return undefined;
 }
 
-function isSecureRequest(req: any): boolean {
+export function isSecureRequest(req: any): boolean {
   return req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
 }
 

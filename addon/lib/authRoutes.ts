@@ -8,6 +8,7 @@ import {
   clearSessionCookie,
   createSession,
   destroySession,
+  isSecureRequest,
   readCookie,
   setSessionCookie,
   SESSION_COOKIE,
@@ -24,6 +25,7 @@ import {
 const logger = consola.withTag('Auth');
 
 const FLOW_PREFIX = 'auth:flow:';
+const FLOW_COOKIE = 'aiom_auth_flow';
 const FLOW_TTL_SECONDS = 10 * 60;
 const MAX_PROFILES = 50;
 const MAX_LABEL_LENGTH = 64;
@@ -58,6 +60,21 @@ function safeNext(value: unknown): string {
 
 function trimmed(value: unknown): string {
   return String(value ?? '').trim();
+}
+
+function flowCookieOptions(req: any) {
+  return {
+    httpOnly: true,
+    sameSite: 'lax' as const,
+    secure: isSecureRequest(req),
+    path: '/api/auth/oidc',
+  };
+}
+
+function sameValue(left: string, right: string): boolean {
+  const a = Buffer.from(left);
+  const b = Buffer.from(right);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 /**
@@ -132,6 +149,7 @@ export function register(addon: any, options: { rateLimit?: any } = {}): void {
         next: safeNext(req.query.next),
       };
       await redis.set(`${FLOW_PREFIX}${request.state}`, JSON.stringify(flow), 'EX', FLOW_TTL_SECONDS);
+      res.cookie(FLOW_COOKIE, request.state, { ...flowCookieOptions(req), maxAge: FLOW_TTL_SECONDS * 1000 });
       res.redirect(request.url);
     } catch (error: any) {
       logger.error(`Could not start sign-in: ${error.message}`);
@@ -149,6 +167,12 @@ export function register(addon: any, options: { rateLimit?: any } = {}): void {
     const code = trimmed(req.query.code);
     if (!state || !code) {
       return res.status(400).json({ error: 'Incomplete reply from the identity provider' });
+    }
+
+    const presented = readCookie(req, FLOW_COOKIE);
+    res.clearCookie(FLOW_COOKIE, flowCookieOptions(req));
+    if (!presented || !sameValue(presented, state)) {
+      return res.status(400).json({ error: 'This sign-in did not start in this browser. Start again.' });
     }
 
     // Single use: a replayed state must not open a second session.

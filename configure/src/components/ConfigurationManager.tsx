@@ -240,28 +240,48 @@ export function ConfigurationManager() {
           <CardDescription>What your addon exposes to your client.</CardDescription>
         </CardHeader>
         <CardContent>
-          <SettingRow
-            htmlFor="catalog-mode-only"
-            label="Catalog Mode Only"
-            description="Catalogs only, no Meta. Use when another addon supplies it: a second AIOMetadata instance, or a different meta provider."
-            control={
-              <Switch
-                id="catalog-mode-only"
-                checked={config.catalogModeOnly ?? false}
-                onCheckedChange={(checked) => {
-                  setConfig(prev => ({
-                    ...prev,
-                    catalogModeOnly: checked
-                  }));
-                }}
-              />
-            }
-            note={config.catalogModeOnly ? (
-              <Callout variant="warn">
-                Meta will come from another addon. AIOMetadata's meta and art provider settings won't apply.
-              </Callout>
-            ) : null}
-          />
+          <div className="space-y-2">
+            <SettingRow
+              htmlFor="catalog-mode-only"
+              label="Catalog Mode Only"
+              description="Catalogs only, no Meta. Use when another addon supplies it: a second AIOMetadata instance, or a different meta provider."
+              control={
+                <Switch
+                  id="catalog-mode-only"
+                  checked={config.catalogModeOnly ?? false}
+                  onCheckedChange={(checked) => {
+                    setConfig(prev => ({
+                      ...prev,
+                      catalogModeOnly: checked
+                    }));
+                  }}
+                />
+              }
+              note={config.catalogModeOnly ? (
+                <Callout variant="warn">
+                  Meta will come from another addon. AIOMetadata's meta and art provider settings won't apply.
+                </Callout>
+              ) : null}
+            />
+
+            <SettingRow
+              htmlFor="hide-stremio-catalogs"
+              label="Hide Stremio Catalogs"
+              description="Hide Stremio-specific catalogs such as Calendar videos from the manifest for clients that do not use them."
+              control={
+                <Switch
+                  id="hide-stremio-catalogs"
+                  checked={config.hideStremioCatalogs ?? false}
+                  onCheckedChange={(checked) => {
+                    setConfig(prev => ({
+                      ...prev,
+                      hideStremioCatalogs: checked
+                    }));
+                  }}
+                />
+              }
+            />
+          </div>
         </CardContent>
       </Card>
       <Card>

@@ -296,6 +296,7 @@ export interface AppConfig {
   showDisabledCatalogs?: boolean;
   tags?: TagDef[];
   catalogModeOnly?: boolean;
+  hideStremioCatalogs?: boolean;
   customPosterUrlPattern?: string;
   customBackgroundUrlPattern?: string;
   customLandscapeUrlPattern?: string;

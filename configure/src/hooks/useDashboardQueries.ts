@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 // Types
 // ============================================================================
 
-export type DashboardTab = 'overview' | 'analytics' | 'content' | 'performance' | 'system' | 'operations' | 'users' | 'logs' | 'settings';
+export type DashboardTab = 'overview' | 'analytics' | 'content' | 'performance' | 'system' | 'operations' | 'users' | 'accounts' | 'logs' | 'settings';
 
 interface DashboardQueryOptions {
   activeTab?: DashboardTab;
@@ -26,6 +26,7 @@ const POLLING_INTERVALS = {
   OPERATIONS: 5 * 1000,         // 5 seconds - warming tasks need fast updates
   COLD_STORE: 60 * 1000,        // 60 seconds - size gauge over a large table, not a live feed
   USERS: 15 * 1000,             // 15 seconds - user activity
+  ACCOUNTS: 30 * 1000,          // 30 seconds - sign-ins change less often than config users
   CONTENT: 60 * 1000,           // 60 seconds - slow-changing data
   LOGS: 2 * 1000,               // 2 seconds - live log streaming (backstop for the SSE stream)
 } as const;
@@ -42,6 +43,7 @@ export const DASHBOARD_QUERY_KEYS = {
   system: ['dashboard', 'system'] as const,
   operations: ['dashboard', 'operations'] as const,
   users: ['dashboard', 'users'] as const,
+  accounts: ['dashboard', 'accounts'] as const,
   logs: ['dashboard', 'logs'] as const,
   settings: ['dashboard', 'settings'] as const,
   all: ['dashboard'] as const,
@@ -1119,16 +1121,99 @@ export function useUpdateSetting() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ key, value }: { key: string; value: string }) => {
+    mutationFn: async ({ key, value, confirm }: { key: string; value: string; confirm?: boolean }) => {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (adminKey) headers['x-admin-key'] = adminKey;
 
       const response = await fetch(`/api/dashboard/settings/${encodeURIComponent(key)}`, {
         method: 'PUT',
         headers,
-        body: JSON.stringify({ value }),
+        body: JSON.stringify(confirm ? { value, confirm: true } : { value }),
       });
 
+      if (response.status === 401) { logout(); throw new Error('Session expired.'); }
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        const err: any = new Error(data.error || `HTTP ${response.status}`);
+        err.requiresConfirmation = data.requiresConfirmation === true;
+        err.reason = data.reason;
+        throw err;
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.settings });
+    },
+  });
+}
+
+export interface AccountRow {
+  accountId: string;
+  issuer: string;
+  subject: string;
+  username: string;
+  email: string | null;
+  createdAt: string;
+  lastSeenAt: string;
+  activeSessions: number;
+}
+
+export interface AccountConfigRow {
+  userUUID: string;
+  label: string;
+  linkedAt: string;
+  lastOpenedAt: string | null;
+}
+
+export function useDashboardAccounts(options: DashboardQueryOptions = {}) {
+  const { isAdmin, logout } = useAdmin();
+  const getHeaders = useApiHeaders();
+  const isVisible = usePageVisibility();
+  const { activeTab = 'overview', enabled = true } = options;
+
+  const isActiveTab = activeTab === 'accounts';
+  const shouldPoll = isVisible && isActiveTab && isAdmin;
+
+  return useQuery({
+    queryKey: DASHBOARD_QUERY_KEYS.accounts,
+    queryFn: async () => {
+      try {
+        return await fetchDashboardData<{ accounts: AccountRow[] }>('/api/auth/accounts', getHeaders());
+      } catch (error) {
+        if (error instanceof Error && error.message === 'UNAUTHORIZED') {
+          logout();
+          throw error;
+        }
+        throw error;
+      }
+    },
+    enabled: enabled && isAdmin && isActiveTab,
+    refetchInterval: shouldPoll ? POLLING_INTERVALS.ACCOUNTS : false,
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function useAccountConfigs(accountId: string | null) {
+  const getHeaders = useApiHeaders();
+
+  return useQuery({
+    queryKey: ['dashboard', 'accounts', accountId, 'configs'] as const,
+    queryFn: async () =>
+      fetchDashboardData<{ configs: AccountConfigRow[] }>(`/api/auth/accounts/${encodeURIComponent(accountId as string)}/configs`, getHeaders()),
+    enabled: Boolean(accountId),
+  });
+}
+
+export function useRevokeAccountSessions() {
+  const { adminKey, logout } = useAdmin();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (accountId: string) => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (adminKey) headers['x-admin-key'] = adminKey;
+
+      const response = await fetch(`/api/auth/accounts/${encodeURIComponent(accountId)}/revoke`, { method: 'POST', headers });
       if (response.status === 401) { logout(); throw new Error('Session expired.'); }
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
@@ -1137,7 +1222,31 @@ export function useUpdateSetting() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.settings });
+      queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.accounts });
+    },
+  });
+}
+
+export function useDeleteAccount() {
+  const { adminKey, logout } = useAdmin();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ accountId, confirm }: { accountId: string; confirm?: boolean }) => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (adminKey) headers['x-admin-key'] = adminKey;
+
+      const url = `/api/auth/accounts/${encodeURIComponent(accountId)}${confirm ? '?confirm=true' : ''}`;
+      const response = await fetch(url, { method: 'DELETE', headers });
+      if (response.status === 401) { logout(); throw new Error('Session expired.'); }
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.accounts });
     },
   });
 }
@@ -1170,19 +1279,23 @@ export function useResetSetting() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (key: string) => {
+    mutationFn: async ({ key, confirm }: { key: string; confirm?: boolean }) => {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (adminKey) headers['x-admin-key'] = adminKey;
 
       const response = await fetch(`/api/dashboard/settings/reset/${encodeURIComponent(key)}`, {
         method: 'POST',
         headers,
+        body: JSON.stringify(confirm ? { confirm: true } : {}),
       });
 
       if (response.status === 401) { logout(); throw new Error('Session expired.'); }
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || `HTTP ${response.status}`);
+        const err: any = new Error(data.error || `HTTP ${response.status}`);
+        err.requiresConfirmation = data.requiresConfirmation === true;
+        err.reason = data.reason;
+        throw err;
       }
       return response.json();
     },

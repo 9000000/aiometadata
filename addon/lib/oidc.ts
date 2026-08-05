@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import consola from 'consola';
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import { getSetting } from './settingsService';
-import { ALL_PERMISSIONS, isPermission, type Permission } from './authSession';
+import { ALL_PERMISSIONS, isPermission, type Permission } from './permissions';
 
 const logger = consola.withTag('OIDC');
 
@@ -38,7 +38,11 @@ function trimmed(value: unknown): string {
  * `group=perm|perm,other=perm`. JSON is accepted too, for group names that
  * contain a comma or an equals sign.
  */
-export function parseGroupPermissions(raw: string): Record<string, string> | null {
+let groupMapCacheRaw: string | null = null;
+let groupMapCacheValue: Record<string, string> | null = null;
+let groupMapCacheHit = false;
+
+function parseGroupPermissionsUncached(raw: string): Record<string, string> | null {
   const value = trimmed(raw);
   if (!value) return {};
 
@@ -79,18 +83,51 @@ export function parseGroupPermissions(raw: string): Record<string, string> | nul
   return map;
 }
 
-export function readOidcConfig(): OidcConfig {
+export function parseGroupPermissions(raw: string): Record<string, string> | null {
+  if (groupMapCacheHit && groupMapCacheRaw === raw) return groupMapCacheValue;
+  const parsed = parseGroupPermissionsUncached(raw);
+  groupMapCacheRaw = raw;
+  groupMapCacheValue = parsed;
+  groupMapCacheHit = true;
+  return parsed;
+}
+
+function buildOidcConfig(read: (key: string) => string): OidcConfig {
   return {
-    enabled: getSetting('OIDC_ENABLED') === 'true',
-    issuer: trimmed(getSetting('OIDC_ISSUER')).replace(/\/+$/, ''),
-    clientId: trimmed(getSetting('OIDC_CLIENT_ID')),
-    clientSecret: trimmed(getSetting('OIDC_CLIENT_SECRET')),
-    groupsClaim: trimmed(getSetting('OIDC_GROUPS_CLAIM')) || 'groups',
-    usernameClaim: trimmed(getSetting('OIDC_USERNAME_CLAIM')),
-    groupPermissions: parseGroupPermissions(getSetting('OIDC_GROUP_PERMISSIONS')),
-    defaultPermissions: trimmed(getSetting('OIDC_DEFAULT_PERMISSIONS')),
-    allowInsecure: getSetting('OIDC_ALLOW_INSECURE_ISSUER') === 'true',
+    enabled: read('OIDC_ENABLED') === 'true',
+    issuer: trimmed(read('OIDC_ISSUER')).replace(/\/+$/, ''),
+    clientId: trimmed(read('OIDC_CLIENT_ID')),
+    clientSecret: trimmed(read('OIDC_CLIENT_SECRET')),
+    groupsClaim: trimmed(read('OIDC_GROUPS_CLAIM')) || 'groups',
+    usernameClaim: trimmed(read('OIDC_USERNAME_CLAIM')),
+    groupPermissions: parseGroupPermissions(read('OIDC_GROUP_PERMISSIONS')),
+    defaultPermissions: trimmed(read('OIDC_DEFAULT_PERMISSIONS')),
+    allowInsecure: read('OIDC_ALLOW_INSECURE_ISSUER') === 'true',
   };
+}
+
+export function readOidcConfig(): OidcConfig {
+  return buildOidcConfig(getSetting);
+}
+
+export type PermissionPreview =
+  | { outcome: 'granted'; permissions: Permission[] }
+  | { outcome: 'unconfigured' }
+  | { outcome: 'malformed' }
+  | { outcome: 'refused' };
+
+/**
+ * The order matches readSession, so what this predicts is what a live session
+ * would actually get: an unconfigured provider ends every session regardless of
+ * the mapping, while an unreadable mapping leaves existing sessions alone.
+ */
+export function previewPermissions(groups: string[], key: string, value: string): PermissionPreview {
+  const config = buildOidcConfig((k) => (k === key ? value : getSetting(k)));
+  if (!isOidcConfigured(config)) return { outcome: 'unconfigured' };
+  if (config.groupPermissions === null) return { outcome: 'malformed' };
+  const permissions = resolvePermissions(groups, config);
+  if (permissions === null) return { outcome: 'refused' };
+  return { outcome: 'granted', permissions };
 }
 
 /**

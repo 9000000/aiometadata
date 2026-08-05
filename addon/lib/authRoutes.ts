@@ -6,6 +6,7 @@ import database from './database';
 import {
   attachSession,
   clearSessionCookie,
+  countAccountSessions,
   createSession,
   destroyAccountSessions,
   destroySession,
@@ -234,6 +235,7 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
         username: identity.username,
         email: identity.email,
         permissions: permissions as Permission[],
+        groups: identity.groups,
       });
       setSessionCookie(req, res, sessionId);
 
@@ -248,17 +250,17 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
   addon.get('/api/auth/accounts', requireAdmin, async (_req: any, res: any) => {
     try {
       const rows = await database.listAccounts();
-      res.json({
-        accounts: rows.map((row: any) => ({
-          accountId: row.id,
-          issuer: row.issuer,
-          subject: row.subject,
-          username: row.username,
-          email: row.email,
-          createdAt: row.created_at,
-          lastSeenAt: row.last_seen_at,
-        })),
-      });
+      const accounts = await Promise.all(rows.map(async (row: any) => ({
+        accountId: row.id,
+        issuer: row.issuer,
+        subject: row.subject,
+        username: row.username,
+        email: row.email,
+        createdAt: row.created_at,
+        lastSeenAt: row.last_seen_at,
+        activeSessions: await countAccountSessions(row.id),
+      })));
+      res.json({ accounts });
     } catch (error: any) {
       logger.error(`Could not list accounts: ${error.message}`);
       res.status(500).json({ error: 'Could not list accounts' });
@@ -279,6 +281,49 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
     } catch (error: any) {
       logger.error(`Could not revoke sessions: ${error.message}`);
       res.status(500).json({ error: 'Could not revoke this account\'s sessions' });
+    }
+  });
+
+  addon.get('/api/auth/accounts/:accountId/configs', requireAdmin, async (req: any, res: any) => {
+    try {
+      const rows = await database.getAccountConfigs(req.params.accountId);
+      res.json({
+        configs: rows.map((row: any) => ({
+          userUUID: row.user_uuid,
+          label: row.label,
+          linkedAt: row.linked_at,
+          lastOpenedAt: row.last_opened_at,
+        })),
+      });
+    } catch (error: any) {
+      logger.error(`Could not list account configurations: ${error.message}`);
+      res.status(500).json({ error: 'Could not list this account\'s configurations' });
+    }
+  });
+
+  addon.delete('/api/auth/accounts/:accountId', requireAdmin, async (req: any, res: any) => {
+    const accountId = trimmed(req.params.accountId);
+    if (!accountId) return res.status(400).json({ error: 'An account is required' });
+
+    if (accountId === req.session?.accountId && trimmed(req.query.confirm) !== 'true') {
+      return res.status(409).json({
+        error: 'This would delete your own account',
+        requiresConfirmation: true,
+        reason: 'Deleting your own account signs you out immediately and unlinks the configurations saved to it.',
+      });
+    }
+
+    try {
+      const account = await database.getAccount(accountId);
+      if (!account) return res.status(404).json({ error: 'No such account' });
+
+      const revoked = await destroyAccountSessions(accountId);
+      await database.deleteAccount(accountId);
+      logger.info(`Deleted account ${account.username || accountId} and ${revoked} session(s)`);
+      res.json({ success: true, revoked });
+    } catch (error: any) {
+      logger.error(`Could not delete account: ${error.message}`);
+      res.status(500).json({ error: 'Could not delete this account' });
     }
   });
 

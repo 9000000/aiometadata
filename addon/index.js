@@ -5860,6 +5860,40 @@ const noCache = (req, res, next) => {
 };
 
 // Middleware to require admin authentication for dashboard routes
+function describeSelfDemotion(req, key, proposedValue, confirmed) {
+  if (confirmed === true) return null;
+  if (!key || !key.startsWith('OIDC_')) return null;
+  const session = req.session;
+  if (!session || !Array.isArray(session.groups)) return null;
+  if (!hasPermission(req, 'admin')) return null;
+
+  const { previewPermissions } = require('./lib/oidc');
+  const preview = previewPermissions(session.groups, key, proposedValue);
+
+  if (preview.outcome === 'unconfigured' || preview.outcome === 'refused') {
+    return {
+      error: 'This change would end your own session',
+      requiresConfirmation: true,
+      reason: `Saving ${key} would sign you out of this dashboard. If no ADMIN_KEY is set on this instance you may not be able to get back in.`,
+    };
+  }
+  if (preview.outcome === 'malformed') {
+    return {
+      error: 'This value cannot be read',
+      requiresConfirmation: true,
+      reason: `${key} would be saved but not understood, so no new sign-in would be allowed and everyone already signed in would keep the permissions they have now.`,
+    };
+  }
+  if (!preview.permissions.includes('admin')) {
+    return {
+      error: 'This change would remove your own admin access',
+      requiresConfirmation: true,
+      reason: `Saving ${key} would leave your account without the admin permission, so you would lose the dashboard immediately.`,
+    };
+  }
+  return null;
+}
+
 function requireDashboardAdmin(req, res, next) {
   // A signed-in administrator needs no key. ADMIN_KEY stays the way in when the
   // identity provider is unreachable or SSO was never set up.
@@ -7075,8 +7109,10 @@ addon.get('/api/dashboard/settings', requireDashboardAdmin, (req, res) => {
 
 addon.put('/api/dashboard/settings/:key', requireDashboardAdmin, async (req, res) => {
   try {
-    const { value } = req.body || {};
+    const { value, confirm } = req.body || {};
     if (value === undefined) return res.status(400).json({ error: 'Missing value' });
+    const block = describeSelfDemotion(req, req.params.key, String(value), confirm);
+    if (block) return res.status(409).json(block);
     await settingsService.setSetting(req.params.key, String(value));
     res.json({ success: true });
   } catch (error) {
@@ -7086,6 +7122,9 @@ addon.put('/api/dashboard/settings/:key', requireDashboardAdmin, async (req, res
 
 addon.post('/api/dashboard/settings/reset/:key', requireDashboardAdmin, async (req, res) => {
   try {
+    const proposed = settingsService.previewSettingValue(req.params.key, null);
+    const block = describeSelfDemotion(req, req.params.key, proposed, req.body && req.body.confirm);
+    if (block) return res.status(409).json(block);
     await settingsService.resetSetting(req.params.key);
     res.json({ success: true });
   } catch (error) {

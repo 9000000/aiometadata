@@ -45,6 +45,7 @@ import { DashboardOverview } from "./DashboardOverview";
 import { DashboardPerformance } from "./DashboardPerformance";
 import { DashboardOperations } from "./DashboardOperations";
 import { DashboardUsers } from "./DashboardUsers";
+import DashboardAccounts from "./DashboardAccounts";
 import { DashboardSettings } from "./DashboardSettings";
 
 
@@ -398,7 +399,7 @@ function AdminStatusBadge({}: AdminStatusBadgeProps) {
 
 // Main Dashboard Component
 export function Dashboard() {
-  const { isAdmin, isGuest, adminKey, isLoading, adminKeyConfigured, guestModeEnabled } = useAdmin();
+  const { isAdmin, isGuest, adminKey, isLoading, adminKeyConfigured, guestModeEnabled, ssoEnabled } = useAdmin();
   const { isMobile } = useBreakpoint();
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
@@ -628,6 +629,11 @@ export function Dashboard() {
           />
         ),
       },
+      ...(ssoEnabled ? [{
+        value: "accounts",
+        title: "Accounts",
+        component: <DashboardAccounts activeTab={activeTab} />,
+      }] : []),
       {
         value: "logs",
         title: "Logs",
@@ -776,6 +782,7 @@ export function Dashboard() {
                 ...(accessLevel === 'admin' ? [
                   { value: "operations", label: "Ops" },
                   { value: "users", label: "Users" },
+                  ...(ssoEnabled ? [{ value: "accounts", label: "Accounts" }] : []),
                   { value: "logs", label: "Logs" },
                   { value: "settings", label: "Settings" },
                 ] : []),
@@ -865,6 +872,12 @@ export function Dashboard() {
                 activeTab={activeTab}
               />
             </TabsContent>
+
+            {ssoEnabled && (
+              <TabsContent value="accounts" className="mt-0">
+                <DashboardAccounts activeTab={activeTab} />
+              </TabsContent>
+            )}
 
             <TabsContent value="logs" className="mt-0">
               <DashboardLogs

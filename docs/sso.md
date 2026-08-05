@@ -71,7 +71,21 @@ OIDC_GROUPS_CLAIM=email
 OIDC_GROUP_PERMISSIONS=you@example.com=admin|createConfig
 ```
 
-Group changes at the provider take effect at the next sign-in, not immediately, because permissions are read into the session. `SESSION_TTL_SECONDS` bounds that delay.
+Editing `OIDC_GROUP_PERMISSIONS` or `OIDC_DEFAULT_PERMISSIONS` takes effect immediately, including for people already signed in: permissions are resolved from the identity's groups on every request, not frozen at sign-in. An edit that leaves someone matching nothing signs them out.
+
+Group membership changes *at the provider* still take effect at the next sign-in, because the addon only learns someone's groups when they sign in. `SESSION_TTL_SECONDS` bounds that delay.
+
+If the mapping is left unreadable, people already signed in keep the permissions they last resolved and an error is logged, so a typo cannot sign out an entire instance. New sign-ins are still refused.
+
+Because a mapping edit applies at once, one that would remove your own admin permission — or switch the provider off entirely — asks you to confirm before it saves.
+
+## Managing accounts
+
+Once a provider is configured, an **Accounts** tab appears in the dashboard listing everyone who has signed in, how many sessions each one holds, and which configurations they have saved.
+
+An administrator can revoke an account's sessions, which signs it out everywhere at once, or delete the account entirely. Deleting removes the account and its links; the configurations themselves survive and stay reachable by UUID and password, so deleting an account never destroys anyone's catalogs.
+
+Revoking is the way to act on someone whose access should end before their session would expire on its own. Editing the group mapping is the way to change what they may do, and applies immediately.
 
 ## Worked example: Authelia
 
@@ -123,6 +137,6 @@ A password prompt reappearing on a configuration you thought was linked almost a
 
 **Redirected back but still asked for a password.** The configuration is not linked to the account yet. Use *Save this to your account* once.
 
-**A group change had no effect.** Permissions are read at sign-in. Sign out and back in, or wait out `SESSION_TTL_SECONDS`.
+**A group change at the provider had no effect.** The addon learns someone's groups when they sign in, so a membership change at the provider needs a new sign-in. Changing `OIDC_GROUP_PERMISSIONS` here, by contrast, applies at once. Revoke the account's sessions from the Accounts tab to force the re-sign-in.
 
 **Sign-in refused for someone who should be allowed.** They matched no entry in `OIDC_GROUP_PERMISSIONS` and `OIDC_DEFAULT_PERMISSIONS` is empty. Confirm what the provider actually issues in the claim named by `OIDC_GROUPS_CLAIM`; a provider that omits the `groups` scope sends no groups at all.

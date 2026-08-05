@@ -239,6 +239,8 @@ async function startServer(): Promise<void> {
   readiness.markReady('redis');
   ok('redis');
 
+  require('./lib/authSession').backfillSessionIndex().catch(() => undefined);
+
   // Cache path migration
   await runCachePathMigration();
   ok('cachePathMigration');

@@ -26,7 +26,7 @@ The exact redirect URI your instance will send is shown at `GET /api/auth/status
 
 ## Settings
 
-All of these are in the dashboard under **Server**, or as environment variables. Only the client secret is environment-only.
+All of these are in the dashboard under **Server**, or as environment variables. The client secret and the trusted proxy count are environment-only.
 
 | Setting | Default | What it does |
 |---|---|---|
@@ -41,7 +41,12 @@ All of these are in the dashboard under **Server**, or as environment variables.
 | `OIDC_ALLOW_INSECURE_ISSUER` | `false` | Permits an `http` issuer. The secret and tokens then travel in the clear. |
 | `OIDC_RATE_LIMIT_PER_WINDOW` | `20` | Sign-in attempts allowed per address per window. |
 | `OIDC_RATE_LIMIT_WINDOW` | `300` | Length of that window, in seconds. |
+| `TRUST_PROXY_HOPS` | `1` | How many reverse proxies sit in front of the addon. Environment only. |
 | `SESSION_TTL_SECONDS` | `86400` | How long a sign-in lasts. |
+
+Sign-in is rate limited per client address, and the address is only as trustworthy as the count in `TRUST_PROXY_HOPS`. It reads that many entries back from the end of `X-Forwarded-For`, because a client can add entries at the front but cannot remove the ones your own proxies append. The default of `1` matches the usual single reverse proxy; raise it if more sit in front. Set it to `0` when the addon is reachable directly, which reads the address from the socket and ignores the header.
+
+Getting it wrong costs one of two things. Too low behind a proxy and every visitor shares one bucket, so a single abuser can exhaust the limit for everyone. Too high, or anything above `0` on a directly reachable instance, and the address can be forged, which defeats the limit but grants nothing on its own.
 
 ## Permissions
 

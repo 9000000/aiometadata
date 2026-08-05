@@ -570,10 +570,10 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'TRUST_PROXY_HOPS',
     envVar: 'TRUST_PROXY_HOPS',
     label: 'Trusted Proxy Hops',
-    description: 'How many reverse proxies sit in front of the addon. Sign-in is rate limited per client address, which is read from the socket unless this says how many forwarded entries to trust. One proxy is 1. Set through the environment only.',
+    description: 'How many reverse proxies sit in front of the addon. Sign-in is rate limited per client address, read that many entries back from the end of X-Forwarded-For. The default of 1 suits a single proxy; raise it if more sit in front, and set 0 if the addon is reachable directly, which reads the address from the socket instead. Set through the environment only.',
     category: 'Server',
     type: 'number',
-    default: 0,
+    default: 1,
     envOnly: true,
   },
   {

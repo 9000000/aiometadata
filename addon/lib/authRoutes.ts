@@ -83,7 +83,7 @@ function flowCookieOptions(req: any) {
 }
 
 function trustedProxyHops(): number {
-  const parsed = parseInt(process.env.TRUST_PROXY_HOPS || '', 10);
+  const parsed = parseInt(getSetting('TRUST_PROXY_HOPS') || '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 

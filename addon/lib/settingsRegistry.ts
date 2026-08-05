@@ -567,6 +567,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: 86400,
   },
   {
+    key: 'TRUST_PROXY_HOPS',
+    envVar: 'TRUST_PROXY_HOPS',
+    label: 'Trusted Proxy Hops',
+    description: 'How many reverse proxies sit in front of the addon. Sign-in is rate limited per client address, which is read from the socket unless this says how many forwarded entries to trust. One proxy is 1. Set through the environment only.',
+    category: 'Server',
+    type: 'number',
+    default: 0,
+    envOnly: true,
+  },
+  {
     key: 'COLLECTION_IMPORT_CATALOG_CAP',
     envVar: 'COLLECTION_IMPORT_CATALOG_CAP',
     label: 'Collection Import Catalog Cap',

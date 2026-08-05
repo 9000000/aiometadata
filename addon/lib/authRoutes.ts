@@ -7,7 +7,9 @@ import {
   attachSession,
   clearSessionCookie,
   createSession,
+  destroyAccountSessions,
   destroySession,
+  isSecureRequest,
   readCookie,
   setSessionCookie,
   SESSION_COOKIE,
@@ -24,6 +26,7 @@ import {
 const logger = consola.withTag('Auth');
 
 const FLOW_PREFIX = 'auth:flow:';
+const FLOW_COOKIE = 'aiom_auth_flow';
 const FLOW_TTL_SECONDS = 10 * 60;
 const MAX_PROFILES = 50;
 const MAX_LABEL_LENGTH = 64;
@@ -52,12 +55,54 @@ export function redirectUriFor(req: any): string {
  */
 function safeNext(value: unknown): string {
   const next = String(value ?? '').trim();
-  if (!next.startsWith('/') || next.startsWith('//')) return '/configure';
-  return next;
+  if (!next.startsWith('/')) return '/configure';
+
+  const base = 'https://aiom.invalid';
+  let parsed: URL;
+  try {
+    parsed = new URL(next, base);
+  } catch {
+    return '/configure';
+  }
+  if (parsed.origin !== base) return '/configure';
+  return `${parsed.pathname}${parsed.search}${parsed.hash}`;
 }
 
 function trimmed(value: unknown): string {
   return String(value ?? '').trim();
+}
+
+function flowCookieOptions(req: any) {
+  return {
+    httpOnly: true,
+    sameSite: 'lax' as const,
+    secure: isSecureRequest(req),
+    path: '/api/auth/oidc',
+  };
+}
+
+function trustedProxyHops(): number {
+  const parsed = parseInt(process.env.TRUST_PROXY_HOPS || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function clientAddress(req: any): string {
+  const hops = trustedProxyHops();
+  if (hops > 0) {
+    const forwarded = String(req.headers['x-forwarded-for'] || '')
+      .split(',')
+      .map((entry: string) => entry.trim())
+      .filter(Boolean);
+    const index = forwarded.length - hops;
+    if (index >= 0 && forwarded[index]) return forwarded[index];
+  }
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+function sameValue(left: string, right: string): boolean {
+  const a = Buffer.from(left);
+  const b = Buffer.from(right);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 /**
@@ -70,7 +115,7 @@ async function ssoRateLimit(req: any, res: any, next: any): Promise<void> {
   const windowSeconds = Math.max(1, parseInt(getSetting('OIDC_RATE_LIMIT_WINDOW') || '', 10) || 300);
 
   try {
-    const address = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.ip || 'unknown';
+    const address = clientAddress(req);
     const bucket = Math.floor(Date.now() / (windowSeconds * 1000));
     const key = `rate-limit:sso:${address}:${bucket}`;
 
@@ -88,8 +133,9 @@ async function ssoRateLimit(req: any, res: any, next: any): Promise<void> {
   next();
 }
 
-export function register(addon: any, options: { rateLimit?: any } = {}): void {
+export function register(addon: any, options: { rateLimit?: any; requireAdmin?: any } = {}): void {
   const rateLimit = options.rateLimit || ((_req: any, _res: any, next: any) => next());
+  const requireAdmin = options.requireAdmin || ((_req: any, res: any) => res.status(401).json({ error: 'Unauthorized' }));
 
   addon.use(attachSession);
 
@@ -132,6 +178,7 @@ export function register(addon: any, options: { rateLimit?: any } = {}): void {
         next: safeNext(req.query.next),
       };
       await redis.set(`${FLOW_PREFIX}${request.state}`, JSON.stringify(flow), 'EX', FLOW_TTL_SECONDS);
+      res.cookie(FLOW_COOKIE, request.state, { ...flowCookieOptions(req), maxAge: FLOW_TTL_SECONDS * 1000 });
       res.redirect(request.url);
     } catch (error: any) {
       logger.error(`Could not start sign-in: ${error.message}`);
@@ -149,6 +196,12 @@ export function register(addon: any, options: { rateLimit?: any } = {}): void {
     const code = trimmed(req.query.code);
     if (!state || !code) {
       return res.status(400).json({ error: 'Incomplete reply from the identity provider' });
+    }
+
+    const presented = readCookie(req, FLOW_COOKIE);
+    res.clearCookie(FLOW_COOKIE, flowCookieOptions(req));
+    if (!presented || !sameValue(presented, state)) {
+      return res.status(400).json({ error: 'This sign-in did not start in this browser. Start again.' });
     }
 
     // Single use: a replayed state must not open a second session.
@@ -189,6 +242,43 @@ export function register(addon: any, options: { rateLimit?: any } = {}): void {
     } catch (error: any) {
       logger.error(`Sign-in failed: ${error.message}`);
       res.status(401).send('Sign-in failed. Please try again.');
+    }
+  });
+
+  addon.get('/api/auth/accounts', requireAdmin, async (_req: any, res: any) => {
+    try {
+      const rows = await database.listAccounts();
+      res.json({
+        accounts: rows.map((row: any) => ({
+          accountId: row.id,
+          issuer: row.issuer,
+          subject: row.subject,
+          username: row.username,
+          email: row.email,
+          createdAt: row.created_at,
+          lastSeenAt: row.last_seen_at,
+        })),
+      });
+    } catch (error: any) {
+      logger.error(`Could not list accounts: ${error.message}`);
+      res.status(500).json({ error: 'Could not list accounts' });
+    }
+  });
+
+  addon.post('/api/auth/accounts/:accountId/revoke', requireAdmin, async (req: any, res: any) => {
+    const accountId = trimmed(req.params.accountId);
+    if (!accountId) return res.status(400).json({ error: 'An account is required' });
+
+    try {
+      const account = await database.getAccount(accountId);
+      if (!account) return res.status(404).json({ error: 'No such account' });
+
+      const revoked = await destroyAccountSessions(accountId);
+      logger.info(`Revoked ${revoked} session(s) for ${account.username || accountId}`);
+      res.json({ success: true, revoked });
+    } catch (error: any) {
+      logger.error(`Could not revoke sessions: ${error.message}`);
+      res.status(500).json({ error: 'Could not revoke this account\'s sessions' });
     }
   });
 

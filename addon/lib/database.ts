@@ -1156,6 +1156,15 @@ class Database {
     );
   }
 
+  async listAccounts(): Promise<any[]> {
+    return await this.allQuery(
+      `SELECT id, issuer, subject, username, email, created_at, last_seen_at
+         FROM accounts
+        ORDER BY last_seen_at DESC NULLS LAST, created_at DESC`,
+      []
+    );
+  }
+
   /** Profiles with the config still present, newest use first. */
   async getAccountConfigs(accountId: string): Promise<any[]> {
     return await this.allQuery(

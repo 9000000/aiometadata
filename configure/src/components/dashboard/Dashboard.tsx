@@ -71,7 +71,7 @@ function AdminLoginModal({
   adminKeyNotConfigured,
   guestModeEnabled 
 }: AdminLoginModalProps) {
-  const { login, loginAsGuest, isLoading, ssoEnabled } = useAdmin();
+  const { login, loginAsGuest, isLoading, ssoEnabled, session, signOut } = useAdmin();
   const [inputAdminKey, setInputAdminKey] = useState("");
   const [error, setError] = useState("");
   const [showAdminInput, setShowAdminInput] = useState(false);
@@ -111,8 +111,55 @@ function AdminLoginModal({
     setError("");
   };
 
+  if (session) {
+    return (
+      <Dialog open={isOpen} onOpenChange={() => {}}>
+        <DialogContent
+          className="sm:max-w-md"
+          onPointerDownOutside={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => e.preventDefault()}
+        >
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-amber-500" />
+              No Dashboard Access
+            </DialogTitle>
+            <DialogDescription>
+              You are signed in as {session.username}, but this account does not have dashboard access.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="p-3 bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-md text-sm text-amber-700 dark:text-amber-300">
+              <p>Dashboard access comes from your identity provider. Ask an administrator to grant your account the admin permission, then sign in again.</p>
+            </div>
+            {guestModeEnabled && (
+              <Button className="w-full justify-start h-auto py-4" variant="outline" onClick={handleGuestLogin}>
+                <div className="flex items-center gap-3">
+                  <Users className="h-5 w-5 text-muted-foreground" />
+                  <div className="text-left">
+                    <p className="font-medium">Continue as Guest</p>
+                    <p className="text-xs text-muted-foreground">View public metrics without authentication</p>
+                  </div>
+                </div>
+              </Button>
+            )}
+            <div className="flex justify-between gap-2">
+              <Button variant="ghost" size="sm" onClick={handleGoBack}>
+                Go Back
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => signOut()}>
+                <LogOut className="h-4 w-4 mr-2" />
+                Sign Out
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
   // Show specific message when ADMIN_KEY is not configured AND guest mode is disabled
-  if (adminKeyNotConfigured && !guestModeEnabled) {
+  if (adminKeyNotConfigured && !guestModeEnabled && !ssoEnabled) {
     return (
       <Dialog open={isOpen} onOpenChange={() => {}}>
         <DialogContent 

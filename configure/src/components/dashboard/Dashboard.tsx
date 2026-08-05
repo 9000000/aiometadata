@@ -549,6 +549,8 @@ export function Dashboard() {
   // Calculate grid columns based on admin status
   const gridCols = isAdmin ? "grid-cols-6" : "grid-cols-4";
 
+  const usersTabLabel = ssoEnabled ? "Accounts" : "Users";
+
   // Dashboard pages configuration - base pages available to all authenticated users
   const dashboardPages = [
     {
@@ -620,20 +622,18 @@ export function Dashboard() {
       },
       {
         value: "users",
-        title: "Users",
+        title: usersTabLabel,
         component: (
-          <DashboardUsers
-            data={dashboardData.users}
-            loading={dashboardData.loading}
-            activeTab={activeTab}
-          />
+          <div className="space-y-6">
+            {ssoEnabled && <DashboardAccounts activeTab={activeTab} />}
+            <DashboardUsers
+              data={dashboardData.users}
+              loading={dashboardData.loading}
+              activeTab={activeTab}
+            />
+          </div>
         ),
       },
-      ...(ssoEnabled ? [{
-        value: "accounts",
-        title: "Accounts",
-        component: <DashboardAccounts activeTab={activeTab} />,
-      }] : []),
       {
         value: "logs",
         title: "Logs",
@@ -781,8 +781,7 @@ export function Dashboard() {
                 { value: "system", label: "System" },
                 ...(accessLevel === 'admin' ? [
                   { value: "operations", label: "Ops" },
-                  { value: "users", label: "Users" },
-                  ...(ssoEnabled ? [{ value: "accounts", label: "Accounts" }] : []),
+                  { value: "users", label: usersTabLabel },
                   { value: "logs", label: "Logs" },
                   { value: "settings", label: "Settings" },
                 ] : []),
@@ -865,19 +864,14 @@ export function Dashboard() {
               />
             </TabsContent>
 
-            <TabsContent value="users" className="mt-0">
+            <TabsContent value="users" className="mt-0 space-y-6">
+              {ssoEnabled && <DashboardAccounts activeTab={activeTab} />}
               <DashboardUsers
                 data={dashboardData.users}
                 loading={dashboardData.loading}
                 activeTab={activeTab}
               />
             </TabsContent>
-
-            {ssoEnabled && (
-              <TabsContent value="accounts" className="mt-0">
-                <DashboardAccounts activeTab={activeTab} />
-              </TabsContent>
-            )}
 
             <TabsContent value="logs" className="mt-0">
               <DashboardLogs

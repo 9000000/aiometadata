@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 // Types
 // ============================================================================
 
-export type DashboardTab = 'overview' | 'analytics' | 'content' | 'performance' | 'system' | 'operations' | 'users' | 'accounts' | 'logs' | 'settings';
+export type DashboardTab = 'overview' | 'analytics' | 'content' | 'performance' | 'system' | 'operations' | 'users' | 'logs' | 'settings';
 
 interface DashboardQueryOptions {
   activeTab?: DashboardTab;
@@ -1171,7 +1171,7 @@ export function useDashboardAccounts(options: DashboardQueryOptions = {}) {
   const isVisible = usePageVisibility();
   const { activeTab = 'overview', enabled = true } = options;
 
-  const isActiveTab = activeTab === 'accounts';
+  const isActiveTab = activeTab === 'users';
   const shouldPoll = isVisible && isActiveTab && isAdmin;
 
   return useQuery({

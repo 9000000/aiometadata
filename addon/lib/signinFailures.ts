@@ -78,13 +78,21 @@ export async function recordSigninFailure(
   try {
     const ttl = logTtlSeconds();
     const index = indexFor(entry.reason);
+    const keep = indexMax();
     await redis
       .pipeline()
       .set(`${FAILURE_PREFIX}${entry.id}`, JSON.stringify(entry), 'EX', ttl)
       .zadd(index, Date.now(), entry.id)
-      .zremrangebyrank(index, 0, -(indexMax() + 1))
       .expire(index, ttl)
       .exec();
+
+    const stale: string[] = await redis.zrange(index, 0, -(keep + 1));
+    if (stale.length > 0) {
+      const pipeline = redis.pipeline();
+      for (const id of stale) pipeline.del(`${FAILURE_PREFIX}${id}`);
+      pipeline.zremrangebyrank(index, 0, -(keep + 1));
+      await pipeline.exec();
+    }
   } catch (error: any) {
     logger.warn(`Could not record the sign-in failure: ${error.message}`);
   }

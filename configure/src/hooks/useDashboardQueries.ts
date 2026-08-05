@@ -44,6 +44,7 @@ export const DASHBOARD_QUERY_KEYS = {
   operations: ['dashboard', 'operations'] as const,
   users: ['dashboard', 'users'] as const,
   accounts: ['dashboard', 'accounts'] as const,
+  signinFailures: ['dashboard', 'signin-failures'] as const,
   logs: ['dashboard', 'logs'] as const,
   settings: ['dashboard', 'settings'] as const,
   all: ['dashboard'] as const,
@@ -1153,9 +1154,34 @@ export interface AccountRow {
   subject: string;
   username: string;
   email: string | null;
+  /** Null until the account signs in again, which is when groups are recorded. */
+  groups: string[] | null;
+  permissions: string[] | null;
+  blocked: boolean;
   createdAt: string;
   lastSeenAt: string;
   activeSessions: number;
+}
+
+export type SigninFailureReason =
+  | 'refused'
+  | 'blocked'
+  | 'rate-limited'
+  | 'browser-mismatch'
+  | 'expired'
+  | 'provider-error';
+
+export interface SigninFailure {
+  id: string;
+  at: string;
+  reason: SigninFailureReason;
+  username: string | null;
+  subject: string | null;
+  issuer: string | null;
+  groups: string[] | null;
+  groupsClaim: string | null;
+  address: string | null;
+  detail: string | null;
 }
 
 export interface AccountConfigRow {
@@ -1178,7 +1204,7 @@ export function useDashboardAccounts(options: DashboardQueryOptions = {}) {
     queryKey: DASHBOARD_QUERY_KEYS.accounts,
     queryFn: async () => {
       try {
-        return await fetchDashboardData<{ accounts: AccountRow[] }>('/api/auth/accounts', getHeaders());
+        return await fetchDashboardData<{ accounts: AccountRow[]; groupsClaim: string }>('/api/auth/accounts', getHeaders());
       } catch (error) {
         if (error instanceof Error && error.message === 'UNAUTHORIZED') {
           logout();
@@ -1201,6 +1227,74 @@ export function useAccountConfigs(accountId: string | null) {
     queryFn: async () =>
       fetchDashboardData<{ configs: AccountConfigRow[] }>(`/api/auth/accounts/${encodeURIComponent(accountId as string)}/configs`, getHeaders()),
     enabled: Boolean(accountId),
+  });
+}
+
+export function useSigninFailures(options: DashboardQueryOptions = {}) {
+  const { isAdmin } = useAdmin();
+  const getHeaders = useApiHeaders();
+  const isVisible = usePageVisibility();
+  const { activeTab = 'overview', enabled = true } = options;
+
+  const isActiveTab = activeTab === 'users';
+
+  return useQuery({
+    queryKey: DASHBOARD_QUERY_KEYS.signinFailures,
+    queryFn: async () =>
+      fetchDashboardData<{ failures: SigninFailure[] }>('/api/auth/signin-failures', getHeaders()),
+    enabled: enabled && isAdmin && isActiveTab,
+    refetchInterval: isVisible && isActiveTab && isAdmin ? POLLING_INTERVALS.ACCOUNTS : false,
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function useClearSigninFailures() {
+  const { adminKey, logout } = useAdmin();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (adminKey) headers['x-admin-key'] = adminKey;
+
+      const response = await fetch('/api/auth/signin-failures', { method: 'DELETE', headers });
+      if (response.status === 401) { logout(); throw new Error('Session expired.'); }
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.signinFailures });
+    },
+  });
+}
+
+export function useSetAccountBlocked() {
+  const { adminKey, logout } = useAdmin();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ accountId, blocked }: { accountId: string; blocked: boolean }) => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (adminKey) headers['x-admin-key'] = adminKey;
+
+      const response = await fetch(`/api/auth/accounts/${encodeURIComponent(accountId)}/block`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ blocked }),
+      });
+      if (response.status === 401) { logout(); throw new Error('Session expired.'); }
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.accounts });
+    },
   });
 }
 

@@ -86,11 +86,25 @@ Because a mapping edit applies at once, one that would remove your own admin per
 
 ## Managing accounts
 
-Once a provider is configured, an **Accounts** tab appears in the dashboard listing everyone who has signed in, how many sessions each one holds, and which configurations they have saved.
+Once a provider is configured, the dashboard's **Users** tab is renamed **Accounts** and gains a panel listing everyone who has signed in: the permissions each one currently holds, the groups their provider presented, how many sessions they have open, and which configurations they have saved.
 
-An administrator can revoke an account's sessions, which signs it out everywhere at once, or delete the account entirely. Deleting removes the account and its links; the configurations themselves survive and stay reachable by UUID and password, so deleting an account never destroys anyone's catalogs.
+Permissions shown there are resolved live from the group mapping, so they are what the account has right now rather than what it had at sign-in. An account that has not signed in since this was added shows *unknown until next sign-in*, because the addon only learns someone's groups when they arrive.
 
-Revoking is the way to act on someone whose access should end before their session would expire on its own. Editing the group mapping is the way to change what they may do, and applies immediately.
+Three actions, and the difference between them matters:
+
+- **Revoke** ends every session the account holds. It does not stop them signing in again, which they can do immediately.
+- **Block** refuses their next sign-in and revokes their sessions on the way. This is the one that ends someone's access. It survives until you unblock them, and you cannot block your own account.
+- **Delete** forgets the account and unlinks its configurations. The configurations themselves survive and stay reachable by UUID and password, so deleting never destroys anyone's catalogs — but it does not stop a sign-in either, and the next one creates the account afresh.
+
+Editing the group mapping remains the way to change what someone *may do*; blocking is the way to stop them being here at all.
+
+## When a sign-in is refused
+
+The Accounts panel also lists recent refused sign-ins with the reason and, where the exchange got far enough to know, the groups the provider actually sent and the claim they came from.
+
+This is the quickest way to fix the most common misconfiguration. If `OIDC_GROUPS_CLAIM` names a claim your provider does not issue, every sign-in is refused and there is otherwise nothing to see — the entry will show the claim carrying *nothing*, and the fix is to name the claim your provider really sends. If instead the groups are listed but the sign-in is still refused, they matched no entry in `OIDC_GROUP_PERMISSIONS`.
+
+How many entries are kept and for how long is set by `AUTH_SIGNIN_FAILURE_LOG_MAX` and `AUTH_SIGNIN_FAILURE_LOG_TTL`.
 
 ## Worked example: Authelia
 
@@ -142,6 +156,6 @@ A password prompt reappearing on a configuration you thought was linked almost a
 
 **Redirected back but still asked for a password.** The configuration is not linked to the account yet. Use *Save this to your account* once.
 
-**A group change at the provider had no effect.** The addon learns someone's groups when they sign in, so a membership change at the provider needs a new sign-in. Changing `OIDC_GROUP_PERMISSIONS` here, by contrast, applies at once. Revoke the account's sessions from the Accounts tab to force the re-sign-in.
+**A group change at the provider had no effect.** The addon learns someone's groups when they sign in, so a membership change at the provider needs a new sign-in. Changing `OIDC_GROUP_PERMISSIONS` here, by contrast, applies at once. Revoke the account's sessions from the Accounts panel to force the re-sign-in.
 
-**Sign-in refused for someone who should be allowed.** They matched no entry in `OIDC_GROUP_PERMISSIONS` and `OIDC_DEFAULT_PERMISSIONS` is empty. Confirm what the provider actually issues in the claim named by `OIDC_GROUPS_CLAIM`; a provider that omits the `groups` scope sends no groups at all.
+**Sign-in refused for someone who should be allowed.** They matched no entry in `OIDC_GROUP_PERMISSIONS` and `OIDC_DEFAULT_PERMISSIONS` is empty. The refused sign-in in the Accounts panel shows what the provider actually put in the claim named by `OIDC_GROUPS_CLAIM`; a provider that omits the `groups` scope sends no groups at all.

@@ -161,6 +161,34 @@ class Database {
     } else {
       await this.createPostgreSQLTables();
     }
+    await this.ensureAccountColumns();
+  }
+
+  /**
+   * The accounts table predates the columns that record what an identity
+   * presented and whether it is barred, and CREATE TABLE IF NOT EXISTS leaves
+   * an existing one untouched.
+   */
+  async ensureAccountColumns(): Promise<void> {
+    const columns: Array<[string, string]> = [
+      ['groups_json', 'TEXT'],
+      ['blocked', 'INTEGER NOT NULL DEFAULT 0'],
+    ];
+
+    for (const [name, definition] of columns) {
+      try {
+        if (this.type === 'sqlite') {
+          const existing = await this.allQuery(`PRAGMA table_info(accounts)`);
+          if (existing.some((column: any) => column.name === name)) continue;
+          await this.runQuery(`ALTER TABLE accounts ADD COLUMN ${name} ${definition}`);
+        } else {
+          await this.runQuery(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS ${name} ${definition}`);
+        }
+        logger.info(`Migrated accounts schema: added ${name}`);
+      } catch (error: any) {
+        logger.warn(`Could not add accounts.${name}: ${error.message}`);
+      }
+    }
   }
 
   async createSQLiteTables(): Promise<void> {
@@ -223,6 +251,8 @@ class Database {
         subject TEXT NOT NULL,
         username TEXT NOT NULL,
         email TEXT,
+        groups_json TEXT,
+        blocked INTEGER NOT NULL DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )`,
@@ -304,6 +334,8 @@ class Database {
         subject TEXT NOT NULL,
         username VARCHAR(255) NOT NULL,
         email VARCHAR(320),
+        groups_json TEXT,
+        blocked INTEGER NOT NULL DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`,
@@ -1119,32 +1151,48 @@ class Database {
    * Keyed on (issuer, subject) rather than the username, because a provider
    * rename would otherwise orphan every profile the account owns.
    */
-  async upsertAccount(issuer: string, subject: string, username: string, email: string | null): Promise<any> {
+  async upsertAccount(
+    issuer: string,
+    subject: string,
+    username: string,
+    email: string | null,
+    groups: string[] | null = null
+  ): Promise<any> {
     const existing = await this.getQuery(
       this.type === 'sqlite'
         ? 'SELECT * FROM accounts WHERE issuer = ? AND subject = ?'
         : 'SELECT * FROM accounts WHERE issuer = $1 AND subject = $2',
       [issuer, subject]
     );
+    const groupsJson = groups === null ? null : JSON.stringify(groups);
 
     if (existing) {
       await this.runQuery(
         this.type === 'sqlite'
-          ? 'UPDATE accounts SET username = ?, email = ?, last_seen_at = CURRENT_TIMESTAMP WHERE id = ?'
-          : 'UPDATE accounts SET username = $1, email = $2, last_seen_at = CURRENT_TIMESTAMP WHERE id = $3',
-        [username, email, existing.id]
+          ? 'UPDATE accounts SET username = ?, email = ?, groups_json = ?, last_seen_at = CURRENT_TIMESTAMP WHERE id = ?'
+          : 'UPDATE accounts SET username = $1, email = $2, groups_json = $3, last_seen_at = CURRENT_TIMESTAMP WHERE id = $4',
+        [username, email, groupsJson, existing.id]
       );
-      return { ...existing, username, email };
+      return { ...existing, username, email, groups_json: groupsJson };
     }
 
     const id = crypto.randomUUID();
     await this.runQuery(
       this.type === 'sqlite'
-        ? 'INSERT INTO accounts (id, issuer, subject, username, email) VALUES (?, ?, ?, ?, ?)'
-        : 'INSERT INTO accounts (id, issuer, subject, username, email) VALUES ($1, $2, $3, $4, $5)',
-      [id, issuer, subject, username, email]
+        ? 'INSERT INTO accounts (id, issuer, subject, username, email, groups_json) VALUES (?, ?, ?, ?, ?, ?)'
+        : 'INSERT INTO accounts (id, issuer, subject, username, email, groups_json) VALUES ($1, $2, $3, $4, $5, $6)',
+      [id, issuer, subject, username, email, groupsJson]
     );
-    return { id, issuer, subject, username, email };
+    return { id, issuer, subject, username, email, groups_json: groupsJson, blocked: 0 };
+  }
+
+  async setAccountBlocked(accountId: string, blocked: boolean): Promise<void> {
+    await this.runQuery(
+      this.type === 'sqlite'
+        ? 'UPDATE accounts SET blocked = ? WHERE id = ?'
+        : 'UPDATE accounts SET blocked = $1 WHERE id = $2',
+      [blocked ? 1 : 0, accountId]
+    );
   }
 
   async getAccount(accountId: string): Promise<any> {
@@ -1158,7 +1206,7 @@ class Database {
 
   async listAccounts(): Promise<any[]> {
     return await this.allQuery(
-      `SELECT id, issuer, subject, username, email, created_at, last_seen_at
+      `SELECT id, issuer, subject, username, email, groups_json, blocked, created_at, last_seen_at
          FROM accounts
         ORDER BY last_seen_at DESC NULLS LAST, created_at DESC`,
       []

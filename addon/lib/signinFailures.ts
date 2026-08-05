@@ -1,0 +1,111 @@
+import crypto from 'crypto';
+import consola from 'consola';
+import redis from './redisClient';
+import { getSetting } from './settingsService';
+
+const logger = consola.withTag('Auth');
+
+const FAILURE_PREFIX = 'auth:signin-failure:';
+const FAILURE_INDEX = 'auth:signin-failures';
+const MAX_GROUPS_RECORDED = 32;
+
+export type SigninFailureReason =
+  | 'refused'
+  | 'blocked'
+  | 'rate-limited'
+  | 'browser-mismatch'
+  | 'expired'
+  | 'provider-error';
+
+export interface SigninFailure {
+  id: string;
+  at: string;
+  reason: SigninFailureReason;
+  username: string | null;
+  subject: string | null;
+  issuer: string | null;
+  groups: string[] | null;
+  groupsClaim: string | null;
+  address: string | null;
+  detail: string | null;
+}
+
+function logMax(): number {
+  const parsed = parseInt(getSetting('AUTH_SIGNIN_FAILURE_LOG_MAX') || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 50;
+}
+
+function logTtlSeconds(): number {
+  const parsed = parseInt(getSetting('AUTH_SIGNIN_FAILURE_LOG_TTL') || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 604800;
+}
+
+/**
+ * A refusal is the one moment an admin can see what the provider actually sent,
+ * so the presented groups are kept alongside the claim they were read from.
+ * Nothing else from the exchange is recorded: the code and the tokens are
+ * credentials, and the reason is what makes the entry useful.
+ */
+export async function recordSigninFailure(
+  failure: Omit<Partial<SigninFailure>, 'reason'> & { reason: SigninFailureReason }
+): Promise<void> {
+  const entry: SigninFailure = {
+    id: crypto.randomBytes(9).toString('base64url'),
+    at: new Date().toISOString(),
+    reason: failure.reason,
+    username: failure.username ?? null,
+    subject: failure.subject ?? null,
+    issuer: failure.issuer ?? null,
+    groups: Array.isArray(failure.groups) ? failure.groups.slice(0, MAX_GROUPS_RECORDED) : null,
+    groupsClaim: failure.groupsClaim ?? null,
+    address: failure.address ?? null,
+    detail: failure.detail ?? null,
+  };
+
+  try {
+    const ttl = logTtlSeconds();
+    await redis
+      .pipeline()
+      .set(`${FAILURE_PREFIX}${entry.id}`, JSON.stringify(entry), 'EX', ttl)
+      .zadd(FAILURE_INDEX, Date.now(), entry.id)
+      .zremrangebyrank(FAILURE_INDEX, 0, -(logMax() + 1))
+      .expire(FAILURE_INDEX, ttl)
+      .exec();
+  } catch (error: any) {
+    logger.warn(`Could not record the sign-in failure: ${error.message}`);
+  }
+}
+
+export async function listSigninFailures(limit = 50): Promise<SigninFailure[]> {
+  try {
+    const ids: string[] = await redis.zrevrange(FAILURE_INDEX, 0, Math.max(0, limit - 1));
+    if (ids.length === 0) return [];
+
+    const raw = await redis.mget(ids.map((id) => `${FAILURE_PREFIX}${id}`));
+    const failures: SigninFailure[] = [];
+    for (const value of raw) {
+      if (!value) continue;
+      try {
+        failures.push(JSON.parse(value));
+      } catch {
+        // Unreadable value, leave it to expire on its own.
+      }
+    }
+    return failures;
+  } catch (error: any) {
+    logger.warn(`Could not read the sign-in failures: ${error.message}`);
+    return [];
+  }
+}
+
+export async function clearSigninFailures(): Promise<void> {
+  try {
+    const ids: string[] = await redis.zrange(FAILURE_INDEX, 0, -1);
+    const pipeline = redis.pipeline();
+    for (const id of ids) pipeline.del(`${FAILURE_PREFIX}${id}`);
+    pipeline.del(FAILURE_INDEX);
+    await pipeline.exec();
+  } catch (error: any) {
+    logger.warn(`Could not clear the sign-in failures: ${error.message}`);
+  }
+}

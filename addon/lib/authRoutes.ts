@@ -20,9 +20,15 @@ import {
   buildAuthRequest,
   exchangeCode,
   isOidcConfigured,
+  previewPermissions,
   readOidcConfig,
   resolvePermissions,
 } from './oidc';
+import {
+  clearSigninFailures,
+  listSigninFailures,
+  recordSigninFailure,
+} from './signinFailures';
 
 const logger = consola.withTag('Auth');
 
@@ -71,6 +77,16 @@ function safeNext(value: unknown): string {
 
 function trimmed(value: unknown): string {
   return String(value ?? '').trim();
+}
+
+function parseGroups(raw: unknown): string[] | null {
+  if (typeof raw !== 'string' || !raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((entry) => typeof entry === 'string') : null;
+  } catch {
+    return null;
+  }
 }
 
 function flowCookieOptions(req: any) {
@@ -125,6 +141,11 @@ async function ssoRateLimit(req: any, res: any, next: any): Promise<void> {
 
     if (count > perWindow) {
       logger.warn(`Rate limited sign-in attempts from ${address}`);
+      await recordSigninFailure({
+        reason: 'rate-limited',
+        address,
+        detail: `More than ${perWindow} attempts in ${windowSeconds}s`,
+      });
       return res.status(429).json({ error: 'Too many sign-in attempts. Please try again shortly.' });
     }
   } catch (error: any) {
@@ -132,6 +153,37 @@ async function ssoRateLimit(req: any, res: any, next: any): Promise<void> {
   }
 
   next();
+}
+
+/**
+ * Who besides the caller would stop being an admin if `key` were saved as
+ * `value`. Permissions resolve live now, so a mapping edit takes effect for
+ * everyone at once and the only accounts that can be judged are those that have
+ * signed in since their groups were first recorded.
+ */
+export async function accountsLosingAdmin(
+  key: string,
+  value: string,
+  exceptAccountId?: string
+): Promise<string[]> {
+  const config = readOidcConfig();
+  const rows = await database.listAccounts();
+  const losing: string[] = [];
+
+  for (const row of rows) {
+    if (row.id === exceptAccountId) continue;
+    const groups = parseGroups(row.groups_json);
+    if (groups === null) continue;
+
+    const before = resolvePermissions(groups, config);
+    if (before === null || !before.includes('admin')) continue;
+
+    const preview = previewPermissions(groups, key, value);
+    const after = preview.outcome === 'granted' ? preview.permissions : [];
+    if (!after.includes('admin')) losing.push(row.username || row.id);
+  }
+
+  return losing;
 }
 
 export function register(addon: any, options: { rateLimit?: any; requireAdmin?: any } = {}): void {
@@ -202,6 +254,11 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
     const presented = readCookie(req, FLOW_COOKIE);
     res.clearCookie(FLOW_COOKIE, flowCookieOptions(req));
     if (!presented || !sameValue(presented, state)) {
+      await recordSigninFailure({
+        reason: 'browser-mismatch',
+        address: clientAddress(req),
+        detail: presented ? 'The reply carried a different state than this browser started' : 'This browser started no sign-in',
+      });
       return res.status(400).json({ error: 'This sign-in did not start in this browser. Start again.' });
     }
 
@@ -209,6 +266,11 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
     const raw = await redis.get(`${FLOW_PREFIX}${state}`);
     await redis.del(`${FLOW_PREFIX}${state}`);
     if (!raw) {
+      await recordSigninFailure({
+        reason: 'expired',
+        address: clientAddress(req),
+        detail: 'The sign-in was already completed or took longer than the flow allows',
+      });
       return res.status(400).json({ error: 'This sign-in is no longer valid. Start again.' });
     }
 
@@ -220,6 +282,18 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
       const permissions = resolvePermissions(identity.groups, config);
       if (permissions === null) {
         logger.warn(`Refused ${identity.subject}: nothing in the ${config.groupsClaim} claim grants access`);
+        await recordSigninFailure({
+          reason: 'refused',
+          username: identity.username,
+          subject: identity.subject,
+          issuer: identity.issuer,
+          groups: identity.groups,
+          groupsClaim: config.groupsClaim,
+          address: clientAddress(req),
+          detail: config.groupPermissions === null
+            ? 'The group mapping could not be read'
+            : 'Nothing presented in the claim matched the group mapping',
+        });
         return res.status(403).send('Your account is not allowed to sign in here.');
       }
 
@@ -227,8 +301,24 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
         identity.issuer,
         identity.subject,
         identity.username,
-        identity.email
+        identity.email,
+        identity.groups
       );
+
+      if (account.blocked) {
+        logger.warn(`Refused ${identity.username}: the account is blocked`);
+        await recordSigninFailure({
+          reason: 'blocked',
+          username: identity.username,
+          subject: identity.subject,
+          issuer: identity.issuer,
+          groups: identity.groups,
+          groupsClaim: config.groupsClaim,
+          address: clientAddress(req),
+          detail: 'An administrator blocked this account',
+        });
+        return res.status(403).send('Your account is not allowed to sign in here.');
+      }
 
       const sessionId = await createSession({
         accountId: account.id,
@@ -243,27 +333,87 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
       res.redirect(flow.next);
     } catch (error: any) {
       logger.error(`Sign-in failed: ${error.message}`);
+      await recordSigninFailure({
+        reason: 'provider-error',
+        issuer: config.issuer,
+        address: clientAddress(req),
+        detail: error.message,
+      });
       res.status(401).send('Sign-in failed. Please try again.');
     }
   });
 
   addon.get('/api/auth/accounts', requireAdmin, async (_req: any, res: any) => {
     try {
+      const config = readOidcConfig();
       const rows = await database.listAccounts();
-      const accounts = await Promise.all(rows.map(async (row: any) => ({
-        accountId: row.id,
-        issuer: row.issuer,
-        subject: row.subject,
-        username: row.username,
-        email: row.email,
-        createdAt: row.created_at,
-        lastSeenAt: row.last_seen_at,
-        activeSessions: await countAccountSessions(row.id),
-      })));
-      res.json({ accounts });
+      const accounts = await Promise.all(rows.map(async (row: any) => {
+        const groups = parseGroups(row.groups_json);
+        return {
+          accountId: row.id,
+          issuer: row.issuer,
+          subject: row.subject,
+          username: row.username,
+          email: row.email,
+          groups,
+          // Null where the account has not signed in since groups were first
+          // recorded, which is not the same as resolving to no permissions.
+          permissions: groups === null ? null : resolvePermissions(groups, config),
+          blocked: Boolean(row.blocked),
+          createdAt: row.created_at,
+          lastSeenAt: row.last_seen_at,
+          activeSessions: await countAccountSessions(row.id),
+        };
+      }));
+      res.json({ accounts, groupsClaim: config.groupsClaim });
     } catch (error: any) {
       logger.error(`Could not list accounts: ${error.message}`);
       res.status(500).json({ error: 'Could not list accounts' });
+    }
+  });
+
+  addon.post('/api/auth/accounts/:accountId/block', requireAdmin, async (req: any, res: any) => {
+    const accountId = trimmed(req.params.accountId);
+    if (!accountId) return res.status(400).json({ error: 'An account is required' });
+
+    const blocked = req.body?.blocked !== false;
+    if (blocked && accountId === req.session?.accountId) {
+      return res.status(409).json({ error: 'You cannot block your own account' });
+    }
+
+    try {
+      const account = await database.getAccount(accountId);
+      if (!account) return res.status(404).json({ error: 'No such account' });
+
+      await database.setAccountBlocked(accountId, blocked);
+
+      // Blocking only refuses the next sign-in, so the sessions it already
+      // holds have to go with it or the block does nothing until they expire.
+      const revoked = blocked ? await destroyAccountSessions(accountId) : 0;
+      logger.info(`${blocked ? 'Blocked' : 'Unblocked'} ${account.username || accountId}`);
+      res.json({ success: true, blocked, revoked });
+    } catch (error: any) {
+      logger.error(`Could not change the block state: ${error.message}`);
+      res.status(500).json({ error: 'Could not change this account\'s block state' });
+    }
+  });
+
+  addon.get('/api/auth/signin-failures', requireAdmin, async (_req: any, res: any) => {
+    try {
+      res.json({ failures: await listSigninFailures() });
+    } catch (error: any) {
+      logger.error(`Could not list sign-in failures: ${error.message}`);
+      res.status(500).json({ error: 'Could not list sign-in failures' });
+    }
+  });
+
+  addon.delete('/api/auth/signin-failures', requireAdmin, async (_req: any, res: any) => {
+    try {
+      await clearSigninFailures();
+      res.json({ success: true });
+    } catch (error: any) {
+      logger.error(`Could not clear sign-in failures: ${error.message}`);
+      res.status(500).json({ error: 'Could not clear sign-in failures' });
     }
   });
 

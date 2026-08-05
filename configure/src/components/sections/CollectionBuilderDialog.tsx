@@ -52,7 +52,6 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useConfig } from '@/contexts/ConfigContext';
-import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { getSourceBadgeLabel, getSourceBadgeStyle } from '@/lib/sourceBadges';
 import { getTagColor } from '@/lib/tagColors';
 import {
@@ -1477,11 +1476,6 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const [remapChoices, setRemapChoices] = useState<Record<string, SourceDraft>>({});
   const [remapPickFor, setRemapPickFor] = useState<string | null>(null);
 
-  const missingGroups: MissingCatalogGroup[] = useMemo(
-    () => groupMissingCatalogs(unknownSources),
-    [unknownSources]
-  );
-
   const applyRemap = () => {
     const { entries: next, replaced } = remapSources(entries, remapChoices);
     setEntries(next);
@@ -1888,6 +1882,11 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     [unknownSources, pendingAdditions]
   );
 
+  const missingGroups: MissingCatalogGroup[] = useMemo(
+    () => groupMissingCatalogs(unresolvedSources),
+    [unresolvedSources]
+  );
+
   const enabledCatalogCount = useMemo(
     () => (config.catalogs || []).filter(catalog => catalog.enabled !== false).length,
     [config.catalogs]
@@ -2258,35 +2257,40 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           </div>
 
           <div className="flex flex-col gap-2 border-t pt-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
-            {overBy > 0 ? (
-              <p className="flex items-start gap-1.5 text-[11px] text-amber-500 sm:mr-auto">
-                <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
-                This design needs {pendingCount} new catalogs and there is room for {headroom}. Delete{' '}
-                {overBy} more catalog{overBy === 1 ? '' : 's'} worth of tiles to apply it.
-              </p>
-            ) : pendingCount > 0 ? (
-              <p className="text-[11px] text-emerald-500 sm:mr-auto">
-                {pendingCount} catalog{pendingCount === 1 ? '' : 's'} will be added when you apply, leaving{' '}
-                {headroom - pendingCount} of your {catalogLimit} spare.
-              </p>
-            ) : unresolvedSources.length > 0 ? (
-              <>
-                <p className="flex items-start gap-1.5 text-[11px] text-amber-500 sm:mr-auto">
+            <div className="min-w-0 space-y-1 sm:mr-auto">
+              {overBy > 0 && (
+                <p className="flex items-start gap-1.5 text-[11px] text-amber-500">
+                  <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+                  This design needs {pendingCount} new catalogs and there is room for {headroom}. Delete{' '}
+                  {overBy} more catalog{overBy === 1 ? '' : 's'} worth of tiles to apply it.
+                </p>
+              )}
+              {overBy === 0 && pendingCount > 0 && (
+                <p className="text-[11px] text-emerald-500">
+                  {pendingCount} catalog{pendingCount === 1 ? '' : 's'} will be added when you apply, leaving{' '}
+                  {headroom - pendingCount} of your {catalogLimit} spare.
+                </p>
+              )}
+              {unresolvedSources.length > 0 && (
+                <p className="flex items-start gap-1.5 text-[11px] text-amber-500">
                   <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
                   {unresolvedSources.length === 1
                     ? '1 source points at a catalog you do not have.'
                     : `${unresolvedSources.length} sources point at catalogs you do not have.`}{' '}
                   Swap them for yours, or leave them and those tiles come up empty.
                 </p>
-                <Button variant="outline" onClick={() => setRemapOpen(true)}>
-                  <Replace className="mr-1.5 h-4 w-4" /> Swap catalogs
-                </Button>
-              </>
-            ) : (
-              <p className="text-[11px] text-muted-foreground sm:mr-auto">
-                Applying puts this in your configuration. It is only stored once you save the configuration
-                itself on the Config tab.
-              </p>
+              )}
+              {overBy === 0 && pendingCount === 0 && unresolvedSources.length === 0 && (
+                <p className="text-[11px] text-muted-foreground">
+                  Applying puts this in your configuration. It is only stored once you save the configuration
+                  itself on the Config tab.
+                </p>
+              )}
+            </div>
+            {unresolvedSources.length > 0 && (
+              <Button variant="outline" onClick={() => setRemapOpen(true)}>
+                <Replace className="mr-1.5 h-4 w-4" /> Swap catalogs
+              </Button>
             )}
             <Button variant="ghost" onClick={requestClose}>Close</Button>
             <Button variant="outline" onClick={() => handleSave()}>Apply to config</Button>
@@ -2626,20 +2630,48 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
         </DialogContent>
       </Dialog>
 
-      <ConfirmDialog
-        isOpen={confirmApply}
-        onClose={() => { setConfirmApply(false); setPendingNavigate(false); }}
-        onConfirm={() => applyToConfig(pendingNavigate)}
-        variant="default"
-        title="Some catalogs are missing"
-        confirmText="Apply anyway"
-        description={
-          `${unresolvedSources.length === 1 ? '1 source points' : `${unresolvedSources.length} sources point`} at a catalog ` +
-          `that is not in your setup: ${unresolvedSources.slice(0, 3).map(s => s.catalogId).join(', ')}` +
-          `${unresolvedSources.length > 3 ? `, and ${unresolvedSources.length - 3} more` : ''}. ` +
-          'Those tiles will come up empty until you add and enable the catalogs. Everything else works as normal.'
-        }
-      />
+      <Dialog
+        open={confirmApply}
+        onOpenChange={open => { if (!open) { setConfirmApply(false); setPendingNavigate(false); } }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-500" /> Some catalogs are missing
+            </DialogTitle>
+            <DialogDescription>
+              {unresolvedSources.length === 1
+                ? '1 source points'
+                : `${unresolvedSources.length} sources point`} at a catalog that is not in your setup:{' '}
+              {unresolvedSources.slice(0, 3).map(source => source.catalogId).join(', ')}
+              {unresolvedSources.length > 3 ? `, and ${unresolvedSources.length - 3} more` : ''}. Those tiles will
+              come up empty until you add and enable the catalogs. Everything else works as normal.
+            </DialogDescription>
+          </DialogHeader>
+
+          <p className="rounded-md border bg-muted/30 p-2 text-[11px] text-muted-foreground">
+            Swapping keeps the layout and points each one at a catalog you already have, everywhere it is used.
+          </p>
+
+          <div className="flex flex-wrap justify-end gap-2 border-t pt-3">
+            <Button
+              variant="ghost"
+              onClick={() => { setConfirmApply(false); setPendingNavigate(false); }}
+            >
+              Back to editing
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => { setConfirmApply(false); setPendingNavigate(false); setRemapOpen(true); }}
+            >
+              <Replace className="mr-1.5 h-4 w-4" /> Swap catalogs
+            </Button>
+            <Button onClick={() => { setConfirmApply(false); applyToConfig(pendingNavigate); }}>
+              Apply anyway
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={nativeBlockFor !== null} onOpenChange={open => { if (!open) setNativeBlockFor(null); }}>
         <DialogContent className="max-w-lg">

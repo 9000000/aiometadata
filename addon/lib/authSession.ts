@@ -192,6 +192,7 @@ export async function destroyAccountSessions(accountId: string): Promise<number>
     });
   } catch (error: any) {
     logger.error(`Could not sweep sessions for ${accountId}: ${error.message}`);
+    error.revoked = removed.size;
     throw error;
   }
 

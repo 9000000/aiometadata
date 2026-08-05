@@ -435,7 +435,7 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
         return res.json({
           success: true,
           blocked,
-          revoked: 0,
+          revoked: typeof error.revoked === 'number' ? error.revoked : 0,
           warning: 'The block is saved, but signing out their existing sessions failed. Some may stay live until they expire.',
         });
       }
@@ -524,7 +524,7 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
         logger.error(`Deleted ${account.username || accountId} but could not sign them out: ${error.message}`);
         return res.json({
           success: true,
-          revoked: 0,
+          revoked: typeof error.revoked === 'number' ? error.revoked : 0,
           warning: 'The account is deleted, but signing out its existing sessions failed. Some may stay live until they expire.',
         });
       }

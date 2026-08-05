@@ -5860,11 +5860,23 @@ const noCache = (req, res, next) => {
 };
 
 // Middleware to require admin authentication for dashboard routes
-function describeOthers(names) {
-  if (names.length === 0) return '';
+function nameList(names) {
   const shown = names.slice(0, 5).join(', ');
-  const rest = names.length > 5 ? ` and ${names.length - 5} more` : '';
-  return ` It would also remove admin from ${shown}${rest}.`;
+  return names.length > 5 ? `${shown} and ${names.length - 5} more` : shown;
+}
+
+function describeAdminImpact(impact) {
+  const parts = [];
+  if (impact.signedOut.length > 0) parts.push(`sign out ${nameList(impact.signedOut)}`);
+  if (impact.demoted.length > 0) {
+    parts.push(`take the admin permission away from ${nameList(impact.demoted)}, immediately and without signing them out`);
+  }
+  return parts.join(', and ');
+}
+
+function describeOthers(impact) {
+  const described = describeAdminImpact(impact);
+  return described ? ` It would also ${described}.` : '';
 }
 
 async function describeSelfDemotion(req, key, proposedValue, confirmed) {
@@ -5874,7 +5886,7 @@ async function describeSelfDemotion(req, key, proposedValue, confirmed) {
   const { previewPermissions } = require('./lib/oidc');
   const { accountsLosingAdmin } = require('./lib/authRoutes');
 
-  let others = [];
+  let others = { signedOut: [], demoted: [] };
   try {
     others = await accountsLosingAdmin(key, proposedValue, req.session?.accountId);
   } catch (error) {
@@ -5908,11 +5920,12 @@ async function describeSelfDemotion(req, key, proposedValue, confirmed) {
     }
   }
 
-  if (others.length > 0) {
+  const described = describeAdminImpact(others);
+  if (described) {
     return {
       error: 'This change would remove someone else\'s admin access',
       requiresConfirmation: true,
-      reason: `Saving ${key} would take the admin permission away from ${others.slice(0, 5).join(', ')}${others.length > 5 ? ` and ${others.length - 5} more` : ''}, immediately and without signing them out.`,
+      reason: `Saving ${key} would ${described}.`,
     };
   }
 

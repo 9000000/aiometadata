@@ -163,14 +163,19 @@ async function ssoRateLimit(req: any, res: any, next: any): Promise<void> {
  * everyone at once and the only accounts that can be judged are those that have
  * signed in since their groups were first recorded.
  */
+export interface AdminImpact {
+  signedOut: string[];
+  demoted: string[];
+}
+
 export async function accountsLosingAdmin(
   key: string,
   value: string,
   exceptAccountId?: string
-): Promise<string[]> {
+): Promise<AdminImpact> {
   const config = readOidcConfig();
   const rows = await database.listAccounts();
-  const losing: string[] = [];
+  const impact: AdminImpact = { signedOut: [], demoted: [] };
 
   for (const row of rows) {
     if (row.id === exceptAccountId) continue;
@@ -180,12 +185,15 @@ export async function accountsLosingAdmin(
     const before = resolvePermissions(groups, config);
     if (before === null || !before.includes('admin')) continue;
 
+    const name = row.username || row.id;
     const preview = previewPermissions(groups, key, value);
-    const after = preview.outcome === 'granted' ? preview.permissions : [];
-    if (!after.includes('admin')) losing.push(row.username || row.id);
+
+    if (preview.outcome === 'malformed') continue;
+    if (preview.outcome === 'unconfigured' || preview.outcome === 'refused') impact.signedOut.push(name);
+    else if (!preview.permissions.includes('admin')) impact.demoted.push(name);
   }
 
-  return losing;
+  return impact;
 }
 
 export function register(addon: any, options: { rateLimit?: any; requireAdmin?: any } = {}): void {

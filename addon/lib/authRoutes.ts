@@ -234,6 +234,7 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
         username: identity.username,
         email: identity.email,
         permissions: permissions as Permission[],
+        groups: identity.groups,
       });
       setSessionCookie(req, res, sessionId);
 

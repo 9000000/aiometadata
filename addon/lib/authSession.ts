@@ -3,6 +3,7 @@ import consola from 'consola';
 import redis from './redisClient';
 import { getSetting } from './settingsService';
 import { isPermission, type Permission } from './permissions';
+import { isOidcConfigured, readOidcConfig, resolvePermissions } from './oidc';
 
 const logger = consola.withTag('AuthSession');
 
@@ -22,6 +23,7 @@ export interface SessionData {
   username: string;
   email: string | null;
   permissions: Permission[];
+  groups: string[];
   createdAt: number;
 }
 
@@ -51,10 +53,28 @@ export async function readSession(id: string | undefined): Promise<SessionData |
     const raw = await redis.get(`${SESSION_PREFIX}${id}`);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    return {
-      ...parsed,
-      permissions: Array.isArray(parsed.permissions) ? parsed.permissions.filter(isPermission) : [],
-    };
+    const stored: Permission[] = Array.isArray(parsed.permissions)
+      ? parsed.permissions.filter(isPermission)
+      : [];
+
+    if (!Array.isArray(parsed.groups)) {
+      return { ...parsed, groups: [], permissions: stored };
+    }
+
+    const config = readOidcConfig();
+    if (!isOidcConfigured(config)) return null;
+
+    const resolved = resolvePermissions(parsed.groups, config);
+    if (resolved !== null) return { ...parsed, permissions: resolved };
+
+    if (config.groupPermissions === null) {
+      logger.error(`Group mapping is unreadable; keeping last known permissions for ${parsed.username}`);
+      return { ...parsed, permissions: stored };
+    }
+
+    logger.info(`Signing out ${parsed.username}: the group mapping no longer grants access`);
+    await destroySession(id);
+    return null;
   } catch (error: any) {
     logger.warn(`Could not read session: ${error.message}`);
     return null;

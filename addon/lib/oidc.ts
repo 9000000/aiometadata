@@ -38,7 +38,11 @@ function trimmed(value: unknown): string {
  * `group=perm|perm,other=perm`. JSON is accepted too, for group names that
  * contain a comma or an equals sign.
  */
-export function parseGroupPermissions(raw: string): Record<string, string> | null {
+let groupMapCacheRaw: string | null = null;
+let groupMapCacheValue: Record<string, string> | null = null;
+let groupMapCacheHit = false;
+
+function parseGroupPermissionsUncached(raw: string): Record<string, string> | null {
   const value = trimmed(raw);
   if (!value) return {};
 
@@ -77,6 +81,15 @@ export function parseGroupPermissions(raw: string): Record<string, string> | nul
     map[group] = pair.slice(index + 1).trim();
   }
   return map;
+}
+
+export function parseGroupPermissions(raw: string): Record<string, string> | null {
+  if (groupMapCacheHit && groupMapCacheRaw === raw) return groupMapCacheValue;
+  const parsed = parseGroupPermissionsUncached(raw);
+  groupMapCacheRaw = raw;
+  groupMapCacheValue = parsed;
+  groupMapCacheHit = true;
+  return parsed;
 }
 
 export function readOidcConfig(): OidcConfig {

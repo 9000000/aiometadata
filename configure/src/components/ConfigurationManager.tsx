@@ -266,8 +266,8 @@ export function ConfigurationManager() {
 
             <SettingRow
               htmlFor="hide-stremio-catalogs"
-              label="Hide Stremio Catalogs"
-              description="Hide Stremio-specific catalogs such as Calendar videos from the manifest for clients that do not use them."
+              label="Hide Stremio-Specific Catalogs"
+              description="Leaves catalogs only Stremio uses, such as Calendar videos, out of the manifest. Clients that don't use them can flicker while they render them and then drop them."
               control={
                 <Switch
                   id="hide-stremio-catalogs"
@@ -280,6 +280,11 @@ export function ConfigurationManager() {
                   }}
                 />
               }
+              note={config.hideStremioCatalogs ? (
+                <Callout variant="warn">
+                  Clients that do use the Calendar will lose it.
+                </Callout>
+              ) : null}
             />
           </div>
         </CardContent>

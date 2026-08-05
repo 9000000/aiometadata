@@ -517,9 +517,9 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   },
   {
     id: 'configuration.hideStremioCatalogs', section: 'configuration', anchor: 'hide-stremio-catalogs',
-    label: 'Hide Stremio Catalogs',
-    description: 'Hide Stremio-specific catalogs such as Calendar videos from the manifest for clients that do not use them.',
-    keywords: ['stremio', 'catalog', 'manifest', 'metadata', 'calendar'],
+    label: 'Hide Stremio-Specific Catalogs',
+    description: 'Leaves catalogs only Stremio uses, such as Calendar videos, out of the manifest. Clients that do not use them can flicker while they render them and then drop them.',
+    keywords: ['stremio', 'catalog', 'manifest', 'metadata', 'calendar', 'calendar videos', 'nuvio', 'flicker'],
   },
   {
     id: 'configuration.password', section: 'configuration', anchor: 'cfgmgr-password',

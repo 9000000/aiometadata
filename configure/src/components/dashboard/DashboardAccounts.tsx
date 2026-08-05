@@ -59,13 +59,23 @@ function LinkedConfigs({ accountId }: { accountId: string }) {
   );
 }
 
-function PermissionBadges({ account }: { account: AccountRow }) {
-  if (account.permissions === null) {
+function PermissionBadges({ account, mappingReadable }: { account: AccountRow; mappingReadable: boolean }) {
+  if (!account.permissionsKnown) {
     return (
       <Badge variant="outline" className="text-muted-foreground font-normal">
         unknown until next sign-in
       </Badge>
     );
+  }
+  if (!mappingReadable) {
+    return (
+      <Badge variant="outline" className="text-muted-foreground font-normal">
+        mapping unreadable
+      </Badge>
+    );
+  }
+  if (account.permissions === null) {
+    return <Badge variant="destructive">would be refused</Badge>;
   }
   if (account.permissions.length === 0) {
     return <Badge variant="outline">no permissions</Badge>;
@@ -163,6 +173,7 @@ export default function DashboardAccounts({ activeTab }: { activeTab: DashboardT
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const accounts: AccountRow[] = data?.accounts ?? [];
+  const mappingReadable = data?.mappingReadable !== false;
   const busy = revoke.isPending || remove.isPending || setBlocked.isPending;
 
   const confirmDelete = (account: AccountRow) => {
@@ -173,9 +184,10 @@ export default function DashboardAccounts({ activeTab }: { activeTab: DashboardT
     if (!window.confirm(`${warning}\n\nTheir saved configurations are unlinked but not deleted, and stay reachable by UUID and password. Deleting does not stop them signing in again — block them for that.`)) return;
 
     remove.mutate({ accountId: account.accountId, confirm: isSelf }, {
-      onSuccess: () => {
+      onSuccess: (result: { warning?: string }) => {
         if (expanded === account.accountId) setExpanded(null);
-        toast.success(`Deleted ${account.username}`);
+        if (result?.warning) toast.warning(`Deleted ${account.username}`, { description: result.warning });
+        else toast.success(`Deleted ${account.username}`);
       },
       onError: (error: Error) => toast.error("Could not delete this account", { description: error.message }),
     });
@@ -200,7 +212,11 @@ export default function DashboardAccounts({ activeTab }: { activeTab: DashboardT
     if (next && !window.confirm(`Block ${account.username}? This signs them out and refuses their next sign-in until you unblock them.`)) return;
 
     setBlocked.mutate({ accountId: account.accountId, blocked: next }, {
-      onSuccess: () => toast.success(next ? `Blocked ${account.username}` : `Unblocked ${account.username}`),
+      onSuccess: (result: { warning?: string }) => {
+        const title = next ? `Blocked ${account.username}` : `Unblocked ${account.username}`;
+        if (result?.warning) toast.warning(title, { description: result.warning });
+        else toast.success(title);
+      },
       onError: (error: Error) =>
         toast.error(next ? "Could not block this account" : "Could not unblock this account", { description: error.message }),
     });
@@ -244,6 +260,11 @@ export default function DashboardAccounts({ activeTab }: { activeTab: DashboardT
               Couldn't refresh — showing the last known state.
             </p>
           )}
+          {!mappingReadable && (
+            <p className="text-xs text-destructive pb-2">
+              The group mapping can't be read, so no sign-in is allowed and nobody's permissions can be resolved. Fix it in Settings — everyone already signed in keeps what they hold until then.
+            </p>
+          )}
           {accounts.length === 0 && (
             <p className="text-sm text-muted-foreground">Nobody has signed in with the identity provider yet.</p>
           )}
@@ -268,7 +289,7 @@ export default function DashboardAccounts({ activeTab }: { activeTab: DashboardT
                       <span className="font-medium text-sm truncate">{account.username}</span>
                       {isSelf && <Badge variant="outline">you</Badge>}
                       {account.blocked && <Badge variant="destructive">blocked</Badge>}
-                      <PermissionBadges account={account} />
+                      <PermissionBadges account={account} mappingReadable={mappingReadable} />
                     </div>
                     <p className="text-xs text-muted-foreground truncate">{account.email || account.subject}</p>
                   </div>

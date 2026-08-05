@@ -122,11 +122,6 @@ function sameValue(left: string, right: string): boolean {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-/**
- * Sign-in carries no configuration id to key on, so this counts per address.
- * Unlike the profile and config-load limiters it guards an unauthenticated
- * write path: every completed sign-in creates an account row.
- */
 async function ssoRateLimit(req: any, res: any, next: any): Promise<void> {
   const perWindow = Math.max(1, parseInt(getSetting('OIDC_RATE_LIMIT_PER_WINDOW') || '', 10) || 20);
   const windowSeconds = Math.max(1, parseInt(getSetting('OIDC_RATE_LIMIT_WINDOW') || '', 10) || 300);
@@ -141,11 +136,20 @@ async function ssoRateLimit(req: any, res: any, next: any): Promise<void> {
 
     if (count > perWindow) {
       logger.warn(`Rate limited sign-in attempts from ${address}`);
-      await recordSigninFailure({
-        reason: 'rate-limited',
-        address,
-        detail: `More than ${perWindow} attempts in ${windowSeconds}s`,
-      });
+      // Recording the refusal must not decide whether it is refused: anything
+      // thrown here would reach the outer catch and let the request through.
+      try {
+        const first = await redis.set(`${key}:logged`, '1', 'EX', windowSeconds + 10, 'NX');
+        if (first) {
+          await recordSigninFailure({
+            reason: 'rate-limited',
+            address,
+            detail: `More than ${perWindow} attempts in ${windowSeconds}s`,
+          });
+        }
+      } catch (error: any) {
+        logger.warn(`Could not record the rate-limited attempt: ${error.message}`);
+      }
       return res.status(429).json({ error: 'Too many sign-in attempts. Please try again shortly.' });
     }
   } catch (error: any) {
@@ -155,20 +159,23 @@ async function ssoRateLimit(req: any, res: any, next: any): Promise<void> {
   next();
 }
 
-/**
- * Who besides the caller would stop being an admin if `key` were saved as
- * `value`. Permissions resolve live now, so a mapping edit takes effect for
- * everyone at once and the only accounts that can be judged are those that have
- * signed in since their groups were first recorded.
- */
+export interface AdminImpact {
+  signedOut: string[];
+  demoted: string[];
+}
+
+export function emptyAdminImpact(): AdminImpact {
+  return { signedOut: [], demoted: [] };
+}
+
 export async function accountsLosingAdmin(
   key: string,
   value: string,
   exceptAccountId?: string
-): Promise<string[]> {
+): Promise<AdminImpact> {
   const config = readOidcConfig();
   const rows = await database.listAccounts();
-  const losing: string[] = [];
+  const impact: AdminImpact = emptyAdminImpact();
 
   for (const row of rows) {
     if (row.id === exceptAccountId) continue;
@@ -178,12 +185,15 @@ export async function accountsLosingAdmin(
     const before = resolvePermissions(groups, config);
     if (before === null || !before.includes('admin')) continue;
 
+    const name = row.username || row.id;
     const preview = previewPermissions(groups, key, value);
-    const after = preview.outcome === 'granted' ? preview.permissions : [];
-    if (!after.includes('admin')) losing.push(row.username || row.id);
+
+    if (preview.outcome === 'malformed') continue;
+    if (preview.outcome === 'unconfigured' || preview.outcome === 'refused') impact.signedOut.push(name);
+    else if (!preview.permissions.includes('admin')) impact.demoted.push(name);
   }
 
-  return losing;
+  return impact;
 }
 
 export function register(addon: any, options: { rateLimit?: any; requireAdmin?: any } = {}): void {
@@ -327,6 +337,32 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
         permissions: permissions as Permission[],
         groups: identity.groups,
       });
+
+      let current;
+      try {
+        current = await database.getAccount(account.id);
+      } catch (error: any) {
+        await destroySession(sessionId);
+        throw error;
+      }
+
+      if (!current || current.blocked) {
+        const what = current ? 'blocked' : 'deleted';
+        await destroySession(sessionId);
+        logger.warn(`Refused ${identity.username}: the account was ${what} during sign-in`);
+        await recordSigninFailure({
+          reason: 'blocked',
+          username: identity.username,
+          subject: identity.subject,
+          issuer: identity.issuer,
+          groups: identity.groups,
+          groupsClaim: config.groupsClaim,
+          address: clientAddress(req),
+          detail: `An administrator ${what} this account while it was signing in`,
+        });
+        return res.status(403).send('Your account is not allowed to sign in here.');
+      }
+
       setSessionCookie(req, res, sessionId);
 
       logger.info(`Signed in ${identity.username} with ${permissions.length ? permissions.join(', ') : 'no'} permissions`);
@@ -346,6 +382,7 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
   addon.get('/api/auth/accounts', requireAdmin, async (_req: any, res: any) => {
     try {
       const config = readOidcConfig();
+      const mappingReadable = config.groupPermissions !== null;
       const rows = await database.listAccounts();
       const accounts = await Promise.all(rows.map(async (row: any) => {
         const groups = parseGroups(row.groups_json);
@@ -356,16 +393,15 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
           username: row.username,
           email: row.email,
           groups,
-          // Null where the account has not signed in since groups were first
-          // recorded, which is not the same as resolving to no permissions.
-          permissions: groups === null ? null : resolvePermissions(groups, config),
+          permissionsKnown: groups !== null,
+          permissions: groups === null || !mappingReadable ? null : resolvePermissions(groups, config),
           blocked: Boolean(row.blocked),
           createdAt: row.created_at,
           lastSeenAt: row.last_seen_at,
           activeSessions: await countAccountSessions(row.id),
         };
       }));
-      res.json({ accounts, groupsClaim: config.groupsClaim });
+      res.json({ accounts, groupsClaim: config.groupsClaim, mappingReadable });
     } catch (error: any) {
       logger.error(`Could not list accounts: ${error.message}`);
       res.status(500).json({ error: 'Could not list accounts' });
@@ -386,12 +422,23 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
       if (!account) return res.status(404).json({ error: 'No such account' });
 
       await database.setAccountBlocked(accountId, blocked);
+      logger.info(`${blocked ? 'Blocked' : 'Unblocked'} ${account.username || accountId}`);
+      if (!blocked) return res.json({ success: true, blocked, revoked: 0 });
 
       // Blocking only refuses the next sign-in, so the sessions it already
       // holds have to go with it or the block does nothing until they expire.
-      const revoked = blocked ? await destroyAccountSessions(accountId) : 0;
-      logger.info(`${blocked ? 'Blocked' : 'Unblocked'} ${account.username || accountId}`);
-      res.json({ success: true, blocked, revoked });
+      try {
+        const revoked = await destroyAccountSessions(accountId);
+        return res.json({ success: true, blocked, revoked });
+      } catch (error: any) {
+        logger.error(`Blocked ${account.username || accountId} but could not sign them out: ${error.message}`);
+        return res.json({
+          success: true,
+          blocked,
+          revoked: typeof error.revoked === 'number' ? error.revoked : 0,
+          warning: 'The block is saved, but signing out their existing sessions failed. Some may stay live until they expire.',
+        });
+      }
     } catch (error: any) {
       logger.error(`Could not change the block state: ${error.message}`);
       res.status(500).json({ error: 'Could not change this account\'s block state' });
@@ -467,10 +514,20 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
       const account = await database.getAccount(accountId);
       if (!account) return res.status(404).json({ error: 'No such account' });
 
-      const revoked = await destroyAccountSessions(accountId);
       await database.deleteAccount(accountId);
-      logger.info(`Deleted account ${account.username || accountId} and ${revoked} session(s)`);
-      res.json({ success: true, revoked });
+
+      try {
+        const revoked = await destroyAccountSessions(accountId);
+        logger.info(`Deleted account ${account.username || accountId} and ${revoked} session(s)`);
+        return res.json({ success: true, revoked });
+      } catch (error: any) {
+        logger.error(`Deleted ${account.username || accountId} but could not sign them out: ${error.message}`);
+        return res.json({
+          success: true,
+          revoked: typeof error.revoked === 'number' ? error.revoked : 0,
+          warning: 'The account is deleted, but signing out its existing sessions failed. Some may stay live until they expire.',
+        });
+      }
     } catch (error: any) {
       logger.error(`Could not delete account: ${error.message}`);
       res.status(500).json({ error: 'Could not delete this account' });

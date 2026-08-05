@@ -5860,11 +5860,24 @@ const noCache = (req, res, next) => {
 };
 
 // Middleware to require admin authentication for dashboard routes
-function describeOthers(names) {
-  if (names.length === 0) return '';
+function nameList(names) {
   const shown = names.slice(0, 5).join(', ');
-  const rest = names.length > 5 ? ` and ${names.length - 5} more` : '';
-  return ` It would also remove admin from ${shown}${rest}.`;
+  return names.length > 5 ? `${shown} and ${names.length - 5} more` : shown;
+}
+
+function describeAdminImpact(impact) {
+  const parts = [];
+  if (impact.signedOut.length > 0) parts.push(`sign out ${nameList(impact.signedOut)}`);
+  if (impact.demoted.length > 0) {
+    parts.push(`take the admin permission away from ${nameList(impact.demoted)}, immediately and without signing them out`);
+  }
+  if (parts.length < 2) return parts.join('');
+  return `${parts.slice(0, -1).join('; ')}; and ${parts[parts.length - 1]}`;
+}
+
+function describeOthers(impact) {
+  const described = describeAdminImpact(impact);
+  return described ? ` It would also ${described}.` : '';
 }
 
 async function describeSelfDemotion(req, key, proposedValue, confirmed) {
@@ -5872,9 +5885,17 @@ async function describeSelfDemotion(req, key, proposedValue, confirmed) {
   if (!key || !key.startsWith('OIDC_')) return null;
 
   const { previewPermissions } = require('./lib/oidc');
-  const { accountsLosingAdmin } = require('./lib/authRoutes');
+  const { accountsLosingAdmin, emptyAdminImpact } = require('./lib/authRoutes');
 
-  let others = [];
+  if (previewPermissions([], key, proposedValue).outcome === 'malformed') {
+    return {
+      error: 'This value cannot be read',
+      requiresConfirmation: true,
+      reason: `${key} would be saved but not understood, so no sign-in would be allowed at all until it is fixed, and everyone already signed in would keep the permissions they have now.`,
+    };
+  }
+
+  let others = emptyAdminImpact();
   try {
     others = await accountsLosingAdmin(key, proposedValue, req.session?.accountId);
   } catch (error) {
@@ -5892,13 +5913,6 @@ async function describeSelfDemotion(req, key, proposedValue, confirmed) {
         reason: `Saving ${key} would sign you out of this dashboard. If no ADMIN_KEY is set on this instance you may not be able to get back in.${describeOthers(others)}`,
       };
     }
-    if (preview.outcome === 'malformed') {
-      return {
-        error: 'This value cannot be read',
-        requiresConfirmation: true,
-        reason: `${key} would be saved but not understood, so no new sign-in would be allowed and everyone already signed in would keep the permissions they have now.`,
-      };
-    }
     if (!preview.permissions.includes('admin')) {
       return {
         error: 'This change would remove your own admin access',
@@ -5908,11 +5922,12 @@ async function describeSelfDemotion(req, key, proposedValue, confirmed) {
     }
   }
 
-  if (others.length > 0) {
+  const described = describeAdminImpact(others);
+  if (described) {
     return {
       error: 'This change would remove someone else\'s admin access',
       requiresConfirmation: true,
-      reason: `Saving ${key} would take the admin permission away from ${others.slice(0, 5).join(', ')}${others.length > 5 ? ` and ${others.length - 5} more` : ''}, immediately and without signing them out.`,
+      reason: `Saving ${key} would ${described}.`,
     };
   }
 

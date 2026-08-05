@@ -565,6 +565,8 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'Server',
     type: 'number',
     default: 50,
+    min: 1,
+    max: 500,
   },
   {
     key: 'AUTH_SIGNIN_FAILURE_LOG_TTL',

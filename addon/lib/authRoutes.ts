@@ -137,13 +137,19 @@ async function ssoRateLimit(req: any, res: any, next: any): Promise<void> {
 
     if (count > perWindow) {
       logger.warn(`Rate limited sign-in attempts from ${address}`);
-      const first = await redis.set(`${key}:logged`, '1', 'EX', windowSeconds + 10, 'NX');
-      if (first) {
-        await recordSigninFailure({
-          reason: 'rate-limited',
-          address,
-          detail: `More than ${perWindow} attempts in ${windowSeconds}s`,
-        });
+      // Recording the refusal must not decide whether it is refused: anything
+      // thrown here would reach the outer catch and let the request through.
+      try {
+        const first = await redis.set(`${key}:logged`, '1', 'EX', windowSeconds + 10, 'NX');
+        if (first) {
+          await recordSigninFailure({
+            reason: 'rate-limited',
+            address,
+            detail: `More than ${perWindow} attempts in ${windowSeconds}s`,
+          });
+        }
+      } catch (error: any) {
+        logger.warn(`Could not record the rate-limited attempt: ${error.message}`);
       }
       return res.status(429).json({ error: 'Too many sign-in attempts. Please try again shortly.' });
     }

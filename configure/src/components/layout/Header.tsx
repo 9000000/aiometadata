@@ -21,6 +21,10 @@ export function Header() {
   const [nameInput, setNameInput] = useState('');
   const [isLoginOpen, setIsLoginOpen] = useState(false);
   const [profiles, setProfiles] = useState<Array<{ userUUID: string; label: string }>>([]);
+  const [editingProfile, setEditingProfile] = useState<string | null>(null);
+  const [profileLabel, setProfileLabel] = useState('');
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const [ssoEnabled, setSsoEnabled] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
   const [autoLoadTried, setAutoLoadTried] = useState(false);
@@ -228,6 +232,65 @@ export function Header() {
       return false;
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const startEditingProfile = (profile: { userUUID: string; label: string }) => {
+    setEditingProfile(profile.userUUID);
+    setProfileLabel(profile.label);
+    setConfirmRemove(false);
+  };
+
+  const stopEditingProfile = () => {
+    setEditingProfile(null);
+    setProfileLabel('');
+    setConfirmRemove(false);
+  };
+
+  const handleRenameProfile = async (userUUID: string) => {
+    const label = profileLabel.trim();
+    if (!label) return;
+    setProfileBusy(true);
+    try {
+      const response = await fetch(`/api/profiles/${encodeURIComponent(userUUID)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label }),
+      });
+      const result = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(result?.error || 'Could not rename this configuration');
+      const next = result?.label || label;
+      setProfiles(prev => prev.map(p => (p.userUUID === userUUID ? { ...p, label: next } : p)));
+      stopEditingProfile();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not rename this configuration');
+    } finally {
+      setProfileBusy(false);
+    }
+  };
+
+  /** Unlinks from the account. The configuration and its password are untouched. */
+  const handleRemoveProfile = async (userUUID: string) => {
+    if (!confirmRemove) {
+      setConfirmRemove(true);
+      return;
+    }
+    setProfileBusy(true);
+    try {
+      const response = await fetch(`/api/profiles/${encodeURIComponent(userUUID)}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const err = await response.json().catch(() => null);
+        throw new Error(err?.error || 'Could not remove this configuration');
+      }
+      setProfiles(prev => prev.filter(p => p.userUUID !== userUUID));
+      stopEditingProfile();
+      toast.success('Removed from your account', {
+        description: 'Its UUID and password still work.',
+      });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not remove this configuration');
+    } finally {
+      setProfileBusy(false);
     }
   };
 
@@ -458,6 +521,7 @@ export function Header() {
         open={isLoginOpen}
         onOpenChange={(next) => {
           if (authTransitioning) return;
+          if (!next) stopEditingProfile();
           setIsLoginOpen(next);
         }}
       >
@@ -485,16 +549,84 @@ export function Header() {
               </Label>
               <div className="space-y-1">
                 {profiles.map(profile => (
-                  <Button
-                    key={profile.userUUID}
-                    type="button"
-                    variant="outline"
-                    className="w-full justify-start"
-                    disabled={isLoading}
-                    onClick={() => handleLoadProfile(profile.userUUID)}
-                  >
-                    <span className="truncate">{profile.label}</span>
-                  </Button>
+                  editingProfile === profile.userUUID ? (
+                    <div key={profile.userUUID} className="space-y-1 rounded-md border p-2">
+                      <div className="flex items-center gap-1">
+                        <Input
+                          value={profileLabel}
+                          maxLength={64}
+                          autoFocus
+                          disabled={profileBusy}
+                          onChange={e => setProfileLabel(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleRenameProfile(profile.userUUID);
+                            } else if (e.key === 'Escape') {
+                              stopEditingProfile();
+                            }
+                          }}
+                          className="h-9 text-sm"
+                          aria-label="Configuration name"
+                        />
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          className="h-9 w-9 shrink-0"
+                          aria-label="Save name"
+                          disabled={profileBusy || !profileLabel.trim()}
+                          onClick={() => handleRenameProfile(profile.userUUID)}
+                        >
+                          <Check className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          className="h-9 w-9 shrink-0"
+                          aria-label="Cancel"
+                          disabled={profileBusy}
+                          onClick={stopEditingProfile}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={profileBusy}
+                        onClick={() => handleRemoveProfile(profile.userUUID)}
+                        className="text-[11px] text-muted-foreground underline-offset-2 hover:text-destructive hover:underline"
+                      >
+                        {confirmRemove
+                          ? 'Click again to remove it from your account'
+                          : 'Remove from your account'}
+                      </button>
+                    </div>
+                  ) : (
+                    <div key={profile.userUUID} className="flex items-center gap-1">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="min-w-0 flex-1 justify-start"
+                        disabled={isLoading}
+                        onClick={() => handleLoadProfile(profile.userUUID)}
+                      >
+                        <span className="truncate">{profile.label}</span>
+                      </Button>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        className="h-9 w-9 shrink-0"
+                        aria-label={`Rename ${profile.label}`}
+                        disabled={isLoading}
+                        onClick={() => startEditingProfile(profile)}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  )
                 ))}
               </div>
             </div>

@@ -281,7 +281,11 @@ async function configLoadRateLimitMiddleware(req, res, next) {
 
   try {
     const minuteBucket = Math.floor(Date.now() / 60000);
-    const target = req.params.userUUID || 'unknown';
+    const target = req.params.userUUID
+      || (typeof req.body?.userUUID === 'string' ? req.body.userUUID.trim() : '')
+      || req.session?.accountId
+      || req.ip
+      || 'unknown';
     const rateKey = `rate-limit:config-load:${target}:${minuteBucket}`;
     const currentCount = await redis.incr(rateKey);
 

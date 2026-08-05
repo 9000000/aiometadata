@@ -35,6 +35,7 @@ const UNVERIFIED_REASONS: ReadonlySet<SigninFailureReason> = new Set<SigninFailu
   'rate-limited',
   'browser-mismatch',
   'expired',
+  'provider-error',
 ]);
 
 function indexFor(reason: SigninFailureReason): string {
@@ -51,12 +52,6 @@ function logTtlSeconds(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 604800;
 }
 
-/**
- * A refusal is the one moment an admin can see what the provider actually sent,
- * so the presented groups are kept alongside the claim they were read from.
- * Nothing else from the exchange is recorded: the code and the tokens are
- * credentials, and the reason is what makes the entry useful.
- */
 export async function recordSigninFailure(
   failure: Omit<Partial<SigninFailure>, 'reason'> & { reason: SigninFailureReason }
 ): Promise<void> {
@@ -88,28 +83,38 @@ export async function recordSigninFailure(
   }
 }
 
+async function readFailures(ids: string[]): Promise<SigninFailure[]> {
+  if (ids.length === 0) return [];
+  const raw = await redis.mget(ids.map((id) => `${FAILURE_PREFIX}${id}`));
+  const failures: SigninFailure[] = [];
+  for (const value of raw) {
+    if (!value) continue;
+    try {
+      failures.push(JSON.parse(value));
+    } catch {
+      // Unreadable value, leave it to expire on its own.
+    }
+  }
+  return failures;
+}
+
 export async function listSigninFailures(limit = logMax()): Promise<SigninFailure[]> {
   try {
     const stop = Math.max(0, limit - 1);
-    const [refusals, unverified]: [string[], string[]] = await Promise.all([
+    const [refusalIds, unverifiedIds]: [string[], string[]] = await Promise.all([
       redis.zrevrange(FAILURE_INDEX, 0, stop),
       redis.zrevrange(UNVERIFIED_INDEX, 0, stop),
     ]);
-    const ids = [...refusals, ...unverified];
-    if (ids.length === 0) return [];
 
-    const raw = await redis.mget(ids.map((id) => `${FAILURE_PREFIX}${id}`));
-    const failures: SigninFailure[] = [];
-    for (const value of raw) {
-      if (!value) continue;
-      try {
-        failures.push(JSON.parse(value));
-      } catch {
-        // Unreadable value, leave it to expire on its own.
-      }
-    }
-    failures.sort((a, b) => b.at.localeCompare(a.at));
-    return failures.slice(0, limit);
+    const [refusals, unverified] = await Promise.all([
+      readFailures(refusalIds),
+      readFailures(unverifiedIds),
+    ]);
+
+    const kept = refusals.slice(0, limit);
+    kept.push(...unverified.slice(0, Math.max(0, limit - kept.length)));
+    kept.sort((a, b) => b.at.localeCompare(a.at));
+    return kept;
   } catch (error: any) {
     logger.warn(`Could not read the sign-in failures: ${error.message}`);
     return [];

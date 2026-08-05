@@ -122,11 +122,7 @@ function sameValue(left: string, right: string): boolean {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-/**
- * Sign-in carries no configuration id to key on, so this counts per address.
- * Unlike the profile and config-load limiters it guards an unauthenticated
- * write path: every completed sign-in creates an account row.
- */
+
 async function ssoRateLimit(req: any, res: any, next: any): Promise<void> {
   const perWindow = Math.max(1, parseInt(getSetting('OIDC_RATE_LIMIT_PER_WINDOW') || '', 10) || 20);
   const windowSeconds = Math.max(1, parseInt(getSetting('OIDC_RATE_LIMIT_WINDOW') || '', 10) || 300);
@@ -141,7 +137,8 @@ async function ssoRateLimit(req: any, res: any, next: any): Promise<void> {
 
     if (count > perWindow) {
       logger.warn(`Rate limited sign-in attempts from ${address}`);
-      if (count === perWindow + 1) {
+      const first = await redis.set(`${key}:logged`, '1', 'EX', windowSeconds + 10, 'NX');
+      if (first) {
         await recordSigninFailure({
           reason: 'rate-limited',
           address,
@@ -157,15 +154,10 @@ async function ssoRateLimit(req: any, res: any, next: any): Promise<void> {
   next();
 }
 
-/**
- * Who besides the caller would stop being an admin if `key` were saved as
- * `value`. Permissions resolve live now, so a mapping edit takes effect for
- * everyone at once and the only accounts that can be judged are those that have
- * signed in since their groups were first recorded.
- */
 export interface AdminImpact {
   signedOut: string[];
   demoted: string[];
+  refusedNext: string[];
 }
 
 export async function accountsLosingAdmin(
@@ -175,7 +167,7 @@ export async function accountsLosingAdmin(
 ): Promise<AdminImpact> {
   const config = readOidcConfig();
   const rows = await database.listAccounts();
-  const impact: AdminImpact = { signedOut: [], demoted: [] };
+  const impact: AdminImpact = { signedOut: [], demoted: [], refusedNext: [] };
 
   for (const row of rows) {
     if (row.id === exceptAccountId) continue;
@@ -188,8 +180,8 @@ export async function accountsLosingAdmin(
     const name = row.username || row.id;
     const preview = previewPermissions(groups, key, value);
 
-    if (preview.outcome === 'malformed') continue;
-    if (preview.outcome === 'unconfigured' || preview.outcome === 'refused') impact.signedOut.push(name);
+    if (preview.outcome === 'malformed') impact.refusedNext.push(name);
+    else if (preview.outcome === 'unconfigured' || preview.outcome === 'refused') impact.signedOut.push(name);
     else if (!preview.permissions.includes('admin')) impact.demoted.push(name);
   }
 
@@ -339,9 +331,10 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
       });
 
       const current = await database.getAccount(account.id);
-      if (current?.blocked) {
+      if (!current || current.blocked) {
+        const what = current ? 'blocked' : 'deleted';
         await destroySession(sessionId);
-        logger.warn(`Refused ${identity.username}: the account was blocked during sign-in`);
+        logger.warn(`Refused ${identity.username}: the account was ${what} during sign-in`);
         await recordSigninFailure({
           reason: 'blocked',
           username: identity.username,
@@ -350,7 +343,7 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
           groups: identity.groups,
           groupsClaim: config.groupsClaim,
           address: clientAddress(req),
-          detail: 'An administrator blocked this account while it was signing in',
+          detail: `An administrator ${what} this account while it was signing in`,
         });
         return res.status(403).send('Your account is not allowed to sign in here.');
       }

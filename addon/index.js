@@ -5871,6 +5871,9 @@ function describeAdminImpact(impact) {
   if (impact.demoted.length > 0) {
     parts.push(`take the admin permission away from ${nameList(impact.demoted)}, immediately and without signing them out`);
   }
+  if (impact.refusedNext.length > 0) {
+    parts.push(`refuse the next sign-in of ${nameList(impact.refusedNext)}, leaving the sessions they hold now alone`);
+  }
   return parts.join(', and ');
 }
 
@@ -5886,7 +5889,7 @@ async function describeSelfDemotion(req, key, proposedValue, confirmed) {
   const { previewPermissions } = require('./lib/oidc');
   const { accountsLosingAdmin } = require('./lib/authRoutes');
 
-  let others = { signedOut: [], demoted: [] };
+  let others = { signedOut: [], demoted: [], refusedNext: [] };
   try {
     others = await accountsLosingAdmin(key, proposedValue, req.session?.accountId);
   } catch (error) {

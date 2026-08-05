@@ -504,10 +504,20 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
       const account = await database.getAccount(accountId);
       if (!account) return res.status(404).json({ error: 'No such account' });
 
-      const revoked = await destroyAccountSessions(accountId);
       await database.deleteAccount(accountId);
-      logger.info(`Deleted account ${account.username || accountId} and ${revoked} session(s)`);
-      res.json({ success: true, revoked });
+
+      try {
+        const revoked = await destroyAccountSessions(accountId);
+        logger.info(`Deleted account ${account.username || accountId} and ${revoked} session(s)`);
+        return res.json({ success: true, revoked });
+      } catch (error: any) {
+        logger.error(`Deleted ${account.username || accountId} but could not sign them out: ${error.message}`);
+        return res.json({
+          success: true,
+          revoked: 0,
+          warning: 'The account is deleted, but signing out its existing sessions failed. Some may stay live until they expire.',
+        });
+      }
     } catch (error: any) {
       logger.error(`Could not delete account: ${error.message}`);
       res.status(500).json({ error: 'Could not delete this account' });

@@ -176,9 +176,10 @@ export default function DashboardAccounts({ activeTab }: { activeTab: DashboardT
     if (!window.confirm(`${warning}\n\nTheir saved configurations are unlinked but not deleted, and stay reachable by UUID and password. Deleting does not stop them signing in again — block them for that.`)) return;
 
     remove.mutate({ accountId: account.accountId, confirm: isSelf }, {
-      onSuccess: () => {
+      onSuccess: (result: { warning?: string }) => {
         if (expanded === account.accountId) setExpanded(null);
-        toast.success(`Deleted ${account.username}`);
+        if (result?.warning) toast.warning(`Deleted ${account.username}`, { description: result.warning });
+        else toast.success(`Deleted ${account.username}`);
       },
       onError: (error: Error) => toast.error("Could not delete this account", { description: error.message }),
     });

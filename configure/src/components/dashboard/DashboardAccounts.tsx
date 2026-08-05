@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -46,7 +47,7 @@ function LinkedConfigs({ accountId }: { accountId: string }) {
 
 export default function DashboardAccounts({ activeTab }: { activeTab: DashboardTab }) {
   const { session } = useAdmin();
-  const { data, isLoading, isError } = useDashboardAccounts({ activeTab });
+  const { data, isLoading, isError, refetch, isFetching } = useDashboardAccounts({ activeTab });
   const revoke = useRevokeAccountSessions();
   const remove = useDeleteAccount();
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -58,15 +59,29 @@ export default function DashboardAccounts({ activeTab }: { activeTab: DashboardT
     const warning = isSelf
       ? `Delete your own account (${account.username})? This signs you out immediately.`
       : `Delete the account ${account.username}?`;
-    if (window.confirm(`${warning}\n\nTheir saved configurations are unlinked but not deleted, and stay reachable by UUID and password.`)) {
-      remove.mutate(account.accountId);
-    }
+    if (!window.confirm(`${warning}\n\nTheir saved configurations are unlinked but not deleted, and stay reachable by UUID and password.`)) return;
+
+    remove.mutate({ accountId: account.accountId, confirm: isSelf }, {
+      onSuccess: () => {
+        if (expanded === account.accountId) setExpanded(null);
+        toast.success(`Deleted ${account.username}`);
+      },
+      onError: (error: Error) => toast.error("Could not delete this account", { description: error.message }),
+    });
   };
 
   const confirmRevoke = (account: AccountRow) => {
     const isSelf = session?.accountId === account.accountId;
-    if (isSelf && !window.confirm("Revoke your own sessions? This signs you out immediately.")) return;
-    revoke.mutate(account.accountId);
+    const warning = isSelf
+      ? "Revoke your own sessions? This signs you out immediately."
+      : `Sign ${account.username} out of every device?`;
+    if (!window.confirm(warning)) return;
+
+    revoke.mutate(account.accountId, {
+      onSuccess: (result: { revoked?: number }) =>
+        toast.success(`Signed ${account.username} out of ${result?.revoked ?? 0} session(s)`),
+      onError: (error: Error) => toast.error("Could not revoke these sessions", { description: error.message }),
+    });
   };
 
   if (isLoading) {
@@ -78,8 +93,18 @@ export default function DashboardAccounts({ activeTab }: { activeTab: DashboardT
     );
   }
 
-  if (isError) {
-    return <p className="text-sm text-red-500">Could not load accounts. This is a read failure, not an empty list.</p>;
+  if (isError && !data) {
+    return (
+      <Card>
+        <CardContent className="py-6 space-y-3">
+          <p className="text-sm text-destructive">Couldn't load accounts — the server did not answer.</p>
+          <Button size="sm" variant="outline" onClick={() => refetch()} disabled={isFetching}>
+            {isFetching ? <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" /> : null}
+            Try again
+          </Button>
+        </CardContent>
+      </Card>
+    );
   }
 
   return (
@@ -88,6 +113,11 @@ export default function DashboardAccounts({ activeTab }: { activeTab: DashboardT
         <CardTitle className="text-base">Accounts</CardTitle>
       </CardHeader>
       <CardContent className="space-y-1">
+        {isError && (
+          <p className="text-xs text-destructive pb-2">
+            Couldn't refresh — showing the last known state.
+          </p>
+        )}
         {accounts.length === 0 && (
           <p className="text-sm text-muted-foreground">Nobody has signed in with the identity provider yet.</p>
         )}
@@ -118,12 +148,28 @@ export default function DashboardAccounts({ activeTab }: { activeTab: DashboardT
                 <div className="hidden lg:block text-xs text-muted-foreground whitespace-nowrap">
                   seen {formatDate(account.lastSeenAt)}
                 </div>
-                <Button size="sm" variant="outline" onClick={() => confirmRevoke(account)} disabled={revoke.isPending}>
-                  <LogOut className="h-3.5 w-3.5 mr-1" />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={() => confirmRevoke(account)}
+                  disabled={revoke.isPending || remove.isPending}
+                >
+                  {revoke.isPending && revoke.variables === account.accountId
+                    ? <Loader2 className="animate-spin" />
+                    : <LogOut />}
                   Revoke
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => confirmDelete(account)} disabled={remove.isPending}>
-                  <Trash2 className="h-3.5 w-3.5 mr-1" />
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="shrink-0"
+                  onClick={() => confirmDelete(account)}
+                  disabled={revoke.isPending || remove.isPending}
+                >
+                  {remove.isPending && remove.variables?.accountId === account.accountId
+                    ? <Loader2 className="animate-spin" />
+                    : <Trash2 />}
                   Delete
                 </Button>
               </div>

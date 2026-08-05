@@ -1232,11 +1232,12 @@ export function useDeleteAccount() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (accountId: string) => {
+    mutationFn: async ({ accountId, confirm }: { accountId: string; confirm?: boolean }) => {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (adminKey) headers['x-admin-key'] = adminKey;
 
-      const response = await fetch(`/api/auth/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE', headers });
+      const url = `/api/auth/accounts/${encodeURIComponent(accountId)}${confirm ? '?confirm=true' : ''}`;
+      const response = await fetch(url, { method: 'DELETE', headers });
       if (response.status === 401) { logout(); throw new Error('Session expired.'); }
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));

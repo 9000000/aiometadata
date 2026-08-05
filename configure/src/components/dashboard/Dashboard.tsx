@@ -629,6 +629,11 @@ export function Dashboard() {
           />
         ),
       },
+      ...(ssoEnabled ? [{
+        value: "accounts",
+        title: "Accounts",
+        component: <DashboardAccounts activeTab={activeTab} />,
+      }] : []),
       {
         value: "logs",
         title: "Logs",

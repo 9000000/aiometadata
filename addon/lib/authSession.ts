@@ -34,7 +34,7 @@ export interface SessionData {
   username: string;
   email: string | null;
   permissions: Permission[];
-  groups: string[];
+  groups: string[] | null;
   createdAt: number;
 }
 
@@ -72,7 +72,7 @@ export async function readSession(id: string | undefined): Promise<SessionData |
     if (!isOidcConfigured(config)) return null;
 
     if (!Array.isArray(parsed.groups)) {
-      return { ...parsed, groups: [], permissions: stored };
+      return { ...parsed, groups: null, permissions: stored };
     }
 
     const resolved = resolvePermissions(parsed.groups, config);

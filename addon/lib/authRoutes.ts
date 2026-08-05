@@ -305,6 +305,14 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
     const accountId = trimmed(req.params.accountId);
     if (!accountId) return res.status(400).json({ error: 'An account is required' });
 
+    if (accountId === req.session?.accountId && trimmed(req.query.confirm) !== 'true') {
+      return res.status(409).json({
+        error: 'This would delete your own account',
+        requiresConfirmation: true,
+        reason: 'Deleting your own account signs you out immediately and unlinks the configurations saved to it.',
+      });
+    }
+
     try {
       const account = await database.getAccount(accountId);
       if (!account) return res.status(404).json({ error: 'No such account' });

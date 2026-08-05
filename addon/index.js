@@ -5868,16 +5868,23 @@ function describeSelfDemotion(req, key, proposedValue, confirmed) {
   if (!hasPermission(req, 'admin')) return null;
 
   const { previewPermissions } = require('./lib/oidc');
-  const next = previewPermissions(session.groups, key, proposedValue);
+  const preview = previewPermissions(session.groups, key, proposedValue);
 
-  if (next === null) {
+  if (preview.outcome === 'unconfigured' || preview.outcome === 'refused') {
     return {
       error: 'This change would end your own session',
       requiresConfirmation: true,
       reason: `Saving ${key} would sign you out of this dashboard. If no ADMIN_KEY is set on this instance you may not be able to get back in.`,
     };
   }
-  if (!next.includes('admin')) {
+  if (preview.outcome === 'malformed') {
+    return {
+      error: 'This value cannot be read',
+      requiresConfirmation: true,
+      reason: `${key} would be saved but not understood, so no new sign-in would be allowed and everyone already signed in would keep the permissions they have now.`,
+    };
+  }
+  if (!preview.permissions.includes('admin')) {
     return {
       error: 'This change would remove your own admin access',
       requiresConfirmation: true,

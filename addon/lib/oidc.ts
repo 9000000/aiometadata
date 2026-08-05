@@ -110,10 +110,24 @@ export function readOidcConfig(): OidcConfig {
   return buildOidcConfig(getSetting);
 }
 
-export function previewPermissions(groups: string[], key: string, value: string): Permission[] | null {
+export type PermissionPreview =
+  | { outcome: 'granted'; permissions: Permission[] }
+  | { outcome: 'unconfigured' }
+  | { outcome: 'malformed' }
+  | { outcome: 'refused' };
+
+/**
+ * The order matches readSession, so what this predicts is what a live session
+ * would actually get: an unconfigured provider ends every session regardless of
+ * the mapping, while an unreadable mapping leaves existing sessions alone.
+ */
+export function previewPermissions(groups: string[], key: string, value: string): PermissionPreview {
   const config = buildOidcConfig((k) => (k === key ? value : getSetting(k)));
-  if (!isOidcConfigured(config)) return null;
-  return resolvePermissions(groups, config);
+  if (!isOidcConfigured(config)) return { outcome: 'unconfigured' };
+  if (config.groupPermissions === null) return { outcome: 'malformed' };
+  const permissions = resolvePermissions(groups, config);
+  if (permissions === null) return { outcome: 'refused' };
+  return { outcome: 'granted', permissions };
 }
 
 /**

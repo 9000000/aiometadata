@@ -8,6 +8,11 @@ const logger = consola.withTag('AuthSession');
 
 export const SESSION_COOKIE = 'aiom_session';
 const SESSION_PREFIX = 'auth:session:';
+const ACCOUNT_SESSIONS_PREFIX = 'auth:account-sessions:';
+
+function accountSessionsKey(accountId: string): string {
+  return `${ACCOUNT_SESSIONS_PREFIX}${accountId}`;
+}
 const DEFAULT_TTL_SECONDS = 24 * 60 * 60;
 
 export { ALL_PERMISSIONS, isPermission, type Permission } from './permissions';
@@ -28,7 +33,15 @@ export function sessionTtlSeconds(): number {
 export async function createSession(data: Omit<SessionData, 'createdAt'>): Promise<string> {
   const id = crypto.randomBytes(32).toString('base64url');
   const payload: SessionData = { ...data, createdAt: Date.now() };
-  await redis.set(`${SESSION_PREFIX}${id}`, JSON.stringify(payload), 'EX', sessionTtlSeconds());
+  const ttl = sessionTtlSeconds();
+  await redis.set(`${SESSION_PREFIX}${id}`, JSON.stringify(payload), 'EX', ttl);
+  try {
+    const key = accountSessionsKey(data.accountId);
+    await redis.zadd(key, Date.now() + ttl * 1000, id);
+    await redis.expire(key, ttl + 60);
+  } catch (error: any) {
+    logger.warn(`Could not index session for ${data.accountId}: ${error.message}`);
+  }
   return id;
 }
 
@@ -51,33 +64,42 @@ export async function readSession(id: string | undefined): Promise<SessionData |
 export async function destroySession(id: string | undefined): Promise<void> {
   if (!id) return;
   try {
+    const raw = await redis.get(`${SESSION_PREFIX}${id}`);
     await redis.del(`${SESSION_PREFIX}${id}`);
+    if (raw) {
+      const accountId = JSON.parse(raw)?.accountId;
+      if (accountId) await redis.zrem(accountSessionsKey(accountId), id);
+    }
   } catch (error: any) {
     logger.warn(`Could not destroy session: ${error.message}`);
   }
 }
 
+export async function countAccountSessions(accountId: string): Promise<number> {
+  try {
+    const key = accountSessionsKey(accountId);
+    await redis.zremrangebyscore(key, 0, Date.now());
+    return await redis.zcard(key);
+  } catch (error: any) {
+    logger.warn(`Could not count sessions for ${accountId}: ${error.message}`);
+    return 0;
+  }
+}
+
 /** Every session for one account, used when its access is revoked. */
 export async function destroyAccountSessions(accountId: string): Promise<number> {
-  let cursor = '0';
-  let removed = 0;
-  do {
-    const [next, keys] = await redis.scan(cursor, 'MATCH', `${SESSION_PREFIX}*`, 'COUNT', 200);
-    cursor = next;
-    for (const key of keys) {
-      const raw = await redis.get(key);
-      if (!raw) continue;
-      try {
-        if (JSON.parse(raw).accountId === accountId) {
-          await redis.del(key);
-          removed += 1;
-        }
-      } catch {
-        // Unreadable value, leave it to expire on its own.
-      }
+  try {
+    const key = accountSessionsKey(accountId);
+    const ids: string[] = await redis.zrange(key, 0, -1);
+    for (const id of ids) {
+      await redis.del(`${SESSION_PREFIX}${id}`);
     }
-  } while (cursor !== '0');
-  return removed;
+    await redis.del(key);
+    return ids.length;
+  } catch (error: any) {
+    logger.warn(`Could not revoke sessions for ${accountId}: ${error.message}`);
+    return 0;
+  }
 }
 
 /** Express has res.cookie but no reader, and one header parse beats a dependency. */

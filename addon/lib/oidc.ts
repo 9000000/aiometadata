@@ -16,7 +16,7 @@ export interface OidcConfig {
   clientSecret: string;
   groupsClaim: string;
   usernameClaim: string;
-  groupPermissions: Record<string, string>;
+  groupPermissions: Record<string, string> | null;
   defaultPermissions: string;
   allowInsecure: boolean;
 }
@@ -38,26 +38,43 @@ function trimmed(value: unknown): string {
  * `group=perm|perm,other=perm`. JSON is accepted too, for group names that
  * contain a comma or an equals sign.
  */
-export function parseGroupPermissions(raw: string): Record<string, string> {
+export function parseGroupPermissions(raw: string): Record<string, string> | null {
   const value = trimmed(raw);
   if (!value) return {};
 
+  const map: Record<string, string> = Object.create(null);
+
   if (value.startsWith('{')) {
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(value);
-      return typeof parsed === 'object' && parsed !== null ? parsed : {};
+      parsed = JSON.parse(value);
     } catch {
-      logger.error('Group permissions is not valid JSON; no group will match');
-      return {};
+      logger.error('Group permissions is not valid JSON; refusing every sign-in until it is corrected');
+      return null;
     }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      logger.error('Group permissions must be an object of group names to permissions; refusing every sign-in until it is corrected');
+      return null;
+    }
+    for (const [group, spec] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof spec !== 'string') {
+        logger.error(`Group "${group}" is not mapped to a permission string; refusing every sign-in until it is corrected`);
+        return null;
+      }
+      map[group] = spec;
+    }
+    return map;
   }
 
-  const map: Record<string, string> = {};
   for (const pair of value.split(',')) {
+    if (!pair.trim()) continue;
     const index = pair.indexOf('=');
-    if (index < 0) continue;
-    const group = pair.slice(0, index).trim();
-    if (group) map[group] = pair.slice(index + 1).trim();
+    const group = index < 0 ? '' : pair.slice(0, index).trim();
+    if (!group) {
+      logger.error(`Group permissions entry "${pair.trim()}" is not "group=permission"; refusing every sign-in until it is corrected`);
+      return null;
+    }
+    map[group] = pair.slice(index + 1).trim();
   }
   return map;
 }
@@ -130,6 +147,11 @@ function lookupSpec(map: Record<string, string>, group: string): string | undefi
  * enough to hold a session and use profiles.
  */
 export function resolvePermissions(groups: string[], config: OidcConfig): Permission[] | null {
+  if (config.groupPermissions === null) {
+    logger.error('Group permissions is unreadable; refusing the login');
+    return null;
+  }
+
   const granted = new Set<Permission>();
   let matched = false;
 

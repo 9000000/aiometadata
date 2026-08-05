@@ -197,6 +197,8 @@ async function startServer(): Promise<void> {
   readiness.markReady('settings');
   ok('settings');
 
+  await require('./lib/authSession').backfillSessionIndex();
+
   await require('./lib/aliasResolver').initializeUserAliases();
   ok('userAliases');
 

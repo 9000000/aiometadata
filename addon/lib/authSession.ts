@@ -57,12 +57,12 @@ export async function readSession(id: string | undefined): Promise<SessionData |
       ? parsed.permissions.filter(isPermission)
       : [];
 
+    const config = readOidcConfig();
+    if (!isOidcConfigured(config)) return null;
+
     if (!Array.isArray(parsed.groups)) {
       return { ...parsed, groups: [], permissions: stored };
     }
-
-    const config = readOidcConfig();
-    if (!isOidcConfigured(config)) return null;
 
     const resolved = resolvePermissions(parsed.groups, config);
     if (resolved !== null) return { ...parsed, permissions: resolved };
@@ -106,20 +106,85 @@ export async function countAccountSessions(accountId: string): Promise<number> {
   }
 }
 
-/** Every session for one account, used when its access is revoked. */
-export async function destroyAccountSessions(accountId: string): Promise<number> {
+async function scanSessions(
+  visit: (id: string, record: any) => Promise<void>
+): Promise<void> {
+  let cursor = '0';
+  do {
+    const [next, keys] = await redis.scan(cursor, 'MATCH', `${SESSION_PREFIX}*`, 'COUNT', 200);
+    cursor = next;
+    for (const key of keys) {
+      const raw = await redis.get(key);
+      if (!raw) continue;
+      try {
+        await visit(key.slice(SESSION_PREFIX.length), JSON.parse(raw));
+      } catch {
+        // Unreadable value, leave it to expire on its own.
+      }
+    }
+  } while (cursor !== '0');
+}
+
+/**
+ * Sessions minted before the per-account index existed carry no member, so the
+ * index alone would report them revoked while they kept working. One sweep at
+ * startup adopts them; after that createSession is the only writer it needs.
+ */
+export async function backfillSessionIndex(): Promise<number> {
+  let adopted = 0;
   try {
-    const key = accountSessionsKey(accountId);
+    await scanSessions(async (id, record) => {
+      const accountId = record?.accountId;
+      if (!accountId) return;
+      const key = accountSessionsKey(accountId);
+      if (await redis.zscore(key, id) !== null) return;
+      const ttl = await redis.ttl(`${SESSION_PREFIX}${id}`);
+      const remaining = ttl > 0 ? ttl : sessionTtlSeconds();
+      await redis.zadd(key, Date.now() + remaining * 1000, id);
+      await redis.expire(key, remaining + 60);
+      adopted += 1;
+    });
+    if (adopted > 0) logger.info(`Adopted ${adopted} session(s) into the account index`);
+  } catch (error: any) {
+    logger.warn(`Could not backfill the session index: ${error.message}`);
+  }
+  return adopted;
+}
+
+/**
+ * Every session for one account, used when its access is revoked. The index
+ * answers first, then a sweep catches anything missing from it: revoking is
+ * rare and interactive, so it is worth the scan to never report a success that
+ * left a session alive.
+ */
+export async function destroyAccountSessions(accountId: string): Promise<number> {
+  const key = accountSessionsKey(accountId);
+  const removed = new Set<string>();
+
+  try {
     const ids: string[] = await redis.zrange(key, 0, -1);
     for (const id of ids) {
       await redis.del(`${SESSION_PREFIX}${id}`);
+      removed.add(id);
     }
     await redis.del(key);
-    return ids.length;
   } catch (error: any) {
-    logger.warn(`Could not revoke sessions for ${accountId}: ${error.message}`);
-    return 0;
+    logger.warn(`Could not read the session index for ${accountId}: ${error.message}`);
   }
+
+  try {
+    await scanSessions(async (id, record) => {
+      if (record?.accountId !== accountId || removed.has(id)) return;
+      await redis.del(`${SESSION_PREFIX}${id}`);
+      await redis.zrem(key, id);
+      removed.add(id);
+    });
+  } catch (error: any) {
+    logger.error(`Could not sweep sessions for ${accountId}: ${error.message}`);
+    throw error;
+  }
+
+  return removed.size;
 }
 
 /** Express has res.cookie but no reader, and one header parse beats a dependency. */

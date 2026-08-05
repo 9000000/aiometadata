@@ -59,11 +59,18 @@ function LinkedConfigs({ accountId }: { accountId: string }) {
   );
 }
 
-function PermissionBadges({ account }: { account: AccountRow }) {
+function PermissionBadges({ account, mappingReadable }: { account: AccountRow; mappingReadable: boolean }) {
   if (!account.permissionsKnown) {
     return (
       <Badge variant="outline" className="text-muted-foreground font-normal">
         unknown until next sign-in
+      </Badge>
+    );
+  }
+  if (!mappingReadable) {
+    return (
+      <Badge variant="outline" className="text-muted-foreground font-normal">
+        mapping unreadable
       </Badge>
     );
   }
@@ -166,6 +173,7 @@ export default function DashboardAccounts({ activeTab }: { activeTab: DashboardT
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const accounts: AccountRow[] = data?.accounts ?? [];
+  const mappingReadable = data?.mappingReadable !== false;
   const busy = revoke.isPending || remove.isPending || setBlocked.isPending;
 
   const confirmDelete = (account: AccountRow) => {
@@ -252,6 +260,11 @@ export default function DashboardAccounts({ activeTab }: { activeTab: DashboardT
               Couldn't refresh — showing the last known state.
             </p>
           )}
+          {!mappingReadable && (
+            <p className="text-xs text-destructive pb-2">
+              The group mapping can't be read, so no sign-in is allowed and nobody's permissions can be resolved. Fix it in Settings — everyone already signed in keeps what they hold until then.
+            </p>
+          )}
           {accounts.length === 0 && (
             <p className="text-sm text-muted-foreground">Nobody has signed in with the identity provider yet.</p>
           )}
@@ -276,7 +289,7 @@ export default function DashboardAccounts({ activeTab }: { activeTab: DashboardT
                       <span className="font-medium text-sm truncate">{account.username}</span>
                       {isSelf && <Badge variant="outline">you</Badge>}
                       {account.blocked && <Badge variant="destructive">blocked</Badge>}
-                      <PermissionBadges account={account} />
+                      <PermissionBadges account={account} mappingReadable={mappingReadable} />
                     </div>
                     <p className="text-xs text-muted-foreground truncate">{account.email || account.subject}</p>
                   </div>

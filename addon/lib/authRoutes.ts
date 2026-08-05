@@ -383,6 +383,7 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
   addon.get('/api/auth/accounts', requireAdmin, async (_req: any, res: any) => {
     try {
       const config = readOidcConfig();
+      const mappingReadable = config.groupPermissions !== null;
       const rows = await database.listAccounts();
       const accounts = await Promise.all(rows.map(async (row: any) => {
         const groups = parseGroups(row.groups_json);
@@ -394,14 +395,14 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
           email: row.email,
           groups,
           permissionsKnown: groups !== null,
-          permissions: groups === null ? null : resolvePermissions(groups, config),
+          permissions: groups === null || !mappingReadable ? null : resolvePermissions(groups, config),
           blocked: Boolean(row.blocked),
           createdAt: row.created_at,
           lastSeenAt: row.last_seen_at,
           activeSessions: await countAccountSessions(row.id),
         };
       }));
-      res.json({ accounts, groupsClaim: config.groupsClaim });
+      res.json({ accounts, groupsClaim: config.groupsClaim, mappingReadable });
     } catch (error: any) {
       logger.error(`Could not list accounts: ${error.message}`);
       res.status(500).json({ error: 'Could not list accounts' });

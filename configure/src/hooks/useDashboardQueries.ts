@@ -1205,7 +1205,7 @@ export function useDashboardAccounts(options: DashboardQueryOptions = {}) {
     queryKey: DASHBOARD_QUERY_KEYS.accounts,
     queryFn: async () => {
       try {
-        return await fetchDashboardData<{ accounts: AccountRow[]; groupsClaim: string }>('/api/auth/accounts', getHeaders());
+        return await fetchDashboardData<{ accounts: AccountRow[]; groupsClaim: string; mappingReadable: boolean }>('/api/auth/accounts', getHeaders());
       } catch (error) {
         if (error instanceof Error && error.message === 'UNAUTHORIZED') {
           logout();

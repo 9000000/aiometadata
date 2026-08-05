@@ -203,7 +203,11 @@ export default function DashboardAccounts({ activeTab }: { activeTab: DashboardT
     if (next && !window.confirm(`Block ${account.username}? This signs them out and refuses their next sign-in until you unblock them.`)) return;
 
     setBlocked.mutate({ accountId: account.accountId, blocked: next }, {
-      onSuccess: () => toast.success(next ? `Blocked ${account.username}` : `Unblocked ${account.username}`),
+      onSuccess: (result: { warning?: string }) => {
+        const title = next ? `Blocked ${account.username}` : `Unblocked ${account.username}`;
+        if (result?.warning) toast.warning(title, { description: result.warning });
+        else toast.success(title);
+      },
       onError: (error: Error) =>
         toast.error(next ? "Could not block this account" : "Could not unblock this account", { description: error.message }),
     });

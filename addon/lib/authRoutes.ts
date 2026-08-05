@@ -387,12 +387,23 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
       if (!account) return res.status(404).json({ error: 'No such account' });
 
       await database.setAccountBlocked(accountId, blocked);
+      logger.info(`${blocked ? 'Blocked' : 'Unblocked'} ${account.username || accountId}`);
+      if (!blocked) return res.json({ success: true, blocked, revoked: 0 });
 
       // Blocking only refuses the next sign-in, so the sessions it already
       // holds have to go with it or the block does nothing until they expire.
-      const revoked = blocked ? await destroyAccountSessions(accountId) : 0;
-      logger.info(`${blocked ? 'Blocked' : 'Unblocked'} ${account.username || accountId}`);
-      res.json({ success: true, blocked, revoked });
+      try {
+        const revoked = await destroyAccountSessions(accountId);
+        return res.json({ success: true, blocked, revoked });
+      } catch (error: any) {
+        logger.error(`Blocked ${account.username || accountId} but could not sign them out: ${error.message}`);
+        return res.json({
+          success: true,
+          blocked,
+          revoked: 0,
+          warning: 'The block is saved, but signing out their existing sessions failed. Some may stay live until they expire.',
+        });
+      }
     } catch (error: any) {
       logger.error(`Could not change the block state: ${error.message}`);
       res.status(500).json({ error: 'Could not change this account\'s block state' });

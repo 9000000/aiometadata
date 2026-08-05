@@ -280,29 +280,6 @@ export function Header() {
         }
       }
 
-      // The password is verified and in hand, so this is where linking belongs.
-      // Sending the user to another tab afterwards loses most of the benefit.
-      if (signedIn && saveToAccount) {
-        try {
-          const linked = await fetch('/api/profiles', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              userUUID: result.userUUID || uuidInput,
-              password: passwordInput,
-              label: result.config?.addonName?.trim() || (result.userUUID || uuidInput).slice(0, 8),
-            }),
-          });
-          if (linked.ok) {
-            toast.success('Saved to your account', {
-              description: 'Signing in is enough to open it from now on.',
-            });
-          }
-        } catch {
-          // The configuration still loaded; it can be linked later.
-        }
-      }
-
       // Prefer the canonical UUID the server resolved, so an alias typed at
       // login does not propagate into later update calls and OAuth redirects.
       applyLoadedConfig(result, passwordInput, uuidInput);

@@ -122,7 +122,6 @@ function sameValue(left: string, right: string): boolean {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-
 async function ssoRateLimit(req: any, res: any, next: any): Promise<void> {
   const perWindow = Math.max(1, parseInt(getSetting('OIDC_RATE_LIMIT_PER_WINDOW') || '', 10) || 20);
   const windowSeconds = Math.max(1, parseInt(getSetting('OIDC_RATE_LIMIT_WINDOW') || '', 10) || 300);

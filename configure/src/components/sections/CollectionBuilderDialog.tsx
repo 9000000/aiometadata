@@ -377,6 +377,7 @@ function SortableEntryRow({
   isActive,
   excluded,
   hasUnknown,
+  warnings = 0,
   allNative,
   canMoveUp,
   canMoveDown,
@@ -390,6 +391,7 @@ function SortableEntryRow({
   excluded: boolean;
   /** True when it points at a catalog that is not in the user's setup. */
   hasUnknown: boolean;
+  warnings?: number;
   /** Every source here is resolved by the client, so none of it reaches us. */
   allNative?: boolean;
   canMoveUp: boolean;
@@ -431,8 +433,15 @@ function SortableEntryRow({
       <button type="button" onClick={onSelect} className="flex min-w-0 flex-1 items-center gap-2 text-left">
         <Icon className={`h-4 w-4 shrink-0 ${isCollection ? 'text-cyan-400' : 'text-violet-400'}`} />
         <span className="min-w-0 flex-1 truncate">{entry.title || 'Untitled'}</span>
-        {hasUnknown && (
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+        {(hasUnknown || warnings > 0) && (
+          <span
+            className="shrink-0"
+            title={warnings > 0
+              ? `${warnings} thing${warnings === 1 ? '' : 's'} worth checking on this entry`
+              : 'Points at a catalog you do not have'}
+          >
+            <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+          </span>
         )}
         {allNative && (
           <span className="shrink-0 text-[10px] text-muted-foreground" title="Nuvio fetches these itself, so they cost this addon nothing">
@@ -1003,6 +1012,8 @@ function CollectionEditor({
   onAddByTag,
   nativeCount,
   onConvertNative,
+  problemFolderIds,
+  focus,
 }: {
   entry: CollectionDraft;
   catalogs: ManifestCatalog[];
@@ -1016,6 +1027,8 @@ function CollectionEditor({
   /** Sources here that Nuvio resolves itself and this addon could take over. */
   nativeCount: number;
   onConvertNative: () => void;
+  problemFolderIds?: Set<string>;
+  focus?: { entryId: string; folderId: string } | null;
 }) {
   const terms = TERMS[target];
   const [showNuvioBox, setShowNuvioBox] = useState(target === 'nuvio');
@@ -1036,6 +1049,10 @@ function CollectionEditor({
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const activeIndex = Math.max(entry.folders.findIndex(folder => folder.id === selectedFolderId), 0);
   const activeFolder = entry.folders[activeIndex] ?? null;
+
+  useEffect(() => {
+    if (focus?.folderId) setSelectedFolderId(focus.folderId);
+  }, [focus]);
 
   const knownKeys = useMemo(() => new Set(catalogs.map(catalogKey)), [catalogs]);
 
@@ -1174,7 +1191,7 @@ function CollectionEditor({
                     key={folder.id}
                     folder={folder}
                     placeholder={`Untitled ${terms.child.toLowerCase()}`}
-                    hasUnknown={folder.sources.some(source =>
+                    hasUnknown={problemFolderIds?.has(folder.id) || folder.sources.some(source =>
                       !isNativeSource(source)
                       && !knownKeys.has(catalogKey(source))
                       && !pendingKeys?.has(catalogKey(source))
@@ -1380,6 +1397,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   /** Entries as they stood when opened or last applied, to spot real edits. */
   const [baseline, setBaseline] = useState('[]');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState('design');
+  const [focusFolder, setFocusFolder] = useState<{ entryId: string; folderId: string } | null>(null);
   const [target, setTarget] = useState<Target>('nuvio');
   const [manifestUrl, setManifestUrl] = useState('');
   const [usePlaceholder, setUsePlaceholder] = useState(false);
@@ -1410,6 +1429,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setBaseline(JSON.stringify(saved));
     setSelectedId(saved[0]?.id ?? null);
     setStagedBlueprints([]);
+    setActiveTab('design');
+    setFocusFolder(null);
     setManifestUrl(buildManifestUrl(auth.userUUID));
   }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1463,7 +1484,6 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   );
 
   const notes: ExportNote[] = target === 'nuvio' ? nuvioResult.notes : fusionResult.notes;
-  const issues = useMemo(() => findSourceIssues(entries, sourceList.catalogs), [entries, sourceList.catalogs]);
 
   const unknownSources = useMemo(
     () => findUnknownSources(entries, sourceList.catalogs),
@@ -1501,6 +1521,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       setSelectedId(current => (current === id ? next[0]?.id ?? null : current));
       return next;
     });
+  };
+
+  const goToProblem = (entryId: string | null, folderId: string | null) => {
+    if (!entryId) return;
+    setSelectedId(entryId);
+    setActiveTab('design');
+    if (folderId) setFocusFolder({ entryId, folderId });
   };
 
   const handleRailDragEnd = (event: DragEndEvent) => {
@@ -1781,6 +1808,71 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     }
     return ids;
   }, [entries, sourceList.catalogs, pendingKeys]);
+
+  const issueCatalogs = useMemo(() => {
+    if (pendingKeys.size === 0) return sourceList.catalogs;
+    const known = new Set(sourceList.catalogs.map(catalogKey));
+    const staged: ManifestCatalog[] = [];
+    for (const key of pendingKeys) {
+      if (known.has(key)) continue;
+      const split = key.lastIndexOf(':');
+      if (split <= 0) continue;
+      staged.push({ id: key.slice(0, split), type: key.slice(split + 1), name: key.slice(0, split) });
+    }
+    return staged.length > 0 ? [...sourceList.catalogs, ...staged] : sourceList.catalogs;
+  }, [sourceList.catalogs, pendingKeys]);
+
+  const issues = useMemo(() => findSourceIssues(entries, issueCatalogs), [entries, issueCatalogs]);
+
+  const problemTargets = useMemo(() => {
+    const map = new Map<string, { entryId: string; folderId: string | null }>();
+    for (const entry of entries) {
+      map.set(entry.id, { entryId: entry.id, folderId: null });
+      if (entry.kind !== 'collection') continue;
+      for (const folder of entry.folders) {
+        map.set(folder.id, { entryId: entry.id, folderId: folder.id });
+      }
+    }
+    return map;
+  }, [entries]);
+
+  const problems = useMemo(() => {
+    const rows: Array<{
+      key: string;
+      message: string;
+      entryId: string | null;
+      folderId: string | null;
+    }> = [];
+    const push = (key: string, id: string, message: string) => {
+      const target = problemTargets.get(id);
+      rows.push({
+        key,
+        message,
+        entryId: target?.entryId ?? null,
+        folderId: target?.folderId ?? null,
+      });
+    };
+    issues.forEach((issue, index) => push(`issue-${index}`, issue.entryId, issue.message));
+    notes.forEach((note, index) => push(`note-${index}`, note.entryId, note.message));
+    return rows;
+  }, [issues, notes, problemTargets]);
+
+  const entryProblemCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const row of problems) {
+      if (!row.entryId) continue;
+      counts.set(row.entryId, (counts.get(row.entryId) ?? 0) + 1);
+    }
+    return counts;
+  }, [problems]);
+
+  const problemFolderIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const row of problems) {
+      if (row.folderId) ids.add(row.folderId);
+    }
+    return ids;
+  }, [problems]);
 
   const countNative = useCallback((entry: BuilderEntry) => {
     const sources = entry.kind === 'classicRow'
@@ -2065,24 +2157,27 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleRailDragEnd}>
                 <SortableContext items={entries.map(entry => entry.id)} strategy={verticalListSortingStrategy}>
                   <div className="max-h-56 space-y-1.5 overflow-y-auto pr-1 lg:max-h-none lg:overflow-visible lg:pr-0">
-                    {entries.map((entry, index) => (
-                      <SortableEntryRow
-                        key={entry.id}
-                        entry={entry}
-                        excluded={
-                          (target === 'nuvio' && entry.kind === 'classicRow')
-                          || (target === 'fusion' && entryIsNative(entry))
-                        }
-                        hasUnknown={entriesWithUnresolved.has(entry.id)}
-                        allNative={entryIsNative(entry)}
-                        isActive={entry.id === selectedId}
-                        canMoveUp={index > 0}
-                        canMoveDown={index < entries.length - 1}
-                        onMove={delta => moveEntry(index, delta)}
-                        onSelect={() => setSelectedId(entry.id)}
-                        onDelete={() => removeEntry(entry.id)}
-                      />
-                    ))}
+                    {entries.map((entry, index) => {
+                      const excluded =
+                        (target === 'nuvio' && entry.kind === 'classicRow')
+                        || (target === 'fusion' && entryIsNative(entry));
+                      return (
+                        <SortableEntryRow
+                          key={entry.id}
+                          entry={entry}
+                          excluded={excluded}
+                          hasUnknown={entriesWithUnresolved.has(entry.id)}
+                          warnings={excluded ? 0 : entryProblemCounts.get(entry.id) ?? 0}
+                          allNative={entryIsNative(entry)}
+                          isActive={entry.id === selectedId}
+                          canMoveUp={index > 0}
+                          canMoveDown={index < entries.length - 1}
+                          onMove={delta => moveEntry(index, delta)}
+                          onSelect={() => setSelectedId(entry.id)}
+                          onDelete={() => removeEntry(entry.id)}
+                        />
+                      );
+                    })}
                   </div>
                 </SortableContext>
               </DndContext>
@@ -2098,7 +2193,41 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             </div>
 
             <div className="min-w-0">
-              <Tabs defaultValue="design">
+              {problems.length > 0 && (
+                <div className="mb-3 space-y-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+                  <div className="flex items-center gap-2 text-xs font-medium text-amber-600 dark:text-amber-400">
+                    <AlertTriangle className="h-4 w-4 shrink-0" /> Worth checking
+                    <Badge variant="outline" className="h-5 border-amber-600/50 px-1.5 text-[10px] text-amber-500">
+                      {problems.length}
+                    </Badge>
+                    <span className="text-[10px] font-normal text-muted-foreground">
+                      for the {target === 'nuvio' ? 'Nuvio' : 'Fusion'} export
+                    </span>
+                  </div>
+                  <ul className="space-y-1 text-xs text-muted-foreground">
+                    {problems.slice(0, 12).map(problem => (
+                      <li key={problem.key}>
+                        {problem.entryId ? (
+                          <button
+                            type="button"
+                            onClick={() => goToProblem(problem.entryId, problem.folderId)}
+                            className="w-full rounded px-1 py-0.5 text-left underline-offset-2 hover:bg-amber-500/10 hover:text-foreground hover:underline"
+                          >
+                            {problem.message}
+                          </button>
+                        ) : (
+                          <span className="block px-1 py-0.5">{problem.message}</span>
+                        )}
+                      </li>
+                    ))}
+                    {problems.length > 12 && (
+                      <li className="px-1 py-0.5">and {problems.length - 12} more</li>
+                    )}
+                  </ul>
+                </div>
+              )}
+
+              <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <TabsList>
                   <TabsTrigger value="design">Design</TabsTrigger>
                   <TabsTrigger value="json">JSON</TabsTrigger>
@@ -2124,6 +2253,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       onAddByTag={(folderId, tag) => addSourcesByTag(selected.id, folderId, tag)}
                       nativeCount={countNative(selected)}
                       onConvertNative={() => convertNativeSources(selected.id)}
+                      problemFolderIds={problemFolderIds}
+                      focus={focusFolder?.entryId === selected.id ? focusFolder : null}
                     />
                   )}
                   {selected?.kind === 'classicRow' && (
@@ -2233,24 +2364,6 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                     className="h-80 w-full resize-none rounded-md border bg-muted p-3 font-mono text-xs focus:outline-none"
                     onClick={event => (event.target as HTMLTextAreaElement).select()}
                   />
-
-                  {(notes.length > 0 || issues.length > 0) && (
-                    <div className="space-y-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
-                      <div className="flex items-center gap-2 text-xs font-medium text-amber-600 dark:text-amber-400">
-                        <AlertTriangle className="h-4 w-4" /> Worth checking
-                      </div>
-                      <ul className="space-y-1 text-xs text-muted-foreground">
-                        {issues.slice(0, 8).map((issue, index) => (
-                          <li key={`issue-${index}`}>{issue.message}</li>
-                        ))}
-                        {issues.length > 8 && <li>and {issues.length - 8} more</li>}
-                        {notes.slice(0, 8).map((note, index) => (
-                          <li key={`note-${index}`}>{note.message}</li>
-                        ))}
-                        {notes.length > 8 && <li>and {notes.length - 8} more</li>}
-                      </ul>
-                    </div>
-                  )}
                 </TabsContent>
               </Tabs>
             </div>

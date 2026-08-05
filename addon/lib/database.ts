@@ -1165,6 +1165,15 @@ class Database {
     );
   }
 
+  async deleteAccount(accountId: string): Promise<void> {
+    await this.runQuery(
+      this.type === 'sqlite'
+        ? 'DELETE FROM accounts WHERE id = ?'
+        : 'DELETE FROM accounts WHERE id = $1',
+      [accountId]
+    );
+  }
+
   /** Profiles with the config still present, newest use first. */
   async getAccountConfigs(accountId: string): Promise<any[]> {
     return await this.allQuery(

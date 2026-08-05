@@ -1156,6 +1156,7 @@ export interface AccountRow {
   email: string | null;
   /** Null until the account signs in again, which is when groups are recorded. */
   groups: string[] | null;
+  permissionsKnown: boolean;
   permissions: string[] | null;
   blocked: boolean;
   createdAt: string;

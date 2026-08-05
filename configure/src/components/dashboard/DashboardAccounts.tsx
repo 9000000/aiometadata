@@ -60,12 +60,15 @@ function LinkedConfigs({ accountId }: { accountId: string }) {
 }
 
 function PermissionBadges({ account }: { account: AccountRow }) {
-  if (account.permissions === null) {
+  if (!account.permissionsKnown) {
     return (
       <Badge variant="outline" className="text-muted-foreground font-normal">
         unknown until next sign-in
       </Badge>
     );
+  }
+  if (account.permissions === null) {
+    return <Badge variant="destructive">would be refused</Badge>;
   }
   if (account.permissions.length === 0) {
     return <Badge variant="outline">no permissions</Badge>;

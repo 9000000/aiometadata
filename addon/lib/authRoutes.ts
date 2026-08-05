@@ -356,8 +356,7 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
           username: row.username,
           email: row.email,
           groups,
-          // Null where the account has not signed in since groups were first
-          // recorded, which is not the same as resolving to no permissions.
+          permissionsKnown: groups !== null,
           permissions: groups === null ? null : resolvePermissions(groups, config),
           blocked: Boolean(row.blocked),
           createdAt: row.created_at,

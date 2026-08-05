@@ -46,7 +46,8 @@ export function previewSettingValue(key: string, value: string | null): string {
   const def = getSettingDefinition(key);
   if (!def) return '';
   if (value !== null) return value;
-  const envVal = process.env[def.envVar] || (def.legacyEnvVar ? process.env[def.legacyEnvVar] : undefined);
+  const restored = originalEnv.has(def.envVar) ? originalEnv.get(def.envVar) : undefined;
+  const envVal = restored || (def.legacyEnvVar ? process.env[def.legacyEnvVar] : undefined);
   if (envVal) return envVal;
   return String(def.default);
 }
@@ -81,6 +82,7 @@ export async function setSetting(key: string, value: string): Promise<void> {
 export async function resetSetting(key: string): Promise<void> {
   const def = getSettingDefinition(key);
   if (!def) throw new Error(`Unknown setting: ${key}`);
+  if (def.envOnly) throw new Error(`Setting ${key} can only be configured via environment variable`);
 
   if (database.type === 'sqlite') {
     await database.runQuery('DELETE FROM addon_settings WHERE key = ?', [key]);

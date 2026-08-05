@@ -14,6 +14,17 @@ const ACCOUNT_SESSIONS_PREFIX = 'auth:account-sessions:';
 function accountSessionsKey(accountId: string): string {
   return `${ACCOUNT_SESSIONS_PREFIX}${accountId}`;
 }
+
+/**
+ * The set has to outlive its longest-lived member, so its expiry follows the
+ * highest score rather than whichever session was added last. Setting it from
+ * the newest member would cut the set short whenever a shorter TTL is issued
+ * after a longer one, stranding live sessions outside the index.
+ */
+async function refreshIndexExpiry(key: string): Promise<void> {
+  const top: string[] = await redis.zrange(key, -1, -1, 'WITHSCORES');
+  if (top.length === 2) await redis.pexpireat(key, Number(top[1]) + 60000);
+}
 const DEFAULT_TTL_SECONDS = 24 * 60 * 60;
 
 export { ALL_PERMISSIONS, isPermission, type Permission } from './permissions';
@@ -40,7 +51,7 @@ export async function createSession(data: Omit<SessionData, 'createdAt'>): Promi
   try {
     const key = accountSessionsKey(data.accountId);
     await redis.zadd(key, Date.now() + ttl * 1000, id);
-    await redis.expire(key, ttl + 60);
+    await refreshIndexExpiry(key);
   } catch (error: any) {
     logger.warn(`Could not index session for ${data.accountId}: ${error.message}`);
   }
@@ -111,7 +122,7 @@ async function scanSessions(
 ): Promise<void> {
   let cursor = '0';
   do {
-    const [next, keys] = await redis.scan(cursor, 'MATCH', `${SESSION_PREFIX}*`, 'COUNT', 200);
+    const [next, keys] = await redis.scan(cursor, 'MATCH', `${SESSION_PREFIX}*`, 'COUNT', 1000);
     cursor = next;
     for (const key of keys) {
       const raw = await redis.get(key);
@@ -139,9 +150,9 @@ export async function backfillSessionIndex(): Promise<number> {
       const key = accountSessionsKey(accountId);
       if (await redis.zscore(key, id) !== null) return;
       const ttl = await redis.ttl(`${SESSION_PREFIX}${id}`);
-      const remaining = ttl > 0 ? ttl : sessionTtlSeconds();
-      await redis.zadd(key, Date.now() + remaining * 1000, id);
-      await redis.expire(key, remaining + 60);
+      if (ttl <= 0) return;
+      await redis.zadd(key, Date.now() + ttl * 1000, id);
+      await refreshIndexExpiry(key);
       adopted += 1;
     });
     if (adopted > 0) logger.info(`Adopted ${adopted} session(s) into the account index`);

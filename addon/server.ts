@@ -197,8 +197,6 @@ async function startServer(): Promise<void> {
   readiness.markReady('settings');
   ok('settings');
 
-  await require('./lib/authSession').backfillSessionIndex();
-
   await require('./lib/aliasResolver').initializeUserAliases();
   ok('userAliases');
 
@@ -240,6 +238,8 @@ async function startServer(): Promise<void> {
   shutdownSequence.register('redis', () => redis.quit().then(() => undefined));
   readiness.markReady('redis');
   ok('redis');
+
+  require('./lib/authSession').backfillSessionIndex().catch(() => undefined);
 
   // Cache path migration
   await runCachePathMigration();

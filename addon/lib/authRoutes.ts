@@ -80,6 +80,24 @@ function flowCookieOptions(req: any) {
   };
 }
 
+function trustedProxyHops(): number {
+  const parsed = parseInt(process.env.TRUST_PROXY_HOPS || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function clientAddress(req: any): string {
+  const hops = trustedProxyHops();
+  if (hops > 0) {
+    const forwarded = String(req.headers['x-forwarded-for'] || '')
+      .split(',')
+      .map((entry: string) => entry.trim())
+      .filter(Boolean);
+    const index = forwarded.length - hops;
+    if (index >= 0 && forwarded[index]) return forwarded[index];
+  }
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
 function sameValue(left: string, right: string): boolean {
   const a = Buffer.from(left);
   const b = Buffer.from(right);
@@ -96,7 +114,7 @@ async function ssoRateLimit(req: any, res: any, next: any): Promise<void> {
   const windowSeconds = Math.max(1, parseInt(getSetting('OIDC_RATE_LIMIT_WINDOW') || '', 10) || 300);
 
   try {
-    const address = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.ip || 'unknown';
+    const address = clientAddress(req);
     const bucket = Math.floor(Date.now() / (windowSeconds * 1000));
     const key = `rate-limit:sso:${address}:${bucket}`;
 

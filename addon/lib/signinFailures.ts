@@ -88,7 +88,7 @@ export async function recordSigninFailure(
   }
 }
 
-export async function listSigninFailures(limit = 50): Promise<SigninFailure[]> {
+export async function listSigninFailures(limit = logMax()): Promise<SigninFailure[]> {
   try {
     const stop = Math.max(0, limit - 1);
     const [refusals, unverified]: [string[], string[]] = await Promise.all([

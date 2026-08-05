@@ -907,7 +907,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'Rate Limiting',
     type: 'string',
     default: 'https://api.jikan.moe/v4',
-    requiresRestart: true,
   },
   {
     key: 'TEST_KEYS_RATE_LIMIT_PER_MIN',
@@ -1262,7 +1261,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'Cache',
     type: 'number',
     default: 604800,
-    requiresRestart: true,
   },
   {
     key: 'TMDB_NETWORK_EXPORT_TTL',
@@ -1272,7 +1270,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'Cache',
     type: 'number',
     default: 604800,
-    requiresRestart: true,
   },
   {
     key: 'TMDB_SCRAPED_IMDB_CACHE_MAX',
@@ -1344,7 +1341,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'Features',
     type: 'string',
     default: '',
-    requiresRestart: true,
   },
   {
     key: 'ENABLE_BUILTIN_POSTER_CACHE',
@@ -1648,7 +1644,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'Features',
     type: 'number',
     default: 25,
-    requiresRestart: true,
   },
 
   // --- MAL Warming ---
@@ -1809,7 +1804,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'Data Updates',
     type: 'number',
     default: 7,
-    requiresRestart: true,
   },
   {
     key: 'TMDB_NETWORK_EXPORT_LOOKBACK_DAYS',
@@ -1819,7 +1813,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'Data Updates',
     type: 'number',
     default: 7,
-    requiresRestart: true,
   },
 
   // --- Proxy ---

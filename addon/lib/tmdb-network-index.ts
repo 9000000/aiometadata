@@ -8,8 +8,13 @@ const logger = consola.withTag('TMDB-Networks');
 const gunzipAsync = promisify(gunzip);
 
 const EXPORT_BASE_URL = 'https://files.tmdb.org/p/exports';
-const NETWORK_EXPORT_TTL = parseInt(process.env.TMDB_NETWORK_EXPORT_TTL || String(7 * 24 * 60 * 60), 10);
-const NETWORK_EXPORT_LOOKBACK_DAYS = parseInt(process.env.TMDB_NETWORK_EXPORT_LOOKBACK_DAYS || '7', 10);
+function networkExportTtl(): number {
+  return parseInt(process.env.TMDB_NETWORK_EXPORT_TTL || String(7 * 24 * 60 * 60), 10);
+}
+
+function networkExportLookbackDays(): number {
+  return parseInt(process.env.TMDB_NETWORK_EXPORT_LOOKBACK_DAYS || '7', 10);
+}
 
 interface TmdbNetworkExportEntry {
   id: number;
@@ -59,8 +64,8 @@ function normalizeNetworkName(value: string): string {
 function getExportDateCandidates(): Array<{ display: string; pathDate: string }> {
   const candidates: Array<{ display: string; pathDate: string }> = [];
   const now = new Date();
-  const lookbackDays = Number.isFinite(NETWORK_EXPORT_LOOKBACK_DAYS)
-    ? Math.max(1, NETWORK_EXPORT_LOOKBACK_DAYS)
+  const lookbackDays = Number.isFinite(networkExportLookbackDays())
+    ? Math.max(1, networkExportLookbackDays())
     : 7;
 
   for (let offset = 0; offset < lookbackDays; offset++) {
@@ -173,7 +178,7 @@ async function loadNetworkExport(): Promise<NetworkIndexPayload> {
 
   if (redis?.status === 'ready') {
     try {
-      await withTimeout(redis.setex(cacheKey, NETWORK_EXPORT_TTL, JSON.stringify(payload)), 1500, 'TMDB network cache write');
+      await withTimeout(redis.setex(cacheKey, networkExportTtl(), JSON.stringify(payload)), 1500, 'TMDB network cache write');
     } catch (error: any) {
       logger.warn(`Failed to write TMDB network cache: ${error.message}`);
     }

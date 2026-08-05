@@ -8,8 +8,13 @@ const logger = consola.withTag('TMDB-Keywords');
 const gunzipAsync = promisify(gunzip);
 
 const EXPORT_BASE_URL = 'https://files.tmdb.org/p/exports';
-const KEYWORD_EXPORT_TTL = parseInt(process.env.TMDB_KEYWORD_EXPORT_TTL || String(7 * 24 * 60 * 60), 10);
-const KEYWORD_EXPORT_LOOKBACK_DAYS = parseInt(process.env.TMDB_KEYWORD_EXPORT_LOOKBACK_DAYS || '7', 10);
+function keywordExportTtl(): number {
+  return parseInt(process.env.TMDB_KEYWORD_EXPORT_TTL || String(7 * 24 * 60 * 60), 10);
+}
+
+function keywordExportLookbackDays(): number {
+  return parseInt(process.env.TMDB_KEYWORD_EXPORT_LOOKBACK_DAYS || '7', 10);
+}
 
 export interface TmdbKeywordExportEntry {
   id: number;
@@ -67,8 +72,8 @@ export function parseTmdbKeywordNames(values: string[] = []): string[] {
 function getExportDateCandidates(): Array<{ display: string; pathDate: string }> {
   const candidates: Array<{ display: string; pathDate: string }> = [];
   const now = new Date();
-  const lookbackDays = Number.isFinite(KEYWORD_EXPORT_LOOKBACK_DAYS)
-    ? Math.max(1, KEYWORD_EXPORT_LOOKBACK_DAYS)
+  const lookbackDays = Number.isFinite(keywordExportLookbackDays())
+    ? Math.max(1, keywordExportLookbackDays())
     : 7;
 
   for (let offset = 0; offset < lookbackDays; offset++) {
@@ -180,7 +185,7 @@ async function loadKeywordExport(): Promise<KeywordIndexPayload> {
 
   if (redis?.status === 'ready') {
     try {
-      await withTimeout(redis.setex(cacheKey, KEYWORD_EXPORT_TTL, JSON.stringify(payload)), 1500, 'TMDB keyword cache write');
+      await withTimeout(redis.setex(cacheKey, keywordExportTtl(), JSON.stringify(payload)), 1500, 'TMDB keyword cache write');
     } catch (error: any) {
       logger.warn(`Failed to write TMDB keyword cache: ${error.message}`);
     }

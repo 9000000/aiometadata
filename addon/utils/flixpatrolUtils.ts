@@ -12,10 +12,14 @@ const consola = require('consola');
 
 const logger = consola.withTag('FlixPatrol');
 
-const CATALOG_BASE_URL = process.env.FLIXPATROL_CATALOG_URL
-  || 'https://raw.githubusercontent.com/0xConstant1/fp-crawler/main/catalogs';
+function catalogBaseUrl(): string {
+  return process.env.FLIXPATROL_CATALOG_URL
+    || 'https://raw.githubusercontent.com/0xConstant1/fp-crawler/main/catalogs';
+}
 
-const AVAILABILITY_URL = `${CATALOG_BASE_URL}/availability.json`;
+function availabilityUrl(): string {
+  return `${catalogBaseUrl()}/availability.json`;
+}
 
 const CRAWLER_REFRESH_HOUR = 16;
 const CRAWLER_REFRESH_MINUTE = 0;
@@ -78,7 +82,7 @@ async function fetchRegionData(regionSlug: string): Promise<CrawlerData> {
 
   return cacheWrapGlobal(cacheKey, async () => {
     const fileSlug = resolved === 'world' ? 'global' : resolved;
-    const url = `${CATALOG_BASE_URL}/${fileSlug}.json`;
+    const url = `${catalogBaseUrl()}/${fileSlug}.json`;
     logger.info(`Fetching region data: ${url}`);
     const response: any = await httpGet(url);
     const data = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
@@ -133,10 +137,10 @@ let availabilityInFlight: Promise<void> | null = null;
 
 async function fetchAvailabilityIndex(): Promise<FlixPatrolAvailability | null> {
   // Startup index fetch; a blip here disables availability for the whole run.
-  const response: any = await httpGet(AVAILABILITY_URL, BOOTSTRAP_HTTP_OPTIONS);
+  const response: any = await httpGet(availabilityUrl(), BOOTSTRAP_HTTP_OPTIONS);
   const data = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
   if (!data || typeof data !== 'object' || !data.regions) {
-    logger.warn(`Availability index at ${AVAILABILITY_URL} has no "regions" field — ignoring`);
+    logger.warn(`Availability index at ${availabilityUrl()} has no "regions" field — ignoring`);
     return null;
   }
   return data as FlixPatrolAvailability;

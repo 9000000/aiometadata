@@ -54,8 +54,17 @@ export function redirectUriFor(req: any): string {
  */
 function safeNext(value: unknown): string {
   const next = String(value ?? '').trim();
-  if (!next.startsWith('/') || next.startsWith('//')) return '/configure';
-  return next;
+  if (!next.startsWith('/')) return '/configure';
+
+  const base = 'https://aiom.invalid';
+  let parsed: URL;
+  try {
+    parsed = new URL(next, base);
+  } catch {
+    return '/configure';
+  }
+  if (parsed.origin !== base) return '/configure';
+  return `${parsed.pathname}${parsed.search}${parsed.hash}`;
 }
 
 function trimmed(value: unknown): string {

@@ -16,6 +16,7 @@ const { getManifest, DEFAULT_LANGUAGE } = require("./lib/getManifest");
 const { getMeta } = require("./lib/getMeta");
 const { cacheWrapMetaSmart, cacheWrapCatalog, cacheWrapSearch, cacheWrapJikanApi, cacheWrapStaticCatalog, cacheWrapGlobal, getCacheHealth, clearCacheHealth, logCacheHealth, stableStringify, deleteKeysByPattern, scanKeys } = require("./lib/getCache");
 const { hasPermission } = require("./lib/authSession");
+const { isOidcConfigured } = require("./lib/oidc");
 const { resolveConfigAccess } = require("./lib/configAccess");
 const redis = require("./lib/redisClient");
 const { warmEssentialContent, warmPopularContent, scheduleEssentialWarming } = require("./lib/cacheWarmer");
@@ -5870,9 +5871,11 @@ function requireDashboardAdmin(req, res, next) {
 
   // If ADMIN_KEY is not configured, deny access with specific message
   if (!adminKey) {
-    return res.status(401).json({ 
+    return res.status(401).json({
       error: 'Unauthorized',
-      message: 'ADMIN_KEY environment variable must be configured to access the dashboard'
+      message: isOidcConfigured()
+        ? 'ADMIN_KEY environment variable must be configured to access the dashboard with a key. Sign in with the identity provider instead, using an account holding the admin permission.'
+        : 'ADMIN_KEY environment variable must be configured to access the dashboard, or configure an identity provider to sign in without one.'
     });
   }
   

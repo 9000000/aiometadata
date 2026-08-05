@@ -336,7 +336,14 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
         groups: identity.groups,
       });
 
-      const current = await database.getAccount(account.id);
+      let current;
+      try {
+        current = await database.getAccount(account.id);
+      } catch (error: any) {
+        await destroySession(sessionId);
+        throw error;
+      }
+
       if (!current || current.blocked) {
         const what = current ? 'blocked' : 'deleted';
         await destroySession(sessionId);

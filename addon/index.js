@@ -559,7 +559,10 @@ const respond = function (req, res, data, opts) {
   });
 
 // --- Authentication and config profiles ---
-require('./lib/authRoutes').register(addon, { rateLimit: configLoadRateLimitMiddleware });
+require('./lib/authRoutes').register(addon, {
+  rateLimit: configLoadRateLimitMiddleware,
+  requireAdmin: requireDashboardAdmin,
+});
 
 // --- Configuration Database API Routes ---
 addon.post("/api/config/save", configApi.saveConfig.bind(configApi));

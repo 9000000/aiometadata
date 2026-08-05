@@ -7,6 +7,7 @@ import {
   attachSession,
   clearSessionCookie,
   createSession,
+  destroyAccountSessions,
   destroySession,
   isSecureRequest,
   readCookie,
@@ -132,8 +133,9 @@ async function ssoRateLimit(req: any, res: any, next: any): Promise<void> {
   next();
 }
 
-export function register(addon: any, options: { rateLimit?: any } = {}): void {
+export function register(addon: any, options: { rateLimit?: any; requireAdmin?: any } = {}): void {
   const rateLimit = options.rateLimit || ((_req: any, _res: any, next: any) => next());
+  const requireAdmin = options.requireAdmin || ((_req: any, res: any) => res.status(401).json({ error: 'Unauthorized' }));
 
   addon.use(attachSession);
 
@@ -240,6 +242,43 @@ export function register(addon: any, options: { rateLimit?: any } = {}): void {
     } catch (error: any) {
       logger.error(`Sign-in failed: ${error.message}`);
       res.status(401).send('Sign-in failed. Please try again.');
+    }
+  });
+
+  addon.get('/api/auth/accounts', requireAdmin, async (_req: any, res: any) => {
+    try {
+      const rows = await database.listAccounts();
+      res.json({
+        accounts: rows.map((row: any) => ({
+          accountId: row.id,
+          issuer: row.issuer,
+          subject: row.subject,
+          username: row.username,
+          email: row.email,
+          createdAt: row.created_at,
+          lastSeenAt: row.last_seen_at,
+        })),
+      });
+    } catch (error: any) {
+      logger.error(`Could not list accounts: ${error.message}`);
+      res.status(500).json({ error: 'Could not list accounts' });
+    }
+  });
+
+  addon.post('/api/auth/accounts/:accountId/revoke', requireAdmin, async (req: any, res: any) => {
+    const accountId = trimmed(req.params.accountId);
+    if (!accountId) return res.status(400).json({ error: 'An account is required' });
+
+    try {
+      const account = await database.getAccount(accountId);
+      if (!account) return res.status(404).json({ error: 'No such account' });
+
+      const revoked = await destroyAccountSessions(accountId);
+      logger.info(`Revoked ${revoked} session(s) for ${account.username || accountId}`);
+      res.json({ success: true, revoked });
+    } catch (error: any) {
+      logger.error(`Could not revoke sessions: ${error.message}`);
+      res.status(500).json({ error: 'Could not revoke this account\'s sessions' });
     }
   });
 

@@ -92,18 +92,28 @@ export function parseGroupPermissions(raw: string): Record<string, string> | nul
   return parsed;
 }
 
-export function readOidcConfig(): OidcConfig {
+function buildOidcConfig(read: (key: string) => string): OidcConfig {
   return {
-    enabled: getSetting('OIDC_ENABLED') === 'true',
-    issuer: trimmed(getSetting('OIDC_ISSUER')).replace(/\/+$/, ''),
-    clientId: trimmed(getSetting('OIDC_CLIENT_ID')),
-    clientSecret: trimmed(getSetting('OIDC_CLIENT_SECRET')),
-    groupsClaim: trimmed(getSetting('OIDC_GROUPS_CLAIM')) || 'groups',
-    usernameClaim: trimmed(getSetting('OIDC_USERNAME_CLAIM')),
-    groupPermissions: parseGroupPermissions(getSetting('OIDC_GROUP_PERMISSIONS')),
-    defaultPermissions: trimmed(getSetting('OIDC_DEFAULT_PERMISSIONS')),
-    allowInsecure: getSetting('OIDC_ALLOW_INSECURE_ISSUER') === 'true',
+    enabled: read('OIDC_ENABLED') === 'true',
+    issuer: trimmed(read('OIDC_ISSUER')).replace(/\/+$/, ''),
+    clientId: trimmed(read('OIDC_CLIENT_ID')),
+    clientSecret: trimmed(read('OIDC_CLIENT_SECRET')),
+    groupsClaim: trimmed(read('OIDC_GROUPS_CLAIM')) || 'groups',
+    usernameClaim: trimmed(read('OIDC_USERNAME_CLAIM')),
+    groupPermissions: parseGroupPermissions(read('OIDC_GROUP_PERMISSIONS')),
+    defaultPermissions: trimmed(read('OIDC_DEFAULT_PERMISSIONS')),
+    allowInsecure: read('OIDC_ALLOW_INSECURE_ISSUER') === 'true',
   };
+}
+
+export function readOidcConfig(): OidcConfig {
+  return buildOidcConfig(getSetting);
+}
+
+export function previewPermissions(groups: string[], key: string, value: string): Permission[] | null {
+  const config = buildOidcConfig((k) => (k === key ? value : getSetting(k)));
+  if (!isOidcConfigured(config)) return null;
+  return resolvePermissions(groups, config);
 }
 
 /**

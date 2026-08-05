@@ -42,6 +42,15 @@ export function getSetting(key: string): string {
   return String(def.default);
 }
 
+export function previewSettingValue(key: string, value: string | null): string {
+  const def = getSettingDefinition(key);
+  if (!def) return '';
+  if (value !== null) return value;
+  const envVal = process.env[def.envVar] || (def.legacyEnvVar ? process.env[def.legacyEnvVar] : undefined);
+  if (envVal) return envVal;
+  return String(def.default);
+}
+
 export async function setSetting(key: string, value: string): Promise<void> {
   const def = getSettingDefinition(key);
   if (!def) throw new Error(`Unknown setting: ${key}`);

@@ -8,6 +8,16 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -196,6 +206,9 @@ function SettingRow({ setting }: { setting: SettingItem }) {
   const [localValue, setLocalValue] = useState(setting.value);
   const [revealed, setRevealed] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<
+    { kind: "update"; value: string; reason: string } | { kind: "reset"; reason: string } | null
+  >(null);
   const updateMutation = useUpdateSetting();
   const resetMutation = useResetSetting();
   const prevServerValue = useRef(setting.value);
@@ -213,14 +226,22 @@ function SettingRow({ setting }: { setting: SettingItem }) {
     : "";
   const displayValue = setting.sensitive && !revealed && !hasChanged ? maskedValue : localValue;
 
+  function needsConfirmation(err: any, pending: { kind: "update"; value: string } | { kind: "reset" }): boolean {
+    if (!err?.requiresConfirmation) return false;
+    setPendingConfirm({ ...pending, reason: err.reason || "This change affects your own access." });
+    return true;
+  }
+
   async function handleSave() {
     setSaving(true);
     try {
       await updateMutation.mutateAsync({ key: setting.key, value: localValue });
       toast.success(`${setting.label} updated`);
     } catch (err: any) {
-      toast.error(err.message || "Failed to save");
-      setLocalValue(setting.value);
+      if (!needsConfirmation(err, { kind: "update", value: localValue })) {
+        toast.error(err.message || "Failed to save");
+        setLocalValue(setting.value);
+      }
     } finally {
       setSaving(false);
     }
@@ -228,10 +249,30 @@ function SettingRow({ setting }: { setting: SettingItem }) {
 
   async function handleReset() {
     try {
-      await resetMutation.mutateAsync(setting.key);
+      await resetMutation.mutateAsync({ key: setting.key });
       toast.success(`${setting.label} reset to default`);
     } catch (err: any) {
-      toast.error(err.message || "Failed to reset");
+      if (!needsConfirmation(err, { kind: "reset" })) {
+        toast.error(err.message || "Failed to reset");
+      }
+    }
+  }
+
+  async function handleConfirmed() {
+    if (!pendingConfirm) return;
+    const pending = pendingConfirm;
+    setPendingConfirm(null);
+    try {
+      if (pending.kind === "update") {
+        await updateMutation.mutateAsync({ key: setting.key, value: pending.value, confirm: true });
+        toast.success(`${setting.label} updated`);
+      } else {
+        await resetMutation.mutateAsync({ key: setting.key, confirm: true });
+        toast.success(`${setting.label} reset to default`);
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Failed to save");
+      setLocalValue(setting.value);
     }
   }
 
@@ -317,6 +358,7 @@ function SettingRow({ setting }: { setting: SettingItem }) {
                 {
                   onSuccess: () => toast.success(`${setting.label} updated`),
                   onError: (err: any) => {
+                    if (needsConfirmation(err, { kind: "update", value: val })) return;
                     toast.error(err.message || "Failed to save");
                     setLocalValue(setting.value);
                   },
@@ -335,6 +377,7 @@ function SettingRow({ setting }: { setting: SettingItem }) {
                 {
                   onSuccess: () => toast.success(`${setting.label} updated`),
                   onError: (err: any) => {
+                    if (needsConfirmation(err, { kind: "update", value: val })) return;
                     toast.error(err.message || "Failed to save");
                     setLocalValue(setting.value);
                   },
@@ -399,6 +442,26 @@ function SettingRow({ setting }: { setting: SettingItem }) {
           </Button>
         )}
       </div>
+
+      <AlertDialog open={pendingConfirm !== null} onOpenChange={(open) => { if (!open) setPendingConfirm(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm this change</AlertDialogTitle>
+            <AlertDialogDescription>{pendingConfirm?.reason}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                setPendingConfirm(null);
+                setLocalValue(setting.value);
+              }}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={handleConfirmed}>Save anyway</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

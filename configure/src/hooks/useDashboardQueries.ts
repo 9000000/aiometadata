@@ -1119,20 +1119,23 @@ export function useUpdateSetting() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ key, value }: { key: string; value: string }) => {
+    mutationFn: async ({ key, value, confirm }: { key: string; value: string; confirm?: boolean }) => {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (adminKey) headers['x-admin-key'] = adminKey;
 
       const response = await fetch(`/api/dashboard/settings/${encodeURIComponent(key)}`, {
         method: 'PUT',
         headers,
-        body: JSON.stringify({ value }),
+        body: JSON.stringify(confirm ? { value, confirm: true } : { value }),
       });
 
       if (response.status === 401) { logout(); throw new Error('Session expired.'); }
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || `HTTP ${response.status}`);
+        const err: any = new Error(data.error || `HTTP ${response.status}`);
+        err.requiresConfirmation = data.requiresConfirmation === true;
+        err.reason = data.reason;
+        throw err;
       }
       return response.json();
     },
@@ -1170,19 +1173,23 @@ export function useResetSetting() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (key: string) => {
+    mutationFn: async ({ key, confirm }: { key: string; confirm?: boolean }) => {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (adminKey) headers['x-admin-key'] = adminKey;
 
       const response = await fetch(`/api/dashboard/settings/reset/${encodeURIComponent(key)}`, {
         method: 'POST',
         headers,
+        body: JSON.stringify(confirm ? { confirm: true } : {}),
       });
 
       if (response.status === 401) { logout(); throw new Error('Session expired.'); }
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || `HTTP ${response.status}`);
+        const err: any = new Error(data.error || `HTTP ${response.status}`);
+        err.requiresConfirmation = data.requiresConfirmation === true;
+        err.reason = data.reason;
+        throw err;
       }
       return response.json();
     },

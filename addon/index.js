@@ -5871,7 +5871,8 @@ function describeAdminImpact(impact) {
   if (impact.demoted.length > 0) {
     parts.push(`take the admin permission away from ${nameList(impact.demoted)}, immediately and without signing them out`);
   }
-  return parts.join(', and ');
+  if (parts.length < 2) return parts.join('');
+  return `${parts.slice(0, -1).join('; ')}; and ${parts[parts.length - 1]}`;
 }
 
 function describeOthers(impact) {

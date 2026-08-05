@@ -1563,6 +1563,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     min: 1,
   },
   {
+    key: 'POSTER_CACHE_TLS_SESSIONS',
+    envVar: 'POSTER_CACHE_TLS_SESSIONS',
+    label: 'Image Provider TLS Session Cache',
+    description: 'Resumable TLS sessions kept per image provider. Each one holds a 64 KiB buffer, so raising it trades memory for fewer full handshakes. 0 disables resumption.',
+    category: 'Features',
+    type: 'number',
+    default: 10,
+    min: 0,
+  },
+  {
     key: 'POSTER_CACHE_STREAM_THRESHOLD',
     envVar: 'POSTER_CACHE_STREAM_THRESHOLD',
     label: 'Image Stream Threshold',

@@ -727,6 +727,11 @@ export function getConnectionCacheMax(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 512;
 }
 
+export function getTlsSessionCacheMax(): number {
+  const parsed = parseInt(process.env.POSTER_CACHE_TLS_SESSIONS || '', 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 10;
+}
+
 export function shouldLogRequests(): boolean {
   return isTruthy(process.env.POSTER_CACHE_LOG_REQUESTS);
 }

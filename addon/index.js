@@ -4320,7 +4320,6 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
   
   // Add userUUID to config for per-user token caching
   config.userUUID = userUUID;
-  // Deep links must name the addon the way the client installed it.
   config.addonIdentifier = req.addonIdentifier || userUUID;
 
   const language = config.language || DEFAULT_LANGUAGE;

@@ -8,6 +8,7 @@ import {
   getConnectionCacheMax,
   getConnectionCacheTtlMs,
   getFetchConcurrency,
+  getTlsSessionCacheMax,
   getMaxObjectBytes,
   getUpstreamTimeoutMs,
   isPrivateArtAllowed,
@@ -175,9 +176,10 @@ function pinnedAgents(addresses: string[], keepAlive: boolean): { httpAgent: htt
   };
   // Bound sockets per host so a burst cannot open an unbounded number of them.
   const maxSockets = Math.max(1, getFetchConcurrency());
+  const maxCachedSessions = getTlsSessionCacheMax();
   return {
     httpAgent: new http.Agent({ lookup, keepAlive, maxSockets, maxFreeSockets: 32 } as any),
-    httpsAgent: new https.Agent({ lookup, keepAlive, maxSockets, maxFreeSockets: 32 } as any),
+    httpsAgent: new https.Agent({ lookup, keepAlive, maxSockets, maxFreeSockets: 32, maxCachedSessions } as any),
   };
 }
 
@@ -199,9 +201,24 @@ interface HostEntry {
 const hostCache = new Map<string, HostEntry>();
 const resolving = new Map<string, Promise<HostEntry>>();
 
+function clearTlsSessions(agent: any): void {
+  const cache = agent?._sessionCache;
+  if (!cache) return;
+  cache.map = {};
+  if (Array.isArray(cache.list)) cache.list.length = 0;
+}
+
 function destroyEntry(entry: HostEntry): void {
   entry.httpAgent.destroy();
   entry.httpsAgent.destroy();
+  clearTlsSessions(entry.httpsAgent);
+}
+
+function sameAddresses(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const left = [...a].sort();
+  const right = [...b].sort();
+  return left.every((address, index) => address === right[index]);
 }
 
 function scheduleDestroy(entry: HostEntry): void {
@@ -235,6 +252,11 @@ async function getHostEntry(host: string, rawUrl: string, opts: ResolveOptions):
 
   const task = (async (): Promise<HostEntry> => {
     const { addresses } = await resolvePublicUrl(rawUrl, opts);
+    const previous = hostCache.get(host);
+    if (previous && sameAddresses(previous.addresses, addresses)) {
+      previous.expiresAt = Date.now() + getConnectionCacheTtlMs();
+      return previous;
+    }
     const agents = pinnedAgents(addresses, true);
     const entry: HostEntry = { addresses, ...agents, expiresAt: Date.now() + getConnectionCacheTtlMs() };
     storeHost(host, entry);

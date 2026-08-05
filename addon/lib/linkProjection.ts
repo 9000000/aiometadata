@@ -50,7 +50,6 @@ function applyLinksUserScopeProjection(
   config: { userUUID?: string | null; addonIdentifier?: string | null }
 ): any {
   if (!Array.isArray(meta?.links)) return meta;
-  // An alias install only recognises links that name it the same way.
   const identifier = config.addonIdentifier || config.userUUID;
   meta.links = meta.links.map((link: Link) => rewriteLinkDiscoverManifestUrl(link, identifier));
   return meta;

@@ -18,7 +18,12 @@ const MAX_PREFIX_SEGMENTS = 3;
 
 type Resolve = (aliasLower: string) => string | null;
 
-function rewritePathname(pathname: string, resolve: Resolve): string | null {
+interface Rewrite {
+  pathname: string;
+  alias: string;
+}
+
+function rewritePathname(pathname: string, resolve: Resolve): Rewrite | null {
   const segments = pathname.split('/');
 
   for (let depth = 1; depth <= MAX_PREFIX_SEGMENTS; depth++) {
@@ -35,7 +40,7 @@ function rewritePathname(pathname: string, resolve: Resolve): string | null {
     if (!userUUID) return null;
 
     segments[aliasIndex] = userUUID;
-    return segments.join('/');
+    return { pathname: segments.join('/'), alias: candidate };
   }
 
   return null;
@@ -57,7 +62,9 @@ export function createAliasResolutionMiddleware({
       const pathname = queryStart === -1 ? rawUrl : rawUrl.slice(0, queryStart);
       const search = queryStart === -1 ? '' : rawUrl.slice(queryStart + 1);
 
-      const nextPathname = rewritePathname(pathname, resolve);
+      const rewritten = rewritePathname(pathname, resolve);
+      const nextPathname = rewritten === null ? null : rewritten.pathname;
+      if (rewritten) req.addonIdentifier = rewritten.alias;
 
       let nextSearch = search;
       if (search) {

@@ -7,6 +7,7 @@ const logger = consola.withTag('Auth');
 
 const FAILURE_PREFIX = 'auth:signin-failure:';
 const FAILURE_INDEX = 'auth:signin-failures';
+const UNVERIFIED_INDEX = 'auth:signin-failures:unverified';
 const MAX_GROUPS_RECORDED = 32;
 
 export type SigninFailureReason =
@@ -28,6 +29,16 @@ export interface SigninFailure {
   groupsClaim: string | null;
   address: string | null;
   detail: string | null;
+}
+
+const UNVERIFIED_REASONS: ReadonlySet<SigninFailureReason> = new Set<SigninFailureReason>([
+  'rate-limited',
+  'browser-mismatch',
+  'expired',
+]);
+
+function indexFor(reason: SigninFailureReason): string {
+  return UNVERIFIED_REASONS.has(reason) ? UNVERIFIED_INDEX : FAILURE_INDEX;
 }
 
 function logMax(): number {
@@ -64,12 +75,13 @@ export async function recordSigninFailure(
 
   try {
     const ttl = logTtlSeconds();
+    const index = indexFor(entry.reason);
     await redis
       .pipeline()
       .set(`${FAILURE_PREFIX}${entry.id}`, JSON.stringify(entry), 'EX', ttl)
-      .zadd(FAILURE_INDEX, Date.now(), entry.id)
-      .zremrangebyrank(FAILURE_INDEX, 0, -(logMax() + 1))
-      .expire(FAILURE_INDEX, ttl)
+      .zadd(index, Date.now(), entry.id)
+      .zremrangebyrank(index, 0, -(logMax() + 1))
+      .expire(index, ttl)
       .exec();
   } catch (error: any) {
     logger.warn(`Could not record the sign-in failure: ${error.message}`);
@@ -78,7 +90,12 @@ export async function recordSigninFailure(
 
 export async function listSigninFailures(limit = 50): Promise<SigninFailure[]> {
   try {
-    const ids: string[] = await redis.zrevrange(FAILURE_INDEX, 0, Math.max(0, limit - 1));
+    const stop = Math.max(0, limit - 1);
+    const [refusals, unverified]: [string[], string[]] = await Promise.all([
+      redis.zrevrange(FAILURE_INDEX, 0, stop),
+      redis.zrevrange(UNVERIFIED_INDEX, 0, stop),
+    ]);
+    const ids = [...refusals, ...unverified];
     if (ids.length === 0) return [];
 
     const raw = await redis.mget(ids.map((id) => `${FAILURE_PREFIX}${id}`));
@@ -91,7 +108,8 @@ export async function listSigninFailures(limit = 50): Promise<SigninFailure[]> {
         // Unreadable value, leave it to expire on its own.
       }
     }
-    return failures;
+    failures.sort((a, b) => b.at.localeCompare(a.at));
+    return failures.slice(0, limit);
   } catch (error: any) {
     logger.warn(`Could not read the sign-in failures: ${error.message}`);
     return [];
@@ -100,10 +118,14 @@ export async function listSigninFailures(limit = 50): Promise<SigninFailure[]> {
 
 export async function clearSigninFailures(): Promise<void> {
   try {
-    const ids: string[] = await redis.zrange(FAILURE_INDEX, 0, -1);
+    const [refusals, unverified]: [string[], string[]] = await Promise.all([
+      redis.zrange(FAILURE_INDEX, 0, -1),
+      redis.zrange(UNVERIFIED_INDEX, 0, -1),
+    ]);
     const pipeline = redis.pipeline();
-    for (const id of ids) pipeline.del(`${FAILURE_PREFIX}${id}`);
+    for (const id of [...refusals, ...unverified]) pipeline.del(`${FAILURE_PREFIX}${id}`);
     pipeline.del(FAILURE_INDEX);
+    pipeline.del(UNVERIFIED_INDEX);
     await pipeline.exec();
   } catch (error: any) {
     logger.warn(`Could not clear the sign-in failures: ${error.message}`);

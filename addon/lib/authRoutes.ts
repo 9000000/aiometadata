@@ -141,11 +141,13 @@ async function ssoRateLimit(req: any, res: any, next: any): Promise<void> {
 
     if (count > perWindow) {
       logger.warn(`Rate limited sign-in attempts from ${address}`);
-      await recordSigninFailure({
-        reason: 'rate-limited',
-        address,
-        detail: `More than ${perWindow} attempts in ${windowSeconds}s`,
-      });
+      if (count === perWindow + 1) {
+        await recordSigninFailure({
+          reason: 'rate-limited',
+          address,
+          detail: `More than ${perWindow} attempts in ${windowSeconds}s`,
+        });
+      }
       return res.status(429).json({ error: 'Too many sign-in attempts. Please try again shortly.' });
     }
   } catch (error: any) {

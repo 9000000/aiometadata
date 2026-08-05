@@ -47,6 +47,10 @@ function logMax(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 50;
 }
 
+function indexMax(): number {
+  return Math.max(1, Math.ceil(logMax() / 2));
+}
+
 function logTtlSeconds(): number {
   const parsed = parseInt(getSetting('AUTH_SIGNIN_FAILURE_LOG_TTL') || '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 604800;
@@ -75,7 +79,7 @@ export async function recordSigninFailure(
       .pipeline()
       .set(`${FAILURE_PREFIX}${entry.id}`, JSON.stringify(entry), 'EX', ttl)
       .zadd(index, Date.now(), entry.id)
-      .zremrangebyrank(index, 0, -(logMax() + 1))
+      .zremrangebyrank(index, 0, -(indexMax() + 1))
       .expire(index, ttl)
       .exec();
   } catch (error: any) {
@@ -111,10 +115,13 @@ export async function listSigninFailures(limit = logMax()): Promise<SigninFailur
       readFailures(unverifiedIds),
     ]);
 
-    const kept = refusals.slice(0, limit);
-    kept.push(...unverified.slice(0, Math.max(0, limit - kept.length)));
+    const share = Math.max(1, Math.ceil(limit / 2));
+    const kept = [...refusals.slice(0, share), ...unverified.slice(0, share)];
+    if (kept.length < limit) kept.push(...refusals.slice(share));
+    if (kept.length < limit) kept.push(...unverified.slice(share));
+
     kept.sort((a, b) => b.at.localeCompare(a.at));
-    return kept;
+    return kept.slice(0, limit);
   } catch (error: any) {
     logger.warn(`Could not read the sign-in failures: ${error.message}`);
     return [];

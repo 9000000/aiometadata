@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react';
 import { toast } from 'sonner';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   AlertTriangle,
   Check,
@@ -54,6 +55,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useConfig } from '@/contexts/ConfigContext';
 import { getSourceBadgeLabel, getSourceBadgeStyle } from '@/lib/sourceBadges';
 import { getTagColor } from '@/lib/tagColors';
+import { TagChip } from '@/components/TagChip';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -468,41 +470,81 @@ function SortableEntryRow({
 function CatalogPicker({
   isOpen,
   catalogs,
-  pendingKeys,
   multiple,
   existingKeys,
+  tagOptions = [],
   onConfirm,
   onClose,
 }: {
   isOpen: boolean;
   catalogs: ManifestCatalog[];
-  pendingKeys?: Set<string>;
   /** Classic rows hold a single catalog, so selection collapses to one there. */
   multiple: boolean;
   /** Already on the tile, shown as such instead of being silently deduped. */
   existingKeys: string[];
+  tagOptions?: TagOption[];
   onConfirm: (picked: ManifestCatalog[]) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
+  const [typeFilter, setTypeFilter] = useState<string | null>(null);
+  const [tagFilters, setTagFilters] = useState<string[]>([]);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       setQuery('');
       setSelected([]);
+      setTypeFilter(null);
+      setTagFilters([]);
+      setActiveIndex(0);
     }
   }, [isOpen]);
 
+  const types = useMemo(() => {
+    const seen = new Set<string>();
+    for (const catalog of catalogs) {
+      if (catalog.type) seen.add(catalog.type);
+    }
+    return [...seen].sort();
+  }, [catalogs]);
+
+  const pickerTags = useMemo(
+    () => tagOptions.filter(tag => catalogs.some(catalog => (catalog.tags ?? []).includes(tag.name))),
+    [tagOptions, catalogs]
+  );
+
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return catalogs;
-    return catalogs.filter(catalog =>
-      `${catalog.name} ${catalog.id} ${catalog.type} ${catalog.source || ''}`.toLowerCase().includes(needle)
-    );
-  }, [catalogs, query]);
+    return catalogs.filter(catalog => {
+      if (typeFilter && catalog.type !== typeFilter) return false;
+      if (tagFilters.length > 0 && !tagFilters.some(tag => (catalog.tags ?? []).includes(tag))) return false;
+      if (!needle) return true;
+      return `${catalog.name} ${catalog.id} ${catalog.type} ${catalog.source || ''}`
+        .toLowerCase()
+        .includes(needle);
+    });
+  }, [catalogs, query, typeFilter, tagFilters]);
 
   const alreadyAdded = useMemo(() => new Set(existingKeys), [existingKeys]);
+
+  const addable = useMemo(
+    () => filtered.filter(catalog => !alreadyAdded.has(catalogKey(catalog))),
+    [filtered, alreadyAdded]
+  );
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [query, typeFilter, tagFilters]);
+
+  const virtualizer = useVirtualizer({
+    count: filtered.length,
+    getScrollElement: () => scrollEl,
+    estimateSize: () => 40,
+    overscan: 12,
+  });
 
   const toggle = (catalog: ManifestCatalog) => {
     const key = catalogKey(catalog);
@@ -521,6 +563,34 @@ function CatalogPicker({
     onClose();
   };
 
+  const move = (delta: number) => {
+    if (filtered.length === 0) return;
+    const next = Math.min(Math.max(activeIndex + delta, 0), filtered.length - 1);
+    setActiveIndex(next);
+    virtualizer.scrollToIndex(next, { align: 'auto' });
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      move(1);
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      move(-1);
+      return;
+    }
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    if (multiple && (event.metaKey || event.ctrlKey)) {
+      if (selected.length > 0) confirm();
+      return;
+    }
+    const catalog = filtered[activeIndex];
+    if (catalog) toggle(catalog);
+  };
+
   return (
     <Dialog open={isOpen} onOpenChange={open => !open && onClose()}>
       <DialogContent className="max-w-xl">
@@ -532,85 +602,182 @@ function CatalogPicker({
               : 'Classic rows read from a single catalog.'}
           </DialogDescription>
         </DialogHeader>
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            autoFocus
-            value={query}
-            onChange={event => setQuery(event.target.value)}
-            placeholder="Search catalogs"
-            className="pl-9"
-          />
-        </div>
-        <div className="max-h-80 space-y-1 overflow-y-auto">
-          {filtered.length === 0 && (
-            <p className="py-6 text-center text-sm text-muted-foreground">No catalogs match that search.</p>
-          )}
-          {filtered.map(catalog => {
-            const key = catalogKey(catalog);
-            const isAdded = alreadyAdded.has(key);
-            const isSelected = selected.includes(key);
-            return (
-              <button
-                key={key}
-                type="button"
-                disabled={isAdded}
-                onClick={() => toggle(catalog)}
-                className={`flex w-full items-center gap-2 rounded-md border px-2 py-2 text-left text-sm transition-colors ${
-                  isAdded
-                    ? 'cursor-default border-transparent opacity-45'
-                    : isSelected
-                      ? 'border-primary/60 bg-primary/10'
-                      : 'border-transparent hover:border-border hover:bg-accent/50'
-                }`}
-              >
-                {multiple && (
-                  <span
-                    className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                      isSelected || isAdded
-                        ? 'border-primary bg-primary text-primary-foreground'
-                        : 'border-muted-foreground/40'
-                    }`}
-                  >
-                    {(isSelected || isAdded) && <Check className="h-3 w-3" />}
-                  </span>
-                )}
-                <span className="min-w-0 flex-1 truncate">{catalog.name}</span>
-                {isAdded && <span className="hidden shrink-0 text-[10px] text-muted-foreground sm:inline">added</span>}
-                {catalog.pendingSave && (
-                  <Badge
-                    variant="outline"
-                    className="shrink-0 border-sky-600/50 bg-sky-900/50 text-[10px] text-sky-200"
-                    title="In your config but not saved yet, so it is not in the manifest"
-                  >
-                    unsaved
-                  </Badge>
-                )}
-                {catalog.genreRequired && (
-                  <Badge variant="outline" className="shrink-0 border-amber-600/50 bg-amber-800/60 text-[10px] text-amber-200">
-                    genre
-                  </Badge>
-                )}
-                <Badge
-                  variant="outline"
-                  className={`shrink-0 text-[10px] font-semibold ${getSourceBadgeStyle(catalog.source)}`}
+        <div onKeyDown={handleKeyDown}>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              autoFocus
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+              placeholder="Search catalogs"
+              className="pl-9"
+            />
+          </div>
+
+          {(types.length > 1 || pickerTags.length > 0) && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {types.length > 1 && types.map(type => (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => setTypeFilter(prev => (prev === type ? null : type))}
+                  className={`rounded-full border px-2 py-0.5 text-xs transition-colors ${
+                    typeFilter === type
+                      ? 'border-primary bg-primary/15 text-foreground'
+                      : 'border-border text-muted-foreground hover:bg-accent/50'
+                  }`}
                 >
-                  {getSourceBadgeLabel(catalog.source)}
-                </Badge>
-                <Badge variant="outline" className="hidden shrink-0 text-[10px] sm:inline-flex">
-                  {catalog.type}
-                </Badge>
-              </button>
-            );
-          })}
+                  {type}
+                </button>
+              ))}
+              {pickerTags.map(tag => (
+                <TagChip
+                  key={tag.name}
+                  name={`${tag.name} (${tag.count})`}
+                  color={tag.color}
+                  dimmed={tagFilters.length > 0 && !tagFilters.includes(tag.name)}
+                  onClick={() => setTagFilters(prev =>
+                    prev.includes(tag.name) ? prev.filter(name => name !== tag.name) : [...prev, tag.name]
+                  )}
+                />
+              ))}
+              {(typeFilter !== null || tagFilters.length > 0) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                  onClick={() => { setTypeFilter(null); setTagFilters([]); }}
+                >
+                  Clear filters
+                </Button>
+              )}
+            </div>
+          )}
+
+          <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+            <span>
+              {filtered.length === catalogs.length
+                ? `${catalogs.length} ${catalogs.length === 1 ? 'catalog' : 'catalogs'}`
+                : `${filtered.length} of ${catalogs.length}`}
+            </span>
+            <span className="hidden sm:inline">
+              &uarr;&darr; to move, Enter to {multiple ? 'tick' : 'pick'}
+              {multiple ? ', Ctrl+Enter to add' : ''}
+            </span>
+          </div>
+
+          <div
+            ref={setScrollEl}
+            className="mt-1 overflow-y-auto"
+            style={filtered.length === 0 ? undefined : { height: Math.min(320, filtered.length * 40) }}
+          >
+            {filtered.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                {catalogs.length === 0
+                  ? 'No catalogs to pick from yet.'
+                  : 'Nothing matches that search and those filters.'}
+              </p>
+            ) : (
+              <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+                {virtualizer.getVirtualItems().map(virtualRow => {
+                  const catalog = filtered[virtualRow.index];
+                  const key = catalogKey(catalog);
+                  const isAdded = alreadyAdded.has(key);
+                  const isSelected = selected.includes(key);
+                  const isActive = virtualRow.index === activeIndex;
+                  return (
+                    <div
+                      key={key}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        height: virtualRow.size,
+                        transform: `translateY(${virtualRow.start}px)`,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        disabled={isAdded}
+                        aria-pressed={multiple && !isAdded ? isSelected : undefined}
+                        onClick={() => toggle(catalog)}
+                        onMouseEnter={() => setActiveIndex(virtualRow.index)}
+                        className={`flex h-9 w-full items-center gap-2 rounded-md border px-2 text-left text-sm transition-colors ${
+                          isAdded
+                            ? 'cursor-default border-transparent opacity-45'
+                            : isSelected
+                              ? 'border-primary/60 bg-primary/10'
+                              : 'border-transparent hover:border-border hover:bg-accent/50'
+                        } ${isActive && !isAdded ? 'ring-1 ring-primary/40' : ''}`}
+                      >
+                        {multiple && (
+                          isAdded ? (
+                            <Check className="h-4 w-4 shrink-0 text-muted-foreground/70" />
+                          ) : (
+                            <span
+                              className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                                isSelected
+                                  ? 'border-primary bg-primary text-primary-foreground'
+                                  : 'border-muted-foreground/40'
+                              }`}
+                            >
+                              {isSelected && <Check className="h-3 w-3" />}
+                            </span>
+                          )
+                        )}
+                        <span className="min-w-0 flex-1 truncate">{catalog.name}</span>
+                        {isAdded && (
+                          <span className="hidden shrink-0 text-[10px] text-muted-foreground sm:inline">added</span>
+                        )}
+                        {catalog.pendingSave && (
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 border-sky-600/50 bg-sky-900/50 text-[10px] text-sky-200"
+                            title="In your config but not saved yet, so it is not in the manifest"
+                          >
+                            unsaved
+                          </Badge>
+                        )}
+                        {catalog.genreRequired && (
+                          <Badge variant="outline" className="shrink-0 border-amber-600/50 bg-amber-800/60 text-[10px] text-amber-200">
+                            genre
+                          </Badge>
+                        )}
+                        <Badge
+                          variant="outline"
+                          className={`shrink-0 text-[10px] font-semibold ${getSourceBadgeStyle(catalog.source)}`}
+                        >
+                          {getSourceBadgeLabel(catalog.source)}
+                        </Badge>
+                        <Badge variant="outline" className="hidden shrink-0 text-[10px] sm:inline-flex">
+                          {catalog.type}
+                        </Badge>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
         {multiple && (
-          <div className="flex items-center justify-between border-t pt-3">
-            <span className="text-xs text-muted-foreground">
-              {selected.length === 0
-                ? 'Nothing selected'
-                : `${selected.length} selected`}
-            </span>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-xs text-muted-foreground">
+                {selected.length === 0 ? 'Nothing selected' : `${selected.length} selected`}
+              </span>
+              {addable.length > 0 && selected.length < addable.length && (
+                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setSelected(addable.map(catalogKey))}>
+                  Select all {addable.length}
+                </Button>
+              )}
+              {selected.length > 0 && (
+                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setSelected([])}>
+                  Clear
+                </Button>
+              )}
+            </div>
             <div className="flex gap-2">
               <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
               <Button size="sm" disabled={selected.length === 0} onClick={confirm}>
@@ -2694,6 +2861,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
         catalogs={sourceList.catalogs}
         multiple={false}
         existingKeys={[]}
+        tagOptions={tagOptions}
         onConfirm={picked => {
           const catalog = picked[0];
           if (!catalog || !remapPickFor) return;
@@ -2860,6 +3028,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
         catalogs={sourceList.catalogs}
         multiple={pickerTarget?.folderId !== null && typeof pickerTarget?.replaceIndex !== 'number'}
         existingKeys={pickerExistingKeys}
+        tagOptions={tagOptions}
         onConfirm={handlePick}
         onClose={() => setPickerTarget(null)}
       />

@@ -163,7 +163,10 @@ async function ssoRateLimit(req: any, res: any, next: any): Promise<void> {
 export interface AdminImpact {
   signedOut: string[];
   demoted: string[];
-  refusedNext: string[];
+}
+
+export function emptyAdminImpact(): AdminImpact {
+  return { signedOut: [], demoted: [] };
 }
 
 export async function accountsLosingAdmin(
@@ -173,7 +176,7 @@ export async function accountsLosingAdmin(
 ): Promise<AdminImpact> {
   const config = readOidcConfig();
   const rows = await database.listAccounts();
-  const impact: AdminImpact = { signedOut: [], demoted: [], refusedNext: [] };
+  const impact: AdminImpact = emptyAdminImpact();
 
   for (const row of rows) {
     if (row.id === exceptAccountId) continue;
@@ -186,8 +189,8 @@ export async function accountsLosingAdmin(
     const name = row.username || row.id;
     const preview = previewPermissions(groups, key, value);
 
-    if (preview.outcome === 'malformed') impact.refusedNext.push(name);
-    else if (preview.outcome === 'unconfigured' || preview.outcome === 'refused') impact.signedOut.push(name);
+    if (preview.outcome === 'malformed') continue;
+    if (preview.outcome === 'unconfigured' || preview.outcome === 'refused') impact.signedOut.push(name);
     else if (!preview.permissions.includes('admin')) impact.demoted.push(name);
   }
 

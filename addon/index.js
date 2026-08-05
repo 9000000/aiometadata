@@ -5871,9 +5871,6 @@ function describeAdminImpact(impact) {
   if (impact.demoted.length > 0) {
     parts.push(`take the admin permission away from ${nameList(impact.demoted)}, immediately and without signing them out`);
   }
-  if (impact.refusedNext.length > 0) {
-    parts.push(`refuse the next sign-in of ${nameList(impact.refusedNext)}, leaving the sessions they hold now alone`);
-  }
   return parts.join(', and ');
 }
 
@@ -5887,9 +5884,17 @@ async function describeSelfDemotion(req, key, proposedValue, confirmed) {
   if (!key || !key.startsWith('OIDC_')) return null;
 
   const { previewPermissions } = require('./lib/oidc');
-  const { accountsLosingAdmin } = require('./lib/authRoutes');
+  const { accountsLosingAdmin, emptyAdminImpact } = require('./lib/authRoutes');
 
-  let others = { signedOut: [], demoted: [], refusedNext: [] };
+  if (previewPermissions([], key, proposedValue).outcome === 'malformed') {
+    return {
+      error: 'This value cannot be read',
+      requiresConfirmation: true,
+      reason: `${key} would be saved but not understood, so no sign-in would be allowed at all until it is fixed, and everyone already signed in would keep the permissions they have now.`,
+    };
+  }
+
+  let others = emptyAdminImpact();
   try {
     others = await accountsLosingAdmin(key, proposedValue, req.session?.accountId);
   } catch (error) {
@@ -5905,13 +5910,6 @@ async function describeSelfDemotion(req, key, proposedValue, confirmed) {
         error: 'This change would end your own session',
         requiresConfirmation: true,
         reason: `Saving ${key} would sign you out of this dashboard. If no ADMIN_KEY is set on this instance you may not be able to get back in.${describeOthers(others)}`,
-      };
-    }
-    if (preview.outcome === 'malformed') {
-      return {
-        error: 'This value cannot be read',
-        requiresConfirmation: true,
-        reason: `${key} would be saved but not understood, so no new sign-in would be allowed and everyone already signed in would keep the permissions they have now.`,
       };
     }
     if (!preview.permissions.includes('admin')) {

@@ -329,6 +329,24 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
         permissions: permissions as Permission[],
         groups: identity.groups,
       });
+
+      const current = await database.getAccount(account.id);
+      if (current?.blocked) {
+        await destroySession(sessionId);
+        logger.warn(`Refused ${identity.username}: the account was blocked during sign-in`);
+        await recordSigninFailure({
+          reason: 'blocked',
+          username: identity.username,
+          subject: identity.subject,
+          issuer: identity.issuer,
+          groups: identity.groups,
+          groupsClaim: config.groupsClaim,
+          address: clientAddress(req),
+          detail: 'An administrator blocked this account while it was signing in',
+        });
+        return res.status(403).send('Your account is not allowed to sign in here.');
+      }
+
       setSessionCookie(req, res, sessionId);
 
       logger.info(`Signed in ${identity.username} with ${permissions.length ? permissions.join(', ') : 'no'} permissions`);

@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import consola from 'consola';
 import redis from './redisClient';
 import { getSetting } from './settingsService';
+import { isPermission, type Permission } from './permissions';
 
 const logger = consola.withTag('AuthSession');
 
@@ -9,14 +10,7 @@ export const SESSION_COOKIE = 'aiom_session';
 const SESSION_PREFIX = 'auth:session:';
 const DEFAULT_TTL_SECONDS = 24 * 60 * 60;
 
-/** What an identity is allowed to do. Deny by default: an empty list is valid. */
-export type Permission = 'admin' | 'createConfig';
-
-export const ALL_PERMISSIONS: Permission[] = ['admin', 'createConfig'];
-
-export function isPermission(value: string): value is Permission {
-  return (ALL_PERMISSIONS as string[]).includes(value);
-}
+export { ALL_PERMISSIONS, isPermission, type Permission } from './permissions';
 
 export interface SessionData {
   accountId: string;

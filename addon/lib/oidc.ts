@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import consola from 'consola';
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import { getSetting } from './settingsService';
-import { ALL_PERMISSIONS, isPermission, type Permission } from './authSession';
+import { ALL_PERMISSIONS, isPermission, type Permission } from './permissions';
 
 const logger = consola.withTag('OIDC');
 

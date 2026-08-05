@@ -9,6 +9,8 @@ const FAILURE_PREFIX = 'auth:signin-failure:';
 const FAILURE_INDEX = 'auth:signin-failures';
 const UNVERIFIED_INDEX = 'auth:signin-failures:unverified';
 const MAX_GROUPS_RECORDED = 32;
+const DEFAULT_LOG_MAX = 50;
+const MAX_LOG_MAX = 500;
 
 export type SigninFailureReason =
   | 'refused'
@@ -44,7 +46,8 @@ function indexFor(reason: SigninFailureReason): string {
 
 function logMax(): number {
   const parsed = parseInt(getSetting('AUTH_SIGNIN_FAILURE_LOG_MAX') || '', 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 50;
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_LOG_MAX;
+  return Math.min(parsed, MAX_LOG_MAX);
 }
 
 function indexMax(): number {

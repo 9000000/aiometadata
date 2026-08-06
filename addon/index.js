@@ -27,7 +27,7 @@ const consola = require('consola');
 const aiCatalogLogger = consola.withTag('AICatalog');
 const { stripReleaseAvailabilityForResponse } = require('./utils/releaseAvailability');
 
-const { getMediaRatingFromMDBList } = require("./utils/mdbList");
+const { getMediaRatingFromMDBList, supportsMdblistScoreFilters } = require("./utils/mdbList");
 
 // Warm user-specific content based on their config
 async function warmUserContent(userUUID, contentType) {
@@ -3825,8 +3825,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
   else if (cleanId.startsWith('mdblist.')) {
     if (catalogConfig?.sort) extraArgs.sort = catalogConfig.sort;
     if (catalogConfig?.order) extraArgs.order = catalogConfig.order;
-    // Add score filters for MDBList external lists
-    if (catalogConfig?.source === 'mdblist' && catalogConfig?.sourceUrl && catalogConfig?.sourceUrl.includes('/external/lists/')) {
+    if (supportsMdblistScoreFilters(catalogConfig)) {
       if (typeof catalogConfig.filter_score_min === 'number') {
         extraArgs.filter_score_min = catalogConfig.filter_score_min;
       }

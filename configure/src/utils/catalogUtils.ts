@@ -6,6 +6,14 @@
 import { CatalogConfig } from '@/contexts/ConfigContext';
 import { GenreSelection } from '@/data/genres';
 
+export function supportsMdblistScoreFilters(catalog: { id?: string } | null | undefined): boolean {
+  const id = catalog?.id;
+  if (typeof id !== 'string' || !id.startsWith('mdblist.')) return false;
+  return id !== 'mdblist.upnext'
+    && !id.startsWith('mdblist.discover.')
+    && !id.startsWith('mdblist.recommended.');
+}
+
 /**
  * Determines the catalog type based on MDBList list metadata
  * @param list - MDBList list object with mediatype, movies, shows, items properties

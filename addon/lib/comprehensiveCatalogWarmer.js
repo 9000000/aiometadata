@@ -17,6 +17,7 @@ const redis = require('./redisClient');
 const consola = require('consola');
 const { loadConfigFromDatabase } = require('./configApi.js');
 const { resolveDynamicTmdbDiscoverParams } = require('./tmdbDiscoverDateTokens');
+const { supportsMdblistScoreFilters } = require('../utils/mdbList');
 const { getTvmazeScheduleCatalog } = require('./tvmazeScheduleCatalog');
 const crypto = require('crypto');
 const { runWithRequestContext } = require('./logBuffer.js');
@@ -641,8 +642,7 @@ class ComprehensiveCatalogWarmer {
           if (catalogConfig) {
             if (catalogConfig.sort) extraArgs.sort = catalogConfig.sort;
             if (catalogConfig.order) extraArgs.order = catalogConfig.order;
-            // Add score filters for MDBList external lists
-            if (catalogConfig.source === 'mdblist' && catalogConfig.sourceUrl && catalogConfig.sourceUrl.includes('/external/lists/')) {
+            if (supportsMdblistScoreFilters(catalogConfig)) {
               if (typeof catalogConfig.filter_score_min === 'number') {
                 extraArgs.filter_score_min = catalogConfig.filter_score_min;
               }

@@ -1,7 +1,7 @@
 require("dotenv").config();
 import { getGenreList } from "./getGenreList.js";
 import { getLanguages } from "./getLanguages.js";
-import { fetchMDBListItems, parseMDBListItems, fetchMDBListBatchMediaInfo, fetchMDBListUpNext, parseMDBListUpNextItems } from "../utils/mdbList.js";
+import { fetchMDBListItems, parseMDBListItems, fetchMDBListBatchMediaInfo, fetchMDBListUpNext, parseMDBListUpNextItems, usesMdblistExternalItemsEndpoint, supportsMdblistScoreFilters } from "../utils/mdbList.js";
 import { fetchStremThruCatalog, parseStremThruItems } from "../utils/stremthru.js";
 import { fetchTraktWatchlistItems, fetchTraktFavoritesItems, fetchTraktRecommendationsItems, fetchTraktListItems, fetchTraktListItemsById, parseTraktItems, fetchTraktMostFavoritedItems, fetchTraktCalendarShows, fetchTraktSearchItems, getTraktAccessToken, fetchTraktUpNextEpisodes, fetchTraktUnwatchedEpisodes, fetchTraktTrendingItems, fetchTraktPopularItems, fetchTraktAnticipatedItems } from "../utils/traktUtils.js";
 import { fetchSimklTrendingItems, fetchSimklRecipeItems, fetchSimklWatchlistItems, parseSimklItems, getSimklToken, fetchSimklCalendarItems, fetchSimklGenreItems, fetchSimklDvdReleases } from "../utils/simklUtils.js";
@@ -840,10 +840,7 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
       return metas;
     }
     
-    const isExternalListUrl = catalogConfig?.sourceUrl?.includes('/external/lists/');
-    const isByNameItemsUrl = catalogConfig?.sourceUrl
-      && /api\.mdblist\.com\/lists\/[^/]+\/[^/]+\/items/.test(catalogConfig.sourceUrl);
-    if (catalogConfig?.sourceUrl && (isExternalListUrl || isByNameItemsUrl)) {
+    if (usesMdblistExternalItemsEndpoint(catalogConfig)) {
       logger.info(`Fetching MDBList list from sourceUrl: ${catalogConfig.sourceUrl}`);
 
       const sort = catalogConfig?.sort === 'default' ? undefined : catalogConfig?.sort;
@@ -911,7 +908,21 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
       }
     }
     
-    const response = await fetchMDBListItems(listId, config.apiKeys?.mdblist || process.env.MDBLIST_API_KEY || '', language, page, sort, order, genreSlug, unified, type, catalogConfig?.cacheTTL);
+    const scoreFiltersAllowed = supportsMdblistScoreFilters(catalogConfig);
+    const response = await fetchMDBListItems(
+      listId,
+      config.apiKeys?.mdblist || process.env.MDBLIST_API_KEY || '',
+      language,
+      page,
+      sort,
+      order,
+      genreSlug,
+      unified,
+      type,
+      catalogConfig?.cacheTTL,
+      scoreFiltersAllowed ? catalogConfig?.filter_score_min : undefined,
+      scoreFiltersAllowed ? catalogConfig?.filter_score_max : undefined
+    );
     
     // Smart pagination handling
     if (listId === 'watchlist') {
@@ -3125,7 +3136,7 @@ function buildCatalogCacheArgs(
   } else if (catalogId.startsWith('mdblist.')) {
     if (catCfg?.sort) args.sort = catCfg.sort;
     if (catCfg?.order) args.order = catCfg.order;
-    if (catCfg?.source === 'mdblist' && catCfg?.sourceUrl?.includes('/external/lists/')) {
+    if (supportsMdblistScoreFilters(catCfg)) {
       if (typeof catCfg.filter_score_min === 'number') args.filter_score_min = catCfg.filter_score_min;
       if (typeof catCfg.filter_score_max === 'number') args.filter_score_max = catCfg.filter_score_max;
     }

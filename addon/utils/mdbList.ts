@@ -307,7 +307,7 @@ async function makeRateLimitedRequest<T>(
   throw new Error(`[${context}] All ${retries} attempts failed.`);
 }
 
-async function fetchMDBListItems(listId: string, apiKey: string, language: string, page: number, sort?: string, order?: string, genre?: string, unified?: boolean, catalogType?: string, cacheTTL?: number): Promise<{items: any[], totalItems?: number, hasMore?: boolean, totalPages?: number}> {
+async function fetchMDBListItems(listId: string, apiKey: string, language: string, page: number, sort?: string, order?: string, genre?: string, unified?: boolean, catalogType?: string, cacheTTL?: number, filterScoreMin?: number, filterScoreMax?: number): Promise<{items: any[], totalItems?: number, hasMore?: boolean, totalPages?: number}> {
   // Use configurable page size (supports CATALOG_LIST_ITEMS_SIZE env var)
   const pageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE as string) || 20;
 
@@ -316,7 +316,7 @@ async function fetchMDBListItems(listId: string, apiKey: string, language: strin
     : 'shared';
 
   const ttlSegment = cacheTTL !== undefined ? `:ttl:${cacheTTL}` : '';
-  const cacheKey = `mdblist-api:items:${keyScope}:${listId}:${page}:${sort || ''}:${order || ''}:${genre || ''}:${unified !== false}:${catalogType || ''}:${pageSize}${ttlSegment}`;
+  const cacheKey = `mdblist-api:items:${keyScope}:${listId}:${page}:${sort || ''}:${order || ''}:${genre || ''}:${unified !== false}:${catalogType || ''}:${filterScoreMin ?? ''}:${filterScoreMax ?? ''}:${pageSize}${ttlSegment}`;
 
   const ttl = cacheTTL !== undefined ? cacheTTL : parseInt(process.env.CATALOG_TTL || String(1 * 24 * 60 * 60), 10);
 
@@ -342,7 +342,13 @@ async function fetchMDBListItems(listId: string, apiKey: string, language: strin
       if (genre && genre.toLowerCase() !== 'none') {
         url += `&filter_genre=${encodeURIComponent(genre)}`;
       }
-      
+      if (typeof filterScoreMin === 'number') {
+        url += `&filter_score_min=${filterScoreMin}`;
+      }
+      if (typeof filterScoreMax === 'number') {
+        url += `&filter_score_max=${filterScoreMax}`;
+      }
+
       // Log the final URL for debugging (with API key sanitized)
       logger.debug(`MDBList request URL: ${sanitizeUrlForLogging(url)}`);
       
@@ -611,6 +617,22 @@ async function getGenresFromMDBList(listId: string, apiKey: string): Promise<str
   }
 }
 
+
+const MDBLIST_BY_NAME_ITEMS_PATTERN = /api\.mdblist\.com\/lists\/[^/]+\/[^/]+\/items/;
+
+function usesMdblistExternalItemsEndpoint(catalogConfig: any): boolean {
+  const sourceUrl = catalogConfig?.sourceUrl;
+  if (typeof sourceUrl !== 'string') return false;
+  return sourceUrl.includes('/external/lists/') || MDBLIST_BY_NAME_ITEMS_PATTERN.test(sourceUrl);
+}
+
+function supportsMdblistScoreFilters(catalogConfig: any): boolean {
+  const id = catalogConfig?.id;
+  if (typeof id !== 'string' || !id.startsWith('mdblist.')) return false;
+  return id !== 'mdblist.upnext'
+    && !id.startsWith('mdblist.discover.')
+    && !id.startsWith('mdblist.recommended.');
+}
 
 async function fetchMDBListExternalItems(
   url: string,
@@ -1688,6 +1710,8 @@ async function fetchMDBListCatalog(
 export {
   fetchMDBListItems,
   fetchMDBListExternalItems,
+  usesMdblistExternalItemsEndpoint,
+  supportsMdblistScoreFilters,
   fetchMDBListBatchMediaInfo,
   getGenresFromMDBList,
   parseMDBListItems,

@@ -337,6 +337,7 @@ function reconcileMergedReferences(catalogs: CatalogConfig[]): CatalogConfig[] {
 }
 
 import { sourceBadgeStyles, sourceBadgeLabels } from '@/lib/sourceBadges';
+import { supportsMdblistScoreFilters } from '@/utils/catalogUtils';
 
 
 
@@ -359,6 +360,7 @@ const MDBListSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogC
   const isUpNext = catalog.id === 'mdblist.upnext';
   const isDiscover = catalog.id.startsWith('mdblist.discover.');
   const showSortOptions = !isUpNext && !isDiscover;
+  const showScoreFilters = supportsMdblistScoreFilters(catalog);
 
   const handleSave = () => {
     const hideTraktValue = hideWatchedTrakt === 'on' ? true : hideWatchedTrakt === 'off' ? false : undefined;
@@ -477,7 +479,7 @@ const MDBListSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogC
               </div>
             </>
           )}
-          {catalog.source === 'mdblist' && catalog.sourceUrl?.includes('/external/lists/') && (
+          {showScoreFilters && (
             <>
               <div className="space-y-2">
                 <Label>Minimum Score</Label>
@@ -501,6 +503,10 @@ const MDBListSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogC
                   max="100"
                 />
               </div>
+              <p className="text-xs text-muted-foreground">
+                Filters the list by MDBList score. Requires an MDBList supporter account.
+                Leave both blank otherwise.
+              </p>
             </>
           )}
           {isDiscover ? (

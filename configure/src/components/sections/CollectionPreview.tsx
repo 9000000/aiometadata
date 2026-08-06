@@ -308,6 +308,46 @@ function NuvioCollectionStage({
   );
 }
 
+function FusionCollectionStage({
+  entry,
+  onEditFolder,
+}: {
+  entry: CollectionDraft;
+  onEditFolder: (folderId: string) => void;
+}) {
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+
+  return (
+    <div className="rounded-lg border bg-neutral-950 p-4">
+      {!entry.hideTitle && (
+        <p className="mb-2.5 text-sm font-semibold text-white">
+          {entry.title.trim() || 'Untitled widget'}
+        </p>
+      )}
+      {entry.folders.length === 0 ? (
+        <p className="py-6 text-center text-xs text-white/50">No items yet.</p>
+      ) : (
+        <div className="flex gap-3 overflow-x-auto pb-1">
+          {entry.folders.map(folder => (
+            <PreviewTile
+              key={folder.id}
+              folder={folder}
+              target="fusion"
+              focused={focusedId === folder.id}
+              glow={false}
+              showTitle={!folder.hideTitle}
+              allowEmoji={false}
+              onFocus={() => setFocusedId(folder.id)}
+              onBlur={() => setFocusedId(current => (current === folder.id ? null : current))}
+              onEdit={() => onEditFolder(folder.id)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function CollectionPreview({
   entry,
   target,
@@ -327,8 +367,12 @@ export function CollectionPreview({
 
   return (
     <div className="space-y-3">
-      {entry.kind === 'collection' && target === 'nuvio' ? (
-        <NuvioCollectionStage entry={entry} onEditFolder={onEditFolder} />
+      {entry.kind === 'collection' ? (
+        target === 'nuvio' ? (
+          <NuvioCollectionStage entry={entry} onEditFolder={onEditFolder} />
+        ) : (
+          <FusionCollectionStage entry={entry} onEditFolder={onEditFolder} />
+        )
       ) : (
         <div className="rounded-md border border-dashed px-3 py-10 text-center text-sm text-muted-foreground">
           No preview for this yet.

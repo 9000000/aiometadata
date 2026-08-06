@@ -211,6 +211,42 @@ export async function getImdbRating(imdbId: string): Promise<ImdbRating | null> 
 }
 
 /**
+ * One HMGET for a whole page of ids. Returns only the ids that resolved.
+ */
+export async function getImdbRatingStrings(imdbIds: string[]): Promise<Map<string, string>> {
+  const found = new Map<string, string>();
+  const ids = [...new Set(imdbIds.filter(Boolean))];
+  if (ids.length === 0) return found;
+
+  try {
+    if (!redis) return found;
+
+    totalRequests += ids.length;
+    const values: Array<string | null> = await redis.hmget(REDIS_RATINGS_HASH, ...ids);
+
+    ids.forEach((id, index) => {
+      const raw = values?.[index];
+      if (!raw) {
+        cacheMisses++;
+        return;
+      }
+      const rating = parseRedisRating(raw);
+      if (!rating) {
+        cacheMisses++;
+        return;
+      }
+      cacheHits++;
+      found.set(id, String(rating.rating));
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.warn('Error fetching ratings batch:', errorMessage);
+  }
+
+  return found;
+}
+
+/**
  * Gets the IMDb rating as a formatted string
  */
 export async function getImdbRatingString(imdbId: string): Promise<string | undefined> {

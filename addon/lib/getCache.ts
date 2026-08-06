@@ -12,6 +12,10 @@ const {
   applyLinksUserScopeProjection,
 }: any = require('./linkProjection');
 const {
+  applyImdbRatingProjection,
+  applyImdbRatingProjectionToList,
+}: any = require('./imdbRatingProjection');
+const {
   RELEASE_AVAILABILITY_FIELD,
   normalizeMetaReleaseAvailability,
   normalizeReleaseAvailabilityInPayload,
@@ -1029,12 +1033,13 @@ function applyCastCountProjection(meta: any, config: any): any {
   return meta;
 }
 
-function projectMetaForUser(meta: any, config: any): any {
+async function projectMetaForUser(meta: any, config: any): Promise<any> {
   if (!meta) return meta;
   applyCastCountProjection(meta, config);
   applyBlurThumbProjection(meta, config);
   applyDisplayAgeRatingProjection(meta, config);
   applyLinksUserScopeProjection(meta, config);
+  await applyImdbRatingProjection(meta);
   return meta;
 }
 
@@ -1448,6 +1453,8 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
     }
   }
 
+  await applyImdbRatingProjectionToList(result?.metas);
+
   return result;
   }
 
@@ -1514,6 +1521,7 @@ async function cacheWrapSearch(userUUID: string, searchKey: string, method: () =
     return normalizeReleaseAvailabilityInPayload(await method());
   }, SEARCH_TTL, options);
   normalizeReleaseAvailabilityInPayload(result);
+  await applyImdbRatingProjectionToList(result?.metas);
   return result;
 }
 
@@ -1657,14 +1665,6 @@ async function writeMetaComponentsWithConfig({ config, metaId, result, ttl = MET
     cacheLogger.warn(`Failed to capture metadata for dashboard: ${error.message}`);
   }
 
-  if (meta.imdb_id && (meta.imdbRating == null || meta.imdbRating === 'N/A')) {
-    const imdbRatings = require('./imdbRatings');
-    if (!(await imdbRatings.ratingsAvailable())) {
-      cacheLogger.debug(`[Meta] Not caching ${metaId}: IMDb rating unavailable (ratings dataset not loaded yet)`);
-      return { meta: projectMetaForUser(meta, config) };
-    }
-  }
-
    const componentsToCache: any[] = [];
 
    const basicMeta: any = {
@@ -1778,7 +1778,7 @@ async function writeMetaComponentsWithConfig({ config, metaId, result, ttl = MET
     cacheLogger.warn(`[ColdStore] write-through failed for ${metaId}: ${coldErr?.message}`);
   }
 
-   return { meta: projectMetaForUser(meta, config) };
+   return { meta: await projectMetaForUser(meta, config) };
 }
 
 async function writeMetaComponentsBatchWithConfig({ config, metas, ttl = META_TTL(), type = null, useShowPoster = false, overwrite = true }: { config: any; metas: any[]; ttl?: number; type?: string | null; useShowPoster?: boolean; overwrite?: boolean }): Promise<{ written: number; skipped: number }> {
@@ -2082,7 +2082,7 @@ async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = 
   const metaReconstructionKey = `meta:reconstructed:${metaId}`;
   updateCacheHealth(metaReconstructionKey, 'hit', true);
 
-  return { meta: projectMetaForUser(reconstructedMeta, config) };
+  return { meta: await projectMetaForUser(reconstructedMeta, config) };
 }
 
 async function cacheWrapMetaSmart(userUUID: string, metaId: string, method: () => Promise<any>, ttl: number = META_TTL(), options: any = {}, type: string | null = null, includeVideos: boolean = true, useShowPoster: boolean = false): Promise<any> {

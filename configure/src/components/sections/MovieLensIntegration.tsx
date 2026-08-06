@@ -183,7 +183,7 @@ export function MovieLensIntegration({ isOpen, onClose }: MovieLensIntegrationPr
                 <CardTitle className="text-base">Connect your account</CardTitle>
                 <CardDescription>
                   No account yet?{' '}
-                  <a href="https://movielens.org/join" target="_blank" rel="noopener noreferrer" className="underline inline-flex items-center gap-1">
+                  <a href="https://movielens.org/register" target="_blank" rel="noopener noreferrer" className="underline inline-flex items-center gap-1">
                     Create one at movielens.org <ExternalLink className="h-3 w-3" />
                   </a>
                 </CardDescription>

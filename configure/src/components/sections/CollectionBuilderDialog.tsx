@@ -113,6 +113,12 @@ import {
   type CatalogSourceList,
   type ManifestCatalog,
 } from '@/lib/collectionBuilder/manifestSources';
+import {
+  buildProblemTargets,
+  collectProblems,
+  countProblems,
+  withStagedCatalogs,
+} from '@/lib/collectionBuilder/problems';
 import { FUSION_CHIP, NUVIO_CHIP, TERMS, type Target } from '@/lib/collectionBuilder/terms';
 import { CollectionPreview } from './CollectionPreview';
 import { buildBlueprintLookup } from '@shared/blueprintLookup';
@@ -2373,71 +2379,23 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     return ids;
   }, [entries, sourceList.catalogs, pendingKeys]);
 
-  const issueCatalogs = useMemo(() => {
-    if (pendingKeys.size === 0) return sourceList.catalogs;
-    const known = new Set(sourceList.catalogs.map(catalogKey));
-    const staged: ManifestCatalog[] = [];
-    for (const key of pendingKeys) {
-      if (known.has(key)) continue;
-      const split = key.lastIndexOf(':');
-      if (split <= 0) continue;
-      staged.push({ id: key.slice(0, split), type: key.slice(split + 1), name: key.slice(0, split) });
-    }
-    return staged.length > 0 ? [...sourceList.catalogs, ...staged] : sourceList.catalogs;
-  }, [sourceList.catalogs, pendingKeys]);
+  const issueCatalogs = useMemo(
+    () => withStagedCatalogs(sourceList.catalogs, pendingKeys),
+    [sourceList.catalogs, pendingKeys]
+  );
 
   const issues = useMemo(() => findSourceIssues(entries, issueCatalogs), [entries, issueCatalogs]);
 
-  const problemTargets = useMemo(() => {
-    const map = new Map<string, { entryId: string; folderId: string | null }>();
-    for (const entry of entries) {
-      map.set(entry.id, { entryId: entry.id, folderId: null });
-      if (entry.kind !== 'collection') continue;
-      for (const folder of entry.folders) {
-        map.set(folder.id, { entryId: entry.id, folderId: folder.id });
-      }
-    }
-    return map;
-  }, [entries]);
+  const problemTargets = useMemo(() => buildProblemTargets(entries), [entries]);
 
-  const problems = useMemo(() => {
-    const rows: Array<{
-      key: string;
-      message: string;
-      entryId: string | null;
-      folderId: string | null;
-    }> = [];
-    const push = (key: string, id: string, message: string) => {
-      const target = problemTargets.get(id);
-      rows.push({
-        key,
-        message,
-        entryId: target?.entryId ?? null,
-        folderId: target?.folderId ?? null,
-      });
-    };
-    issues.forEach((issue, index) => push(`issue-${index}`, issue.folderId ?? issue.entryId, issue.message));
-    notes.forEach((note, index) => push(`note-${index}`, note.entryId, note.message));
-    return rows;
-  }, [issues, notes, problemTargets]);
+  const problems = useMemo(
+    () => collectProblems(issues, notes, problemTargets),
+    [issues, notes, problemTargets]
+  );
 
-  const entryProblemCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const row of problems) {
-      if (!row.entryId) continue;
-      counts.set(row.entryId, (counts.get(row.entryId) ?? 0) + 1);
-    }
-    return counts;
-  }, [problems]);
+  const entryProblemCounts = useMemo(() => countProblems(problems, 'entryId'), [problems]);
 
-  const folderProblemCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const row of problems) {
-      if (!row.folderId) continue;
-      counts.set(row.folderId, (counts.get(row.folderId) ?? 0) + 1);
-    }
-    return counts;
-  }, [problems]);
+  const folderProblemCounts = useMemo(() => countProblems(problems, 'folderId'), [problems]);
 
   const countNative = useCallback((entry: BuilderEntry) => {
     const sources = entry.kind === 'classicRow'

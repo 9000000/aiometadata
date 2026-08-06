@@ -1010,6 +1010,7 @@ function SortableSourceRow({
 function SortableFolderRow({
   folder,
   hasUnknown,
+  warnings = 0,
   allNative,
   placeholder,
   isActive,
@@ -1023,6 +1024,7 @@ function SortableFolderRow({
 }: {
   folder: FolderDraft;
   hasUnknown: boolean;
+  warnings?: number;
   /** Every source here is resolved by the client, so none of it reaches us. */
   allNative?: boolean;
   placeholder: string;
@@ -1069,7 +1071,16 @@ function SortableFolderRow({
       <button type="button" onClick={onSelect} className="flex min-w-0 flex-1 items-center gap-2 text-left">
         <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate">{folder.title || placeholder}</span>
-        {hasUnknown && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />}
+        {(hasUnknown || warnings > 0) && (
+          <span
+            className="shrink-0"
+            title={hasUnknown
+              ? 'Points at a catalog you do not have'
+              : `${warnings} thing${warnings === 1 ? '' : 's'} worth checking here`}
+          >
+            <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+          </span>
+        )}
         {allNative && (
           <span className="shrink-0 text-[10px] text-muted-foreground" title="Nuvio fetches these itself, so they cost this addon nothing">
             Nuvio
@@ -1381,7 +1392,7 @@ function CollectionEditor({
   onAddByTag,
   nativeCount,
   onConvertNative,
-  problemFolderIds,
+  folderWarnings,
   focus,
   focusTitle,
 }: {
@@ -1397,7 +1408,8 @@ function CollectionEditor({
   /** Sources here that Nuvio resolves itself and this addon could take over. */
   nativeCount: number;
   onConvertNative: () => void;
-  problemFolderIds?: Set<string>;
+  /** Notes the export would raise about a folder, counted per folder id. */
+  folderWarnings?: Map<string, number>;
   focus?: { entryId: string; folderId: string } | null;
   focusTitle?: boolean;
 }) {
@@ -1613,11 +1625,12 @@ function CollectionEditor({
                     key={folder.id}
                     folder={folder}
                     placeholder={`Untitled ${terms.child.toLowerCase()}`}
-                    hasUnknown={problemFolderIds?.has(folder.id) || folder.sources.some(source =>
+                    hasUnknown={folder.sources.some(source =>
                       !isNativeSource(source)
                       && !knownKeys.has(catalogKey(source))
                       && !pendingKeys?.has(catalogKey(source))
                     )}
+                    warnings={folderWarnings?.get(folder.id) ?? 0}
                     allNative={folder.sources.length > 0 && folder.sources.every(isNativeSource)}
                     isActive={index === activeIndex}
                     canMoveUp={index > 0}
@@ -2349,12 +2362,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     return counts;
   }, [problems]);
 
-  const problemFolderIds = useMemo(() => {
-    const ids = new Set<string>();
+  const folderProblemCounts = useMemo(() => {
+    const counts = new Map<string, number>();
     for (const row of problems) {
-      if (row.folderId) ids.add(row.folderId);
+      if (!row.folderId) continue;
+      counts.set(row.folderId, (counts.get(row.folderId) ?? 0) + 1);
     }
-    return ids;
+    return counts;
   }, [problems]);
 
   const countNative = useCallback((entry: BuilderEntry) => {
@@ -2756,7 +2770,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       onAddByTag={(folderId, tag) => addSourcesByTag(selected.id, folderId, tag)}
                       nativeCount={countNative(selected)}
                       onConvertNative={() => convertNativeSources(selected.id)}
-                      problemFolderIds={problemFolderIds}
+                      folderWarnings={folderProblemCounts}
                       focus={focusFolder?.entryId === selected.id ? focusFolder : null}
                       focusTitle={titleFocusId === selected.id}
                     />

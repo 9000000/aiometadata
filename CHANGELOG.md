@@ -2,6 +2,83 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.11.0](https://github.com/cedya77/aiometadata/compare/v2.10.0...v2.11.0) (2026-08-06)
+
+
+### Features
+
+* allow for per-provider policies in proxy-only environments ([9e50b45](https://github.com/cedya77/aiometadata/commit/9e50b45e7e96db9308ff4aad267c93193687d177))
+* allow for per-provider policies in proxy-only environments ([e8a85fc](https://github.com/cedya77/aiometadata/commit/e8a85fcb82751a66f0c693863a02be9d03265131))
+* **auth:** add OpenID Connect sign-in ([3af2e06](https://github.com/cedya77/aiometadata/commit/3af2e0604af8e67528c67d64a5ae453845528e7c))
+* **auth:** let an administrator session reach the dashboard ([3af2e06](https://github.com/cedya77/aiometadata/commit/3af2e0604af8e67528c67d64a5ae453845528e7c))
+* **auth:** open a configuration saved to an account without its password ([3af2e06](https://github.com/cedya77/aiometadata/commit/3af2e0604af8e67528c67d64a5ae453845528e7c))
+* **auth:** sign in with an identity provider and reach your configurations ([3af2e06](https://github.com/cedya77/aiometadata/commit/3af2e0604af8e67528c67d64a5ae453845528e7c))
+* **dashboard:** add an accounts panel for identity provider sign-ins ([c4f5946](https://github.com/cedya77/aiometadata/commit/c4f59466a3c071381bd269531b9fba4774dde7df))
+* **discover:** add Today and This Week date presets ([2a7d3d1](https://github.com/cedya77/aiometadata/commit/2a7d3d1861e9bc45314b291578f23216f511b8ad))
+* Hide Stremio-specific catalogs ([d13e887](https://github.com/cedya77/aiometadata/commit/d13e8878b0191487425d1fad775805f63afd3eed))
+* Hide Stremio-specific catalogs ([fcef660](https://github.com/cedya77/aiometadata/commit/fcef66005d35080e3d75ac649d8467044f326c77))
+* **mdblist:** offer score filters on every list catalog ([6f0bf01](https://github.com/cedya77/aiometadata/commit/6f0bf0130f294191e5ed8656719a3440b7b637a8))
+* **mdblist:** use quick_search on the search endpoint ([2c1a481](https://github.com/cedya77/aiometadata/commit/2c1a4810c1d9efb0650ece14b5014140866dfd60))
+* **sso:** apply group mapping changes to live sessions ([03e6b37](https://github.com/cedya77/aiometadata/commit/03e6b3731884cfafa6393da9ae0ad765a2469875))
+* **sso:** confirm settings changes that would remove your own access ([97c81e6](https://github.com/cedya77/aiometadata/commit/97c81e61c479deeb5ef84832374423357fe973ac))
+* **sso:** expose account sessions, configurations and deletion ([46328b8](https://github.com/cedya77/aiometadata/commit/46328b8bc489f1f9f1b2a668d6bb8e3568afeadf))
+* **sso:** let an admin revoke an account's sessions ([a180a7b](https://github.com/cedya77/aiometadata/commit/a180a7be60599e4e9c467567d3b5639bbf6105e0))
+
+
+### Bug Fixes
+
+* **admin:** require authentication on every admin route ([3af2e06](https://github.com/cedya77/aiometadata/commit/3af2e0604af8e67528c67d64a5ae453845528e7c))
+* **catalogs:** keep the catalog list responsive when it is long ([329c4b9](https://github.com/cedya77/aiometadata/commit/329c4b94703ce463b3bc26756c07cc3ff50463e4))
+* **collections:** apply the digital release and unknown-source checks to the right sources ([329c4b9](https://github.com/cedya77/aiometadata/commit/329c4b94703ce463b3bc26756c07cc3ff50463e4))
+* **collections:** carry catalogs with a shared collection ([329c4b9](https://github.com/cedya77/aiometadata/commit/329c4b94703ce463b3bc26756c07cc3ff50463e4))
+* **collections:** embed catalog definitions in the exported collections ([329c4b9](https://github.com/cedya77/aiometadata/commit/329c4b94703ce463b3bc26756c07cc3ff50463e4))
+* **collections:** give rebuilt discover catalogs a form state ([329c4b9](https://github.com/cedya77/aiometadata/commit/329c4b94703ce463b3bc26756c07cc3ff50463e4))
+* **collections:** hold imported catalogs until the design is applied ([329c4b9](https://github.com/cedya77/aiometadata/commit/329c4b94703ce463b3bc26756c07cc3ff50463e4))
+* **collections:** make routing Nuvio's own sources through the addon opt-in ([329c4b9](https://github.com/cedya77/aiometadata/commit/329c4b94703ce463b3bc26756c07cc3ff50463e4))
+* **collections:** rebuild catalogs from a Nuvio collection file ([329c4b9](https://github.com/cedya77/aiometadata/commit/329c4b94703ce463b3bc26756c07cc3ff50463e4))
+* **collections:** recreate account catalogs from their id ([329c4b9](https://github.com/cedya77/aiometadata/commit/329c4b94703ce463b3bc26756c07cc3ff50463e4))
+* **collections:** stop a Fusion export silently dropping most of a design ([329c4b9](https://github.com/cedya77/aiometadata/commit/329c4b94703ce463b3bc26756c07cc3ff50463e4))
+* **collections:** stop an import exceeding the catalog ceiling ([329c4b9](https://github.com/cedya77/aiometadata/commit/329c4b94703ce463b3bc26756c07cc3ff50463e4))
+* **config:** rate limit profile saves per configuration ([62343a3](https://github.com/cedya77/aiometadata/commit/62343a3638db5c95d0d170209983a7b020bef509))
+* **dashboard:** let an SSO instance reach the dashboard without an admin key ([133814e](https://github.com/cedya77/aiometadata/commit/133814eaa9f8ae426dd3037051e16ff29f26b909))
+* **dashboard:** reach the accounts panel on mobile and report what its actions did ([bdb1e66](https://github.com/cedya77/aiometadata/commit/bdb1e66b68790ebe266f28db66af2a3272312e77))
+* **dashboard:** report heap usage against the limit V8 enforces ([ec183ff](https://github.com/cedya77/aiometadata/commit/ec183ff4e415c5a5e4594ade7f32b6a4439ee2f7))
+* **dashboard:** say how to reach the dashboard when no admin key is set ([f43b5b5](https://github.com/cedya77/aiometadata/commit/f43b5b5fc187a0ad4765b4abbc1d517dcb187234))
+* **docs:** run self-hosted Jikan search on Typesense ([a5cda44](https://github.com/cedya77/aiometadata/commit/a5cda44bd83d9fde35f9eabf2f22eceba606f3f1))
+* **image cache:** stop image provider connections piling up TLS sessions ([dbbd875](https://github.com/cedya77/aiometadata/commit/dbbd8754ab9015fbd68fe97826b7243edcb62564))
+* **meta:** build deep links from the identifier the client installed ([097c676](https://github.com/cedya77/aiometadata/commit/097c67653463a599d8d0cbda61c390e899526935))
+* **movielens:** fix movielens sign up url ([76d3754](https://github.com/cedya77/aiometadata/commit/76d37548d55ee4a804f7dbbf53231c4564433438))
+* **settings:** register TRUST_PROXY_HOPS in the settings registry ([187ff67](https://github.com/cedya77/aiometadata/commit/187ff671057192a2ddfe41c95399c257a3636720))
+* **sso:** bind an OIDC sign-in to the browser that started it ([3c531e1](https://github.com/cedya77/aiometadata/commit/3c531e1a73e9cf5765987ae6e13b5e01a49801e9))
+* **sso:** bound how many sign-in failures the log will keep and read ([7b781dd](https://github.com/cedya77/aiometadata/commit/7b781dd018726dd213195dd49d854c397514470d))
+* **sso:** close the window where a sign-in outlives the block that hit it ([8d5ca17](https://github.com/cedya77/aiometadata/commit/8d5ca178c0aff0886395fd124095d6722b61b6f4))
+* **sso:** delete the account row before sweeping its sessions ([255a2f5](https://github.com/cedya77/aiometadata/commit/255a2f58c544551478adecbca778f323964e81f8))
+* **sso:** delete the payloads a trimmed failure index leaves behind ([89afe3f](https://github.com/cedya77/aiometadata/commit/89afe3fcc1e7474975bde1a729c9b8f9d9bedafa))
+* **sso:** destroy the minted session when the block re-read throws ([648f323](https://github.com/cedya77/aiometadata/commit/648f3230c4e6e85ebb22627f9b0c8bcff3b0c5b5))
+* **sso:** honour AUTH_SIGNIN_FAILURE_LOG_MAX when listing failures ([8eeb5e3](https://github.com/cedya77/aiometadata/commit/8eeb5e35d9e444a4870fd5bb9151c0dc4d26ff27))
+* **sso:** keep a rate-limited request refused when recording it fails ([ff3b798](https://github.com/cedya77/aiometadata/commit/ff3b7988843b841e0761e6ae9fa748dcef7a7247))
+* **sso:** keep refusals visible and sign-ins tied to a live account ([e0f5e46](https://github.com/cedya77/aiometadata/commit/e0f5e46aab857973e00ad71e2fa4abe3e93a0032))
+* **sso:** make account revocation authoritative again ([884430d](https://github.com/cedya77/aiometadata/commit/884430dbd138b6a45afa9d704b5f5572289031b4))
+* **sso:** make the self-demotion guard model a settings reset correctly ([9a22467](https://github.com/cedya77/aiometadata/commit/9a224678879293089cb1e447ccfa902013800b9c))
+* **sso:** point an unreadable mapping at the setting, not at every account ([4f3bbce](https://github.com/cedya77/aiometadata/commit/4f3bbce5524d7b0cb82bbb6c302fec0ff364c408))
+* **sso:** rate limit sign-in by an address the client cannot forge ([00911bf](https://github.com/cedya77/aiometadata/commit/00911bf4516f3aa266f3aed96820ff2c180d4b01))
+* **sso:** refuse a post-sign-in redirect that leaves the instance ([976f513](https://github.com/cedya77/aiometadata/commit/976f51318853b319d2a70cb5a3c455acaead008b))
+* **sso:** refuse the login when the group mapping cannot be read ([3540713](https://github.com/cedya77/aiometadata/commit/3540713995c0eb4820d086bcf7f7b057f66e4ab8))
+* **sso:** report a block whose session sweep failed as saved, not failed ([5ebbff3](https://github.com/cedya77/aiometadata/commit/5ebbff3c7544806a93d0cea0c3e09cf27e1ac5a4))
+* **sso:** report the sessions a failed sweep did destroy ([ad78e04](https://github.com/cedya77/aiometadata/commit/ad78e0475f1f784d584ce034b4dff445eb080772))
+* **sso:** say what a settings change does to other admins, per outcome ([d668a2b](https://github.com/cedya77/aiometadata/commit/d668a2b8b27775de837e474b167da187cb9c5cb3))
+* **sso:** separate the parts of a multi-outcome warning with semicolons ([b50d4c3](https://github.com/cedya77/aiometadata/commit/b50d4c30c1326769906a844a9f8c4c50b3f41480))
+* **sso:** stop a full refusal log hiding every provider error ([1ef32b4](https://github.com/cedya77/aiometadata/commit/1ef32b4563a2bfb1c3cc293387690270c6f46f4d))
+* **sso:** stop unauthenticated attempts evicting recorded refusals ([48a84c7](https://github.com/cedya77/aiometadata/commit/48a84c7a76b2f4c9464ebc81268b87604b3f774f))
+* **sso:** tell a refused account apart from an unrecorded one ([ea4aebf](https://github.com/cedya77/aiometadata/commit/ea4aebf9fbd63c074d2711aeb197dbf1c2b725ba))
+* **sso:** tell an admin what a settings change would actually do ([515227c](https://github.com/cedya77/aiometadata/commit/515227ce07769ad0cc885e40b53ea715a5dbcd8d))
+* **sso:** warn that an unreadable mapping refuses everyone, not just admins ([3fb6d57](https://github.com/cedya77/aiometadata/commit/3fb6d57bac8838c70095a53755d6facf0ffd0c24))
+
+
+### Performance Improvements
+
+* **sso:** index sessions per account instead of scanning the keyspace ([8c82f1b](https://github.com/cedya77/aiometadata/commit/8c82f1b05db78ba4f29a464b04a1adf1ce373725))
+
 ## [2.10.0](https://github.com/cedya77/aiometadata/compare/v2.9.1...v2.10.0) (2026-08-03)
 
 

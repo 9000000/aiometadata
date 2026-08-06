@@ -13,8 +13,11 @@ import {
   AlertTriangle,
   Check,
   ChevronDown,
+  ChevronsDown,
+  ChevronsUp,
   ChevronUp,
   Copy,
+  MoreVertical,
   Download,
   Folder,
   FolderPlus,
@@ -77,6 +80,7 @@ import {
   createFolderDraft,
   hasNuvioCollectionSettings,
   hasNuvioFolderArt,
+  newId,
   type BuilderEntry,
   type ClassicRowDraft,
   type CollectionDraft,
@@ -380,6 +384,55 @@ function ReorderArrows({
   );
 }
 
+function RowActions({
+  label,
+  canMoveUp,
+  canMoveDown,
+  onDuplicate,
+  onMoveTo,
+}: {
+  label: string;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onDuplicate: () => void;
+  onMoveTo: (position: 'top' | 'bottom') => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="shrink-0 text-muted-foreground hover:text-foreground"
+          aria-label={`More actions for ${label}`}
+        >
+          <MoreVertical className="h-4 w-4" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={onDuplicate}>
+          <Copy className="mr-2 h-3.5 w-3.5" /> Duplicate
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={!canMoveUp} onClick={() => onMoveTo('top')}>
+          <ChevronsUp className="mr-2 h-3.5 w-3.5" /> Move to top
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={!canMoveDown} onClick={() => onMoveTo('bottom')}>
+          <ChevronsDown className="mr-2 h-3.5 w-3.5" /> Move to bottom
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function duplicateEntryDraft(entry: BuilderEntry): BuilderEntry {
+  const copy = clone(entry);
+  copy.id = newId();
+  copy.title = `${entry.title} copy`;
+  if (copy.kind === 'collection') {
+    copy.folders = copy.folders.map(folder => ({ ...folder, id: newId() }));
+  }
+  return copy;
+}
+
 // ---- Entry rail ----
 
 function SortableEntryRow({
@@ -392,6 +445,8 @@ function SortableEntryRow({
   canMoveUp,
   canMoveDown,
   onMove,
+  onMoveTo,
+  onDuplicate,
   onSelect,
   onDelete,
 }: {
@@ -407,6 +462,8 @@ function SortableEntryRow({
   canMoveUp: boolean;
   canMoveDown: boolean;
   onMove: (delta: number) => void;
+  onMoveTo: (position: 'top' | 'bottom') => void;
+  onDuplicate: () => void;
   onSelect: () => void;
   onDelete: () => void;
 }) {
@@ -466,6 +523,13 @@ function SortableEntryRow({
           {count}
         </span>
       </button>
+      <RowActions
+        label={entry.title || 'this entry'}
+        canMoveUp={canMoveUp}
+        canMoveDown={canMoveDown}
+        onDuplicate={onDuplicate}
+        onMoveTo={onMoveTo}
+      />
       <button type="button" onClick={onDelete} className="text-muted-foreground hover:text-destructive">
         <Trash2 className="h-4 w-4" />
       </button>
@@ -979,6 +1043,8 @@ function SortableFolderRow({
   canMoveUp,
   canMoveDown,
   onMove,
+  onMoveTo,
+  onDuplicate,
   onSelect,
   onDelete,
 }: {
@@ -991,6 +1057,8 @@ function SortableFolderRow({
   canMoveUp: boolean;
   canMoveDown: boolean;
   onMove: (delta: number) => void;
+  onMoveTo: (position: 'top' | 'bottom') => void;
+  onDuplicate: () => void;
   onSelect: () => void;
   onDelete: () => void;
 }) {
@@ -1036,6 +1104,13 @@ function SortableFolderRow({
           {count}
         </span>
       </button>
+      <RowActions
+        label={folder.title || placeholder}
+        canMoveUp={canMoveUp}
+        canMoveDown={canMoveDown}
+        onDuplicate={onDuplicate}
+        onMoveTo={onMoveTo}
+      />
       <button type="button" onClick={onDelete} className="text-muted-foreground hover:text-destructive">
         <Trash2 className="h-4 w-4" />
       </button>
@@ -1348,6 +1423,22 @@ function CollectionEditor({
     update({ folders: arrayMove(entry.folders, index, to) });
   };
 
+  const moveFolderTo = (index: number, position: 'top' | 'bottom') => {
+    const to = position === 'top' ? 0 : entry.folders.length - 1;
+    if (to === index) return;
+    update({ folders: arrayMove(entry.folders, index, to) });
+  };
+
+  const duplicateFolder = (index: number) => {
+    const original = entry.folders[index];
+    if (!original) return;
+    const copy: FolderDraft = { ...clone(original), id: newId(), title: `${original.title} copy` };
+    setSelectedFolderId(copy.id);
+    update({
+      folders: [...entry.folders.slice(0, index + 1), copy, ...entry.folders.slice(index + 1)],
+    });
+  };
+
   const addFolder = () => {
     const folder = createFolderDraft();
     setSelectedFolderId(folder.id);
@@ -1478,6 +1569,8 @@ function CollectionEditor({
                     canMoveUp={index > 0}
                     canMoveDown={index < entry.folders.length - 1}
                     onMove={delta => moveFolder(index, delta)}
+                    onMoveTo={position => moveFolderTo(index, position)}
+                    onDuplicate={() => duplicateFolder(index)}
                     onSelect={() => setSelectedFolderId(folder.id)}
                     onDelete={() => update({ folders: entry.folders.filter((_, i) => i !== index) })}
                   />
@@ -1824,6 +1917,26 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       if (to < 0 || to >= prev.length) return prev;
       return arrayMove(prev, index, to);
     });
+  };
+
+  const moveEntryTo = (index: number, position: 'top' | 'bottom') => {
+    setEntries(prev => {
+      const to = position === 'top' ? 0 : prev.length - 1;
+      if (to === index) return prev;
+      return arrayMove(prev, index, to);
+    });
+  };
+
+  const duplicateEntry = (id: string) => {
+    const original = entries.find(entry => entry.id === id);
+    if (!original) return;
+    const copy = duplicateEntryDraft(original);
+    setEntries(prev => {
+      const at = prev.findIndex(entry => entry.id === id);
+      if (at < 0) return prev;
+      return [...prev.slice(0, at + 1), copy, ...prev.slice(at + 1)];
+    });
+    setSelectedId(copy.id);
   };
 
   const pickerExistingKeys = useMemo(() => {
@@ -2450,6 +2563,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                           canMoveUp={index > 0}
                           canMoveDown={index < entries.length - 1}
                           onMove={delta => moveEntry(index, delta)}
+                          onMoveTo={position => moveEntryTo(index, position)}
+                          onDuplicate={() => duplicateEntry(entry.id)}
                           onSelect={() => setSelectedId(entry.id)}
                           onDelete={() => removeEntry(entry.id)}
                         />

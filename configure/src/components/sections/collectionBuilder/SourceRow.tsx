@@ -1,0 +1,280 @@
+import type { CSSProperties, ReactNode } from 'react';
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronsDown,
+  ChevronsUp,
+  ChevronUp,
+  Copy,
+  GripVertical,
+  MoreVertical,
+  Replace,
+  Trash2,
+} from 'lucide-react';
+import { useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { getSourceBadgeLabel, getSourceBadgeStyle } from '@/lib/sourceBadges';
+import { catalogKey, type ManifestCatalog } from '@/lib/collectionBuilder/manifestSources';
+import { isNativeSource, nativeLabel } from '@shared/catalogReconstruction';
+import type { SourceDraft } from '@shared/types';
+
+export function ReorderArrows({
+  label,
+  canMoveUp,
+  canMoveDown,
+  onMove,
+}: {
+  label: string;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMove: (delta: number) => void;
+}) {
+  const buttonClass =
+    'flex h-3.5 w-4 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-25';
+  return (
+    <div className="flex shrink-0 flex-col">
+      <button
+        type="button"
+        className={buttonClass}
+        disabled={!canMoveUp}
+        onClick={() => onMove(-1)}
+        title={`Move ${label} up`}
+        aria-label={`Move ${label} up`}
+      >
+        <ChevronUp className="h-3 w-3" />
+      </button>
+      <button
+        type="button"
+        className={buttonClass}
+        disabled={!canMoveDown}
+        onClick={() => onMove(1)}
+        title={`Move ${label} down`}
+        aria-label={`Move ${label} down`}
+      >
+        <ChevronDown className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
+
+export function RowActions({
+  label,
+  canMoveUp,
+  canMoveDown,
+  onDuplicate,
+  onMoveTo,
+}: {
+  label: string;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onDuplicate: () => void;
+  onMoveTo: (position: 'top' | 'bottom') => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="shrink-0 text-muted-foreground hover:text-foreground"
+          aria-label={`More actions for ${label}`}
+        >
+          <MoreVertical className="h-4 w-4" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={onDuplicate}>
+          <Copy className="mr-2 h-3.5 w-3.5" /> Duplicate
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={!canMoveUp} onClick={() => onMoveTo('top')}>
+          <ChevronsUp className="mr-2 h-3.5 w-3.5" /> Move to top
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={!canMoveDown} onClick={() => onMoveTo('bottom')}>
+          <ChevronsDown className="mr-2 h-3.5 w-3.5" /> Move to bottom
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+export function SourceRow({
+  source,
+  catalogs,
+  pendingKeys,
+  onChange,
+  onRemove,
+  onReplace,
+  innerRef,
+  style,
+  leading,
+}: {
+  source: SourceDraft;
+  catalogs: ManifestCatalog[];
+  /** Sources an apply would add a catalog for, so not missing, just not saved yet. */
+  pendingKeys?: Set<string>;
+  onChange: (next: SourceDraft) => void;
+  onRemove: () => void;
+  /** Swap this one for a catalog the user has. */
+  onReplace?: () => void;
+  innerRef?: (node: HTMLElement | null) => void;
+  style?: CSSProperties;
+  /** Reorder controls, where the row is one of several in a folder. */
+  leading?: ReactNode;
+}) {
+  const native = isNativeSource(source);
+  const match = native ? undefined : catalogs.find(catalog => catalogKey(catalog) === catalogKey(source));
+  const genres = match?.genres || [];
+  const genreRequired = Boolean(match?.genreRequired);
+  const pending = !native && !match && Boolean(pendingKeys?.has(catalogKey(source)));
+  const unknown = !native && !match && !pending;
+  const label = match?.name || source.name || source.catalogId;
+
+  return (
+    <div
+      ref={innerRef}
+      style={style}
+      className={`flex flex-col gap-2 rounded-md border px-2 py-2 sm:flex-row sm:flex-wrap sm:items-center ${
+        unknown
+          ? 'border-amber-600/60 bg-amber-950/20'
+          : pending ? 'border-emerald-600/50 bg-emerald-950/20' : 'bg-muted/30'
+      }`}
+    >
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+      {leading}
+      {unknown && <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />}
+      <span
+        className="min-w-0 flex-1 truncate text-sm"
+        title={`${source.catalogId} (${source.type})`}
+      >
+        {label}
+      </span>
+      {native ? (
+        <>
+          <Badge variant="outline" className="shrink-0 text-[10px] font-semibold">
+            {nativeLabel(source)}
+          </Badge>
+          <span className="shrink-0 text-[10px] text-muted-foreground">served by Nuvio</span>
+        </>
+      ) : pending ? (
+        <span className="shrink-0 text-[10px] text-emerald-500" title={`${source.catalogId} (${source.type})`}>
+          added on apply
+        </span>
+      ) : unknown ? (
+        <>
+          <span className="shrink-0 text-[10px] text-amber-500" title={`${source.catalogId} (${source.type})`}>
+            not in your catalogs
+          </span>
+          {onReplace && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 shrink-0 border-amber-600/60 text-amber-200 hover:bg-amber-900/40"
+              onClick={onReplace}
+            >
+              <Replace className="mr-1 h-3.5 w-3.5" /> Replace
+            </Button>
+          )}
+        </>
+      ) : (
+        <Badge
+          variant="outline"
+          className={`shrink-0 text-[10px] font-semibold ${getSourceBadgeStyle(match?.source)}`}
+        >
+          {getSourceBadgeLabel(match?.source)}
+        </Badge>
+      )}
+        <Badge variant="outline" className="shrink-0 text-[10px]">{source.type}</Badge>
+      </div>
+      <div className="flex min-w-0 items-center gap-2 sm:shrink-0">
+      {genres.length > 0 && (
+        <Select
+          value={source.genre || '__all__'}
+          onValueChange={value => onChange({ ...source, genre: value === '__all__' ? null : value })}
+        >
+          <SelectTrigger className={`h-8 min-w-0 flex-1 sm:w-40 sm:flex-none ${genreRequired && !source.genre ? 'border-amber-500' : ''}`}>
+            <SelectValue placeholder={genreRequired ? 'Pick a genre' : 'All genres'} />
+          </SelectTrigger>
+          <SelectContent>
+            {!genreRequired && <SelectItem value="__all__">All genres</SelectItem>}
+            {genres.map(genre => (
+              <SelectItem key={genre} value={genre}>{genre}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-8 w-8 shrink-0"
+        onClick={onRemove}
+        aria-label={`Remove ${label}`}
+      >
+        <Trash2 className="h-4 w-4" />
+      </Button>
+      </div>
+    </div>
+  );
+}
+
+export function SortableSourceRow({
+  id,
+  label,
+  canMoveUp,
+  canMoveDown,
+  onMove,
+  ...rest
+}: {
+  id: string;
+  label: string;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMove: (delta: number) => void;
+  source: SourceDraft;
+  catalogs: ManifestCatalog[];
+  pendingKeys?: Set<string>;
+  onChange: (next: SourceDraft) => void;
+  onRemove: () => void;
+  onReplace?: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+
+  return (
+    <SourceRow
+      {...rest}
+      innerRef={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        zIndex: isDragging ? 50 : 'auto',
+      }}
+      leading={
+        <>
+          <ReorderArrows
+            label={label}
+            canMoveUp={canMoveUp}
+            canMoveDown={canMoveDown}
+            onMove={onMove}
+          />
+          <button
+            type="button"
+            className="cursor-grab touch-none text-muted-foreground"
+            aria-label={`Drag ${label} to reorder`}
+            {...attributes}
+            {...listeners}
+          >
+            <GripVertical className="h-4 w-4" />
+          </button>
+        </>
+      }
+    />
+  );
+}

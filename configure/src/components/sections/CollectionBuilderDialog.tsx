@@ -2379,7 +2379,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
         folderId: target?.folderId ?? null,
       });
     };
-    issues.forEach((issue, index) => push(`issue-${index}`, issue.entryId, issue.message));
+    issues.forEach((issue, index) => push(`issue-${index}`, issue.folderId ?? issue.entryId, issue.message));
     notes.forEach((note, index) => push(`note-${index}`, note.entryId, note.message));
     return rows;
   }, [issues, notes, problemTargets]);

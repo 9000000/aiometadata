@@ -34,6 +34,7 @@ type SearchEntity = 'person' | 'company' | 'keyword' | 'network';
 type JoinMode = 'or' | 'and';
 type DatePresetKey =
   | 'today'
+  | 'this_week'
   | 'this_month'
   | 'last_month'
   | 'this_year'
@@ -48,6 +49,7 @@ type DatePresetKey =
   | 'custom';
 type RelativeDatePresetKey =
   | 'today'
+  | 'this_week'
   | 'this_month'
   | 'last_month'
   | 'this_year'
@@ -186,10 +188,12 @@ const JOIN_MODE_OPTIONS = [
 ];
 
 const DATE_PRESET_OPTIONS: Array<{ value: Exclude<DatePresetKey, 'custom'>; label: string }> = [
+  { value: 'today', label: 'Today' },
+  { value: 'this_week', label: 'This Week' },
   { value: 'this_month', label: 'This Month' },
-  { value: 'last_month', label: 'Last Month' },
+  { value: 'last_month', label: 'Last 30 Days' },
   { value: 'this_year', label: 'This Year' },
-  { value: 'last_year', label: 'Last Year' },
+  { value: 'last_year', label: 'Last 12 Months' },
   { value: 'last_5_years', label: 'Last 5 Years' },
   { value: 'last_10_years', label: 'Last 10 Years' },
   { value: 'era_2010s', label: '2010s' },
@@ -201,6 +205,7 @@ const DATE_PRESET_OPTIONS: Array<{ value: Exclude<DatePresetKey, 'custom'>; labe
 
 const RELATIVE_DATE_PRESET_KEYS: RelativeDatePresetKey[] = [
   'today',
+  'this_week',
   'this_month',
   'last_month',
   'this_year',
@@ -534,6 +539,18 @@ function getDateRangeFromPreset(preset: Exclude<DatePresetKey, 'custom'>): { fro
   const fromDate = new Date(now);
 
   switch (preset) {
+    case 'today':
+      return { from: to, to };
+    case 'this_week': {
+      const monday = new Date(now);
+      monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+      const sunday = new Date(monday);
+      sunday.setDate(sunday.getDate() + 6);
+      return {
+        from: formatLocalDateForInput(monday),
+        to: formatLocalDateForInput(sunday),
+      };
+    }
     case 'this_month': {
       const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
       const lastOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
@@ -583,6 +600,7 @@ function applyDynamicTmdbDateTokens(
   catalogType: CatalogMediaType,
   movieDatePreset: DatePresetKey,
   seriesDatePreset: DatePresetKey,
+  airDatePreset: DatePresetKey,
   releasedOnly: boolean
 ): Record<string, string | number | boolean> {
   const serializedParams = { ...params };
@@ -599,6 +617,11 @@ function applyDynamicTmdbDateTokens(
   if (catalogType === 'series' && isRelativeDatePreset(seriesDatePreset)) {
     serializedParams['first_air_date.gte'] = buildTmdbDateToken(seriesDatePreset, 'from');
     serializedParams['first_air_date.lte'] = buildTmdbDateToken(seriesDatePreset, 'to');
+  }
+
+  if (catalogType === 'series' && isRelativeDatePreset(airDatePreset)) {
+    serializedParams['air_date.gte'] = buildTmdbDateToken(airDatePreset, 'from');
+    serializedParams['air_date.lte'] = buildTmdbDateToken(airDatePreset, 'to');
   }
 
   return serializedParams;
@@ -825,6 +848,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
   const [seriesDatePreset, setSeriesDatePreset] = useState<DatePresetKey>('clear');
   const [airDateFrom, setAirDateFrom] = useState('');
   const [airDateTo, setAirDateTo] = useState('');
+  const [airDatePreset, setAirDatePreset] = useState<DatePresetKey>('clear');
 
   // AniList-specific state
   const [anilistFormats, setAnilistFormats] = useState<string[]>([]); // multi-select
@@ -1348,6 +1372,17 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     }
     if (fs.airDateFrom) setAirDateFrom(fs.airDateFrom);
     if (fs.airDateTo) setAirDateTo(fs.airDateTo);
+    const loadedAirDatePreset = fs.airDatePreset as DatePresetKey | undefined;
+    if (loadedAirDatePreset) {
+      setAirDatePreset(loadedAirDatePreset);
+      if (loadedAirDatePreset !== 'custom') {
+        const { from, to } = getDateRangeFromPreset(loadedAirDatePreset);
+        setAirDateFrom(from);
+        setAirDateTo(to);
+      }
+    } else if (fs.airDateFrom || fs.airDateTo) {
+      setAirDatePreset('custom');
+    }
     if (fs.releaseRegion) setReleaseRegion(fs.releaseRegion);
   
     // TVDB-only
@@ -1441,7 +1476,8 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     if (fs.firstAirTo) setFirstAirTo(fs.firstAirTo);
     if (fs.airDateFrom) setAirDateFrom(fs.airDateFrom);
     if (fs.airDateTo) setAirDateTo(fs.airDateTo);
-  
+    if (fs.airDatePreset) setAirDatePreset(fs.airDatePreset as DatePresetKey);
+
     // TVDB fields
     if (fs.tvdbSortDirection) setTvdbSortDirection(fs.tvdbSortDirection);
     if (fs.tvdbStatus) setTvdbStatus(fs.tvdbStatus);
@@ -2357,6 +2393,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
         seriesDatePreset,
         airDateFrom,
         airDateTo,
+        airDatePreset,
         releaseRegion,
       });
     }
@@ -2464,13 +2501,20 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     setRuntimeRange(([currentMin]) => [currentMin, Math.max(value, currentMin)]);
   };
 
-  const applyDatePreset = (target: 'movie' | 'series', preset: Exclude<DatePresetKey, 'custom'>) => {
+  const applyDatePreset = (target: 'movie' | 'series' | 'airDate', preset: Exclude<DatePresetKey, 'custom'>) => {
     const { from, to } = getDateRangeFromPreset(preset);
 
     if (target === 'movie') {
       setPrimaryReleaseFrom(from);
       setPrimaryReleaseTo(to);
       setMovieDatePreset(preset);
+      return;
+    }
+
+    if (target === 'airDate') {
+      setAirDateFrom(from);
+      setAirDateTo(to);
+      setAirDatePreset(preset);
       return;
     }
 
@@ -2518,7 +2562,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     try {
       const params = buildDiscoverParams();
       const persistedParams = discoverSource === 'tmdb'
-        ? applyDynamicTmdbDateTokens(params, catalogType, movieDatePreset, seriesDatePreset, releasedOnly)
+        ? applyDynamicTmdbDateTokens(params, catalogType, movieDatePreset, seriesDatePreset, airDatePreset, releasedOnly)
         : params;
       const formState = buildFormState();
   
@@ -5255,13 +5299,50 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
                           }}
                         />
                       </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Episode Air Date Presets</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Matches shows with an episode airing in the range, rather than shows that premiered in it.
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {DATE_PRESET_OPTIONS.map(option => (
+                          <Button
+                            key={option.value}
+                            type="button"
+                            size="sm"
+                            variant={airDatePreset === option.value ? 'default' : 'outline'}
+                            onClick={() => applyDatePreset('airDate', option.value)}
+                          >
+                            {option.label}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label htmlFor="air-date-from">Episode Air Date From</Label>
-                        <Input id="air-date-from" type="date" value={airDateFrom} onChange={(event) => setAirDateFrom(event.target.value)} />
+                        <Input
+                          id="air-date-from"
+                          type="date"
+                          value={airDateFrom}
+                          onChange={(event) => {
+                            setAirDateFrom(event.target.value);
+                            setAirDatePreset('custom');
+                          }}
+                        />
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="air-date-to">Episode Air Date To</Label>
-                        <Input id="air-date-to" type="date" value={airDateTo} onChange={(event) => setAirDateTo(event.target.value)} />
+                        <Input
+                          id="air-date-to"
+                          type="date"
+                          value={airDateTo}
+                          onChange={(event) => {
+                            setAirDateTo(event.target.value);
+                            setAirDatePreset('custom');
+                          }}
+                        />
                       </div>
                     </div>
                   </div>

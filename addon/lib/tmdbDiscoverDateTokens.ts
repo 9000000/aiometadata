@@ -2,6 +2,7 @@ const TMDB_DISCOVER_DATE_TOKEN_PREFIX = '__tmdb_date__';
 
 const RELATIVE_DATE_PRESET_KEYS = new Set([
   'today',
+  'this_week',
   'this_month',
   'last_month',
   'this_year',
@@ -11,14 +12,21 @@ const RELATIVE_DATE_PRESET_KEYS = new Set([
 ]);
 
 const TMDB_DYNAMIC_DATE_FIELDS = new Set([
+  'release_date.gte',
   'release_date.lte',
   'primary_release_date.gte',
   'primary_release_date.lte',
   'first_air_date.gte',
-  'first_air_date.lte'
+  'first_air_date.lte',
+  // Episode air dates, which is what a catalog of "airing this week" needs;
+  // first_air_date is the series premiere and matches far fewer shows.
+  'air_date.gte',
+  'air_date.lte'
 ]);
+// Built from the preset set so a new preset cannot parse but resolve to nothing,
+// or be rejected here while every other layer accepts it.
 const DATE_TOKEN_PATTERN = new RegExp(
-  `^${TMDB_DISCOVER_DATE_TOKEN_PREFIX}:(today|this_month|last_month|this_year|last_year|last_5_years|last_10_years):(from|to)$`
+  `^${TMDB_DISCOVER_DATE_TOKEN_PREFIX}:(${[...RELATIVE_DATE_PRESET_KEYS].join('|')}):(from|to)$`
 );
 
 interface DateToken {
@@ -90,6 +98,15 @@ function getDateRangeFromRelativePreset(preset: string, timezone: string, nowInp
   const now = nowInput instanceof Date ? nowInput : new Date();
   const { year, month, day } = getDatePartsInTimezone(now, timezone || 'UTC');
 
+  if (preset === 'this_week') {
+    const probe = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+    const offsetFromMonday = (probe.getUTCDay() + 6) % 7;
+    const monday = new Date(probe.getTime());
+    monday.setUTCDate(monday.getUTCDate() - offsetFromMonday);
+    const sunday = new Date(monday.getTime());
+    sunday.setUTCDate(sunday.getUTCDate() + 6);
+    return { from: formatUtcDate(monday), to: formatUtcDate(sunday) };
+  }
   if (preset === 'this_month') {
     const firstOfMonth = new Date(Date.UTC(year, month - 1, 1, 12, 0, 0));
     const lastOfMonth = new Date(Date.UTC(year, month, 0, 12, 0, 0));

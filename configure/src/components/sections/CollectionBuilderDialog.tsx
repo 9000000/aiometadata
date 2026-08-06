@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 import { toast } from 'sonner';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
@@ -800,6 +808,9 @@ function SourceRow({
   onChange,
   onRemove,
   onReplace,
+  innerRef,
+  style,
+  leading,
 }: {
   source: SourceDraft;
   catalogs: ManifestCatalog[];
@@ -809,6 +820,10 @@ function SourceRow({
   onRemove: () => void;
   /** Swap this one for a catalog the user has. */
   onReplace?: () => void;
+  innerRef?: (node: HTMLElement | null) => void;
+  style?: CSSProperties;
+  /** Reorder controls, where the row is one of several in a folder. */
+  leading?: ReactNode;
 }) {
   const native = isNativeSource(source);
   const match = native ? undefined : catalogs.find(catalog => catalogKey(catalog) === catalogKey(source));
@@ -816,9 +831,12 @@ function SourceRow({
   const genreRequired = Boolean(match?.genreRequired);
   const pending = !native && !match && Boolean(pendingKeys?.has(catalogKey(source)));
   const unknown = !native && !match && !pending;
+  const label = match?.name || source.name || source.catalogId;
 
   return (
     <div
+      ref={innerRef}
+      style={style}
       className={`flex flex-col gap-2 rounded-md border px-2 py-2 sm:flex-row sm:flex-wrap sm:items-center ${
         unknown
           ? 'border-amber-600/60 bg-amber-950/20'
@@ -826,12 +844,13 @@ function SourceRow({
       }`}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
+      {leading}
       {unknown && <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />}
       <span
         className="min-w-0 flex-1 truncate text-sm"
         title={`${source.catalogId} (${source.type})`}
       >
-        {match?.name || source.name || source.catalogId}
+        {label}
       </span>
       {native ? (
         <>
@@ -892,6 +911,60 @@ function SourceRow({
       </Button>
       </div>
     </div>
+  );
+}
+
+function SortableSourceRow({
+  id,
+  label,
+  canMoveUp,
+  canMoveDown,
+  onMove,
+  ...rest
+}: {
+  id: string;
+  label: string;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMove: (delta: number) => void;
+  source: SourceDraft;
+  catalogs: ManifestCatalog[];
+  pendingKeys?: Set<string>;
+  onChange: (next: SourceDraft) => void;
+  onRemove: () => void;
+  onReplace?: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+
+  return (
+    <SourceRow
+      {...rest}
+      innerRef={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        zIndex: isDragging ? 50 : 'auto',
+      }}
+      leading={
+        <>
+          <ReorderArrows
+            label={label}
+            canMoveUp={canMoveUp}
+            canMoveDown={canMoveDown}
+            onMove={onMove}
+          />
+          <button
+            type="button"
+            className="cursor-grab touch-none text-muted-foreground"
+            aria-label={`Drag ${label} to reorder`}
+            {...attributes}
+            {...listeners}
+          >
+            <GripVertical className="h-4 w-4" />
+          </button>
+        </>
+      }
+    />
   );
 }
 
@@ -1001,6 +1074,29 @@ function FolderCard({
 
   const update = (patch: Partial<FolderDraft>) => onChange({ ...folder, ...patch });
 
+  const sourceSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
+  const sourceDndId = (index: number) => `source-${index}`;
+
+  const moveSource = (index: number, delta: number) => {
+    const to = index + delta;
+    if (to < 0 || to >= folder.sources.length) return;
+    update({ sources: arrayMove(folder.sources, index, to) });
+  };
+
+  const handleSourceDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const from = folder.sources.findIndex((_, index) => sourceDndId(index) === active.id);
+    const to = folder.sources.findIndex((_, index) => sourceDndId(index) === over.id);
+    if (from < 0 || to < 0) return;
+    update({ sources: arrayMove(folder.sources, from, to) });
+  };
+
   return (
     <div className="space-y-3 rounded-lg border p-3">
       <div className="flex items-center gap-2">
@@ -1091,17 +1187,31 @@ function FolderCard({
             No catalogs yet. Both Nuvio and Fusion drop tiles that have none.
           </p>
         )}
-        {folder.sources.map((source, index) => (
-          <SourceRow
-            key={`${catalogKey(source)}-${index}`}
-            source={source}
-            catalogs={catalogs}
-            pendingKeys={pendingKeys}
-            onChange={next => update({ sources: folder.sources.map((s, i) => (i === index ? next : s)) })}
-            onRemove={() => update({ sources: folder.sources.filter((_, i) => i !== index) })}
-            onReplace={() => onReplaceSource(index)}
-          />
-        ))}
+        <DndContext sensors={sourceSensors} collisionDetection={closestCenter} onDragEnd={handleSourceDragEnd}>
+          <SortableContext
+            items={folder.sources.map((_, index) => sourceDndId(index))}
+            strategy={verticalListSortingStrategy}
+          >
+            <div className="space-y-2">
+              {folder.sources.map((source, index) => (
+                <SortableSourceRow
+                  key={`${catalogKey(source)}-${index}`}
+                  id={sourceDndId(index)}
+                  label={source.name || source.catalogId}
+                  canMoveUp={index > 0}
+                  canMoveDown={index < folder.sources.length - 1}
+                  onMove={delta => moveSource(index, delta)}
+                  source={source}
+                  catalogs={catalogs}
+                  pendingKeys={pendingKeys}
+                  onChange={next => update({ sources: folder.sources.map((s, i) => (i === index ? next : s)) })}
+                  onRemove={() => update({ sources: folder.sources.filter((_, i) => i !== index) })}
+                  onReplace={() => onReplaceSource(index)}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
       </div>
 
       {nuvioArtVisible && (

@@ -4,6 +4,7 @@ const database = require('./database');
 const buildInfo = require('./buildInfo');
 const { buildInstallUrl } = require('./installUrl');
 const { hasPermission } = require('./authSession');
+const { respondIfSigninRequired } = require('./signinGate');
 const KEY_VALIDATION_STATUS_SET = new Set(['valid', 'invalid', 'timeout', 'error']);
 const isKnownKeyValidationStatus = (status) =>
   typeof status === 'string' && KEY_VALIDATION_STATUS_SET.has(status);
@@ -549,6 +550,7 @@ class ConfigApi {
         message: existingUUID ? 'Configuration updated successfully' : 'Configuration saved successfully'
       });
     } catch (error) {
+      if (respondIfSigninRequired(error, res)) return;
       logger.error('Save config error:', error);
       res.status(500).json({ error: 'Failed to save configuration' });
     }
@@ -943,6 +945,7 @@ class ConfigApi {
         message: 'Configuration updated successfully'
       });
     } catch (error) {
+      if (respondIfSigninRequired(error, res)) return;
       logger.error('Update config error:', error);
       res.status(500).json({ error: 'Failed to update configuration' });
     }
@@ -980,6 +983,7 @@ class ConfigApi {
         message: 'Migration completed successfully'
       });
     } catch (error) {
+      if (respondIfSigninRequired(error, res)) return;
       logger.error('Migration error:', error);
       res.status(500).json({ error: 'Failed to migrate data' });
     }

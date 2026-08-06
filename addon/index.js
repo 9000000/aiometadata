@@ -568,6 +568,11 @@ require('./lib/authRoutes').register(addon, {
   rateLimit: configLoadRateLimitMiddleware,
   requireAdmin: requireDashboardAdmin,
 });
+const { requireSigninForAppPages, requireSigninForApi, isAuthenticatedRequest, respondIfSigninRequired } = require('./lib/signinGate');
+const { runWithRequestAuth } = require('./lib/requestSession');
+addon.use((req, _res, next) => runWithRequestAuth(isAuthenticatedRequest(req), next));
+addon.use(requireSigninForAppPages);
+addon.use(requireSigninForApi);
 
 // --- Configuration Database API Routes ---
 addon.post("/api/config/save", configApi.saveConfig.bind(configApi));
@@ -7202,6 +7207,11 @@ addon.post('/api/dashboard/restart', requireDashboardAdmin, (req, res) => {
       process.exit(0);
     }
   }, 500);
+});
+
+addon.use((err, req, res, next) => {
+  if (respondIfSigninRequired(err, res)) return;
+  next(err);
 });
 
 // Blocking startup function that waits for cache warming

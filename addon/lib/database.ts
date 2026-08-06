@@ -407,6 +407,8 @@ class Database {
   }
 
   async saveUserConfig(userUUID: string, passwordHash: string, configData: any): Promise<any> {
+    require('./signinGate').assertConfigWriteAllowed();
+
     let normalizedConfig = configData;
 
     if (typeof normalizedConfig === 'string') {

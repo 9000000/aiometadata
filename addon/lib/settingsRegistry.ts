@@ -531,6 +531,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: '',
   },
   {
+    key: 'AUTH_REQUIRE_SIGNIN',
+    envVar: 'AUTH_REQUIRE_SIGNIN',
+    label: 'Require Sign-In For The Config Page',
+    description: 'Makes the configuration and dashboard pages ask for a sign-in before they render, rather than only when saving. Addon routes are untouched: manifests, catalogs, meta, streams and art are still served to clients, which carry no session. Ignored while no identity provider is configured, so turning it on cannot lock you out of an instance that has no way to sign in.',
+    category: 'Server',
+    type: 'boolean',
+    default: 'false',
+  },
+  {
     key: 'OIDC_ALLOW_INSECURE_ISSUER',
     envVar: 'OIDC_ALLOW_INSECURE_ISSUER',
     label: 'Allow Insecure SSO Issuer',

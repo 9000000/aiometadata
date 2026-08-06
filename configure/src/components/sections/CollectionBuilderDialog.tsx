@@ -1,7 +1,9 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type KeyboardEvent,
@@ -266,6 +268,7 @@ function ImageUrlField({
 }) {
   const [debounced, setDebounced] = useState(value);
   const [status, setStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle');
+  const fieldId = useId();
 
   // Wait for a pause in typing so a half-typed URL is not fetched on every key.
   useEffect(() => {
@@ -280,7 +283,7 @@ function ImageUrlField({
   return (
     <div className="space-y-1.5">
       <div className="flex flex-wrap items-center gap-2">
-        <Label className="text-xs">{label}</Label>
+        <Label htmlFor={fieldId} className="text-xs">{label}</Label>
         {hint && <span className="text-[10px] text-muted-foreground">{hint}</span>}
       </div>
       <div className="flex items-start gap-3">
@@ -318,6 +321,7 @@ function ImageUrlField({
         </div>
         <div className="min-w-0 flex-1 space-y-1">
           <Input
+            id={fieldId}
             value={value}
             onChange={event => onChange(event.target.value)}
             placeholder={placeholder}
@@ -494,7 +498,13 @@ function SortableEntryRow({
         canMoveDown={canMoveDown}
         onMove={onMove}
       />
-      <button type="button" className="cursor-grab touch-none text-muted-foreground" {...attributes} {...listeners}>
+      <button
+        type="button"
+        className="cursor-grab touch-none text-muted-foreground"
+        aria-label={`Drag ${entry.title || 'this entry'} to reorder`}
+        {...attributes}
+        {...listeners}
+      >
         <GripVertical className="h-4 w-4" />
       </button>
       <button type="button" onClick={onSelect} className="flex min-w-0 flex-1 items-center gap-2 text-left">
@@ -530,7 +540,12 @@ function SortableEntryRow({
         onDuplicate={onDuplicate}
         onMoveTo={onMoveTo}
       />
-      <button type="button" onClick={onDelete} className="text-muted-foreground hover:text-destructive">
+      <button
+        type="button"
+        onClick={onDelete}
+        className="text-muted-foreground hover:text-destructive"
+        aria-label={`Delete ${entry.title || 'this entry'}`}
+      >
         <Trash2 className="h-4 w-4" />
       </button>
     </div>
@@ -970,7 +985,13 @@ function SourceRow({
           </SelectContent>
         </Select>
       )}
-      <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={onRemove}>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-8 w-8 shrink-0"
+        onClick={onRemove}
+        aria-label={`Remove ${label}`}
+      >
         <Trash2 className="h-4 w-4" />
       </Button>
       </div>
@@ -1084,7 +1105,13 @@ function SortableFolderRow({
         canMoveDown={canMoveDown}
         onMove={onMove}
       />
-      <button type="button" className="cursor-grab touch-none text-muted-foreground" {...attributes} {...listeners}>
+      <button
+        type="button"
+        className="cursor-grab touch-none text-muted-foreground"
+        aria-label={`Drag ${folder.title || placeholder} to reorder`}
+        {...attributes}
+        {...listeners}
+      >
         <GripVertical className="h-4 w-4" />
       </button>
       <button type="button" onClick={onSelect} className="flex min-w-0 flex-1 items-center gap-2 text-left">
@@ -1111,7 +1138,12 @@ function SortableFolderRow({
         onDuplicate={onDuplicate}
         onMoveTo={onMoveTo}
       />
-      <button type="button" onClick={onDelete} className="text-muted-foreground hover:text-destructive">
+      <button
+        type="button"
+        onClick={onDelete}
+        className="text-muted-foreground hover:text-destructive"
+        aria-label={`Delete ${folder.title || placeholder}`}
+      >
         <Trash2 className="h-4 w-4" />
       </button>
     </div>
@@ -1131,6 +1163,7 @@ function FolderCard({
   onReplaceSource,
   tagOptions,
   onAddByTag,
+  focusTitle,
 }: {
   folder: FolderDraft;
   catalogs: ManifestCatalog[];
@@ -1142,12 +1175,21 @@ function FolderCard({
   onReplaceSource: (index: number) => void;
   tagOptions: TagOption[];
   onAddByTag: (tag: string) => void;
+  focusTitle?: boolean;
 }) {
   const terms = TERMS[target];
   const [showExtras, setShowExtras] = useState(false);
   const nuvioArtVisible = target === 'nuvio' || hasNuvioFolderArt(folder);
 
   const update = (patch: Partial<FolderDraft>) => onChange({ ...folder, ...patch });
+  const uid = useId();
+  const titleRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!focusTitle) return;
+    titleRef.current?.focus();
+    titleRef.current?.select();
+  }, [focusTitle]);
 
   const sourceSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -1175,25 +1217,34 @@ function FolderCard({
   return (
     <div className="space-y-3 rounded-lg border p-3">
       <div className="flex items-center gap-2">
+        <Label htmlFor={`${uid}-title`} className="sr-only">{terms.childTitle}</Label>
         <Input
+          id={`${uid}-title`}
+          ref={titleRef}
           value={folder.title}
           onChange={event => update({ title: event.target.value })}
           placeholder={terms.childTitle}
           className="h-9 min-w-0 flex-1"
         />
-        <Button variant="ghost" size="icon" className="h-9 w-9" onClick={onRemove}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-9 w-9"
+          onClick={onRemove}
+          aria-label={`Delete ${folder.title || terms.child.toLowerCase()}`}
+        >
           <Trash2 className="h-4 w-4" />
         </Button>
       </div>
 
       <div className="space-y-1.5">
         <div className="flex flex-wrap items-center gap-2">
-          <Label className="text-xs">{terms.shape}</Label>
+          <Label id={`${uid}-shape`} className="text-xs">{terms.shape}</Label>
           <span className="text-[10px] text-muted-foreground">
             {terms.shapeOther}
           </span>
         </div>
-        <div className="flex gap-1 rounded-lg border p-1">
+        <div role="group" aria-labelledby={`${uid}-shape`} className="flex gap-1 rounded-lg border p-1">
           {SHAPE_ORDER.map(shape => {
             const active = folder.shape === shape;
             return (
@@ -1226,8 +1277,14 @@ function FolderCard({
       />
 
       <div className="flex items-center gap-2">
-        <Switch checked={Boolean(folder.hideTitle)} onCheckedChange={value => update({ hideTitle: value })} />
-        <Label className="text-xs">Hide title on the {terms.child.toLowerCase()}</Label>
+        <Switch
+          id={`${uid}-hide-title`}
+          checked={Boolean(folder.hideTitle)}
+          onCheckedChange={value => update({ hideTitle: value })}
+        />
+        <Label htmlFor={`${uid}-hide-title`} className="text-xs">
+          Hide title on the {terms.child.toLowerCase()}
+        </Label>
       </div>
 
       <div className="space-y-2">
@@ -1258,9 +1315,14 @@ function FolderCard({
           </div>
         </div>
         {folder.sources.length === 0 && (
-          <p className="rounded-md border border-dashed px-2 py-3 text-center text-xs text-muted-foreground">
+          <button
+            type="button"
+            onClick={onAddSource}
+            className="w-full rounded-md border border-dashed px-2 py-3 text-center text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent/40 hover:text-foreground"
+          >
             No catalogs yet. Both Nuvio and Fusion drop tiles that have none.
-          </p>
+            <span className="mt-0.5 block font-medium">Add one</span>
+          </button>
         )}
         <DndContext sensors={sourceSensors} collisionDetection={closestCenter} onDragEnd={handleSourceDragEnd}>
           <SortableContext
@@ -1303,8 +1365,9 @@ function FolderCard({
       {nuvioArtVisible && showExtras && (
         <div className="grid gap-3 rounded-lg border border-cyan-800/40 bg-cyan-950/20 p-3 lg:grid-cols-2">
           <div className="space-y-1.5">
-            <Label className="text-xs">Cover emoji</Label>
+            <Label htmlFor={`${uid}-emoji`} className="text-xs">Cover emoji</Label>
             <Input
+              id={`${uid}-emoji`}
               value={folder.coverEmoji || ''}
               onChange={event => update({ coverEmoji: event.target.value })}
               className="h-9"
@@ -1323,8 +1386,9 @@ function FolderCard({
             onChange={next => update({ heroBackdropUrl: next })}
           />
           <div className="space-y-1.5">
-            <Label className="text-xs">Hero video URL</Label>
+            <Label htmlFor={`${uid}-hero-video`} className="text-xs">Hero video URL</Label>
             <Input
+              id={`${uid}-hero-video`}
               value={folder.heroVideoUrl || ''}
               onChange={event => update({ heroVideoUrl: event.target.value })}
               placeholder="https://..."
@@ -1339,10 +1403,11 @@ function FolderCard({
           />
           <div className="flex items-center gap-2 pt-6">
             <Switch
+              id={`${uid}-focus-gif`}
               checked={folder.focusGifEnabled !== false}
               onCheckedChange={value => update({ focusGifEnabled: value })}
             />
-            <Label className="text-xs">Play focus GIF</Label>
+            <Label htmlFor={`${uid}-focus-gif`} className="text-xs">Play focus GIF</Label>
           </div>
         </div>
       )}
@@ -1366,6 +1431,7 @@ function CollectionEditor({
   onConvertNative,
   problemFolderIds,
   focus,
+  focusTitle,
 }: {
   entry: CollectionDraft;
   catalogs: ManifestCatalog[];
@@ -1381,10 +1447,20 @@ function CollectionEditor({
   onConvertNative: () => void;
   problemFolderIds?: Set<string>;
   focus?: { entryId: string; folderId: string } | null;
+  focusTitle?: boolean;
 }) {
   const terms = TERMS[target];
   const [showNuvioBox, setShowNuvioBox] = useState(target === 'nuvio');
   const nuvioBoxVisible = target === 'nuvio' || hasNuvioCollectionSettings(entry);
+  const uid = useId();
+  const titleRef = useRef<HTMLInputElement>(null);
+  const [newFolderId, setNewFolderId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!focusTitle) return;
+    titleRef.current?.focus();
+    titleRef.current?.select();
+  }, [focusTitle]);
 
   useEffect(() => {
     setShowNuvioBox(target === 'nuvio');
@@ -1434,6 +1510,7 @@ function CollectionEditor({
     if (!original) return;
     const copy: FolderDraft = { ...clone(original), id: newId(), title: `${original.title} copy` };
     setSelectedFolderId(copy.id);
+    setNewFolderId(copy.id);
     update({
       folders: [...entry.folders.slice(0, index + 1), copy, ...entry.folders.slice(index + 1)],
     });
@@ -1442,6 +1519,7 @@ function CollectionEditor({
   const addFolder = () => {
     const folder = createFolderDraft();
     setSelectedFolderId(folder.id);
+    setNewFolderId(folder.id);
     update({ folders: [...entry.folders, folder] });
   };
 
@@ -1449,12 +1527,22 @@ function CollectionEditor({
     <div className="space-y-4">
       <div className="grid gap-3 lg:grid-cols-2">
         <div className="space-y-1.5">
-          <Label className="text-xs">{terms.entryTitle}</Label>
-          <Input value={entry.title} onChange={event => update({ title: event.target.value })} className="h-9" />
+          <Label htmlFor={`${uid}-title`} className="text-xs">{terms.entryTitle}</Label>
+          <Input
+            id={`${uid}-title`}
+            ref={titleRef}
+            value={entry.title}
+            onChange={event => update({ title: event.target.value })}
+            className="h-9"
+          />
         </div>
         <div className="flex items-end gap-2 pb-2">
-          <Switch checked={Boolean(entry.hideTitle)} onCheckedChange={value => update({ hideTitle: value })} />
-          <Label className="text-xs">Hide title</Label>
+          <Switch
+            id={`${uid}-hide-title`}
+            checked={Boolean(entry.hideTitle)}
+            onCheckedChange={value => update({ hideTitle: value })}
+          />
+          <Label htmlFor={`${uid}-hide-title`} className="text-xs">Hide title</Label>
           <ScopeChip scope="fusion" />
         </div>
       </div>
@@ -1485,12 +1573,12 @@ function CollectionEditor({
             onChange={next => update({ backdropImageUrl: next })}
           />
           <div className="space-y-1.5">
-            <Label className="text-xs">Folder view mode</Label>
+            <Label htmlFor={`${uid}-view-mode`} className="text-xs">Folder view mode</Label>
             <Select
               value={entry.viewMode || 'TABBED_GRID'}
               onValueChange={(value: CollectionDraft['viewMode']) => update({ viewMode: value })}
             >
-              <SelectTrigger className="h-9">
+              <SelectTrigger id={`${uid}-view-mode`} className="h-9">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1504,19 +1592,28 @@ function CollectionEditor({
 
         <div className="flex flex-wrap gap-x-6 gap-y-2">
           <div className="flex items-center gap-2">
-            <Switch checked={Boolean(entry.pinToTop)} onCheckedChange={value => update({ pinToTop: value })} />
-            <Label className="text-xs">Pin to top</Label>
+            <Switch
+              id={`${uid}-pin`}
+              checked={Boolean(entry.pinToTop)}
+              onCheckedChange={value => update({ pinToTop: value })}
+            />
+            <Label htmlFor={`${uid}-pin`} className="text-xs">Pin to top</Label>
           </div>
           <div className="flex items-center gap-2">
             <Switch
+              id={`${uid}-glow`}
               checked={entry.focusGlowEnabled !== false}
               onCheckedChange={value => update({ focusGlowEnabled: value })}
             />
-            <Label className="text-xs">Focus glow</Label>
+            <Label htmlFor={`${uid}-glow`} className="text-xs">Focus glow</Label>
           </div>
           <div className="flex items-center gap-2">
-            <Switch checked={entry.showAllTab !== false} onCheckedChange={value => update({ showAllTab: value })} />
-            <Label className="text-xs">Show "All" tab</Label>
+            <Switch
+              id={`${uid}-all-tab`}
+              checked={entry.showAllTab !== false}
+              onCheckedChange={value => update({ showAllTab: value })}
+            />
+            <Label htmlFor={`${uid}-all-tab`} className="text-xs">Show &ldquo;All&rdquo; tab</Label>
           </div>
         </div>
         </>
@@ -1546,9 +1643,14 @@ function CollectionEditor({
       </div>
 
       {entry.folders.length === 0 ? (
-        <p className="rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground">
-          Use &ldquo;{terms.addChild}&rdquo;, then point it at one or more of your catalogs.
-        </p>
+        <button
+          type="button"
+          onClick={addFolder}
+          className="w-full rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent/40 hover:text-foreground"
+        >
+          Nothing here yet. Add {terms.child.toLowerCase() === 'folder' ? 'a folder' : 'an item'}, then point it at
+          one or more of your catalogs.
+        </button>
       ) : (
         <div className="grid gap-3 lg:grid-cols-[minmax(0,13rem)_minmax(0,1fr)]">
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
@@ -1594,6 +1696,7 @@ function CollectionEditor({
                 onReplaceSource={index => onReplaceSource(activeFolder.id, index)}
                 tagOptions={tagOptions}
                 onAddByTag={tag => onAddByTag(activeFolder.id, tag)}
+                focusTitle={newFolderId === activeFolder.id}
               />
             )}
           </div>
@@ -1612,6 +1715,7 @@ function ClassicRowEditor({
   target,
   onChange,
   onAddSource,
+  focusTitle,
 }: {
   entry: ClassicRowDraft;
   catalogs: ManifestCatalog[];
@@ -1619,9 +1723,18 @@ function ClassicRowEditor({
   target: Target;
   onChange: (next: ClassicRowDraft) => void;
   onAddSource: () => void;
+  focusTitle?: boolean;
 }) {
   const terms = TERMS[target];
   const update = (patch: Partial<ClassicRowDraft>) => onChange({ ...entry, ...patch });
+  const uid = useId();
+  const titleRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!focusTitle) return;
+    titleRef.current?.focus();
+    titleRef.current?.select();
+  }, [focusTitle]);
 
   return (
     <div className="space-y-4">
@@ -1632,8 +1745,14 @@ function ClassicRowEditor({
 
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
-          <Label className="text-xs">{terms.entryTitle}</Label>
-          <Input value={entry.title} onChange={event => update({ title: event.target.value })} className="h-9" />
+          <Label htmlFor={`${uid}-title`} className="text-xs">{terms.entryTitle}</Label>
+          <Input
+            id={`${uid}-title`}
+            ref={titleRef}
+            value={entry.title}
+            onChange={event => update({ title: event.target.value })}
+            className="h-9"
+          />
         </div>
         <ImageUrlField
           label={terms.cover}
@@ -1660,16 +1779,22 @@ function ClassicRowEditor({
             onReplace={onAddSource}
           />
         ) : (
-          <p className="rounded-md border border-dashed px-2 py-3 text-center text-xs text-muted-foreground">
+          <button
+            type="button"
+            onClick={onAddSource}
+            className="w-full rounded-md border border-dashed px-2 py-3 text-center text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent/40 hover:text-foreground"
+          >
             No catalog selected. Fusion drops rows without one.
-          </p>
+            <span className="mt-0.5 block font-medium">Pick one</span>
+          </button>
         )}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
-          <Label className="text-xs">Items shown</Label>
+          <Label htmlFor={`${uid}-limit`} className="text-xs">Items shown</Label>
           <Input
+            id={`${uid}-limit`}
             type="number"
             min={1}
             value={entry.limit}
@@ -1678,8 +1803,9 @@ function ClassicRowEditor({
           />
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs">Cache TTL (seconds)</Label>
+          <Label htmlFor={`${uid}-ttl`} className="text-xs">Cache TTL (seconds)</Label>
           <Input
+            id={`${uid}-ttl`}
             type="number"
             min={0}
             value={entry.cacheTTL}
@@ -1688,8 +1814,8 @@ function ClassicRowEditor({
           />
         </div>
         <div className="space-y-1.5 sm:col-span-2">
-          <Label className="text-xs">Aspect ratio</Label>
-          <div className="flex gap-1 rounded-lg border p-1">
+          <Label id={`${uid}-aspect`} className="text-xs">Aspect ratio</Label>
+          <div role="group" aria-labelledby={`${uid}-aspect`} className="flex gap-1 rounded-lg border p-1">
             {SHAPE_ORDER.map(shape => {
               const value = ASPECT_BY_SHAPE[shape];
               const active = entry.aspectRatio === value;
@@ -1714,12 +1840,12 @@ function ClassicRowEditor({
           </div>
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs">Card size</Label>
+          <Label htmlFor={`${uid}-card-size`} className="text-xs">Card size</Label>
           <Select
             value={entry.cardStyle}
             onValueChange={(value: ClassicRowDraft['cardStyle']) => update({ cardStyle: value })}
           >
-            <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+            <SelectTrigger id={`${uid}-card-size`} className="h-9"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="small">Small</SelectItem>
               <SelectItem value="medium">Medium</SelectItem>
@@ -1731,27 +1857,37 @@ function ClassicRowEditor({
 
       <div className="flex flex-wrap gap-x-6 gap-y-2">
         <div className="flex items-center gap-2">
-          <Switch checked={Boolean(entry.numbered)} onCheckedChange={value => update({ numbered: value })} />
-          <Label className="text-xs">Numbered ranking</Label>
+          <Switch
+            id={`${uid}-numbered`}
+            checked={Boolean(entry.numbered)}
+            onCheckedChange={value => update({ numbered: value })}
+          />
+          <Label htmlFor={`${uid}-numbered`} className="text-xs">Numbered ranking</Label>
           <span className="text-[10px] text-muted-foreground">1, 2, 3 … over each card</span>
         </div>
         <div className="flex items-center gap-2">
-          <Switch checked={Boolean(entry.hideTitle)} onCheckedChange={value => update({ hideTitle: value })} />
-          <Label className="text-xs">Hide title</Label>
+          <Switch
+            id={`${uid}-row-hide-title`}
+            checked={Boolean(entry.hideTitle)}
+            onCheckedChange={value => update({ hideTitle: value })}
+          />
+          <Label htmlFor={`${uid}-row-hide-title`} className="text-xs">Hide title</Label>
         </div>
         <div className="flex items-center gap-2">
           <Switch
+            id={`${uid}-provider-badges`}
             checked={entry.badges.providers}
             onCheckedChange={value => update({ badges: { ...entry.badges, providers: value } })}
           />
-          <Label className="text-xs">Provider badges</Label>
+          <Label htmlFor={`${uid}-provider-badges`} className="text-xs">Provider badges</Label>
         </div>
         <div className="flex items-center gap-2">
           <Switch
+            id={`${uid}-rating-badges`}
             checked={entry.badges.ratings}
             onCheckedChange={value => update({ badges: { ...entry.badges, ratings: value } })}
           />
-          <Label className="text-xs">Rating badges</Label>
+          <Label htmlFor={`${uid}-rating-badges`} className="text-xs">Rating badges</Label>
         </div>
       </div>
     </div>
@@ -1769,6 +1905,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('design');
   const [focusFolder, setFocusFolder] = useState<{ entryId: string; folderId: string } | null>(null);
+  const [titleFocusId, setTitleFocusId] = useState<string | null>(null);
   const [target, setTarget] = useState<Target>('nuvio');
   const [manifestUrl, setManifestUrl] = useState('');
   const [usePlaceholder, setUsePlaceholder] = useState(false);
@@ -1801,6 +1938,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setStagedBlueprints([]);
     setActiveTab('design');
     setFocusFolder(null);
+    setTitleFocusId(null);
     setManifestUrl(buildManifestUrl(auth.userUUID));
   }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1883,6 +2021,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const addEntry = (entry: BuilderEntry) => {
     setEntries(prev => [...prev, entry]);
     setSelectedId(entry.id);
+    setActiveTab('design');
+    setTitleFocusId(entry.id);
   };
 
   const removeEntry = (id: string) => {
@@ -1937,6 +2077,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       return [...prev.slice(0, at + 1), copy, ...prev.slice(at + 1)];
     });
     setSelectedId(copy.id);
+    setTitleFocusId(copy.id);
   };
 
   const pickerExistingKeys = useMemo(() => {
@@ -2539,9 +2680,14 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               </Button>
 
               {entries.length === 0 && (
-                <p className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
-                  Nothing yet. Start with a collection.
-                </p>
+                <button
+                  type="button"
+                  onClick={() => addEntry(createCollectionDraft())}
+                  className="w-full rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent/40 hover:text-foreground"
+                >
+                  Nothing yet.
+                  <span className="mt-0.5 block font-medium">Start with a collection</span>
+                </button>
               )}
 
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleRailDragEnd}>
@@ -2627,9 +2773,21 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
                 <TabsContent value="design" className="pt-4">
                   {!selected && (
-                    <p className="rounded-md border border-dashed px-3 py-10 text-center text-sm text-muted-foreground">
-                      Select something on the left, or create a collection.
-                    </p>
+                    <div className="rounded-md border border-dashed px-3 py-10 text-center text-sm text-muted-foreground">
+                      <p>
+                        {entries.length > 0
+                          ? 'Select something on the left to edit it.'
+                          : 'Nothing to edit yet.'}
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-3"
+                        onClick={() => addEntry(createCollectionDraft())}
+                      >
+                        <Layers className="mr-1.5 h-4 w-4 text-cyan-400" /> New {terms.collection.toLowerCase()}
+                      </Button>
+                    </div>
                   )}
                   {selected?.kind === 'collection' && (
                     <CollectionEditor
@@ -2647,6 +2805,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       onConvertNative={() => convertNativeSources(selected.id)}
                       problemFolderIds={problemFolderIds}
                       focus={focusFolder?.entryId === selected.id ? focusFolder : null}
+                      focusTitle={titleFocusId === selected.id}
                     />
                   )}
                   {selected?.kind === 'classicRow' && (
@@ -2657,6 +2816,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       target={target}
                       onChange={updateEntry}
                       onAddSource={() => setPickerTarget({ entryId: selected.id, folderId: null })}
+                      focusTitle={titleFocusId === selected.id}
                     />
                   )}
                 </TabsContent>
@@ -2682,8 +2842,9 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label className="text-xs">Manifest URL</Label>
+                    <Label htmlFor="collection-manifest-url" className="text-xs">Manifest URL</Label>
                     <Input
+                      id="collection-manifest-url"
                       value={manifestUrl}
                       onChange={event => setManifestUrl(event.target.value)}
                       placeholder="https://your-host/stremio/<uuid>/manifest.json"
@@ -2694,7 +2855,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   <div className="space-y-1.5 rounded-lg border border-primary/40 bg-primary/5 p-3">
                     <div className="flex flex-wrap items-center gap-2">
                       <LinkIcon className="h-4 w-4 text-primary" />
-                      <Label className="text-xs font-medium">Import by link</Label>
+                      <Label htmlFor="collection-hosted-url" className="text-xs font-medium">Import by link</Label>
                       <span className="text-[11px] text-muted-foreground">
                         {target === 'fusion'
                           ? 'Paste this straight into Fusion instead of the JSON'
@@ -2704,8 +2865,14 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                     {hostedUrl ? (
                       <>
                         <div className="flex gap-2">
-                          <Input readOnly value={hostedUrl} className="h-9 font-mono text-xs" onClick={e => (e.target as HTMLInputElement).select()} />
-                          <Button size="sm" variant="outline" className="shrink-0" onClick={handleCopyUrl}>
+                          <Input id="collection-hosted-url" readOnly value={hostedUrl} className="h-9 font-mono text-xs" onClick={e => (e.target as HTMLInputElement).select()} />
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="shrink-0"
+                            onClick={handleCopyUrl}
+                            aria-label="Copy the import link"
+                          >
                             {copiedUrl ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                           </Button>
                         </div>
@@ -2732,8 +2899,14 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   {target === 'fusion' && (
                     <div className="space-y-1.5 rounded-lg border p-3">
                       <div className="flex items-center gap-2">
-                        <Switch checked={usePlaceholder} onCheckedChange={setUsePlaceholder} />
-                        <Label className="text-xs font-medium">Make a copy for someone else</Label>
+                        <Switch
+                          id="collection-use-placeholder"
+                          checked={usePlaceholder}
+                          onCheckedChange={setUsePlaceholder}
+                        />
+                        <Label htmlFor="collection-use-placeholder" className="text-xs font-medium">
+                          Make a copy for someone else
+                        </Label>
                       </div>
                       <p className="text-[11px] text-muted-foreground">
                         Your addon link contains your user ID, and this file embeds it on every row. Turn this on to
@@ -2981,15 +3154,15 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             <Button
               variant="outline"
               disabled={!importPreview || importPreview.entries.length === 0}
-              onClick={() => runImport('merge')}
+              onClick={() => runImport('replace')}
             >
-              Add to existing
+              {entries.length > 0 ? `Replace all ${entries.length}` : 'Replace all'}
             </Button>
             <Button
               disabled={!importPreview || importPreview.entries.length === 0}
-              onClick={() => runImport('replace')}
+              onClick={() => runImport('merge')}
             >
-              Replace all
+              Add to existing
             </Button>
           </div>
         </DialogContent>

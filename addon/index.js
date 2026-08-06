@@ -5008,8 +5008,9 @@ function warnRefusedOrigin(context, message) {
 const handlePosterProxy = async function (req, res) {
   const { type, id } = req.params;
   const { fallback, lang, key, url: customUrl, sig } = req.query;
+  const sendFallback = () => (fallback ? res.redirect(302, fallback) : res.status(404).end());
   if (!key && !customUrl) {
-    return res.redirect(302, fallback);
+    return sendFallback();
   }
   try {
     let posterUrl = customUrl || null;
@@ -5019,7 +5020,7 @@ const handlePosterProxy = async function (req, res) {
     }
 
     if (!posterUrl) {
-      return res.redirect(302, fallback);
+      return sendFallback();
     }
 
     const isRatingPoster = !customUrl;
@@ -5066,7 +5067,7 @@ const handlePosterProxy = async function (req, res) {
     } else {
       consola.error(`Error in poster proxy for ${id}:`, error.message);
     }
-    res.redirect(302, fallback);
+    sendFallback();
   }
 };
 addon.get("/poster/:type/:id", handlePosterProxy);

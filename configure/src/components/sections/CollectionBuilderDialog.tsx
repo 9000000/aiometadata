@@ -608,7 +608,7 @@ function CatalogPicker({
     virtualizer.scrollToIndex(next, { align: 'auto' });
   };
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'ArrowDown') {
       event.preventDefault();
       move(1);
@@ -640,13 +640,14 @@ function CatalogPicker({
               : 'Classic rows read from a single catalog.'}
           </DialogDescription>
         </DialogHeader>
-        <div onKeyDown={handleKeyDown}>
+        <div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               autoFocus
               value={query}
               onChange={event => setQuery(event.target.value)}
+              onKeyDown={handleKeyDown}
               placeholder="Search catalogs"
               className="pl-9"
             />

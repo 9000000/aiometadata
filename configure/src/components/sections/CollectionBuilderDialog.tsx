@@ -573,6 +573,13 @@ function CatalogPicker({
     [filtered, alreadyAdded]
   );
 
+  // Selection outlives a filter change, so "select all" adds to it rather than
+  // becoming it, and offers itself whenever this set holds something unticked.
+  const unselectedAddable = useMemo(() => {
+    const picked = new Set(selected);
+    return addable.map(catalogKey).filter(key => !picked.has(key));
+  }, [addable, selected]);
+
   useEffect(() => {
     setActiveIndex(0);
   }, [query, typeFilter, tagFilters]);
@@ -808,8 +815,13 @@ function CatalogPicker({
               <span className="text-xs text-muted-foreground">
                 {selected.length === 0 ? 'Nothing selected' : `${selected.length} selected`}
               </span>
-              {addable.length > 0 && selected.length < addable.length && (
-                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setSelected(addable.map(catalogKey))}>
+              {unselectedAddable.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setSelected(prev => [...prev, ...unselectedAddable])}
+                >
                   Select all {addable.length}
                 </Button>
               )}

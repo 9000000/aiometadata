@@ -827,7 +827,7 @@ async function fetchMDBListGenres(apiKey: string, isAnime: boolean = false): Pro
 }
 
 async function fetchMdbListSearchItems(query: string, type: string, apiKey: string): Promise<any[]> {
-  const url = `https://api.mdblist.com/search/${type}?query=${encodeURIComponent(query)}&limit=30&apikey=${apiKey}`;
+  const url = `https://api.mdblist.com/search/${type}?query=${encodeURIComponent(query)}&limit=30&quick_search=true&apikey=${apiKey}`;
 
   const res: Response = await makeRateLimitedRequest(async () => {
     return await fetch(url, { headers: { Accept: "application/json" } });

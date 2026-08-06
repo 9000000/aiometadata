@@ -659,6 +659,7 @@ function CatalogPicker({
                 <button
                   key={type}
                   type="button"
+                  aria-pressed={typeFilter === type}
                   onClick={() => setTypeFilter(prev => (prev === type ? null : type))}
                   className={`rounded-full border px-2 py-0.5 text-xs transition-colors ${
                     typeFilter === type
@@ -675,6 +676,7 @@ function CatalogPicker({
                   name={`${tag.name} (${tag.count})`}
                   color={tag.color}
                   dimmed={tagFilters.length > 0 && !tagFilters.includes(tag.name)}
+                  pressed={tagFilters.includes(tag.name)}
                   onClick={() => setTagFilters(prev =>
                     prev.includes(tag.name) ? prev.filter(name => name !== tag.name) : [...prev, tag.name]
                   )}

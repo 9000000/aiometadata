@@ -2286,7 +2286,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           importUnknown,
           config.apiKeys || {}
         )
-      : { added: [], enabled: [], resolved: new Set<string>(), needsAccount: [] }),
+      : {
+        added: [],
+        enabled: [],
+        resolved: new Set<string>(),
+        needsAccount: [],
+        needsAccountKeys: new Set<string>(),
+      }),
     [importPreview, importUnknown, config.catalogs, config.apiKeys]
   );
 
@@ -2320,11 +2326,15 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   /**
    * Sources that resolve to a catalog an apply would add. They are absent from
    * the manifest, so without this they would read as missing rather than staged.
+   * A catalog waiting on an account it does not have is resolved but not added,
+   * so it stays out: it is missing, and saying otherwise is the more costly lie.
    */
-  const pendingKeys = useMemo(
-    () => (pendingCount > 0 ? pendingAdditions.resolved : new Set<string>()),
-    [pendingAdditions, pendingCount]
-  );
+  const pendingKeys = useMemo(() => {
+    if (pendingCount === 0) return new Set<string>();
+    const { resolved, needsAccountKeys } = pendingAdditions;
+    if (needsAccountKeys.size === 0) return resolved;
+    return new Set([...resolved].filter(key => !needsAccountKeys.has(key)));
+  }, [pendingAdditions, pendingCount]);
 
   /** Entries still pointing at a catalog neither the config nor the import can serve. */
   const entriesWithUnresolved = useMemo(() => {
@@ -2967,7 +2977,19 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   Swap them for yours, or leave them and those tiles come up empty.
                 </p>
               )}
-              {overBy === 0 && pendingCount === 0 && unresolvedSources.length === 0 && (
+              {pendingAdditions.needsAccount.length > 0 && (
+                <p className="flex items-start gap-1.5 text-[11px] text-amber-500">
+                  <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+                  This design uses your own {pendingAdditions.needsAccount.join(' and ')} catalogs, such as
+                  your watchlist. Connect{' '}
+                  {pendingAdditions.needsAccount.length === 1 ? 'that account' : 'those accounts'} first, or
+                  applying leaves those tiles empty.
+                </p>
+              )}
+              {overBy === 0
+                && pendingCount === 0
+                && unresolvedSources.length === 0
+                && pendingAdditions.needsAccount.length === 0 && (
                 <p className="text-[11px] text-muted-foreground">
                   Applying puts this in your configuration. It is only stored once you save the configuration
                   itself on the Config tab.

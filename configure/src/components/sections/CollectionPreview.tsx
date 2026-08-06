@@ -3,8 +3,11 @@ import { useEffect, useState } from 'react';
 import { isNativeSource } from '@shared/catalogReconstruction';
 import type {
   BuilderEntry,
+  ClassicRowDraft,
   CollectionDraft,
   FolderDraft,
+  FusionAspectRatio,
+  FusionCardStyle,
   TileShape,
 } from '@shared/types';
 import { TERMS, type Target } from '@/lib/collectionBuilder/terms';
@@ -21,6 +24,20 @@ const TILE_WIDTH: Record<TileShape, string> = {
   LANDSCAPE: '24%',
   SQUARE: '19%',
 };
+
+const CARD_ASPECT: Record<FusionAspectRatio, string> = {
+  poster: '2 / 3',
+  wide: '16 / 9',
+  square: '1 / 1',
+};
+
+const CARD_WIDTH: Record<FusionCardStyle, string> = {
+  small: '11%',
+  medium: '15%',
+  large: '21%',
+};
+
+const MAX_PREVIEW_CARDS = 10;
 
 function initialsFor(title: string): string {
   const words = title.trim().split(/\s+/).filter(Boolean);
@@ -348,6 +365,69 @@ function FusionCollectionStage({
   );
 }
 
+function ClassicRowStage({ entry, target }: { entry: ClassicRowDraft; target: Target }) {
+  const cards = Math.min(Math.max(entry.limit, 1), MAX_PREVIEW_CARDS);
+  const extra = Math.max(entry.limit - cards, 0);
+  const background = (entry.backgroundImageURL || '').trim();
+
+  return (
+    <div className={target === 'nuvio' ? 'space-y-2' : ''}>
+      {target === 'nuvio' && (
+        <p className="text-[11px] text-violet-300">
+          Classic rows are Fusion only. Nuvio has no equivalent, so this row is left out of the Nuvio
+          export.
+        </p>
+      )}
+      <div
+        className={`relative overflow-hidden rounded-lg border bg-neutral-950 p-4 ${
+          target === 'nuvio' ? 'opacity-50' : ''
+        }`}
+      >
+        {background && (
+          <img
+            key={background}
+            src={background}
+            alt=""
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            className="absolute inset-0 h-full w-full object-cover opacity-30"
+          />
+        )}
+        <div className="relative">
+          {!entry.hideTitle && (
+            <p className="mb-2.5 text-sm font-semibold text-white">
+              {entry.title.trim() || 'Untitled row'}
+            </p>
+          )}
+          <div className="flex items-end gap-3 overflow-x-auto pb-1">
+            {Array.from({ length: cards }, (_, index) => (
+              <div key={index} className="relative shrink-0" style={{ width: CARD_WIDTH[entry.cardStyle] }}>
+                <div
+                  className="relative w-full overflow-hidden rounded-md bg-white/10 shadow-[0_0_0_1px_rgba(255,255,255,0.12)]"
+                  style={{ aspectRatio: CARD_ASPECT[entry.aspectRatio] }}
+                >
+                  {entry.badges.ratings && (
+                    <span className="absolute bottom-1 left-1 h-3 w-8 rounded-full bg-white/25" />
+                  )}
+                  {entry.badges.providers && (
+                    <span className="absolute bottom-1 right-1 h-3 w-3 rounded-full bg-white/25" />
+                  )}
+                </div>
+                {entry.numbered && (
+                  <span className="absolute -left-1 bottom-0 text-2xl font-black leading-none text-white/70">
+                    {index + 1}
+                  </span>
+                )}
+              </div>
+            ))}
+            {extra > 0 && <span className="shrink-0 text-[11px] text-white/50">+{extra} more</span>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function CollectionPreview({
   entry,
   target,
@@ -374,9 +454,7 @@ export function CollectionPreview({
           <FusionCollectionStage entry={entry} onEditFolder={onEditFolder} />
         )
       ) : (
-        <div className="rounded-md border border-dashed px-3 py-10 text-center text-sm text-muted-foreground">
-          No preview for this yet.
-        </div>
+        <ClassicRowStage entry={entry} target={target} />
       )}
       <PreviewCaption />
     </div>

@@ -683,7 +683,7 @@ function parseMedia(el, type, genreList = [], config = {}) {
     poster: el.poster_path ? `https://image.tmdb.org/t/p/w500${el.poster_path}` : null,
     background: el.backdrop_path ? tmdbImageUrl(tmdbBackdropSize(), el.backdrop_path) : null,
     posterShape: "regular",
-    imdbRating: el.vote_average ? el.vote_average.toFixed(1) : 'N/A',
+    imdbRating: 'N/A',
     year: type === 'movie' ? (el.release_date?.substring(0, 4) || '') : (el.first_air_date?.substring(0, 4) || ''),
     type: type === 'movie' ? type : 'series',
     released: type === 'movie' ? new Date(el.release_date) : new Date(el.first_air_date),

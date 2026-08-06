@@ -1975,7 +1975,7 @@ async function parseTvmazeResult(show: any, config: any): Promise<any> {
     logo: logoUrl,
     year: show.premiered ? show.premiered.substring(0, 4) : '',
     released: show.premiered ? new Date(show.premiered) : undefined,
-    imdbRating: imdbId ? (await getImdbRating(imdbId, 'series')) : show.rating?.average ? show.rating.average.toFixed(1) : 'N/A',
+    imdbRating: (imdbId ? await getImdbRating(imdbId, 'series') : 'N/A') || 'N/A',
     _tmdbId: tmdbId ? String(tmdbId) : undefined,
     _tvdbId: tvdbId ? String(tvdbId) : undefined,
   };

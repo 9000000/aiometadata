@@ -1430,7 +1430,7 @@ async function buildTmdbMovieResponse(stremioId, movieData, language, config, us
   ]);
   }
   
-  const imdbRating = imdbRatingValue || movieData.vote_average?.toFixed(1) || "N/A";
+  const imdbRating = imdbRatingValue || "N/A";
   const posterProxyUrl = Utils.buildPosterProxyUrl(host, 'movie', `tmdb:${movieData.id}`, poster, language, config);
   const kitsuId = allIds?.kitsuId;
   const idProvider = config.providers?.movie || 'imdb';
@@ -1567,7 +1567,7 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
   // logger.debug(`[TmdbSeriesMeta] poster: ${poster}, background: ${background}, logoUrl: ${logoUrl}`);
   
   const posterProxyUrl = Utils.buildPosterProxyUrl(host, 'series', `tmdb:${tmdbId}`, poster, language, config);
-  const imdbRating = imdbRatingValue || seriesData.vote_average?.toFixed(1) || "N/A";
+  const imdbRating = imdbRatingValue || "N/A";
   const castCount = config.castCount;
   const _rawPosterUrl = poster || `${host}/missing_poster.png`;
 
@@ -2643,7 +2643,7 @@ async function buildSeriesResponseFromTvmaze(stremioId, tvmazeShow, episodes, la
       Utils.getSeriesBackground({ tmdbId: tmdbId, tvdbId: tvdbId, imdbId: imdbId, metaProvider: 'tvmaze', fallbackBackgroundUrl: landscapePosterUrl }, config, true)
   ]);
   }
-  const imdbRating = imdbRatingValue || tvmazeShow.rating?.average?.toFixed(1) || "N/A";
+  const imdbRating = imdbRatingValue || "N/A";
 
   const tvmazeCredits = {
     cast: (tvmazeShow?._embedded?.cast || [])
@@ -2845,7 +2845,7 @@ async function buildAnimeResponse(stremioId, malData, language, characterData, e
     const stremioType = malData.type.toLowerCase() === 'movie' ? 'movie' : 'series';
     const imdbId = mapping?.imdbId;
     const kitsuId = mapping?.kitsuId;
-    const imdbRating = typeof malData.score === 'number' ? malData.score.toFixed(1) : "N/A";
+    const imdbRating = (imdbId ? await getImdbRating(imdbId, stremioType) : "N/A") || "N/A";
     const castCount = config.castCount;  
     let videos = [];
     const seriesId = `mal:${malData.mal_id}`;
@@ -3242,7 +3242,7 @@ async function buildKitsuAnimeResponse(stremioId, kitsuData, genres, includeObje
         }
       }
     }
-    const imdbRating = imdbId ? await getImdbRating(imdbId, stremioType) || 'N/A' : 'N/A';
+    const imdbRating = (imdbId ? await getImdbRating(imdbId, stremioType) : "N/A") || "N/A";
     const kitsuTitle = Utils.getKitsuLocalizedTitle(kitsuData.attributes.titles, config.language) || kitsuData.attributes.canonicalTitle;
     const links = [];
     if (imdbId) {

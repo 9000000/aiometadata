@@ -1127,6 +1127,7 @@ function FolderCard({
   tagOptions,
   onAddByTag,
   focusTitle,
+  onTitleFocused,
 }: {
   folder: FolderDraft;
   catalogs: ManifestCatalog[];
@@ -1139,6 +1140,7 @@ function FolderCard({
   tagOptions: TagOption[];
   onAddByTag: (tag: string) => void;
   focusTitle?: boolean;
+  onTitleFocused?: () => void;
 }) {
   const terms = TERMS[target];
   const [showExtras, setShowExtras] = useState(false);
@@ -1152,7 +1154,8 @@ function FolderCard({
     if (!focusTitle) return;
     titleRef.current?.focus();
     titleRef.current?.select();
-  }, [focusTitle]);
+    onTitleFocused?.();
+  }, [focusTitle, onTitleFocused]);
 
   const sourceSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -1394,7 +1397,9 @@ function CollectionEditor({
   onConvertNative,
   folderWarnings,
   focus,
+  onFocusHandled,
   focusTitle,
+  onTitleFocused,
 }: {
   entry: CollectionDraft;
   catalogs: ManifestCatalog[];
@@ -1411,7 +1416,9 @@ function CollectionEditor({
   /** Notes the export would raise about a folder, counted per folder id. */
   folderWarnings?: Map<string, number>;
   focus?: { entryId: string; folderId: string } | null;
+  onFocusHandled?: () => void;
   focusTitle?: boolean;
+  onTitleFocused?: () => void;
 }) {
   const terms = TERMS[target];
   const [showNuvioBox, setShowNuvioBox] = useState(target === 'nuvio');
@@ -1419,12 +1426,14 @@ function CollectionEditor({
   const uid = useId();
   const titleRef = useRef<HTMLInputElement>(null);
   const [newFolderId, setNewFolderId] = useState<string | null>(null);
+  const clearNewFolderId = useCallback(() => setNewFolderId(null), []);
 
   useEffect(() => {
     if (!focusTitle) return;
     titleRef.current?.focus();
     titleRef.current?.select();
-  }, [focusTitle]);
+    onTitleFocused?.();
+  }, [focusTitle, onTitleFocused]);
 
   useEffect(() => {
     setShowNuvioBox(target === 'nuvio');
@@ -1443,8 +1452,10 @@ function CollectionEditor({
   const activeFolder = entry.folders[activeIndex] ?? null;
 
   useEffect(() => {
-    if (focus?.folderId) setSelectedFolderId(focus.folderId);
-  }, [focus]);
+    if (!focus?.folderId) return;
+    setSelectedFolderId(focus.folderId);
+    onFocusHandled?.();
+  }, [focus, onFocusHandled]);
 
   const knownKeys = useMemo(() => new Set(catalogs.map(catalogKey)), [catalogs]);
 
@@ -1662,6 +1673,7 @@ function CollectionEditor({
                 tagOptions={tagOptions}
                 onAddByTag={tag => onAddByTag(activeFolder.id, tag)}
                 focusTitle={newFolderId === activeFolder.id}
+                onTitleFocused={clearNewFolderId}
               />
             )}
           </div>
@@ -1681,6 +1693,7 @@ function ClassicRowEditor({
   onChange,
   onAddSource,
   focusTitle,
+  onTitleFocused,
 }: {
   entry: ClassicRowDraft;
   catalogs: ManifestCatalog[];
@@ -1689,6 +1702,7 @@ function ClassicRowEditor({
   onChange: (next: ClassicRowDraft) => void;
   onAddSource: () => void;
   focusTitle?: boolean;
+  onTitleFocused?: () => void;
 }) {
   const terms = TERMS[target];
   const update = (patch: Partial<ClassicRowDraft>) => onChange({ ...entry, ...patch });
@@ -1699,7 +1713,8 @@ function ClassicRowEditor({
     if (!focusTitle) return;
     titleRef.current?.focus();
     titleRef.current?.select();
-  }, [focusTitle]);
+    onTitleFocused?.();
+  }, [focusTitle, onTitleFocused]);
 
   return (
     <div className="space-y-4">
@@ -1871,6 +1886,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const [activeTab, setActiveTab] = useState('design');
   const [focusFolder, setFocusFolder] = useState<{ entryId: string; folderId: string } | null>(null);
   const [titleFocusId, setTitleFocusId] = useState<string | null>(null);
+  const clearFocusFolder = useCallback(() => setFocusFolder(null), []);
+  const clearTitleFocus = useCallback(() => setTitleFocusId(null), []);
   const [target, setTarget] = useState<Target>('nuvio');
   const [manifestUrl, setManifestUrl] = useState('');
   const [usePlaceholder, setUsePlaceholder] = useState(false);
@@ -2772,7 +2789,9 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       onConvertNative={() => convertNativeSources(selected.id)}
                       folderWarnings={folderProblemCounts}
                       focus={focusFolder?.entryId === selected.id ? focusFolder : null}
+                      onFocusHandled={clearFocusFolder}
                       focusTitle={titleFocusId === selected.id}
+                      onTitleFocused={clearTitleFocus}
                     />
                   )}
                   {selected?.kind === 'classicRow' && (
@@ -2784,6 +2803,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       onChange={updateEntry}
                       onAddSource={() => setPickerTarget({ entryId: selected.id, folderId: null })}
                       focusTitle={titleFocusId === selected.id}
+                      onTitleFocused={clearTitleFocus}
                     />
                   )}
                 </TabsContent>

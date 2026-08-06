@@ -114,6 +114,7 @@ import {
   type ManifestCatalog,
 } from '@/lib/collectionBuilder/manifestSources';
 import { FUSION_CHIP, NUVIO_CHIP, TERMS, type Target } from '@/lib/collectionBuilder/terms';
+import { CollectionPreview } from './CollectionPreview';
 import { buildBlueprintLookup } from '@shared/blueprintLookup';
 import {
   additionCount,
@@ -2718,6 +2719,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <TabsList>
                   <TabsTrigger value="design">Design</TabsTrigger>
+                  <TabsTrigger value="preview">Preview</TabsTrigger>
                   <TabsTrigger value="json">JSON</TabsTrigger>
                 </TabsList>
 
@@ -2769,6 +2771,14 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       focusTitle={titleFocusId === selected.id}
                     />
                   )}
+                </TabsContent>
+
+                <TabsContent value="preview" className="pt-4">
+                  <CollectionPreview
+                    entry={selected}
+                    target={target}
+                    onEditFolder={folderId => selected && goToProblem(selected.id, folderId)}
+                  />
                 </TabsContent>
 
                 <TabsContent value="json" className="space-y-3 pt-4">

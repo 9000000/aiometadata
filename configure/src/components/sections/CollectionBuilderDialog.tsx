@@ -378,6 +378,33 @@ function RowActions({
   );
 }
 
+function collectIds(entries: BuilderEntry[]): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    ids.add(entry.id);
+    if (entry.kind !== 'collection') continue;
+    for (const folder of entry.folders) ids.add(folder.id);
+  }
+  return ids;
+}
+
+/**
+ * An exported design carries its ids, and importing one twice would otherwise
+ * seat two entries on the same id: deleting either would take both. Only the
+ * clashes are reissued, so a design imported once keeps the ids Nuvio knows it by.
+ */
+function reissueTakenIds(entries: BuilderEntry[], taken: Set<string>): void {
+  for (const entry of entries) {
+    if (!entry.id || taken.has(entry.id)) entry.id = newId();
+    taken.add(entry.id);
+    if (entry.kind !== 'collection') continue;
+    for (const folder of entry.folders) {
+      if (!folder.id || taken.has(folder.id)) folder.id = newId();
+      taken.add(folder.id);
+    }
+  }
+}
+
 function duplicateEntryDraft(entry: BuilderEntry): BuilderEntry {
   const copy = clone(entry);
   copy.id = newId();
@@ -2534,6 +2561,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       clone(importPreview.entries) as BuilderEntry[],
       sourceList.catalogs
     );
+    reissueTakenIds(incoming, mode === 'merge' ? collectIds(entries) : new Set<string>());
 
     setStagedBlueprints(prev => dedupeBlueprints(
       mode === 'replace' ? importPreview.blueprints : [...prev, ...importPreview.blueprints]

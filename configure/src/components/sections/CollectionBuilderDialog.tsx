@@ -82,6 +82,7 @@ import {
 } from '@/lib/collectionBuilder/issueCenter';
 import { filterEntries } from '@/lib/collectionBuilder/entryOps';
 import { deriveSaveStage, describeSaveStage } from '@/lib/collectionBuilder/saveState';
+import { listStarterTemplates } from '@/lib/collectionBuilder/templates';
 import { FUSION_CHIP, NUVIO_CHIP, TERMS, type Target } from '@/lib/collectionBuilder/terms';
 import { CollectionPreview } from './CollectionPreview';
 import { buildBlueprintLookup } from '@shared/blueprintLookup';
@@ -400,6 +401,12 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       .filter(tag => counts.has(tag.name))
       .map(tag => ({ name: tag.name, color: tag.color, count: counts.get(tag.name) ?? 0 }));
   }, [sourceList.catalogs, config.tags]);
+
+  // Below tagOptions: it reads that, and a const is dead until its own line runs.
+  const starters = useMemo(
+    () => listStarterTemplates({ catalogs: sourceList.catalogs, tags: tagOptions }),
+    [sourceList.catalogs, tagOptions]
+  );
 
   const addSourcesByTag = (entryId: string, folderId: string, tag: string) => {
     const matching = sourceList.catalogs.filter(catalog => (catalog.tags ?? []).includes(tag));
@@ -990,14 +997,34 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               )}
 
               {entries.length === 0 && (
-                <button
-                  type="button"
-                  onClick={() => addEntry(createCollectionDraft())}
-                  className="w-full rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent/40 hover:text-foreground"
-                >
-                  Nothing yet.
-                  <span className="mt-0.5 block font-medium">Start with a collection</span>
-                </button>
+                <div className="space-y-1.5 rounded-md border border-dashed p-2">
+                  <p className="px-1 text-center text-xs text-muted-foreground">
+                    Nothing yet. Start from one of these:
+                  </p>
+                  {starters.map(template => (
+                    <button
+                      key={template.id}
+                      type="button"
+                      onClick={() => {
+                        const built = template.build();
+                        setEntries(built);
+                        setSelectedId(built[0]?.id ?? null);
+                        toast.success(`Started from "${template.label}"`);
+                      }}
+                      className="w-full rounded-md border px-2 py-1.5 text-left text-xs transition-colors hover:border-primary/50 hover:bg-accent/40"
+                    >
+                      <span className="block font-medium">{template.label}</span>
+                      <span className="block text-[10px] text-muted-foreground">{template.hint}</span>
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => addEntry(createCollectionDraft())}
+                    className="w-full rounded-md px-2 py-1.5 text-center text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    or start empty
+                  </button>
+                </div>
               )}
 
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleRailDragEnd}>

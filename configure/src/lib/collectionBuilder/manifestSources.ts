@@ -10,6 +10,8 @@ export interface ManifestCatalog {
   id: string;
   /** Manifest catalog type, which is what Nuvio and Fusion record. */
   type: string;
+  /** The config's own type for this catalog, which a displayType may have renamed. */
+  baseType?: string;
   name: string;
   /** Source label from the user's config, for the picker only. */
   source?: string;
@@ -80,6 +82,7 @@ export function deriveManifestCatalog(catalog: CatalogConfig): ManifestCatalog {
   return {
     id,
     type,
+    baseType: catalog.type,
     name: catalog.name,
     source: catalog.source,
     tags: catalog.tags,
@@ -135,10 +138,14 @@ export async function loadCatalogSources(
     const genresById = new Map<string, string[] | undefined>();
     const sourceById = new Map<string, string | undefined>();
     const tagsById = new Map<string, string[] | undefined>();
+    // The manifest has already spent the displayType, so only the config still
+    // knows what a catalog's own type was.
+    const baseTypeById = new Map<string, string | undefined>();
     for (const catalog of derived) {
       genresById.set(`${catalog.id}:${catalog.type}`, catalog.genres);
       sourceById.set(`${catalog.id}:${catalog.type}`, catalog.source);
       tagsById.set(`${catalog.id}:${catalog.type}`, catalog.tags);
+      baseTypeById.set(`${catalog.id}:${catalog.type}`, catalog.baseType);
     }
 
     const catalogs: ManifestCatalog[] = entries
@@ -149,6 +156,7 @@ export async function loadCatalogSources(
         return {
           id: trimmed(entry.id),
           type: trimmed(entry.type),
+          baseType: baseTypeById.get(key),
           name: stripPrefix(trimmed(entry.name)) || trimmed(entry.id),
           source: sourceById.get(key),
           tags: tagsById.get(key),
@@ -230,6 +238,17 @@ export function catalogKey(catalog: { id?: string; catalogId?: string; type: str
   return `${catalog.id ?? catalog.catalogId ?? ''}:${String(catalog.type ?? '').toLowerCase()}`;
 }
 
+/** The one way a picked catalog becomes a source, so every picker agrees. */
+export function sourceFromCatalog(catalog: ManifestCatalog): SourceDraft {
+  return {
+    catalogId: catalog.id,
+    type: catalog.type,
+    name: catalog.name,
+    genre: catalog.genreRequired ? catalog.genres?.[0] ?? null : null,
+    ...(catalog.baseType ? { baseType: catalog.baseType } : {}),
+  };
+}
+
 /** Sources whose catalog is not in the resolved catalog list, keyed for lookup. */
 export function findUnknownSources(
   entries: BuilderEntry[],
@@ -296,7 +315,7 @@ function mapSources(
  * `tmdb.top` movie catalog are the same thing; the sibling `tmdb.top` series
  * catalog is not, and matching on the displayType alone would pick that one.
  */
-function baseCatalogKey(id: string, type: string): string {
+function baseCatalogKey(id: string, type: string, baseType?: string): string {
   for (const suffix of SUFFIX_TYPES) {
     if (!id.toLowerCase().endsWith(`_${suffix}`)) continue;
     const base = id.slice(0, -(suffix.length + 1));
@@ -306,7 +325,10 @@ function baseCatalogKey(id: string, type: string): string {
       return `${base}:${suffix}`;
     }
   }
-  return `${id}:${type.toLowerCase()}`;
+  // A user catalog is never suffixed, so only a recorded baseType can tell it
+  // from the same list under another type. Files written before it existed have
+  // none, and fall back to the type they do carry.
+  return `${id}:${(trimmed(baseType) || type).toLowerCase()}`;
 }
 
 /**
@@ -323,16 +345,18 @@ export function realignSourceIds(
   const known = new Set(catalogs.map(catalogKey));
   const byBase = new Map<string, ManifestCatalog>();
   for (const catalog of catalogs) {
-    const key = baseCatalogKey(catalog.id, catalog.type);
+    const key = baseCatalogKey(catalog.id, catalog.type, catalog.baseType);
     if (!byBase.has(key)) byBase.set(key, catalog);
   }
 
   const realign = (source: SourceDraft): SourceDraft => {
     if (isNativeSource(source)) return source;
     if (known.has(catalogKey(source))) return source;
-    const match = byBase.get(baseCatalogKey(trimmed(source.catalogId), trimmed(source.type)));
+    const match = byBase.get(
+      baseCatalogKey(trimmed(source.catalogId), trimmed(source.type), source.baseType)
+    );
     if (!match) return source;
-    return { ...source, catalogId: match.id, type: match.type };
+    return { ...source, catalogId: match.id, type: match.type, baseType: match.baseType };
   };
 
   return mapSources(entries, realign);
@@ -352,9 +376,20 @@ export function healSourceNames(
   const heal = (source: SourceDraft): SourceDraft => {
     if (isNativeSource(source)) return source;
     const match = byKey.get(catalogKey(source));
-    return match && match.name && match.name !== source.name
-      ? { ...source, name: match.name }
-      : source;
+    if (!match) return source;
+
+    const name = match.name && match.name !== source.name ? match.name : undefined;
+    // Designs built before the export carried it, so that the next export does.
+    const baseType = match.baseType && match.baseType !== source.baseType
+      ? match.baseType
+      : undefined;
+    if (!name && !baseType) return source;
+
+    return {
+      ...source,
+      ...(name ? { name } : {}),
+      ...(baseType ? { baseType } : {}),
+    };
   };
 
   return mapSources(entries, heal);

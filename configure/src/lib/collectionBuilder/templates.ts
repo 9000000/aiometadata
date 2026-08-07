@@ -1,5 +1,5 @@
-import { createCollectionDraft, createFolderDraft, type BuilderEntry, type SourceDraft } from '@shared/types';
-import type { ManifestCatalog } from './manifestSources';
+import { createCollectionDraft, createFolderDraft, type BuilderEntry } from '@shared/types';
+import { sourceFromCatalog, type ManifestCatalog } from './manifestSources';
 
 const MIRROR_CAP = 24;
 
@@ -16,14 +16,7 @@ export interface TemplateInput {
   tags: Array<{ name: string }>;
 }
 
-function toSource(catalog: ManifestCatalog): SourceDraft {
-  return {
-    catalogId: catalog.id,
-    type: catalog.type,
-    name: catalog.name,
-    genre: catalog.genreRequired ? catalog.genres?.[0] ?? null : null,
-  };
-}
+const toSource = sourceFromCatalog;
 
 export function listStarterTemplates({ catalogs, tags }: TemplateInput): StarterTemplate[] {
   if (catalogs.length === 0) return [];

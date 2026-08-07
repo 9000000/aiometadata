@@ -10,6 +10,13 @@ export interface SourceDraft {
   name: string;
   genre?: string | null;
   /**
+   * The catalog's own type, before a displayType renamed it. A built-in catalog
+   * spells this in its manifest id suffix, but a user catalog never does, so
+   * without it an imported list cannot be told from its own sibling of another
+   * type. Neither target reads it; it exists to survive the round trip.
+   */
+  baseType?: string;
+  /**
    * A source Nuvio resolves against TMDB or Trakt itself (CollectionModels.kt
    * checks `provider` before looking for an addon). It never reaches this addon,
    * so it costs nothing to serve and cannot be edited here. Kept verbatim so
@@ -89,6 +96,7 @@ export interface NuvioAddonSource {
   catalogName: string | null;
   title: string;
   genre: string | null;
+  baseType?: string;
   /** See writeBlueprint in catalogReconstruction. Nuvio does not read this. */
   aiometadata?: { version: number; catalog: Record<string, any> };
 }
@@ -140,6 +148,7 @@ export interface FusionAddonCatalogSource {
     catalogId: string;
     type: string;
     genre?: string;
+    baseType?: string;
   };
 }
 

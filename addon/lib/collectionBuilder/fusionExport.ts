@@ -114,6 +114,7 @@ function toDataSource(
   const composite = `${manifestType}::${plainId}`;
   const catalogType = resolveFusionCatalogType(composite, manifestType);
   const genre = trimmed(source.genre);
+  const baseType = trimmed(source.baseType);
   return {
     kind: 'addonCatalog',
     payload: attach({
@@ -121,6 +122,7 @@ function toDataSource(
       catalogId: normalizeCatalogId(composite, catalogType),
       type: catalogType,
       ...(genre ? { genre } : {}),
+      ...(baseType ? { baseType } : {}),
     }, `${plainId}:${source.type}`),
   };
 }

@@ -162,6 +162,7 @@ function nuvioSource(
     type,
     name: trimmed(raw.catalogName || raw.title || raw.name) || catalogId,
     genre: trimmed(raw.genre) || null,
+    ...(trimmed(raw.baseType) ? { baseType: trimmed(raw.baseType) } : {}),
   };
 }
 
@@ -316,6 +317,7 @@ function fusionSource(
     type: split.type,
     name: split.catalogId,
     genre: trimmed(payload.genre) || split.genre,
+    ...(trimmed(payload.baseType) ? { baseType: trimmed(payload.baseType) } : {}),
   };
 }
 

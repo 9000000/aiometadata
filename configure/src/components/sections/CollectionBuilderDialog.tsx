@@ -74,6 +74,7 @@ import {
   healSourceNames,
   loadCatalogSources,
   realignSourceIds,
+  sourceFromCatalog,
   stripManifestSuffix,
   type CatalogSourceList,
   type ManifestCatalog,
@@ -591,12 +592,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           const existing = new Set(folder.sources.map(catalogKey));
           const incoming = matching
             .filter(catalog => !existing.has(catalogKey(catalog)))
-            .map(catalog => ({
-              catalogId: catalog.id,
-              type: catalog.type,
-              name: catalog.name,
-              genre: catalog.genreRequired ? catalog.genres?.[0] ?? null : null,
-            }));
+            .map(sourceFromCatalog);
           added = incoming.length;
           return { ...folder, sources: [...folder.sources, ...incoming] };
         }),
@@ -622,12 +618,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   const handlePick = (picked: ManifestCatalog[]) => {
     if (!pickerTarget || picked.length === 0) return;
-    const sources: SourceDraft[] = picked.map(catalog => ({
-      catalogId: catalog.id,
-      type: catalog.type,
-      name: catalog.name,
-      genre: catalog.genreRequired ? catalog.genres?.[0] ?? null : null,
-    }));
+    const sources: SourceDraft[] = picked.map(sourceFromCatalog);
     setEntries(prev =>
       prev.map(entry => {
         if (entry.id !== pickerTarget.entryId) return entry;
@@ -1889,12 +1880,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           if (!catalog || !remapPickFor) return;
           setRemapChoices(prev => ({
             ...prev,
-            [remapPickFor]: {
-              catalogId: catalog.id,
-              type: catalog.type,
-              name: catalog.name,
-              genre: catalog.genreRequired ? catalog.genres?.[0] ?? null : null,
-            },
+            [remapPickFor]: sourceFromCatalog(catalog),
           }));
         }}
         onClose={() => setRemapPickFor(null)}

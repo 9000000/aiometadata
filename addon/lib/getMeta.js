@@ -1097,7 +1097,7 @@ async function getAnimeMeta(preferredProvider, stremioId, language, config, user
       const [details, characters, episodes] = await Promise.all([
         cacheWrapJikanApi(`anime-details-${allIds.malId}`, () => jikan.getAnimeDetails(allIds.malId), null),
         includeVideos ? cacheWrapJikanApi(`anime-characters-${allIds.malId}`, () => jikan.getAnimeCharacters(allIds.malId), null) : null,
-        includeVideos ? cacheWrapJikanApi(`anime-episodes-${allIds.malId}`, () => jikan.getAnimeEpisodes(allIds.malId), 24 * 60 * 60) : null,
+        includeVideos ? jikan.getAnimeEpisodes(allIds.malId) : null,
       ]);
       if (!details) {
         throw new Error(`Jikan returned no core details for MAL ID ${allIds.malId}.`);

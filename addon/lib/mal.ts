@@ -351,9 +351,70 @@ async function getAnimeDetails(malId: string | number): Promise<any> {
     .catch(() => null);
 }
 
+function episodePageTtl(): number {
+  return envInt('JIKAN_EPISODE_PAGE_TTL', 7 * 24 * 60 * 60, 0);
+}
+
+function episodeLatestPageTtl(): number {
+  return envInt('JIKAN_EPISODE_LATEST_PAGE_TTL', 6 * 60 * 60, 0);
+}
+
+/** A run that stopped long ago gains nothing, so only a live one needs rechecking. */
+function stillGrowing(episodes: any[]): boolean {
+  if (!Array.isArray(episodes) || episodes.length === 0) return true;
+  const newest = episodes.reduce((latest: number, episode: any) => {
+    const aired = Date.parse(episode?.aired || '');
+    return Number.isFinite(aired) && aired > latest ? aired : latest;
+  }, 0);
+  if (!newest) return true;
+  return Date.now() - newest < 45 * 24 * 60 * 60 * 1000;
+}
+
+/**
+ * MAL pages episodes at 100 and only the newest page ever gains one, so each page
+ * is cached on its own: a long-running series re-reads one page instead of all
+ * twelve, and a short scrape on the newest page ages out in hours, not a day.
+ */
 async function getAnimeEpisodes(malId: string | number): Promise<any[]> {
-  const results = await jikanGetAllPages(`/anime/${malId}/episodes`);
-  return normalizeJikanAnimeEpisodesForCache(results);
+  const { cacheWrapJikanApi }: any = require('./getCache');
+
+  const fetchPage = async (page: number) => {
+    const url = `${jikanApiBase()}/anime/${malId}/episodes?page=${page}`;
+    const response: any = await enqueueRequest(() => _makeJikanRequest(url), url);
+    const body = response?.data || {};
+    return {
+      results: normalizeJikanAnimeEpisodesForCache(body.data || []),
+      lastPage: body.pagination?.last_visible_page || 1,
+    };
+  };
+
+  const readPage = (page: number) => cacheWrapJikanApi(
+    `anime-episodes-${malId}-p${page}`,
+    () => fetchPage(page),
+    null,
+    {
+      resultClassifier: (result: any) => ({
+        type: 'SUCCESS',
+        ttl: result && result.lastPage === page && stillGrowing(result.results)
+          ? episodeLatestPageTtl()
+          : episodePageTtl(),
+      }),
+    }
+  );
+
+  const first: any = await readPage(1);
+  if (!first?.results) return [];
+  if (first.lastPage <= 1) return first.results;
+
+  const rest: any[] = await Promise.all(
+    Array.from({ length: first.lastPage - 1 }, (_, index) => readPage(index + 2)
+      .catch((error: any) => {
+        logger.warn(`Failed to fetch episode page ${index + 2} for MAL ID ${malId}:`, error.message || error);
+        return null;
+      }))
+  );
+
+  return [...first.results, ...rest.flatMap(page => page?.results || [])];
 }
 
 async function getAnimeEpisodeVideos(malId: string | number): Promise<any[]> {

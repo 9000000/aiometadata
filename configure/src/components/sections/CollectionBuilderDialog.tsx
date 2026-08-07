@@ -48,6 +48,7 @@ import { getSourceBadgeStyle } from '@/lib/sourceBadges';
 import {
   createClassicRowDraft,
   createCollectionDraft,
+  createFolderDraft,
   newId,
   type AddonIdentity,
   type BuilderEntry,
@@ -472,6 +473,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       ...entry,
       folders: arrayMove(entry.folders, index, position === 'top' ? 0 : entry.folders.length - 1),
     })));
+  };
+
+  const addFolderIn = (entryId: string) => {
+    const folder = createFolderDraft();
+    setEntries(overEntry(entryId, current => ({ ...current, folders: [...current.folders, folder] })));
+    setSelection({ entryId, folderId: folder.id });
+    setTitleFocusId(folder.id);
   };
 
   const duplicateFolderIn = (entryId: string, index: number) => {
@@ -1309,7 +1317,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       nativeCount={countNative(selected)}
                       onConvertNative={() => convertNativeSources(selected.id)}
                       selectedFolderId={selection.folderId}
-                      onSelectFolder={folderId => setSelection({ entryId: selected.id, folderId })}
+                      onAddFolder={() => addFolderIn(selected.id)}
                       onRemoveFolder={() => {
                         const index = selected.folders.findIndex(f => f.id === selection.folderId);
                         if (index >= 0) removeFolderIn(selected.id, index);

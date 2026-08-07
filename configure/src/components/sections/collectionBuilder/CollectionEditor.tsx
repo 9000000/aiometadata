@@ -8,7 +8,7 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { type ManifestCatalog } from '@/lib/collectionBuilder/manifestSources';
 import { TERMS, type Target } from '@/lib/collectionBuilder/terms';
-import { createFolderDraft, hasNuvioCollectionSettings, type CollectionDraft, type FolderDraft } from '@shared/types';
+import { hasNuvioCollectionSettings, type CollectionDraft, type FolderDraft } from '@shared/types';
 
 import { FolderCard } from './FolderCard';
 import { ImageUrlField } from './ImageUrlField';
@@ -29,7 +29,7 @@ export function CollectionEditor({
   nativeCount,
   onConvertNative,
   selectedFolderId,
-  onSelectFolder,
+  onAddFolder,
   onRemoveFolder,
   focusFolderTitle,
   onFolderTitleFocused,
@@ -56,7 +56,7 @@ export function CollectionEditor({
   onConvertNative: () => void;
   /** Owned by the dialog, because the rail tree selects folders too. */
   selectedFolderId: string | null;
-  onSelectFolder: (id: string) => void;
+  onAddFolder: () => void;
   onRemoveFolder: () => void;
   focusFolderTitle?: boolean;
   onFolderTitleFocused?: () => void;
@@ -83,12 +83,6 @@ export function CollectionEditor({
   const update = (patch: Partial<CollectionDraft>) => onChange({ ...entry, ...patch });
 
   const activeFolder = entry.folders.find(folder => folder.id === selectedFolderId) ?? null;
-
-  const addFolder = () => {
-    const folder = createFolderDraft();
-    onSelectFolder(folder.id);
-    update({ folders: [...entry.folders, folder] });
-  };
 
   return (
     <div className="space-y-4">
@@ -204,7 +198,7 @@ export function CollectionEditor({
 
       <div className="flex items-center justify-between border-t pt-3">
         <Label className="text-sm font-medium">{terms.children}</Label>
-        <Button variant="outline" size="sm" onClick={addFolder}>
+        <Button variant="outline" size="sm" onClick={onAddFolder}>
           <FolderPlus className="mr-1.5 h-4 w-4" /> {terms.addChild}
         </Button>
       </div>
@@ -212,7 +206,7 @@ export function CollectionEditor({
       {entry.folders.length === 0 ? (
         <button
           type="button"
-          onClick={addFolder}
+          onClick={onAddFolder}
           className="w-full rounded-md border border-dashed px-3 py-8 text-center text-sm text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent/40 hover:text-foreground"
         >
           Nothing here yet. Add a folder, then point it at one or more of your catalogs.

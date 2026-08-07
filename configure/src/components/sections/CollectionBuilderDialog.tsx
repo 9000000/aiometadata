@@ -1013,7 +1013,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           className="@container grid h-[100dvh] max-h-[100dvh] w-screen max-w-none grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden rounded-none p-0 sm:h-[92vh] sm:p-0 sm:max-h-[92vh] sm:w-[min(96vw,120rem)] sm:rounded-2xl"
           onInteractOutside={event => event.preventDefault()}
         >
-          <header className="flex flex-col gap-3 border-b px-5 py-4">
+          <header className="flex max-h-[40dvh] min-h-0 flex-col gap-3 overflow-y-auto border-b px-5 py-4">
             <div className="flex flex-wrap items-center gap-3">
               <DialogTitle className="flex items-center gap-2 text-lg font-semibold">
                 <Layers className="h-5 w-5" />
@@ -1449,7 +1449,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           </div>
           </div>
 
-          <footer className="flex flex-col gap-3 border-t px-5 py-4 @2xl:flex-row @2xl:flex-wrap @2xl:items-center @2xl:justify-end">
+          <footer className="flex max-h-[30dvh] min-h-0 flex-col gap-3 overflow-y-auto border-t px-5 py-4 @2xl:flex-row @2xl:flex-wrap @2xl:items-center @2xl:justify-end">
             <div className="min-w-0 space-y-1 @2xl:mr-auto">
               {overBy > 0 && (
                 <p className="flex items-start gap-1.5 text-xs text-amber-500">

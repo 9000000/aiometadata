@@ -50,7 +50,7 @@ export function StatusBar({
       </div>
 
       {open && rows.length > 0 && (
-        <ul className="max-h-56 space-y-1 overflow-y-auto rounded-md border bg-muted/40 p-2 text-xs">
+        <ul className="max-h-[min(14rem,25dvh)] space-y-1 overflow-y-auto rounded-md border bg-muted/40 p-2 text-xs">
           {rows.map(row => {
             const rowTone = row.severity === 'blocking'
               ? 'text-red-400'

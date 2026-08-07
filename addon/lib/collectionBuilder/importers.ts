@@ -90,6 +90,12 @@ function toCardStyle(value: unknown): FusionCardStyle {
   return 'medium';
 }
 
+/** The inverse of prefixedId in fusionExport, so a round trip keeps the same id. */
+function unprefixedId(value: unknown, prefix: string): string {
+  const id = trimmed(value);
+  return id.startsWith(prefix) ? id.slice(prefix.length) : id;
+}
+
 function looksLikeFusionTile(value: unknown): boolean {
   if (!isRecord(value)) return false;
   const hasLabel = 'name' in value || 'title' in value;
@@ -378,7 +384,7 @@ export function fromFusionWidgets(
       const badges = isRecord(presentation.badges) ? presentation.badges : {};
       const row: ClassicRowDraft = {
         ...createClassicRowDraft(title),
-        id: trimmed(raw.id) || newId(),
+        id: unprefixedId(raw.id, 'catalog.') || newId(),
         title,
         hideTitle: Boolean(raw.hideTitle),
         source,
@@ -403,7 +409,7 @@ export function fromFusionWidgets(
 
     entries.push({
       ...createCollectionDraft(title),
-      id: trimmed(raw.id) || newId(),
+      id: unprefixedId(raw.id, 'collection.') || newId(),
       title,
       hideTitle: Boolean(raw.hideTitle),
       folders,

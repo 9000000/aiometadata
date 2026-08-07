@@ -762,7 +762,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   const importCounts = useMemo(
     () => (importPreview
-      ? countImport(importPreview.entries, new Set(entries.map(entry => entry.id)))
+      ? countImport(importPreview.entries, entries)
       : null),
     [importPreview, entries]
   );

@@ -20,6 +20,19 @@ export interface MergeSummary {
 }
 
 /**
+ * Fusion namespaces widget ids by kind, and designs saved before we read that
+ * back carry the prefix in the config. So the join ignores it on both sides
+ * rather than trusting either to be the bare id.
+ */
+function joinKey(entry: BuilderEntry): string {
+  const id = entry.id;
+  for (const prefix of ['collection.', 'catalog.']) {
+    if (id.startsWith(prefix)) return id.slice(prefix.length);
+  }
+  return id;
+}
+
+/**
  * Genre is part of the identity: eleven folders can hold the same catalog and
  * differ only by which one they ask for.
  */
@@ -29,14 +42,15 @@ function sourceKey(source: SourceDraft): string {
   return `${source.catalogId}:${String(source.type ?? '').toLowerCase()}:${genre}`;
 }
 
-export function countImport(entries: BuilderEntry[], existingIds: Set<string>): ImportCounts {
+export function countImport(entries: BuilderEntry[], current: BuilderEntry[]): ImportCounts {
+  const held = new Set(current.map(joinKey));
   let collections = 0;
   let folders = 0;
   let sources = 0;
   let existing = 0;
 
   for (const entry of entries) {
-    if (existingIds.has(entry.id)) existing += 1;
+    if (held.has(joinKey(entry))) existing += 1;
     if (entry.kind === 'classicRow') {
       sources += entry.source ? 1 : 0;
       continue;
@@ -71,8 +85,8 @@ export function mergeEntries(
     updated: 0, added: 0, foldersAdded: 0, sourcesAdded: 0, sourcesSkipped: 0,
   };
 
-  const byId = new Map(existing.map(entry => [entry.id, entry]));
-  const takenEntryIds = new Set(existing.map(entry => entry.id));
+  const byId = new Map(existing.map(entry => [joinKey(entry), entry]));
+  const takenEntryIds = new Set(existing.flatMap(entry => [entry.id, joinKey(entry)]));
   const takenFolderIds = collectFolderIds(existing);
   const appended: BuilderEntry[] = [];
   const merged = new Map<string, BuilderEntry>();
@@ -95,7 +109,8 @@ export function mergeEntries(
   };
 
   for (const entry of incoming) {
-    const match = merged.get(entry.id) ?? byId.get(entry.id);
+    const key = joinKey(entry);
+    const match = merged.get(key) ?? byId.get(key);
 
     if (!match || match.kind !== entry.kind) {
       const next = { ...entry };
@@ -116,7 +131,7 @@ export function mergeEntries(
     if (match.kind === 'classicRow' || entry.kind === 'classicRow') {
       const next = { ...entry, id: match.id };
       if (JSON.stringify(next) !== JSON.stringify(match)) summary.updated += 1;
-      merged.set(entry.id, next);
+      merged.set(key, next);
       continue;
     }
 
@@ -143,10 +158,10 @@ export function mergeEntries(
     }
 
     if (changed) summary.updated += 1;
-    merged.set(entry.id, { ...match, folders });
+    merged.set(key, { ...match, folders });
   }
 
-  const entries = existing.map(entry => merged.get(entry.id) ?? entry);
+  const entries = existing.map(entry => merged.get(joinKey(entry)) ?? entry);
   return { entries: [...entries, ...appended], summary };
 }
 

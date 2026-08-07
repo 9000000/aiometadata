@@ -137,6 +137,7 @@ function toCollectionItem(
       entryId: folder.id,
       entryTitle: collectionTitle,
       message: 'A folder without a title was skipped.',
+      severity: 'warning',
     });
     return null;
   }
@@ -154,6 +155,7 @@ function toCollectionItem(
         entryId: folder.id,
         entryTitle: name,
         message: `Source "${trimmed(source.name) || trimmed(source.catalogId) || 'unnamed'}" is missing a catalog id or type and was skipped.`,
+        severity: 'warning',
       });
       continue;
     }
@@ -162,6 +164,7 @@ function toCollectionItem(
         entryId: folder.id,
         entryTitle: name,
         message: `Genre "${trimmed(source.genre)}" on "${trimmed(source.name) || plainLabel(source)}" is dropped. Fusion requests a catalog as <type>/<id> with no genre.`,
+        severity: 'info',
       });
     }
     dataSources.push(mapped);
@@ -173,6 +176,7 @@ function toCollectionItem(
       entryId: folder.id,
       entryTitle: name,
       message: `"${name}": ${nativeSkipped} source${nativeSkipped === 1 ? ' is' : 's are'} resolved by Nuvio itself. Fusion has no equivalent, so ${nativeSkipped === 1 ? 'it is' : 'they are'} only in the Nuvio export.`,
+      severity: 'info',
     });
   }
 
@@ -181,6 +185,7 @@ function toCollectionItem(
       entryId: folder.id,
       entryTitle: name,
       message: `Folder "${name}" has no usable sources and was skipped.`,
+      severity: 'warning',
     });
     return null;
   }
@@ -223,6 +228,7 @@ export function toFusionWidgets(
         entryId: entry.id,
         entryTitle: entry.title,
         message: 'An entry without a title was skipped.',
+        severity: 'warning',
       });
       continue;
     }
@@ -248,6 +254,7 @@ export function toFusionWidgets(
         entryId: entry.id,
         entryTitle: title,
         message: `Row "${title}" has no catalog selected and was skipped.`,
+        severity: 'warning',
       });
       continue;
     }
@@ -256,6 +263,7 @@ export function toFusionWidgets(
         entryId: entry.id,
         entryTitle: title,
         message: `Genre "${trimmed(entry.source.genre)}" is dropped. Fusion requests a catalog as <type>/<id> with no genre.`,
+        severity: 'info',
       });
     }
 

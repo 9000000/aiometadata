@@ -10,6 +10,7 @@ export interface ProblemTarget {
 export interface ProblemRow {
   key: string;
   message: string;
+  severity: 'blocking' | 'warning' | 'info';
   entryId: string | null;
   folderId: string | null;
 }
@@ -36,17 +37,20 @@ export function collectProblems(
   targets: Map<string, ProblemTarget>
 ): ProblemRow[] {
   const rows: ProblemRow[] = [];
-  const push = (key: string, id: string, message: string) => {
+  const push = (key: string, id: string, message: string, severity: ProblemRow['severity']) => {
     const target = targets.get(id);
     rows.push({
       key,
       message,
+      severity,
       entryId: target?.entryId ?? null,
       folderId: target?.folderId ?? null,
     });
   };
-  issues.forEach((issue, index) => push(`issue-${index}`, issue.folderId ?? issue.entryId, issue.message));
-  notes.forEach((note, index) => push(`note-${index}`, note.entryId, note.message));
+  issues.forEach((issue, index) =>
+    push(`issue-${index}`, issue.folderId ?? issue.entryId, issue.message, 'warning'));
+  notes.forEach((note, index) =>
+    push(`note-${index}`, note.entryId, note.message, note.severity ?? 'info'));
   return rows;
 }
 

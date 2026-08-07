@@ -2228,16 +2228,15 @@ function cacheWrapJikanApi(key: string, method: () => Promise<any>, customTTL: n
   const subkey = key.replace(/\s/g, '-');
   const ttl = customTTL !== null ? customTTL : JIKAN_API_TTL;
 
-  const jikanResultClassifier = (result: any, error: any = null) => {
-    if (error) {
-      if (error.response?.status === 429 || error.message?.includes('429')) {
-        cacheLogger.debug(`Jikan Cache - Skipping cache for rate limit error: ${key}`);
-        return { type: 'SKIP_CACHE', ttl: 0 };
-      }
-      return classifyResult(result, error);
+  // The key has to be forwarded: without it classifyResult cannot tell this is an
+  // external API, and every endpoint returning a bare object reads as empty.
+  const jikanResultClassifier = (result: any, error: any = null, cacheKey: string | null = null) => {
+    if (error && (error.response?.status === 429 || error.message?.includes('429'))) {
+      cacheLogger.debug(`Jikan Cache - Skipping cache for rate limit error: ${key}`);
+      return { type: 'SKIP_CACHE', ttl: 0 };
     }
 
-    return classifyResult(result, error);
+    return classifyResult(result, error, cacheKey);
   };
 
   return cacheWrapGlobal(`jikan-api:${subkey}`, method, ttl, {

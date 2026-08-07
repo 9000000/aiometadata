@@ -219,7 +219,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setStagedBlueprints([]);
     setActiveTab('design');
     setRailQuery('');
-    setExpandedIds(new Set());
+    setExpandedIds(new Set(saved[0]?.id ? [saved[0].id] : []));
     setTitleFocusId(null);
     setManifestUrl(buildManifestUrl(auth.userUUID));
   }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps

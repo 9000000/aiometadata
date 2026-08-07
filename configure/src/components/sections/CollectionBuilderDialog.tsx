@@ -69,6 +69,7 @@ import {
   buildIdentity,
   buildManifestUrl,
   catalogKey,
+  fillMissingGenres,
   findSourceIssues,
   findUnknownSources,
   healSourceNames,
@@ -985,8 +986,11 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const runImport = (mode: 'replace' | 'merge') => {
     if (!importPreview || importPreview.entries.length === 0) return;
     setConfirmReplace(false);
-    const incoming = healSourceNames(
-      realignSourceIds(clone(importPreview.entries) as BuilderEntry[], sourceList.catalogs),
+    const { entries: incoming, filled } = fillMissingGenres(
+      healSourceNames(
+        realignSourceIds(clone(importPreview.entries) as BuilderEntry[], sourceList.catalogs),
+        sourceList.catalogs
+      ),
       sourceList.catalogs
     );
     reissueTakenIds(incoming, mode === 'merge' ? collectIds(entries) : new Set<string>());
@@ -1004,11 +1008,18 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setImportText('');
     setImportPreview(null);
     setConvertNative(false);
+    const notes: string[] = [];
+    if (rebuildable > 0) {
+      notes.push(`${rebuildable} catalog${rebuildable === 1 ? '' : 's'} will be added when you apply.`);
+    }
+    if (filled.length > 0) {
+      notes.push(filled.length === 1
+        ? `${filled[0].name} arrived without a genre and was set to ${filled[0].genre}.`
+        : `${filled.length} catalogs arrived without a genre and were set to the one their catalog defaults to.`);
+    }
     toast.success(
       incoming.length === 1 ? '1 entry imported' : `${incoming.length} entries imported`,
-      rebuildable > 0
-        ? { description: `${rebuildable} catalog${rebuildable === 1 ? '' : 's'} will be added when you apply.` }
-        : undefined
+      notes.length > 0 ? { description: notes.join(' ') } : undefined
     );
   };
 

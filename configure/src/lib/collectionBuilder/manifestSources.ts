@@ -16,8 +16,10 @@ export interface ManifestCatalog {
   /** Source label from the user's config, for the picker only. */
   source?: string;
   genres?: string[];
-  /** The manifest marks genre as required, so a source without one returns nothing. */
+  /** The catalog returns nothing without a genre, so a source has to carry one. */
   genreRequired?: boolean;
+  /** What the manifest says it uses when the request carries no genre. */
+  genreDefault?: string;
   /** In the local config but not yet in the manifest, so the config needs saving. */
   pendingSave?: boolean;
   /** Profile tags from the user's config. The manifest does not carry these. */
@@ -89,8 +91,11 @@ export function deriveManifestCatalog(catalog: CatalogConfig): ManifestCatalog {
     genres,
     // getManifest sets `isRequired: showInHome ? false : true` on every branch.
     // Only worth flagging when we also have genres to offer, which locally means
-    // catalogs imported from another addon's manifest.
-    genreRequired: !catalog.showInHome && (genres?.length ?? 0) > 0,
+    // catalogs imported from another addon's manifest, and when none of them is
+    // the "None" that makes going without one a valid choice.
+    genreRequired: !catalog.showInHome
+      && (genres?.length ?? 0) > 0
+      && !genres?.some(genre => genre === 'None'),
   };
 }
 
@@ -162,6 +167,7 @@ export async function loadCatalogSources(
           tags: tagsById.get(key),
           genres: genreOptions(entry) ?? genresById.get(key),
           genreRequired: isGenreRequired(entry),
+          genreDefault: genreDefault(entry),
         };
       });
 
@@ -201,9 +207,24 @@ function needsNonGenreExtra(entry: any): boolean {
   return entry.extra.some((item: any) => item?.isRequired && item?.name !== 'genre');
 }
 
+/**
+ * getManifest marks genre required on every catalog that is not on the home row,
+ * whether or not the catalog needs one, so `isRequired` alone flags far more than
+ * it should. A list that offers "None" is saying the unfiltered whole is a valid
+ * answer, and those do serve without a genre, so only the rest can go empty.
+ */
 function isGenreRequired(entry: any): boolean {
   if (!Array.isArray(entry?.extra)) return false;
-  return entry.extra.some((item: any) => item?.isRequired && item?.name === 'genre');
+  const genre = entry.extra.find((item: any) => item?.name === 'genre');
+  if (!genre?.isRequired) return false;
+  return !(Array.isArray(genre.options) && genre.options.some((option: any) => option === 'None'));
+}
+
+/** The genre the manifest says it will use when the request carries none. */
+function genreDefault(entry: any): string | undefined {
+  if (!Array.isArray(entry?.extra)) return undefined;
+  const genre = entry.extra.find((item: any) => item?.name === 'genre');
+  return trimmed(genre?.default) || undefined;
 }
 
 function genreOptions(entry: any): string[] | undefined {
@@ -238,15 +259,50 @@ export function catalogKey(catalog: { id?: string; catalogId?: string; type: str
   return `${catalog.id ?? catalog.catalogId ?? ''}:${String(catalog.type ?? '').toLowerCase()}`;
 }
 
+/**
+ * The genre to start a source on: what the manifest says it will use anyway,
+ * falling back to the first option only when it declares none. Never a guess for
+ * a catalog that serves fine without one.
+ */
+function startingGenre(catalog: ManifestCatalog): string | null {
+  if (!catalog.genreRequired) return null;
+  return trimmed(catalog.genreDefault) || catalog.genres?.[0] || null;
+}
+
 /** The one way a picked catalog becomes a source, so every picker agrees. */
 export function sourceFromCatalog(catalog: ManifestCatalog): SourceDraft {
   return {
     catalogId: catalog.id,
     type: catalog.type,
     name: catalog.name,
-    genre: catalog.genreRequired ? catalog.genres?.[0] ?? null : null,
+    genre: startingGenre(catalog),
     ...(catalog.baseType ? { baseType: catalog.baseType } : {}),
   };
+}
+
+/**
+ * An imported file can name a catalog that needs a genre without carrying one,
+ * either because it predates us exporting genres or because the app that wrote it
+ * has no field for one. The row would come back empty, so start it on the genre
+ * the manifest already declares rather than leaving it broken.
+ */
+export function fillMissingGenres(
+  entries: BuilderEntry[],
+  catalogs: ManifestCatalog[]
+): { entries: BuilderEntry[]; filled: Array<{ name: string; genre: string }> } {
+  const byKey = new Map(catalogs.map(catalog => [catalogKey(catalog), catalog]));
+  const filled: Array<{ name: string; genre: string }> = [];
+
+  const fill = (source: SourceDraft): SourceDraft => {
+    if (isNativeSource(source) || trimmed(source.genre)) return source;
+    const match = byKey.get(catalogKey(source));
+    const genre = match ? startingGenre(match) : null;
+    if (!genre) return source;
+    filled.push({ name: match?.name || source.name || source.catalogId, genre });
+    return { ...source, genre };
+  };
+
+  return { entries: mapSources(entries, fill), filled };
 }
 
 /** Sources whose catalog is not in the resolved catalog list, keyed for lookup. */

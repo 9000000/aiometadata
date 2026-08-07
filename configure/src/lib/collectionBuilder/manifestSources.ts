@@ -1,4 +1,5 @@
 import { allCatalogDefinitions } from '@/data/catalogs';
+import { SUFFIX_TYPES } from './catalogBlueprints';
 import type { AppConfig, CatalogConfig } from '@/contexts/config';
 import type { AddonIdentity, BuilderEntry, SourceDraft } from '@shared/types';
 import { isNativeSource } from '@shared/catalogReconstruction';
@@ -249,6 +250,97 @@ export function findUnknownSources(
 }
 
 /**
+ * Rewrites every source in place, returning the original reference when none
+ * changed so callers can run this in an effect without re-triggering themselves.
+ */
+function mapSources(
+  entries: BuilderEntry[],
+  rewrite: (source: SourceDraft) => SourceDraft
+): BuilderEntry[] {
+  let changed = false;
+
+  const next = entries.map((entry): BuilderEntry => {
+    if (entry.kind === 'classicRow') {
+      if (!entry.source) return entry;
+      const source = rewrite(entry.source);
+      if (source === entry.source) return entry;
+      changed = true;
+      return { ...entry, source };
+    }
+
+    let entryChanged = false;
+    const folders = entry.folders.map(folder => {
+      let folderChanged = false;
+      const sources = folder.sources.map(source => {
+        const next = rewrite(source);
+        if (next !== source) folderChanged = true;
+        return next;
+      });
+      if (!folderChanged) return folder;
+      entryChanged = true;
+      return { ...folder, sources };
+    });
+
+    if (!entryChanged) return entry;
+    changed = true;
+    return { ...entry, folders };
+  });
+
+  return changed ? next : entries;
+}
+
+/**
+ * A manifest id only carries the original type as a suffix when the catalog has a
+ * displayType, so one setup addresses MAL By Studio as `mal.studios` and another
+ * as `mal.studios_anime`. An imported source spells it whichever way the author's
+ * manifest did, and the wrong spelling returns nothing rather than failing, so
+ * point it at the form this manifest actually serves.
+ */
+export function realignSourceIds(
+  entries: BuilderEntry[],
+  catalogs: ManifestCatalog[]
+): BuilderEntry[] {
+  const known = new Set(catalogs.map(catalogKey));
+  const byId = new Map<string, ManifestCatalog[]>();
+  for (const catalog of catalogs) {
+    const bucket = byId.get(catalog.id);
+    if (bucket) bucket.push(catalog);
+    else byId.set(catalog.id, [catalog]);
+  }
+
+  const candidateIds = (source: SourceDraft): string[] => {
+    const id = trimmed(source.catalogId);
+    const type = trimmed(source.type);
+    const ids: string[] = [];
+    for (const suffix of SUFFIX_TYPES) {
+      if (id.toLowerCase().endsWith(`_${suffix}`)) ids.push(id.slice(0, -(suffix.length + 1)));
+    }
+    if (type) ids.push(`${id}_${type.toLowerCase()}`);
+    return ids;
+  };
+
+  const realign = (source: SourceDraft): SourceDraft => {
+    if (isNativeSource(source)) return source;
+    if (known.has(catalogKey(source))) return source;
+
+    for (const candidate of candidateIds(source)) {
+      const matches = byId.get(candidate);
+      if (!matches || matches.length === 0) continue;
+      // Ambiguity is left to the repoint dialog: the same id under two types is a
+      // choice, and guessing it wrong is worse than saying the catalog is missing.
+      const match = matches.length === 1
+        ? matches[0]
+        : matches.find(entry => catalogKey(entry) === catalogKey({ ...source, catalogId: candidate }));
+      if (!match) continue;
+      return { ...source, catalogId: match.id, type: match.type };
+    }
+    return source;
+  };
+
+  return mapSources(entries, realign);
+}
+
+/**
  * Imported files carry whatever the author's setup called a catalog, and Fusion
  * files carry no name at all. Where the catalog is one of ours, prefer our own
  * name so the editor shows what the user recognises instead of a raw id.
@@ -267,38 +359,7 @@ export function healSourceNames(
       : source;
   };
 
-  let changed = false;
-
-  const next = entries.map((entry): BuilderEntry => {
-    if (entry.kind === 'classicRow') {
-      if (!entry.source) return entry;
-      const healed = heal(entry.source);
-      if (healed === entry.source) return entry;
-      changed = true;
-      return { ...entry, source: healed };
-    }
-
-    let entryChanged = false;
-    const folders = entry.folders.map(folder => {
-      let folderChanged = false;
-      const sources = folder.sources.map(source => {
-        const healed = heal(source);
-        if (healed !== source) folderChanged = true;
-        return healed;
-      });
-      if (!folderChanged) return folder;
-      entryChanged = true;
-      return { ...folder, sources };
-    });
-
-    if (!entryChanged) return entry;
-    changed = true;
-    return { ...entry, folders };
-  });
-
-  // Same reference when nothing needed healing, so callers can use this in an
-  // effect without re-triggering themselves.
-  return changed ? next : entries;
+  return mapSources(entries, heal);
 }
 
 export interface SourceIssue {

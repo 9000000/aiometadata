@@ -73,6 +73,7 @@ import {
   findUnknownSources,
   healSourceNames,
   loadCatalogSources,
+  realignSourceIds,
   stripManifestSuffix,
   type CatalogSourceList,
   type ManifestCatalog,
@@ -245,7 +246,10 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   useEffect(() => {
     if (sourceList.catalogs.length === 0) return;
-    const healed = healSourceNames(entries, sourceList.catalogs);
+    const healed = healSourceNames(
+      realignSourceIds(entries, sourceList.catalogs),
+      sourceList.catalogs
+    );
     if (healed === entries) return;
     setEntries(healed);
     // Only carry the baseline along if nothing else had been edited yet,
@@ -758,8 +762,15 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     previewImport(await file.text());
   };
 
+  // Realigned first, so the panel counts what the import will actually add rather
+  // than the ids the file happens to spell.
   const importUnknown = useMemo(
-    () => (importPreview ? findUnknownSources(importPreview.entries, sourceList.catalogs) : []),
+    () => (importPreview
+      ? findUnknownSources(
+          realignSourceIds(importPreview.entries, sourceList.catalogs),
+          sourceList.catalogs
+        )
+      : []),
     [importPreview, sourceList.catalogs]
   );
 
@@ -984,7 +995,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     if (!importPreview || importPreview.entries.length === 0) return;
     setConfirmReplace(false);
     const incoming = healSourceNames(
-      clone(importPreview.entries) as BuilderEntry[],
+      realignSourceIds(clone(importPreview.entries) as BuilderEntry[], sourceList.catalogs),
       sourceList.catalogs
     );
     reissueTakenIds(incoming, mode === 'merge' ? collectIds(entries) : new Set<string>());

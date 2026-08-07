@@ -66,8 +66,10 @@ export function SortableTreeRow({
   };
 
   // Reserved tracks rather than conditional rendering, so revealing a control
-  // on hover does not shift the name it sits beside.
-  const reveal = 'opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100';
+  // on hover does not shift the name it sits beside. Where nothing can hover,
+  // nothing is hidden.
+  const reveal =
+    'transition-opacity [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100';
 
   return (
     <div

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Check, Search } from 'lucide-react';
 
@@ -36,6 +36,9 @@ export function CatalogPicker({
   const [tagFilters, setTagFilters] = useState<string[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  // A row under a resting pointer would otherwise steal the selection back on
+  // every repaint, so hovering only counts after the mouse has actually moved.
+  const pointerActive = useRef(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -115,6 +118,7 @@ export function CatalogPicker({
   };
 
   const move = (delta: number) => {
+    pointerActive.current = false;
     if (filtered.length === 0) return;
     const next = Math.min(Math.max(activeIndex + delta, 0), filtered.length - 1);
     setActiveIndex(next);
@@ -214,14 +218,15 @@ export function CatalogPicker({
                 ? `${catalogs.length} ${catalogs.length === 1 ? 'catalog' : 'catalogs'}`
                 : `${filtered.length} of ${catalogs.length}`}
             </span>
-            <span className="hidden sm:inline">
-              &uarr;&darr; to move, Enter to {multiple ? 'tick' : 'pick'}
-              {multiple ? ', Ctrl+Enter to add' : ''}
+            <span className="text-right">
+              &uarr;&darr; move &middot; Enter {multiple ? 'ticks' : 'picks'}
+              {multiple ? ' · Ctrl+Enter adds' : ''}
             </span>
           </div>
 
           <div
             ref={setScrollEl}
+            onMouseMove={() => { pointerActive.current = true; }}
             className="mt-1 overflow-y-auto"
             style={filtered.length === 0 ? undefined : { height: Math.min(320, filtered.length * 40) }}
           >
@@ -256,7 +261,7 @@ export function CatalogPicker({
                         disabled={isAdded}
                         aria-pressed={multiple && !isAdded ? isSelected : undefined}
                         onClick={() => toggle(catalog)}
-                        onMouseEnter={() => setActiveIndex(virtualRow.index)}
+                        onMouseEnter={() => { if (pointerActive.current) setActiveIndex(virtualRow.index); }}
                         className={`flex h-9 w-full items-center gap-2 rounded-md border px-2 text-left text-sm transition-colors ${
                           isAdded
                             ? 'cursor-default border-transparent opacity-45'

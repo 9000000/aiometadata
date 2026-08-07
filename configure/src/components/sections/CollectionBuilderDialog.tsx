@@ -1010,7 +1010,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     <>
       <Dialog open={isOpen} onOpenChange={open => !open && requestClose()}>
         <DialogContent
-          className="grid h-[100dvh] max-h-[100dvh] w-screen max-w-none grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden rounded-none p-0 sm:h-[92vh] sm:max-h-[92vh] sm:w-[min(96vw,120rem)] sm:rounded-2xl"
+          className="@container grid h-[100dvh] max-h-[100dvh] w-screen max-w-none grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden rounded-none p-0 sm:h-[92vh] sm:max-h-[92vh] sm:w-[min(96vw,120rem)] sm:rounded-2xl"
           onInteractOutside={event => event.preventDefault()}
         >
           <header className="flex flex-col gap-3 border-b px-5 py-4">
@@ -1242,7 +1242,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
             </div>
 
-            <div className="min-h-0 min-w-0 overflow-y-auto">
+            <div className="@container min-h-0 min-w-0 overflow-y-auto">
               <div className="sticky top-0 z-10 -mx-1 mb-4 flex items-center gap-1.5 border-b bg-card/95 px-1 py-2 text-sm backdrop-blur">
                 <button
                   type="button"

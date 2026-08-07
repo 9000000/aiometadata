@@ -106,6 +106,7 @@ import {
 import type { ShareableCatalog } from '@shared/catalogSharing';
 
 import { CatalogPicker } from './collectionBuilder/CatalogPicker';
+import { StatusBar } from './collectionBuilder/StatusBar';
 import { ClassicRowEditor } from './collectionBuilder/ClassicRowEditor';
 import { CollectionEditor } from './collectionBuilder/CollectionEditor';
 import { SortableTreeRow } from './collectionBuilder/EntryRail';
@@ -871,6 +872,19 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   const verdict = useMemo(() => saveVerdict(problems), [problems]);
 
+  // Not a fault in the design, so it stays out of the verdict, but it changes
+  // what the editor can offer and belongs on the same shelf as the rest.
+  const statusRows = useMemo(() => {
+    if (sourceList.origin !== 'derived') return problems;
+    const message = sourceList.error
+      ? `Could not read your manifest (${sourceList.error}). The catalog list is derived from your local config, so genre options and genre requirements are missing.`
+      : 'Save to read the real manifest. Until then the catalog list is derived from your local config, so genre options and genre requirements are missing.';
+    return [
+      { key: 'derived-manifest', message, severity: 'warning' as IssueSeverity, entryId: null, folderId: null },
+      ...problems,
+    ];
+  }, [problems, sourceList.origin, sourceList.error]);
+
   const worstByEntry = useMemo(() => severityByField(problems, 'entryId'), [problems]);
 
   const worstByFolder = useMemo(() => severityByField(problems, 'folderId'), [problems]);
@@ -999,18 +1013,23 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               </Badge>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <span>
-                Catalogs read from {sourceList.origin === 'derived' ? 'your local config' : 'your saved manifest'}
-              </span>
-              <button
-                type="button"
-                onClick={() => setShowManifestField(value => !value)}
-                className="underline underline-offset-2 hover:text-foreground"
-              >
-                {showManifestField ? 'Hide' : 'Change source'}
-              </button>
-            </div>
+            <StatusBar
+              rows={statusRows}
+              onGoTo={goToProblem}
+              trailing={
+                <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  Catalogs read from{' '}
+                  {sourceList.origin === 'derived' ? 'your local config' : 'your saved manifest'}
+                  <button
+                    type="button"
+                    onClick={() => setShowManifestField(value => !value)}
+                    className="underline underline-offset-2 hover:text-foreground"
+                  >
+                    {showManifestField ? 'Hide' : 'Change source'}
+                  </button>
+                </span>
+              }
+            />
             {showManifestField && (
               <div className="space-y-2">
                 <Label htmlFor="collection-manifest-url" className="text-sm font-medium">Manifest URL</Label>
@@ -1026,27 +1045,6 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           </header>
 
           <div className="@container min-h-0 overflow-hidden px-5 py-4">
-          {target === 'fusion' && totalNative > 0 && (
-            <div className="flex flex-col gap-2 rounded-md border border-amber-600/50 bg-amber-950/20 p-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="flex items-start gap-1.5 text-xs text-amber-500">
-                <AlertTriangle className="mt-px h-4 w-4 shrink-0" />
-                <span>
-                  Fusion cannot serve {totalNative} of these sources. Nuvio fetches them from TMDB and Trakt
-                  itself, and Fusion has no equivalent, so the tiles using them are left out of this export.
-                  Routing them through AIOMetadata is the only way to keep them.
-                </span>
-              </p>
-              <Button
-                size="sm"
-                variant="outline"
-                className="shrink-0 border-amber-600/60 text-amber-200 hover:bg-amber-900/40"
-                onClick={() => convertNativeSources()}
-              >
-                <Replace className="mr-1.5 h-4 w-4" /> Route all through AIOMetadata
-              </Button>
-            </div>
-          )}
-
           <div className="grid h-full min-h-0 gap-4 @2xl:grid-cols-[18rem_minmax(0,1fr)] @6xl:grid-cols-[18rem_minmax(0,1fr)_24rem]">
             <div className="flex min-h-0 flex-col gap-2 overflow-y-auto pr-1">
               <div className="flex gap-2">
@@ -1198,22 +1196,6 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 </SortableContext>
               </DndContext>
 
-              {sourceList.origin === 'derived' && (
-                <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-2 py-2 text-[11px] text-amber-600 dark:text-amber-400">
-                  {sourceList.error
-                    ? `Could not read your manifest (${sourceList.error}). The catalog list is derived from your local config.`
-                    : 'Save to read the real manifest. Until then the catalog list is derived from your local config.'}
-                  {' '}Genre options and genre requirements only come from the manifest, so save first if a catalog needs one.
-                  {' '}
-                  <button
-                    type="button"
-                    onClick={() => setShowManifestField(true)}
-                    className="underline underline-offset-2 hover:text-foreground"
-                  >
-                    Set the manifest URL
-                  </button>
-                </div>
-              )}
             </div>
 
             <div className="min-h-0 min-w-0 overflow-y-auto">
@@ -1239,70 +1221,6 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   </>
                 )}
               </div>
-              {problems.length > 0 && (
-                <div
-                  className={`mb-3 space-y-1.5 rounded-md border p-3 ${
-                    verdict.blocking > 0 ? 'border-red-500/50 bg-red-500/5' : 'border-amber-500/40 bg-amber-500/5'
-                  }`}
-                >
-                  <div className={`flex items-center gap-2 text-xs font-medium ${
-                    verdict.blocking > 0 ? 'text-red-500' : 'text-amber-600 dark:text-amber-400'
-                  }`}>
-                    <AlertTriangle className="h-4 w-4 shrink-0" />
-                    {verdict.blocking > 0 ? 'Fix before saving' : 'Worth checking'}
-                    <Badge
-                      variant="outline"
-                      className={`h-5 px-1.5 text-[10px] ${
-                        verdict.blocking > 0
-                          ? 'border-red-600/50 text-red-400'
-                          : 'border-amber-600/50 text-amber-500'
-                      }`}
-                    >
-                      {problems.length}
-                    </Badge>
-                    <span className="text-[10px] font-normal text-muted-foreground">
-                      for the {target === 'nuvio' ? 'Nuvio' : 'Fusion'} export
-                    </span>
-                  </div>
-                  <ul className="space-y-1 text-xs">
-                    {problems.slice(0, 12).map(problem => {
-                      const tone = problem.severity === 'blocking'
-                        ? 'text-red-400'
-                        : problem.severity === 'warning'
-                          ? 'text-amber-500'
-                          : 'text-muted-foreground';
-                      return (
-                        <li key={problem.key}>
-                          {problem.entryId ? (
-                            <button
-                              type="button"
-                              onClick={() => goToProblem(problem.entryId, problem.folderId)}
-                              className={`w-full rounded px-1 py-0.5 text-left underline-offset-2 hover:bg-amber-500/10 hover:text-foreground hover:underline ${tone}`}
-                            >
-                              {problem.message}
-                            </button>
-                          ) : (
-                            <span className={`block px-1 py-0.5 ${tone}`}>{problem.message}</span>
-                          )}
-                        </li>
-                      );
-                    })}
-                    {problems.length > 12 && (
-                      <li className="px-1 py-0.5 text-muted-foreground">and {problems.length - 12} more</li>
-                    )}
-                  </ul>
-                  {overBy > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="mt-1"
-                      onClick={() => { setPendingMode('save'); setOverLimitOpen(true); }}
-                    >
-                      Apply the layout without the catalogs
-                    </Button>
-                  )}
-                </div>
-              )}
 
               <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <TabsList>
@@ -1527,6 +1445,24 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 <p className="text-xs text-muted-foreground">{stageCopy.hint}</p>
               )}
             </div>
+            {target === 'fusion' && totalNative > 0 && (
+              <Button
+                variant="outline"
+                className="h-9 border-amber-600/60 text-amber-200 hover:bg-amber-900/40"
+                onClick={() => convertNativeSources()}
+              >
+                <Replace className="mr-1.5 h-4 w-4" /> Route all through AIOMetadata
+              </Button>
+            )}
+            {overBy > 0 && (
+              <Button
+                variant="outline"
+                className="h-9"
+                onClick={() => { setPendingMode('save'); setOverLimitOpen(true); }}
+              >
+                Apply the layout without the catalogs
+              </Button>
+            )}
             {unresolvedSources.length > 0 && (
               <Button variant="outline" onClick={() => setRemapOpen(true)}>
                 <Replace className="mr-1.5 h-4 w-4" /> Swap catalogs

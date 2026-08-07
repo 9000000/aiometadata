@@ -317,7 +317,37 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   const selected = entries.find(entry => entry.id === selectedId) || null;
 
-  const visibleTree = useMemo(() => filterEntryTree(entries, railQuery), [entries, railQuery]);
+  const visibleTree = useMemo(
+    () => filterEntryTree(entries, railQuery).map(({ entry, matchedFolderIds }) => ({
+      entry,
+      // Reorder targets have to come from the full list, or a move made while
+      // filtering would land in the wrong slot.
+      folders: entry.kind === 'collection'
+        ? entry.folders
+            .map((folder, folderIndex) => ({ folder, folderIndex }))
+            .filter(({ folder }) => !matchedFolderIds || matchedFolderIds.has(folder.id))
+        : [],
+    })),
+    [entries, railQuery]
+  );
+
+  const railItemIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const { entry, folders } of visibleTree) {
+      ids.push(entry.id);
+      if (expandedIds.has(entry.id)) for (const { folder } of folders) ids.push(folder.id);
+    }
+    return ids;
+  }, [visibleTree, expandedIds]);
+
+  const folderOwners = useMemo(() => {
+    const owners = new Map<string, string>();
+    for (const entry of entries) {
+      if (entry.kind !== 'collection') continue;
+      for (const folder of entry.folders) owners.set(folder.id, entry.id);
+    }
+    return owners;
+  }, [entries]);
 
   const updateEntry = useCallback((next: BuilderEntry) => {
     setEntries(prev => prev.map(entry => (entry.id === next.id ? next : entry)));
@@ -385,10 +415,28 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const handleRailDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
+    const activeId = String(active.id);
+    const overId = String(over.id);
+    const activeOwner = folderOwners.get(activeId);
+    const overOwner = folderOwners.get(overId);
+
+    if (activeOwner) {
+      if (overOwner !== activeOwner) return;
+      setEntries(prev => prev.map(entry => {
+        if (entry.id !== activeOwner || entry.kind !== 'collection') return entry;
+        const from = entry.folders.findIndex(folder => folder.id === activeId);
+        const to = entry.folders.findIndex(folder => folder.id === overId);
+        if (from < 0 || to < 0) return entry;
+        return { ...entry, folders: arrayMove(entry.folders, from, to) };
+      }));
+      return;
+    }
+
+    const overEntryId = overOwner ?? overId;
     setEntries(prev => {
-      const from = prev.findIndex(entry => entry.id === active.id);
-      const to = prev.findIndex(entry => entry.id === over.id);
-      if (from < 0 || to < 0) return prev;
+      const from = prev.findIndex(entry => entry.id === activeId);
+      const to = prev.findIndex(entry => entry.id === overEntryId);
+      if (from < 0 || to < 0 || from === to) return prev;
       return arrayMove(prev, from, to);
     });
   };
@@ -1117,21 +1165,14 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               )}
 
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleRailDragEnd}>
-                <SortableContext items={visibleTree.map(item => item.entry.id)} strategy={verticalListSortingStrategy}>
+                <SortableContext items={railItemIds} strategy={verticalListSortingStrategy}>
                   <div className="space-y-0.5">
-                    {visibleTree.map(({ entry, matchedFolderIds }) => {
-                      // Reorder targets have to come from the full list, or a move
-                      // made while filtering would land in the wrong slot.
+                    {visibleTree.map(({ entry, folders }) => {
                       const index = entries.findIndex(item => item.id === entry.id);
                       const excluded: 'nuvio' | 'fusion' | null =
                         target === 'nuvio' && entry.kind === 'classicRow' ? 'fusion'
                         : target === 'fusion' && entryIsNative(entry) ? 'nuvio'
                         : null;
-                      const folders = entry.kind === 'collection'
-                        ? entry.folders
-                            .map((folder, folderIndex) => ({ folder, folderIndex }))
-                            .filter(({ folder }) => !matchedFolderIds || matchedFolderIds.has(folder.id))
-                        : [];
                       const folderCount = entry.kind === 'collection' ? entry.folders.length : 0;
                       const expanded = expandedIds.has(entry.id);
                       return (

@@ -288,7 +288,7 @@ export function CollectionEditor({
         <div className="grid gap-3 lg:grid-cols-[minmax(0,13rem)_minmax(0,1fr)]">
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <SortableContext items={entry.folders.map(folder => folder.id)} strategy={verticalListSortingStrategy}>
-              <div className="max-h-48 space-y-1.5 overflow-y-auto pr-1 lg:max-h-none lg:overflow-visible lg:pr-0">
+              <div className="space-y-1.5">
                 {entry.folders.map((folder, index) => (
                   <SortableFolderRow
                     key={folder.id}

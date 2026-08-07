@@ -859,7 +859,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     <>
       <Dialog open={isOpen} onOpenChange={open => !open && requestClose()}>
         <DialogContent
-          className="max-w-6xl max-h-[90vh] overflow-y-auto"
+          className="h-[100dvh] max-h-[100dvh] w-screen max-w-none overflow-y-auto rounded-none p-4 sm:h-auto sm:max-h-[90vh] sm:w-full sm:max-w-6xl sm:rounded-lg sm:p-6"
           onInteractOutside={event => event.preventDefault()}
         >
           <DialogHeader>
@@ -1029,7 +1029,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleRailDragEnd}>
                 <SortableContext items={visibleEntries.map(entry => entry.id)} strategy={verticalListSortingStrategy}>
-                  <div className="max-h-56 space-y-1.5 overflow-y-auto pr-1 lg:max-h-none lg:overflow-visible lg:pr-0">
+                  <div className="space-y-1.5">
                     {visibleEntries.map(entry => {
                       // Reorder targets have to come from the full list, or a move
                       // made while filtering would land in the wrong slot.
@@ -1346,7 +1346,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   <textarea
                     readOnly
                     value={json}
-                    className="h-80 w-full resize-none rounded-md border bg-muted p-3 font-mono text-xs focus:outline-none"
+                    className="h-56 w-full resize-none rounded-md border bg-muted p-3 font-mono text-xs focus:outline-none sm:h-80"
                     onClick={event => (event.target as HTMLTextAreaElement).select()}
                   />
                 </TabsContent>

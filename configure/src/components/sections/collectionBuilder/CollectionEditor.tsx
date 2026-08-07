@@ -40,6 +40,7 @@ export function CollectionEditor({
   pendingKeys,
   target,
   onChange,
+  onUndoableChange,
   onAddSource,
   onReplaceSource,
   tagOptions,
@@ -57,6 +58,8 @@ export function CollectionEditor({
   pendingKeys?: Set<string>;
   target: Target;
   onChange: (next: CollectionDraft) => void;
+  /** Same as onChange, but the caller offers an Undo for it. */
+  onUndoableChange?: (label: string, next: CollectionDraft) => void;
   onAddSource: (folderId: string) => void;
   onReplaceSource: (folderId: string, index: number) => void;
   tagOptions: TagOption[];
@@ -138,6 +141,13 @@ export function CollectionEditor({
     update({
       folders: [...entry.folders.slice(0, index + 1), copy, ...entry.folders.slice(index + 1)],
     });
+  };
+
+  const removeFolder = (index: number) => {
+    const doomed = entry.folders[index];
+    const next = { ...entry, folders: entry.folders.filter((_, i) => i !== index) };
+    if (onUndoableChange) onUndoableChange(`Deleted ${doomed?.title || 'folder'}`, next);
+    else onChange(next);
   };
 
   const addFolder = () => {
@@ -293,7 +303,7 @@ export function CollectionEditor({
                     onMoveTo={position => moveFolderTo(index, position)}
                     onDuplicate={() => duplicateFolder(index)}
                     onSelect={() => setSelectedFolderId(folder.id)}
-                    onDelete={() => update({ folders: entry.folders.filter((_, i) => i !== index) })}
+                    onDelete={() => removeFolder(index)}
                   />
                 ))}
               </div>
@@ -310,7 +320,11 @@ export function CollectionEditor({
                 target={target}
                 onChange={next =>
                   update({ folders: entry.folders.map((f, i) => (i === activeIndex ? next : f)) })}
-                onRemove={() => update({ folders: entry.folders.filter((_, i) => i !== activeIndex) })}
+                onUndoableChange={onUndoableChange && ((label, next) => onUndoableChange(label, {
+                  ...entry,
+                  folders: entry.folders.map((f, i) => (i === activeIndex ? next : f)),
+                }))}
+                onRemove={() => removeFolder(activeIndex)}
                 onAddSource={() => onAddSource(activeFolder.id)}
                 onReplaceSource={index => onReplaceSource(activeFolder.id, index)}
                 tagOptions={tagOptions}

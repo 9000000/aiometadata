@@ -151,6 +151,7 @@ export function FolderCard({
   pendingKeys,
   target,
   onChange,
+  onUndoableChange,
   onRemove,
   onAddSource,
   onReplaceSource,
@@ -164,6 +165,8 @@ export function FolderCard({
   pendingKeys?: Set<string>;
   target: Target;
   onChange: (next: FolderDraft) => void;
+  /** Same as onChange, but the caller offers an Undo for it. */
+  onUndoableChange?: (label: string, next: FolderDraft) => void;
   onRemove: () => void;
   onAddSource: () => void;
   onReplaceSource: (index: number) => void;
@@ -338,7 +341,12 @@ export function FolderCard({
                   catalogs={catalogs}
                   pendingKeys={pendingKeys}
                   onChange={next => update({ sources: folder.sources.map((s, i) => (i === index ? next : s)) })}
-                  onRemove={() => update({ sources: folder.sources.filter((_, i) => i !== index) })}
+                  onRemove={() => {
+                    const next = { ...folder, sources: folder.sources.filter((_, i) => i !== index) };
+                    const label = `Removed ${source.name || source.catalogId}`;
+                    if (onUndoableChange) onUndoableChange(label, next);
+                    else onChange(next);
+                  }}
                   onReplace={() => onReplaceSource(index)}
                 />
               ))}

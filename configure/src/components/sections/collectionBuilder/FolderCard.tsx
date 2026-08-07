@@ -30,6 +30,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { getTagColor } from '@/lib/tagColors';
+import type { IssueSeverity } from '@/lib/collectionBuilder/issueCenter';
 import { catalogKey, type ManifestCatalog } from '@/lib/collectionBuilder/manifestSources';
 import { TERMS, type Target } from '@/lib/collectionBuilder/terms';
 import { hasNuvioFolderArt, type FolderDraft } from '@shared/types';
@@ -41,8 +42,7 @@ import { ASPECT_BY_TILE, SHAPE_LABELS, SHAPE_ORDER, SHAPE_PREVIEW, type TagOptio
 
 export function SortableFolderRow({
   folder,
-  hasUnknown,
-  warnings = 0,
+  severity,
   allNative,
   placeholder,
   isActive,
@@ -55,8 +55,8 @@ export function SortableFolderRow({
   onDelete,
 }: {
   folder: FolderDraft;
-  hasUnknown: boolean;
-  warnings?: number;
+  /** The worst thing the issue list says about this folder, if anything. */
+  severity?: IssueSeverity;
   /** Every source here is resolved by the client, so none of it reaches us. */
   allNative?: boolean;
   placeholder: string;
@@ -103,14 +103,14 @@ export function SortableFolderRow({
       <button type="button" onClick={onSelect} className="flex min-w-0 flex-1 items-center gap-2 text-left">
         <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate">{folder.title || placeholder}</span>
-        {(hasUnknown || warnings > 0) && (
+        {severity && severity !== 'info' && (
           <span
             className="shrink-0"
-            title={hasUnknown
-              ? 'Points at a catalog you do not have'
-              : `${warnings} thing${warnings === 1 ? '' : 's'} worth checking here`}
+            title={severity === 'blocking' ? 'Must be fixed before saving' : 'Worth checking'}
           >
-            <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+            <AlertTriangle
+              className={`h-3.5 w-3.5 ${severity === 'blocking' ? 'text-red-500' : 'text-amber-500'}`}
+            />
           </span>
         )}
         {allNative && (

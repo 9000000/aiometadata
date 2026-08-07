@@ -22,6 +22,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import type { IssueSeverity } from '@/lib/collectionBuilder/issueCenter';
 import { catalogKey, type ManifestCatalog } from '@/lib/collectionBuilder/manifestSources';
 import { TERMS, type Target } from '@/lib/collectionBuilder/terms';
 import { isNativeSource } from '@shared/catalogReconstruction';
@@ -44,7 +45,7 @@ export function CollectionEditor({
   onAddByTag,
   nativeCount,
   onConvertNative,
-  folderWarnings,
+  folderSeverity,
   focus,
   onFocusHandled,
   focusTitle,
@@ -62,8 +63,8 @@ export function CollectionEditor({
   /** Sources here that Nuvio resolves itself and this addon could take over. */
   nativeCount: number;
   onConvertNative: () => void;
-  /** Notes the export would raise about a folder, counted per folder id. */
-  folderWarnings?: Map<string, number>;
+  /** The worst thing the issue list says about each folder, by folder id. */
+  folderSeverity?: Map<string, IssueSeverity>;
   focus?: { entryId: string; folderId: string } | null;
   onFocusHandled?: () => void;
   focusTitle?: boolean;
@@ -105,8 +106,6 @@ export function CollectionEditor({
     setSelectedFolderId(focus.folderId);
     onFocusHandled?.();
   }, [focus, onFocusHandled]);
-
-  const knownKeys = useMemo(() => new Set(catalogs.map(catalogKey)), [catalogs]);
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -285,12 +284,7 @@ export function CollectionEditor({
                     key={folder.id}
                     folder={folder}
                     placeholder={`Untitled ${terms.child.toLowerCase()}`}
-                    hasUnknown={folder.sources.some(source =>
-                      !isNativeSource(source)
-                      && !knownKeys.has(catalogKey(source))
-                      && !pendingKeys?.has(catalogKey(source))
-                    )}
-                    warnings={folderWarnings?.get(folder.id) ?? 0}
+                    severity={folderSeverity?.get(folder.id)}
                     allNative={folder.sources.length > 0 && folder.sources.every(isNativeSource)}
                     isActive={index === activeIndex}
                     canMoveUp={index > 0}

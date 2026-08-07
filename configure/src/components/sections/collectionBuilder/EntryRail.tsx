@@ -2,6 +2,7 @@ import { AlertTriangle, GripVertical, Layers, ListOrdered, Rows3, Trash2 } from 
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
+import type { IssueSeverity } from '@/lib/collectionBuilder/issueCenter';
 import type { BuilderEntry } from '@shared/types';
 import { entrySourceCount } from './shared';
 import { ReorderArrows, RowActions } from './SourceRow';
@@ -10,8 +11,7 @@ export function SortableEntryRow({
   entry,
   isActive,
   excluded,
-  hasUnknown,
-  warnings = 0,
+  severity,
   allNative,
   canMoveUp,
   canMoveDown,
@@ -25,9 +25,8 @@ export function SortableEntryRow({
   isActive: boolean;
   /** True when the active target has no equivalent and will skip this entry. */
   excluded: boolean;
-  /** True when it points at a catalog that is not in the user's setup. */
-  hasUnknown: boolean;
-  warnings?: number;
+  /** The worst thing the issue list says about this entry, if anything. */
+  severity?: IssueSeverity;
   /** Every source here is resolved by the client, so none of it reaches us. */
   allNative?: boolean;
   canMoveUp: boolean;
@@ -77,14 +76,14 @@ export function SortableEntryRow({
       <button type="button" onClick={onSelect} className="flex min-w-0 flex-1 items-center gap-2 text-left">
         <Icon className={`h-4 w-4 shrink-0 ${isCollection ? 'text-cyan-400' : 'text-violet-400'}`} />
         <span className="min-w-0 flex-1 truncate">{entry.title || 'Untitled'}</span>
-        {(hasUnknown || warnings > 0) && (
+        {severity && severity !== 'info' && (
           <span
             className="shrink-0"
-            title={warnings > 0
-              ? `${warnings} thing${warnings === 1 ? '' : 's'} worth checking on this entry`
-              : 'Points at a catalog you do not have'}
+            title={severity === 'blocking' ? 'Must be fixed before saving' : 'Worth checking'}
           >
-            <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+            <AlertTriangle
+              className={`h-3.5 w-3.5 ${severity === 'blocking' ? 'text-red-500' : 'text-amber-500'}`}
+            />
           </span>
         )}
         {allNative && (

@@ -71,12 +71,14 @@ import {
   type CatalogSourceList,
   type ManifestCatalog,
 } from '@/lib/collectionBuilder/manifestSources';
+import { buildProblemTargets, withStagedCatalogs } from '@/lib/collectionBuilder/problems';
 import {
-  buildProblemTargets,
-  collectProblems,
-  countProblems,
-  withStagedCatalogs,
-} from '@/lib/collectionBuilder/problems';
+  blockingIssues,
+  buildIssueCenter,
+  saveVerdict,
+  type IssueRow,
+  type IssueSeverity,
+} from '@/lib/collectionBuilder/issueCenter';
 import { deriveSaveStage, describeSaveStage } from '@/lib/collectionBuilder/saveState';
 import { FUSION_CHIP, NUVIO_CHIP, TERMS, type Target } from '@/lib/collectionBuilder/terms';
 import { CollectionPreview } from './CollectionPreview';
@@ -111,6 +113,20 @@ const BULK_ADD_THRESHOLD = 100;
 interface CollectionBuilderDialogProps {
   isOpen: boolean;
   onClose: () => void;
+}
+
+const SEVERITY_RANK: Record<IssueSeverity, number> = { blocking: 0, warning: 1, info: 2 };
+
+/** The worst thing said about each entry or folder, for its badge on the rail. */
+function severityByField(rows: IssueRow[], field: 'entryId' | 'folderId'): Map<string, IssueSeverity> {
+  const worst = new Map<string, IssueSeverity>();
+  for (const row of rows) {
+    const id = row[field];
+    if (!id) continue;
+    const current = worst.get(id);
+    if (!current || SEVERITY_RANK[row.severity] < SEVERITY_RANK[current]) worst.set(id, row.severity);
+  }
+  return worst;
 }
 
 function collectIds(entries: BuilderEntry[]): Set<string> {
@@ -484,16 +500,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   };
 
   const handleSave = (mode: 'apply' | 'save') => {
-    // The design stays valid for Nuvio, but applying it while building for
-    // Fusion also publishes the hosted widgets URL, which would serve tiles the
-    // export cannot fill.
+    // Save is already disabled on these two, but Apply only is not, so they
+    // still have to be caught here. The issue list is the advance notice.
     if (target === 'fusion' && totalNative > 0) {
       setPendingMode(mode);
       setNativeBlockFor('apply');
       return;
     }
-    // A config over the ceiling is refused on save, so this has to stop here
-    // rather than let the catalogs through and fail later.
     if (overBy > 0) {
       setPendingMode(mode);
       setOverLimitOpen(true);
@@ -607,16 +620,6 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     return new Set([...resolved].filter(key => !needsAccountKeys.has(key)));
   }, [pendingAdditions, pendingCount]);
 
-  /** Entries still pointing at a catalog neither the config nor the import can serve. */
-  const entriesWithUnresolved = useMemo(() => {
-    const ids = new Set<string>();
-    for (const entry of entries) {
-      const missing = findUnknownSources([entry], sourceList.catalogs);
-      if (missing.some(source => !pendingKeys.has(catalogKey(source)))) ids.add(entry.id);
-    }
-    return ids;
-  }, [entries, sourceList.catalogs, pendingKeys]);
-
   const issueCatalogs = useMemo(
     () => withStagedCatalogs(sourceList.catalogs, pendingKeys),
     [sourceList.catalogs, pendingKeys]
@@ -625,15 +628,6 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const issues = useMemo(() => findSourceIssues(entries, issueCatalogs), [entries, issueCatalogs]);
 
   const problemTargets = useMemo(() => buildProblemTargets(entries), [entries]);
-
-  const problems = useMemo(
-    () => collectProblems(issues, notes, problemTargets),
-    [issues, notes, problemTargets]
-  );
-
-  const entryProblemCounts = useMemo(() => countProblems(problems, 'entryId'), [problems]);
-
-  const folderProblemCounts = useMemo(() => countProblems(problems, 'folderId'), [problems]);
 
   const countNative = useCallback((entry: BuilderEntry) => {
     const sources = entry.kind === 'classicRow'
@@ -750,6 +744,24 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const catalogLimit = maxCatalogs ?? collectionImportCatalogCap;
   const headroom = Math.max(0, catalogLimit - enabledCatalogCount);
   const overBy = Math.max(0, pendingCount - headroom);
+
+  // Below overBy and totalNative on purpose: blockingIssues reads both, and a
+  // const is in its temporal dead zone until its own line runs.
+  const blocking = useMemo(
+    () => blockingIssues({ target, totalNative, overBy, pendingCount, headroom }),
+    [target, totalNative, overBy, pendingCount, headroom]
+  );
+
+  const problems = useMemo(
+    () => buildIssueCenter({ blocking, issues, notes, targets: problemTargets }),
+    [blocking, issues, notes, problemTargets]
+  );
+
+  const verdict = useMemo(() => saveVerdict(problems), [problems]);
+
+  const worstByEntry = useMemo(() => severityByField(problems, 'entryId'), [problems]);
+
+  const worstByFolder = useMemo(() => severityByField(problems, 'folderId'), [problems]);
 
   const runImport = (mode: 'replace' | 'merge') => {
     if (!importPreview || importPreview.entries.length === 0) return;
@@ -946,8 +958,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                           key={entry.id}
                           entry={entry}
                           excluded={excluded}
-                          hasUnknown={entriesWithUnresolved.has(entry.id)}
-                          warnings={excluded ? 0 : entryProblemCounts.get(entry.id) ?? 0}
+                          severity={excluded ? undefined : worstByEntry.get(entry.id)}
                           allNative={entryIsNative(entry)}
                           isActive={entry.id === selectedId}
                           canMoveUp={index > 0}
@@ -976,36 +987,67 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
             <div className="min-w-0">
               {problems.length > 0 && (
-                <div className="mb-3 space-y-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
-                  <div className="flex items-center gap-2 text-xs font-medium text-amber-600 dark:text-amber-400">
-                    <AlertTriangle className="h-4 w-4 shrink-0" /> Worth checking
-                    <Badge variant="outline" className="h-5 border-amber-600/50 px-1.5 text-[10px] text-amber-500">
+                <div
+                  className={`mb-3 space-y-1.5 rounded-md border p-3 ${
+                    verdict.blocking > 0 ? 'border-red-500/50 bg-red-500/5' : 'border-amber-500/40 bg-amber-500/5'
+                  }`}
+                >
+                  <div className={`flex items-center gap-2 text-xs font-medium ${
+                    verdict.blocking > 0 ? 'text-red-500' : 'text-amber-600 dark:text-amber-400'
+                  }`}>
+                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                    {verdict.blocking > 0 ? 'Fix before saving' : 'Worth checking'}
+                    <Badge
+                      variant="outline"
+                      className={`h-5 px-1.5 text-[10px] ${
+                        verdict.blocking > 0
+                          ? 'border-red-600/50 text-red-400'
+                          : 'border-amber-600/50 text-amber-500'
+                      }`}
+                    >
                       {problems.length}
                     </Badge>
                     <span className="text-[10px] font-normal text-muted-foreground">
                       for the {target === 'nuvio' ? 'Nuvio' : 'Fusion'} export
                     </span>
                   </div>
-                  <ul className="space-y-1 text-xs text-muted-foreground">
-                    {problems.slice(0, 12).map(problem => (
-                      <li key={problem.key}>
-                        {problem.entryId ? (
-                          <button
-                            type="button"
-                            onClick={() => goToProblem(problem.entryId, problem.folderId)}
-                            className="w-full rounded px-1 py-0.5 text-left underline-offset-2 hover:bg-amber-500/10 hover:text-foreground hover:underline"
-                          >
-                            {problem.message}
-                          </button>
-                        ) : (
-                          <span className="block px-1 py-0.5">{problem.message}</span>
-                        )}
-                      </li>
-                    ))}
+                  <ul className="space-y-1 text-xs">
+                    {problems.slice(0, 12).map(problem => {
+                      const tone = problem.severity === 'blocking'
+                        ? 'text-red-400'
+                        : problem.severity === 'warning'
+                          ? 'text-amber-500'
+                          : 'text-muted-foreground';
+                      return (
+                        <li key={problem.key}>
+                          {problem.entryId ? (
+                            <button
+                              type="button"
+                              onClick={() => goToProblem(problem.entryId, problem.folderId)}
+                              className={`w-full rounded px-1 py-0.5 text-left underline-offset-2 hover:bg-amber-500/10 hover:text-foreground hover:underline ${tone}`}
+                            >
+                              {problem.message}
+                            </button>
+                          ) : (
+                            <span className={`block px-1 py-0.5 ${tone}`}>{problem.message}</span>
+                          )}
+                        </li>
+                      );
+                    })}
                     {problems.length > 12 && (
-                      <li className="px-1 py-0.5">and {problems.length - 12} more</li>
+                      <li className="px-1 py-0.5 text-muted-foreground">and {problems.length - 12} more</li>
                     )}
                   </ul>
+                  {overBy > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-1"
+                      onClick={() => { setPendingMode('save'); setOverLimitOpen(true); }}
+                    >
+                      Apply the layout without the catalogs
+                    </Button>
+                  )}
                 </div>
               )}
 
@@ -1048,7 +1090,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       onAddByTag={(folderId, tag) => addSourcesByTag(selected.id, folderId, tag)}
                       nativeCount={countNative(selected)}
                       onConvertNative={() => convertNativeSources(selected.id)}
-                      folderWarnings={folderProblemCounts}
+                      folderSeverity={worstByFolder}
                       focus={focusFolder?.entryId === selected.id ? focusFolder : null}
                       onFocusHandled={clearFocusFolder}
                       focusTitle={titleFocusId === selected.id}
@@ -1237,8 +1279,12 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             )}
             <Button variant="ghost" onClick={requestClose}>Close</Button>
             <Button variant="outline" onClick={() => handleSave('apply')}>Apply only</Button>
-            <Button onClick={() => handleSave('save')} disabled={isSaving}>
-              {isSaving ? 'Saving…' : 'Save'}
+            <Button
+              onClick={() => handleSave('save')}
+              disabled={isSaving || !verdict.canSave}
+              title={verdict.canSave ? undefined : 'Resolve the issues listed above first'}
+            >
+              {isSaving ? 'Saving…' : verdict.label}
             </Button>
           </div>
         </DialogContent>

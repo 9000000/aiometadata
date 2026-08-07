@@ -3,6 +3,9 @@ export type CollectionViewMode = 'TABBED_GRID' | 'ROWS' | 'FOLLOW_LAYOUT';
 export type FusionAspectRatio = 'poster' | 'wide' | 'square';
 export type FusionCardStyle = 'small' | 'medium' | 'large';
 
+/** Types a manifest id can carry as a suffix, per createCatalog in getManifest. */
+export const SUFFIX_TYPES = ['movie', 'series', 'anime', 'all'];
+
 /** One addon catalog, referenced the way it appears in the generated manifest. */
 export interface SourceDraft {
   catalogId: string;
@@ -91,7 +94,6 @@ export interface NuvioAddonSource {
   catalogName: string | null;
   title: string;
   genre: string | null;
-  baseType?: string;
   /** See writeBlueprint in catalogReconstruction. Nuvio does not read this. */
   aiometadata?: { version: number; catalog: Record<string, any> };
 }
@@ -143,7 +145,6 @@ export interface FusionAddonCatalogSource {
     catalogId: string;
     type: string;
     genre?: string;
-    baseType?: string;
   };
 }
 

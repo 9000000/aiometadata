@@ -45,7 +45,6 @@ function toAddonSource(
     catalogName: name,
     title: name,
     genre: orNull(source.genre),
-    ...(trimmed(source.baseType) ? { baseType: trimmed(source.baseType) } : {}),
   };
 
   return attach(mapped, `${catalogId}:${source.type}`);

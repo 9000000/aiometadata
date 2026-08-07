@@ -10,6 +10,7 @@ import {
   type FolderDraft,
   type FusionAspectRatio,
   type FusionCardStyle,
+  SUFFIX_TYPES,
   type SourceDraft,
   type TileShape,
 } from './types';
@@ -162,7 +163,6 @@ function nuvioSource(
     type,
     name: trimmed(raw.catalogName || raw.title || raw.name) || catalogId,
     genre: trimmed(raw.genre) || null,
-    ...(trimmed(raw.baseType) ? { baseType: trimmed(raw.baseType) } : {}),
   };
 }
 
@@ -317,7 +317,6 @@ function fusionSource(
     type: split.type,
     name: split.catalogId,
     genre: trimmed(payload.genre) || split.genre,
-    ...(trimmed(payload.baseType) ? { baseType: trimmed(payload.baseType) } : {}),
   };
 }
 
@@ -447,6 +446,38 @@ function collapseNotes(notes: string[]): string[] {
   return [...counts.entries()].map(([note, count]) => (count > 1 ? `${note} (×${count})` : note));
 }
 
+/**
+ * A blueprint's `type` is the catalog's own, before any displayType renamed it,
+ * which is what a source needs to be matched against another setup's manifest.
+ * The writer attaches a blueprint once per catalog, so the collected list answers
+ * for every source pointing at it rather than only the one that carried it.
+ */
+function withBlueprintTypes(entries: BuilderEntry[], blueprints: CatalogBlueprint[]): BuilderEntry[] {
+  if (blueprints.length === 0) return entries;
+  const typeById = new Map(blueprints.map(blueprint => [blueprint.id, blueprint.type as string]));
+
+  const apply = (source: SourceDraft): SourceDraft => {
+    if (trimmed(source.baseType)) return source;
+    const id = trimmed(source.catalogId);
+    const baseType = typeById.get(id)
+      ?? SUFFIX_TYPES.reduce<string | undefined>((found, suffix) => found
+        ?? (id.toLowerCase().endsWith(`_${suffix}`)
+          ? typeById.get(id.slice(0, -(suffix.length + 1)))
+          : undefined), undefined);
+    return baseType ? { ...source, baseType } : source;
+  };
+
+  return entries.map(entry => {
+    if (entry.kind === 'classicRow') {
+      return entry.source ? { ...entry, source: apply(entry.source) } : entry;
+    }
+    return {
+      ...entry,
+      folders: entry.folders.map(folder => ({ ...folder, sources: folder.sources.map(apply) })),
+    };
+  });
+}
+
 export function importEntries(raw: unknown, options: ImportOptions = {}): ImportResult {
   const notes: string[] = [];
   const blueprints: CatalogBlueprint[] = [];
@@ -457,14 +488,17 @@ export function importEntries(raw: unknown, options: ImportOptions = {}): Import
   };
   const format = detectFormat(raw);
 
-  const done = (entries: BuilderEntry[]): ImportResult => ({
-    format,
-    entries,
-    notes: collapseNotes(notes),
-    blueprints: dedupeBlueprints(blueprints),
-    nativeCount: context.nativeCount,
-    convertibleCount: context.convertibleCount,
-  });
+  const done = (entries: BuilderEntry[]): ImportResult => {
+    const unique = dedupeBlueprints(blueprints);
+    return {
+      format,
+      entries: withBlueprintTypes(entries, unique),
+      notes: collapseNotes(notes),
+      blueprints: unique,
+      nativeCount: context.nativeCount,
+      convertibleCount: context.convertibleCount,
+    };
+  };
 
   if (format === 'nuvio') return done(fromNuvioCollections(raw, notes, blueprints, context));
   if (format === 'fusion') return done(fromFusionWidgets(raw, notes, blueprints));

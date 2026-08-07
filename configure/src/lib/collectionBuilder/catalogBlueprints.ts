@@ -2,8 +2,9 @@ import { allCatalogDefinitions } from '@/data/catalogs';
 import type { CatalogConfig } from '@/contexts/config';
 import type { CatalogBlueprint } from '@shared/catalogReconstruction';
 
-/** Types a manifest id can carry as a suffix, per createCatalog in getManifest. */
-export const SUFFIX_TYPES = ['movie', 'series', 'anime', 'all'];
+import { SUFFIX_TYPES } from '@shared/types';
+
+export { SUFFIX_TYPES };
 
 /**
  * Catalogs tied to whoever is signed in rather than to whoever built the file.

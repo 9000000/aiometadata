@@ -95,6 +95,12 @@ import {
   tallyEntryCount,
 } from '@/lib/collectionBuilder/entryOps';
 import { deriveSaveStage, describeSaveStage } from '@/lib/collectionBuilder/saveState';
+import {
+  countImport,
+  describeMerge,
+  mergeEntries,
+  type ImportMode,
+} from '@/lib/collectionBuilder/importModes';
 import { listStarterTemplates } from '@/lib/collectionBuilder/templates';
 import { FUSION_CHIP, NUVIO_CHIP, TERMS, type Target } from '@/lib/collectionBuilder/terms';
 import { CollectionPreview } from './CollectionPreview';
@@ -754,6 +760,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     previewImport(await file.text());
   };
 
+  const importCounts = useMemo(
+    () => (importPreview
+      ? countImport(importPreview.entries, new Set(entries.map(entry => entry.id)))
+      : null),
+    [importPreview, entries]
+  );
+
   // Realigned first, so the panel counts what the import will add, not what it spells.
   const importUnknown = useMemo(
     () => (importPreview
@@ -982,7 +995,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   const worstByFolder = useMemo(() => severityByField(problems, 'folderId'), [problems]);
 
-  const runImport = (mode: 'replace' | 'merge') => {
+  const runImport = (mode: ImportMode) => {
     if (!importPreview || importPreview.entries.length === 0) return;
     setConfirmReplace(false);
     const { entries: incoming, filled } = fillMissingGenres(
@@ -992,14 +1005,27 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       ),
       sourceList.catalogs
     );
-    reissueTakenIds(incoming, mode === 'merge' ? collectIds(entries) : new Set<string>());
+    // Merge joins on ids, so reissuing them there would defeat it.
+    if (mode !== 'merge') {
+      reissueTakenIds(incoming, mode === 'append' ? collectIds(entries) : new Set<string>());
+    }
 
     setStagedBlueprints(prev => dedupeBlueprints(
       mode === 'replace' ? importPreview.blueprints : [...prev, ...importPreview.blueprints]
     ));
 
+    let mergeNote = '';
     setEntries(prev => {
-      const next = mode === 'replace' ? incoming : [...prev, ...incoming];
+      let next: BuilderEntry[];
+      if (mode === 'replace') {
+        next = incoming;
+      } else if (mode === 'append') {
+        next = [...prev, ...incoming];
+      } else {
+        const result = mergeEntries(prev, incoming);
+        next = result.entries;
+        mergeNote = describeMerge(result.summary);
+      }
       setSelectedId(next[0]?.id ?? null);
       return next;
     });
@@ -1008,6 +1034,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setImportPreview(null);
     setConvertNative(false);
     const notes: string[] = [];
+    if (mergeNote) notes.push(mergeNote);
     if (rebuildable > 0) {
       notes.push(`${rebuildable} catalog${rebuildable === 1 ? '' : 's'} will be added when you apply.`);
     }
@@ -1017,7 +1044,9 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
         : `${filled.length} catalogs arrived without a genre and were set to the one their catalog defaults to.`);
     }
     toast.success(
-      incoming.length === 1 ? '1 entry imported' : `${incoming.length} entries imported`,
+      mode === 'merge'
+        ? 'File merged in'
+        : incoming.length === 1 ? '1 entry imported' : `${incoming.length} entries imported`,
       notes.length > 0 ? { description: notes.join(' ') } : undefined
     );
   };
@@ -1734,6 +1763,22 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 </div>
               )}
 
+              {importCounts && (
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {([
+                    ['Collections', importCounts.collections],
+                    ['Folders', importCounts.folders],
+                    ['Catalogs', importCounts.sources],
+                    ['Existing', importCounts.existing],
+                  ] as const).map(([label, value]) => (
+                    <div key={label} className="rounded-md border px-2 py-1.5">
+                      <div className="text-base font-semibold leading-tight">{value}</div>
+                      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {importPreview.entries.length > 0 && (
                 <ul className="space-y-1 text-xs text-muted-foreground">
                   {importPreview.entries.slice(0, 6).map(entry => (
@@ -1763,7 +1808,15 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             </div>
           )}
 
-          <div className="flex flex-wrap justify-end gap-2 border-t pt-3">
+          {importPreview && importPreview.entries.length > 0 && (
+            <p className="border-t pt-3 text-xs text-muted-foreground">
+              <span className="text-foreground">Merge</span> folds the file into whatever it shares an id with,
+              skipping catalogs you already have. <span className="text-foreground">Add as new</span> keeps both
+              copies. <span className="text-foreground">Overwrite</span> discards what you have.
+            </p>
+          )}
+
+          <div className="flex flex-wrap justify-end gap-2 pt-3">
             <Button variant="ghost" onClick={() => { setImportOpen(false); setImportText(''); setImportPreview(null); setConfirmReplace(false); }}>
               Cancel
             </Button>
@@ -1781,13 +1834,20 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             >
               {confirmReplace
                 ? `Really discard ${entries.length}?`
-                : entries.length > 0 ? `Replace all ${entries.length}` : 'Replace all'}
+                : entries.length > 0 ? `Overwrite all ${entries.length}` : 'Overwrite'}
+            </Button>
+            <Button
+              variant="outline"
+              disabled={!importPreview || importPreview.entries.length === 0}
+              onClick={() => runImport('append')}
+            >
+              Add as new
             </Button>
             <Button
               disabled={!importPreview || importPreview.entries.length === 0}
               onClick={() => runImport('merge')}
             >
-              Add to existing
+              Merge
             </Button>
           </div>
         </DialogContent>

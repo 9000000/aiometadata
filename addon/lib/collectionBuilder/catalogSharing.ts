@@ -51,17 +51,28 @@ export function isUserSpecific(catalogId: string): boolean {
   return USER_SPECIFIC_PATTERNS.some(pattern => catalogId.startsWith(pattern));
 }
 
+/**
+ * A PublicMetaDB list is only fetchable by another key when it is public, and a
+ * watchlist is the owner's either way. Absent metadata means the catalog predates
+ * us recording it, so it is treated as personal rather than shared blindly.
+ */
+function isPersonalPublicMetaDBList(catalog: ShareableCatalog): boolean {
+  if (!catalog.id.startsWith('publicmetadb.list.')) return false;
+  if (catalog.metadata?.listType === 'watchlist') return true;
+  return catalog.metadata?.isPublic !== true;
+}
+
 export function isPrivateList(catalog: ShareableCatalog): boolean {
   if (catalog.metadata?.privacy === 'private') return true;
   if (catalog.source === 'letterboxd' && catalog.metadata?.isWatchlist) return true;
-  return false;
+  return isPersonalPublicMetaDBList(catalog);
 }
 
 const SAFE_METADATA = [
   'discover', 'discoverParams', 'interval', 'pageSize', 'useShowPosterForUpNext',
   'airingSoonDays', 'status', 'description', 'itemCount', 'url', 'identifier',
   'isWatchlist', 'isCustomList', 'mediatype', 'username', 'listName', 'author',
-  'listId', 'listDescription',
+  'listId', 'listDescription', 'isPublic', 'listType',
 ];
 
 /** Everything not named here is dropped, `privacy` deliberately among them. */

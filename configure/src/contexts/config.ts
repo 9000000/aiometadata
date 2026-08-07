@@ -62,6 +62,9 @@ export interface CatalogConfig {
     airingSoonDays?: number;
     // Letterboxd-specific metadata
     isWatchlist?: boolean;
+    // PublicMetaDB list visibility and kind, as the API reports them
+    isPublic?: boolean;
+    listType?: string;
     hideUnreleased?: boolean;
     hideWatchedTrakt?: boolean;
     hideWatchedAnilist?: boolean;

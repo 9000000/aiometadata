@@ -479,7 +479,14 @@ export function createPublicMetaDBUpNextCatalog(): CatalogConfig {
   };
 }
 
-export function createPublicMetaDBListCatalog(list: { id: string; name: string }, mediaType: 'movie' | 'series' | 'all' = 'all'): CatalogConfig {
+export function createPublicMetaDBListCatalog(
+  list: { id: string; name: string; is_public?: boolean; type?: string },
+  mediaType: 'movie' | 'series' | 'all' = 'all'
+): CatalogConfig {
+  const metadata: CatalogConfig['metadata'] = {};
+  if (typeof list.is_public === 'boolean') metadata.isPublic = list.is_public;
+  if (list.type) metadata.listType = list.type;
+
   return {
     id: `publicmetadb.list.${list.id}`,
     type: mediaType,
@@ -487,6 +494,7 @@ export function createPublicMetaDBListCatalog(list: { id: string; name: string }
     enabled: true,
     showInHome: true,
     source: 'publicmetadb' as const,
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
   };
 }
 

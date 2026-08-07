@@ -166,6 +166,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const [baseline, setBaseline] = useState('[]');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('design');
+  const [dockPreview, setDockPreview] = useState(true);
   const [focusFolder, setFocusFolder] = useState<{ entryId: string; folderId: string } | null>(null);
   const [titleFocusId, setTitleFocusId] = useState<string | null>(null);
   const clearFocusFolder = useCallback(() => setFocusFolder(null), []);
@@ -1057,9 +1058,20 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   <TabsTrigger value="design">Design</TabsTrigger>
                   <TabsTrigger value="preview">Preview</TabsTrigger>
                   <TabsTrigger value="json">JSON</TabsTrigger>
+                  {!dockPreview && (
+                    <button
+                      type="button"
+                      onClick={() => setDockPreview(true)}
+                      className="ml-2 hidden text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline xl:inline"
+                    >
+                      Dock preview
+                    </button>
+                  )}
                 </TabsList>
 
                 <TabsContent value="design" className="pt-4">
+                  <div className={dockPreview ? 'grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]' : ''}>
+                    <div className="min-w-0">
                   {!selected && (
                     <div className="rounded-md border border-dashed px-3 py-10 text-center text-sm text-muted-foreground">
                       <p>
@@ -1110,6 +1122,29 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       onTitleFocused={clearTitleFocus}
                     />
                   )}
+                    </div>
+                    {dockPreview && (
+                      <div className="hidden min-w-0 xl:block">
+                        <div className="sticky top-2 rounded-lg border p-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <span className="text-xs font-medium text-muted-foreground">Live preview</span>
+                            <button
+                              type="button"
+                              onClick={() => setDockPreview(false)}
+                              className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                            >
+                              Hide
+                            </button>
+                          </div>
+                          <CollectionPreview
+                            entry={selected}
+                            target={target}
+                            onEditFolder={folderId => selected && goToProblem(selected.id, folderId)}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </TabsContent>
 
                 <TabsContent value="preview" className="pt-4">

@@ -566,11 +566,20 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     applyToConfig({ thenSave: mode === 'save' });
   };
 
+  const subDialogOpen = importOpen
+    || pickerTarget !== null
+    || remapOpen
+    || confirmApply
+    || confirmClose
+    || overLimitOpen
+    || nativeBlockFor !== null;
+
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || subDialogOpen) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 's' || !(event.metaKey || event.ctrlKey)) return;
       event.preventDefault();
+      if (isSaving || !verdict.canSave) return;
       handleSave('save');
     };
     window.addEventListener('keydown', onKeyDown);

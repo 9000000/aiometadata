@@ -1,38 +1,19 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { FolderPlus, Replace, Tv } from 'lucide-react';
-import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  TouchSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from '@dnd-kit/core';
-import {
-  arrayMove,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { nextCopyTitle } from '@/lib/collectionBuilder/entryOps';
-import type { IssueSeverity } from '@/lib/collectionBuilder/issueCenter';
-import { catalogKey, type ManifestCatalog } from '@/lib/collectionBuilder/manifestSources';
+import { type ManifestCatalog } from '@/lib/collectionBuilder/manifestSources';
 import { TERMS, type Target } from '@/lib/collectionBuilder/terms';
-import { isNativeSource } from '@shared/catalogReconstruction';
-import { createFolderDraft, hasNuvioCollectionSettings, newId, type CollectionDraft, type FolderDraft } from '@shared/types';
+import { createFolderDraft, hasNuvioCollectionSettings, type CollectionDraft, type FolderDraft } from '@shared/types';
 
-import { FolderCard, SortableFolderRow } from './FolderCard';
+import { FolderCard } from './FolderCard';
 import { ImageUrlField } from './ImageUrlField';
 import { ScopeChip } from './ScopeChip';
-import { clone, type TagOption } from './shared';
+import { type TagOption } from './shared';
 
 export function CollectionEditor({
   entry,
@@ -47,9 +28,11 @@ export function CollectionEditor({
   onAddByTag,
   nativeCount,
   onConvertNative,
-  folderSeverity,
-  focus,
-  onFocusHandled,
+  selectedFolderId,
+  onSelectFolder,
+  onRemoveFolder,
+  focusFolderTitle,
+  onFolderTitleFocused,
   focusTitle,
   onTitleFocused,
 }: {
@@ -71,10 +54,12 @@ export function CollectionEditor({
   /** Sources here that Nuvio resolves itself and this addon could take over. */
   nativeCount: number;
   onConvertNative: () => void;
-  /** The worst thing the issue list says about each folder, by folder id. */
-  folderSeverity?: Map<string, IssueSeverity>;
-  focus?: { entryId: string; folderId: string } | null;
-  onFocusHandled?: () => void;
+  /** Owned by the dialog, because the rail tree selects folders too. */
+  selectedFolderId: string | null;
+  onSelectFolder: (id: string) => void;
+  onRemoveFolder: () => void;
+  focusFolderTitle?: boolean;
+  onFolderTitleFocused?: () => void;
   focusTitle?: boolean;
   onTitleFocused?: () => void;
 }) {
@@ -83,8 +68,6 @@ export function CollectionEditor({
   const nuvioBoxVisible = target === 'nuvio' || hasNuvioCollectionSettings(entry);
   const uid = useId();
   const titleRef = useRef<HTMLInputElement>(null);
-  const [newFolderId, setNewFolderId] = useState<string | null>(null);
-  const clearNewFolderId = useCallback(() => setNewFolderId(null), []);
 
   useEffect(() => {
     if (!focusTitle) return;
@@ -97,76 +80,13 @@ export function CollectionEditor({
     setShowNuvioBox(target === 'nuvio');
   }, [target]);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
-  );
-
   const update = (patch: Partial<CollectionDraft>) => onChange({ ...entry, ...patch });
 
-  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
-  const activeIndex = Math.max(entry.folders.findIndex(folder => folder.id === selectedFolderId), 0);
-  const activeFolder = entry.folders[activeIndex] ?? null;
-
-  useEffect(() => {
-    if (!focus?.folderId) return;
-    setSelectedFolderId(focus.folderId);
-    onFocusHandled?.();
-  }, [focus, onFocusHandled]);
-
-  const handleDragEnd = (event: DragEndEvent) => {
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-    const from = entry.folders.findIndex(folder => folder.id === active.id);
-    const to = entry.folders.findIndex(folder => folder.id === over.id);
-    if (from < 0 || to < 0) return;
-    update({ folders: arrayMove(entry.folders, from, to) });
-  };
-
-  const moveFolder = (index: number, delta: number) => {
-    const to = index + delta;
-    if (to < 0 || to >= entry.folders.length) return;
-    update({ folders: arrayMove(entry.folders, index, to) });
-  };
-
-  const moveFolderTo = (index: number, position: 'top' | 'bottom') => {
-    const to = position === 'top' ? 0 : entry.folders.length - 1;
-    if (to === index) return;
-    update({ folders: arrayMove(entry.folders, index, to) });
-  };
-
-  const duplicateFolder = (index: number) => {
-    const original = entry.folders[index];
-    if (!original) return;
-    const copy: FolderDraft = { ...clone(original), id: newId(), title: nextCopyTitle(original.title) };
-    setSelectedFolderId(copy.id);
-    setNewFolderId(copy.id);
-    update({
-      folders: [...entry.folders.slice(0, index + 1), copy, ...entry.folders.slice(index + 1)],
-    });
-  };
-
-  const removeFolder = (index: number) => {
-    const doomed = entry.folders[index];
-    if (!doomed) return;
-    const apply = (current: CollectionDraft): CollectionDraft => ({
-      ...current,
-      folders: current.folders.filter(folder => folder.id !== doomed.id),
-    });
-    const undo = (current: CollectionDraft): CollectionDraft => (
-      current.folders.some(folder => folder.id === doomed.id)
-        ? current
-        : { ...current, folders: [...current.folders.slice(0, index), doomed, ...current.folders.slice(index)] }
-    );
-    if (onUndoableChange) onUndoableChange(`Deleted ${doomed.title || 'folder'}`, apply, undo);
-    else onChange(apply(entry));
-  };
+  const activeFolder = entry.folders.find(folder => folder.id === selectedFolderId) ?? null;
 
   const addFolder = () => {
     const folder = createFolderDraft();
-    setSelectedFolderId(folder.id);
-    setNewFolderId(folder.id);
+    onSelectFolder(folder.id);
     update({ folders: [...entry.folders, folder] });
   };
 
@@ -293,65 +213,40 @@ export function CollectionEditor({
         <button
           type="button"
           onClick={addFolder}
-          className="w-full rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent/40 hover:text-foreground"
+          className="w-full rounded-md border border-dashed px-3 py-8 text-center text-sm text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent/40 hover:text-foreground"
         >
           Nothing here yet. Add a folder, then point it at one or more of your catalogs.
         </button>
+      ) : activeFolder ? (
+        <FolderCard
+          key={activeFolder.id}
+          folder={activeFolder}
+          catalogs={catalogs}
+          pendingKeys={pendingKeys}
+          target={target}
+          onChange={next => update({
+            folders: entry.folders.map(f => (f.id === activeFolder.id ? next : f)),
+          })}
+          onUndoableChange={onUndoableChange && ((label, apply, undo) => {
+            const over = (fn: (folder: FolderDraft) => FolderDraft) =>
+              (current: CollectionDraft): CollectionDraft => ({
+                ...current,
+                folders: current.folders.map(f => (f.id === activeFolder.id ? fn(f) : f)),
+              });
+            onUndoableChange(label, over(apply), over(undo));
+          })}
+          onRemove={onRemoveFolder}
+          onAddSource={() => onAddSource(activeFolder.id)}
+          onReplaceSource={index => onReplaceSource(activeFolder.id, index)}
+          tagOptions={tagOptions}
+          onAddByTag={tag => onAddByTag(activeFolder.id, tag)}
+          focusTitle={focusFolderTitle}
+          onTitleFocused={onFolderTitleFocused}
+        />
       ) : (
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,13rem)_minmax(0,1fr)]">
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-            <SortableContext items={entry.folders.map(folder => folder.id)} strategy={verticalListSortingStrategy}>
-              <div className="space-y-1.5">
-                {entry.folders.map((folder, index) => (
-                  <SortableFolderRow
-                    key={folder.id}
-                    folder={folder}
-                    placeholder={`Untitled ${terms.child.toLowerCase()}`}
-                    severity={folderSeverity?.get(folder.id)}
-                    allNative={folder.sources.length > 0 && folder.sources.every(isNativeSource)}
-                    isActive={index === activeIndex}
-                    canMoveUp={index > 0}
-                    canMoveDown={index < entry.folders.length - 1}
-                    onMove={delta => moveFolder(index, delta)}
-                    onMoveTo={position => moveFolderTo(index, position)}
-                    onDuplicate={() => duplicateFolder(index)}
-                    onSelect={() => setSelectedFolderId(folder.id)}
-                    onDelete={() => removeFolder(index)}
-                  />
-                ))}
-              </div>
-            </SortableContext>
-          </DndContext>
-
-          <div className="min-w-0">
-            {activeFolder && (
-              <FolderCard
-                key={activeFolder.id}
-                folder={activeFolder}
-                catalogs={catalogs}
-                pendingKeys={pendingKeys}
-                target={target}
-                onChange={next =>
-                  update({ folders: entry.folders.map((f, i) => (i === activeIndex ? next : f)) })}
-                onUndoableChange={onUndoableChange && ((label, apply, undo) => {
-                  const over = (fn: (folder: FolderDraft) => FolderDraft) =>
-                    (current: CollectionDraft): CollectionDraft => ({
-                      ...current,
-                      folders: current.folders.map(f => (f.id === activeFolder.id ? fn(f) : f)),
-                    });
-                  onUndoableChange(label, over(apply), over(undo));
-                })}
-                onRemove={() => removeFolder(activeIndex)}
-                onAddSource={() => onAddSource(activeFolder.id)}
-                onReplaceSource={index => onReplaceSource(activeFolder.id, index)}
-                tagOptions={tagOptions}
-                onAddByTag={tag => onAddByTag(activeFolder.id, tag)}
-                focusTitle={newFolderId === activeFolder.id}
-                onTitleFocused={clearNewFolderId}
-              />
-            )}
-          </div>
-        </div>
+        <p className="rounded-md border border-dashed px-3 py-8 text-center text-sm text-muted-foreground">
+          Pick a {terms.child.toLowerCase()} on the left to edit it.
+        </p>
       )}
     </div>
   );

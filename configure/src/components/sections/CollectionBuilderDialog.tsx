@@ -3,9 +3,12 @@ import { toast } from 'sonner';
 import {
   AlertTriangle,
   Check,
+  ChevronRight,
   Copy,
   Download,
+  Folder,
   Layers,
+  ListOrdered,
   Link as LinkIcon,
   Plus,
   Replace,
@@ -81,7 +84,7 @@ import {
   type IssueRow,
   type IssueSeverity,
 } from '@/lib/collectionBuilder/issueCenter';
-import { filterEntries } from '@/lib/collectionBuilder/entryOps';
+import { describeEntryCount, filterEntryTree, nextCopyTitle } from '@/lib/collectionBuilder/entryOps';
 import { deriveSaveStage, describeSaveStage } from '@/lib/collectionBuilder/saveState';
 import { listStarterTemplates } from '@/lib/collectionBuilder/templates';
 import { FUSION_CHIP, NUVIO_CHIP, TERMS, type Target } from '@/lib/collectionBuilder/terms';
@@ -105,7 +108,7 @@ import type { ShareableCatalog } from '@shared/catalogSharing';
 import { CatalogPicker } from './collectionBuilder/CatalogPicker';
 import { ClassicRowEditor } from './collectionBuilder/ClassicRowEditor';
 import { CollectionEditor } from './collectionBuilder/CollectionEditor';
-import { SortableEntryRow } from './collectionBuilder/EntryRail';
+import { SortableTreeRow } from './collectionBuilder/EntryRail';
 import { clone, duplicateEntryDraft, entrySourceCount, type TagOption } from './collectionBuilder/shared';
 
 /**
@@ -168,15 +171,20 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const [entries, setEntries] = useState<BuilderEntry[]>([]);
   /** Entries as they stood when opened or last applied, to spot real edits. */
   const [baseline, setBaseline] = useState('[]');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selection, setSelection] = useState<{ entryId: string; folderId: string | null }>(
+    { entryId: '', folderId: null }
+  );
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState('design');
-  const [dockPreview, setDockPreview] = useState(true);
   const [railQuery, setRailQuery] = useState('');
   const [showManifestField, setShowManifestField] = useState(false);
-  const [focusFolder, setFocusFolder] = useState<{ entryId: string; folderId: string } | null>(null);
   const [titleFocusId, setTitleFocusId] = useState<string | null>(null);
-  const clearFocusFolder = useCallback(() => setFocusFolder(null), []);
   const clearTitleFocus = useCallback(() => setTitleFocusId(null), []);
+
+  const selectedId = selection.entryId || null;
+  const setSelectedId = useCallback((id: string | null) => {
+    setSelection({ entryId: id ?? '', folderId: null });
+  }, []);
   const [target, setTarget] = useState<Target>('nuvio');
   const [manifestUrl, setManifestUrl] = useState('');
   const [usePlaceholder, setUsePlaceholder] = useState(false);
@@ -210,7 +218,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setStagedBlueprints([]);
     setActiveTab('design');
     setRailQuery('');
-    setFocusFolder(null);
+    setExpandedIds(new Set());
     setTitleFocusId(null);
     setManifestUrl(buildManifestUrl(auth.userUUID));
   }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -308,7 +316,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   const selected = entries.find(entry => entry.id === selectedId) || null;
 
-  const visibleEntries = useMemo(() => filterEntries(entries, railQuery), [entries, railQuery]);
+  const visibleTree = useMemo(() => filterEntryTree(entries, railQuery), [entries, railQuery]);
 
   const updateEntry = useCallback((next: BuilderEntry) => {
     setEntries(prev => prev.map(entry => (entry.id === next.id ? next : entry)));
@@ -340,7 +348,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     if (at < 0) return;
     const doomed = entries[at];
     const remaining = entries.filter(entry => entry.id !== id);
-    setSelectedId(current => (current === id ? remaining[0]?.id ?? null : current));
+    if (selectedId === id) setSelectedId(remaining[0]?.id ?? null);
     undoableUpdate(
       `Deleted ${doomed.title || 'entry'}`,
       prev => prev.filter(entry => entry.id !== id),
@@ -363,10 +371,15 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   const goToProblem = (entryId: string | null, folderId: string | null) => {
     if (!entryId) return;
-    setSelectedId(entryId);
+    setSelection({ entryId, folderId });
     setActiveTab('design');
-    if (folderId) setFocusFolder({ entryId, folderId });
+    if (folderId) setExpandedIds(prev => new Set(prev).add(entryId));
   };
+
+  useEffect(() => {
+    if (!selection.entryId) return;
+    setExpandedIds(prev => (prev.has(selection.entryId) ? prev : new Set(prev).add(selection.entryId)));
+  }, [selection.entryId]);
 
   const handleRailDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -398,6 +411,47 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     });
     setSelectedId(copy.id);
     setTitleFocusId(copy.id);
+  };
+
+  const overEntry = (entryId: string, fn: (entry: CollectionDraft) => CollectionDraft) =>
+    (prev: BuilderEntry[]) =>
+      prev.map(item => (item.id === entryId && item.kind === 'collection' ? fn(item) : item));
+
+  const moveFolderTo = (entryId: string, index: number, position: 'top' | 'bottom') => {
+    setEntries(overEntry(entryId, entry => ({
+      ...entry,
+      folders: arrayMove(entry.folders, index, position === 'top' ? 0 : entry.folders.length - 1),
+    })));
+  };
+
+  const duplicateFolderIn = (entryId: string, index: number) => {
+    const entry = entries.find(item => item.id === entryId);
+    if (!entry || entry.kind !== 'collection') return;
+    const original = entry.folders[index];
+    if (!original) return;
+    const copy = { ...clone(original), id: newId(), title: nextCopyTitle(original.title) };
+    setEntries(overEntry(entryId, current => ({
+      ...current,
+      folders: [...current.folders.slice(0, index + 1), copy, ...current.folders.slice(index + 1)],
+    })));
+    setSelection({ entryId, folderId: copy.id });
+    setTitleFocusId(copy.id);
+  };
+
+  const removeFolderIn = (entryId: string, index: number) => {
+    const entry = entries.find(item => item.id === entryId);
+    if (!entry || entry.kind !== 'collection') return;
+    const doomed = entry.folders[index];
+    if (!doomed) return;
+    setSelection(current => (current.folderId === doomed.id ? { entryId, folderId: null } : current));
+    editEntryUndoable(
+      `Deleted ${doomed.title || 'folder'}`,
+      entryId,
+      current => ({ ...current, folders: current.folders.filter(f => f.id !== doomed.id) }),
+      current => (current.folders.some(f => f.id === doomed.id)
+        ? current
+        : { ...current, folders: [...current.folders.slice(0, index), doomed, ...current.folders.slice(index)] })
+    );
   };
 
   const pickerExistingKeys = useMemo(() => {
@@ -993,8 +1047,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             </div>
           )}
 
-          <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-            <div className="space-y-2">
+          <div className="grid h-full min-h-0 gap-4 @2xl:grid-cols-[18rem_minmax(0,1fr)] @6xl:grid-cols-[18rem_minmax(0,1fr)_24rem]">
+            <div className="flex min-h-0 flex-col gap-2 overflow-y-auto pr-1">
               <div className="flex gap-2">
                 <Button
                   size="sm"
@@ -1065,9 +1119,9 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               )}
 
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleRailDragEnd}>
-                <SortableContext items={visibleEntries.map(entry => entry.id)} strategy={verticalListSortingStrategy}>
-                  <div className="space-y-1.5">
-                    {visibleEntries.map(entry => {
+                <SortableContext items={visibleTree.map(item => item.entry.id)} strategy={verticalListSortingStrategy}>
+                  <div className="space-y-0.5">
+                    {visibleTree.map(({ entry, matchedFolderIds }) => {
                       // Reorder targets have to come from the full list, or a move
                       // made while filtering would land in the wrong slot.
                       const index = entries.findIndex(item => item.id === entry.id);
@@ -1075,25 +1129,68 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                         target === 'nuvio' && entry.kind === 'classicRow' ? 'fusion'
                         : target === 'fusion' && entryIsNative(entry) ? 'nuvio'
                         : null;
+                      const folders = entry.kind === 'collection'
+                        ? entry.folders.filter(folder => !matchedFolderIds || matchedFolderIds.has(folder.id))
+                        : [];
+                      const expanded = expandedIds.has(entry.id);
                       return (
-                        <SortableEntryRow
-                          key={entry.id}
-                          entry={entry}
-                          excluded={excluded}
-                          severity={excluded ? undefined : worstByEntry.get(entry.id)}
-                          allNative={entryIsNative(entry)}
-                          isActive={entry.id === selectedId}
-                          canMoveUp={index > 0}
-                          canMoveDown={index < entries.length - 1}
-                          onMoveTo={position => moveEntryTo(index, position)}
-                          onDuplicate={() => duplicateEntry(entry.id)}
-                          onSelect={() => setSelectedId(entry.id)}
-                          onDelete={() => removeEntry(entry.id)}
-                        />
+                        <div key={entry.id}>
+                          <SortableTreeRow
+                            id={entry.id}
+                            depth={0}
+                            title={entry.title}
+                            placeholder="Untitled"
+                            count={describeEntryCount(entry)}
+                            empty={entrySourceCount(entry) === 0}
+                            icon={entry.kind === 'collection' ? Layers : entry.numbered ? ListOrdered : Rows3}
+                            accent={entry.kind === 'collection' ? 'text-cyan-400' : 'text-violet-400'}
+                            severity={excluded ? undefined : worstByEntry.get(entry.id)}
+                            allNative={entryIsNative(entry)}
+                            excluded={excluded}
+                            isActive={selection.entryId === entry.id && selection.folderId === null}
+                            isAncestor={selection.entryId === entry.id && selection.folderId !== null}
+                            expanded={expanded}
+                            onToggleExpand={folders.length > 0
+                              ? () => setExpandedIds(prev => {
+                                  const next = new Set(prev);
+                                  if (next.has(entry.id)) next.delete(entry.id); else next.add(entry.id);
+                                  return next;
+                                })
+                              : undefined}
+                            canMoveUp={index > 0}
+                            canMoveDown={index < entries.length - 1}
+                            onMoveTo={position => moveEntryTo(index, position)}
+                            onDuplicate={() => duplicateEntry(entry.id)}
+                            onSelect={() => setSelection({ entryId: entry.id, folderId: null })}
+                            onDelete={() => removeEntry(entry.id)}
+                          />
+                          {expanded && folders.map((folder, folderIndex) => (
+                            <SortableTreeRow
+                              key={folder.id}
+                              id={folder.id}
+                              depth={1}
+                              title={folder.title}
+                              placeholder="Untitled folder"
+                              count={String(folder.sources.length)}
+                              empty={folder.sources.length === 0}
+                              icon={Folder}
+                              accent="text-muted-foreground"
+                              severity={worstByFolder.get(folder.id)}
+                              allNative={folder.sources.length > 0 && folder.sources.every(isNativeSource)}
+                              isActive={selection.folderId === folder.id}
+                              canMoveUp={folderIndex > 0}
+                              canMoveDown={folderIndex < folders.length - 1}
+                              onMoveTo={position => moveFolderTo(entry.id, folderIndex, position)}
+                              onDuplicate={() => duplicateFolderIn(entry.id, folderIndex)}
+                              onSelect={() => setSelection({ entryId: entry.id, folderId: folder.id })}
+                              onDelete={() => removeFolderIn(entry.id, folderIndex)}
+                            />
+                          ))}
+                        </div>
                       );
                     })}
-                    {railQuery.trim() && visibleEntries.length === 0 && (
-                      <p className="px-1 py-3 text-center text-[11px] text-muted-foreground">
+                    {railQuery.trim() && visibleTree.length === 0 && (
+                      <p className="px-1 py-3 text-center text-xs text-muted-foreground">
                         Nothing matches that filter.
                       </p>
                     )}
@@ -1119,7 +1216,29 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               )}
             </div>
 
-            <div className="min-w-0">
+            <div className="min-h-0 min-w-0 overflow-y-auto">
+              <div className="sticky top-0 z-10 -mx-1 mb-4 flex items-center gap-1.5 border-b bg-card/95 px-1 py-2 text-sm backdrop-blur">
+                <button
+                  type="button"
+                  onClick={() => selected && setSelection({ entryId: selected.id, folderId: null })}
+                  className={`truncate rounded px-1 py-0.5 hover:bg-accent/60 ${
+                    selection.folderId ? 'text-muted-foreground hover:text-foreground' : 'font-medium'
+                  }`}
+                >
+                  {selected?.title || 'Untitled'}
+                </button>
+                {selection.folderId && (
+                  <>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className="truncate font-medium">
+                      {selected?.kind === 'collection'
+                        ? selected.folders.find(folder => folder.id === selection.folderId)?.title
+                          || 'Untitled folder'
+                        : ''}
+                    </span>
+                  </>
+                )}
+              </div>
               {problems.length > 0 && (
                 <div
                   className={`mb-3 space-y-1.5 rounded-md border p-3 ${
@@ -1188,22 +1307,11 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <TabsList>
                   <TabsTrigger value="design">Design</TabsTrigger>
-                  <TabsTrigger value="preview">Preview</TabsTrigger>
                   <TabsTrigger value="json">Export &amp; share</TabsTrigger>
-                  {!dockPreview && (
-                    <button
-                      type="button"
-                      onClick={() => setDockPreview(true)}
-                      className="ml-2 hidden text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline xl:inline"
-                    >
-                      Dock preview
-                    </button>
-                  )}
                 </TabsList>
 
                 <TabsContent value="design" className="pt-4">
-                  <div className={dockPreview ? 'grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]' : ''}>
-                    <div className="min-w-0">
+                  <div className="min-w-0">
                   {!selected && (
                     <div className="rounded-md border border-dashed px-3 py-10 text-center text-sm text-muted-foreground">
                       <p>
@@ -1237,9 +1345,14 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       onAddByTag={(folderId, tag) => addSourcesByTag(selected.id, folderId, tag)}
                       nativeCount={countNative(selected)}
                       onConvertNative={() => convertNativeSources(selected.id)}
-                      folderSeverity={worstByFolder}
-                      focus={focusFolder?.entryId === selected.id ? focusFolder : null}
-                      onFocusHandled={clearFocusFolder}
+                      selectedFolderId={selection.folderId}
+                      onSelectFolder={folderId => setSelection({ entryId: selected.id, folderId })}
+                      onRemoveFolder={() => {
+                        const index = selected.folders.findIndex(f => f.id === selection.folderId);
+                        if (index >= 0) removeFolderIn(selected.id, index);
+                      }}
+                      focusFolderTitle={titleFocusId === selection.folderId}
+                      onFolderTitleFocused={clearTitleFocus}
                       focusTitle={titleFocusId === selected.id}
                       onTitleFocused={clearTitleFocus}
                     />
@@ -1256,37 +1369,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       onTitleFocused={clearTitleFocus}
                     />
                   )}
-                    </div>
-                    {dockPreview && (
-                      <div className="hidden min-w-0 xl:block">
-                        <div className="sticky top-2 rounded-lg border p-3">
-                          <div className="mb-2 flex items-center justify-between gap-2">
-                            <span className="text-xs font-medium text-muted-foreground">Live preview</span>
-                            <button
-                              type="button"
-                              onClick={() => setDockPreview(false)}
-                              className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                            >
-                              Hide
-                            </button>
-                          </div>
-                          <CollectionPreview
-                            entry={selected}
-                            target={target}
-                            onEditFolder={folderId => selected && goToProblem(selected.id, folderId)}
-                          />
-                        </div>
-                      </div>
-                    )}
                   </div>
-                </TabsContent>
-
-                <TabsContent value="preview" className="pt-4">
-                  <CollectionPreview
-                    entry={selected}
-                    target={target}
-                    onEditFolder={folderId => selected && goToProblem(selected.id, folderId)}
-                  />
                 </TabsContent>
 
                 <TabsContent value="json" className="space-y-3 pt-4">
@@ -1389,6 +1472,17 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   />
                 </TabsContent>
               </Tabs>
+            </div>
+
+            <div className="hidden min-h-0 min-w-0 overflow-y-auto @6xl:block">
+              <div className="sticky top-0 rounded-lg border p-4">
+                <span className="mb-3 block text-sm font-medium text-muted-foreground">Live preview</span>
+                <CollectionPreview
+                  entry={selected}
+                  target={target}
+                  onEditFolder={folderId => selected && goToProblem(selected.id, folderId)}
+                />
+              </div>
             </div>
           </div>
           </div>

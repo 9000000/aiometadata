@@ -327,15 +327,16 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             .map((folder, folderIndex) => ({ folder, folderIndex }))
             .filter(({ folder }) => !matchedFolderIds || matchedFolderIds.has(folder.id))
         : [],
+      forceExpand: matchedFolderIds !== null,
     })),
     [entries, railQuery]
   );
 
   const railItemIds = useMemo(() => {
     const ids: string[] = [];
-    for (const { entry, folders } of visibleTree) {
+    for (const { entry, folders, forceExpand } of visibleTree) {
       ids.push(entry.id);
-      if (expandedIds.has(entry.id)) for (const { folder } of folders) ids.push(folder.id);
+      if (forceExpand || expandedIds.has(entry.id)) for (const { folder } of folders) ids.push(folder.id);
     }
     return ids;
   }, [visibleTree, expandedIds]);
@@ -1167,14 +1168,14 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleRailDragEnd}>
                 <SortableContext items={railItemIds} strategy={verticalListSortingStrategy}>
                   <div className="space-y-0.5">
-                    {visibleTree.map(({ entry, folders }) => {
+                    {visibleTree.map(({ entry, folders, forceExpand }) => {
                       const index = entries.findIndex(item => item.id === entry.id);
                       const excluded: 'nuvio' | 'fusion' | null =
                         target === 'nuvio' && entry.kind === 'classicRow' ? 'fusion'
                         : target === 'fusion' && entryIsNative(entry) ? 'nuvio'
                         : null;
                       const folderCount = entry.kind === 'collection' ? entry.folders.length : 0;
-                      const expanded = expandedIds.has(entry.id);
+                      const expanded = forceExpand || expandedIds.has(entry.id);
                       return (
                         <div key={entry.id}>
                           <SortableTreeRow

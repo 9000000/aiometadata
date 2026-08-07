@@ -195,6 +195,26 @@ function toCollectionItem(
   };
 }
 
+/** The addons an importer has to have installed for the file to resolve. */
+function requiredAddons(widgets: FusionWidget[]): string[] {
+  const addons = new Set<string>();
+  const take = (source: FusionAddonCatalogSource) => {
+    if (source.kind === 'addonCatalog' && source.payload.addonId.startsWith('http')) {
+      addons.add(source.payload.addonId);
+    }
+  };
+
+  for (const widget of widgets) {
+    if (widget.type === 'collection.row') {
+      for (const item of widget.dataSource.payload.items) item.dataSources.forEach(take);
+      continue;
+    }
+    take(widget.dataSource);
+  }
+
+  return [...addons];
+}
+
 /** Fusion namespaces widget ids by kind: `collection.<id>` and `catalog.<id>`. */
 function prefixedId(id: string, prefix: string): string {
   return id.startsWith(prefix) ? id : `${prefix}${id}`;
@@ -266,7 +286,12 @@ export function toFusionWidgets(
   }
 
   return {
-    output: { exportType: 'fusionWidgets', exportVersion: 1, widgets },
+    output: {
+      exportType: 'fusionWidgets',
+      exportVersion: 1,
+      requiredAddons: requiredAddons(widgets),
+      widgets,
+    },
     notes,
   };
 }

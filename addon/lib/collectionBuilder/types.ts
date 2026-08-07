@@ -189,6 +189,7 @@ export type FusionWidget = FusionCollectionRowWidget | FusionRowClassicWidget;
 export interface FusionWidgetsConfig {
   exportType: 'fusionWidgets';
   exportVersion: 1;
+  requiredAddons: string[];
   widgets: FusionWidget[];
 }
 

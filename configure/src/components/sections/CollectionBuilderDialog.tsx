@@ -1281,28 +1281,30 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             </div>
 
             <div className="@container min-h-0 min-w-0 overflow-y-auto">
-              <div className="sticky top-0 z-10 -mx-1 mb-4 flex items-center gap-1.5 border-b bg-card/95 px-1 py-2 text-sm backdrop-blur">
-                <button
-                  type="button"
-                  onClick={() => selected && setSelection({ entryId: selected.id, folderId: null })}
-                  className={`truncate rounded px-1 py-0.5 hover:bg-accent/60 ${
-                    selection.folderId ? 'text-muted-foreground hover:text-foreground' : 'font-medium'
-                  }`}
-                >
-                  {selected?.title || 'Untitled'}
-                </button>
-                {selection.folderId && (
-                  <>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <span className="truncate font-medium">
-                      {selected?.kind === 'collection'
-                        ? selected.folders.find(folder => folder.id === selection.folderId)?.title
-                          || 'Untitled folder'
-                        : ''}
-                    </span>
-                  </>
-                )}
-              </div>
+              {selected && (
+                <div className="sticky top-0 z-10 -mx-1 mb-4 flex items-center gap-1.5 border-b bg-card/95 px-1 py-2 text-sm backdrop-blur">
+                  <button
+                    type="button"
+                    onClick={() => setSelection({ entryId: selected.id, folderId: null })}
+                    className={`truncate rounded px-1 py-0.5 hover:bg-accent/60 ${
+                      selection.folderId ? 'text-muted-foreground hover:text-foreground' : 'font-medium'
+                    }`}
+                  >
+                    {selected.title || 'Untitled'}
+                  </button>
+                  {selection.folderId && (
+                    <>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="truncate font-medium">
+                        {selected.kind === 'collection'
+                          ? selected.folders.find(folder => folder.id === selection.folderId)?.title
+                            || 'Untitled folder'
+                          : ''}
+                      </span>
+                    </>
+                  )}
+                </div>
+              )}
 
               <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <TabsList>

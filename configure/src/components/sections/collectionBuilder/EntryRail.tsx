@@ -4,6 +4,7 @@ import { CSS } from '@dnd-kit/utilities';
 
 import type { IssueSeverity } from '@/lib/collectionBuilder/issueCenter';
 import type { BuilderEntry } from '@shared/types';
+import { ScopeChip } from './ScopeChip';
 import { entrySourceCount } from './shared';
 import { ReorderArrows, RowActions } from './SourceRow';
 
@@ -23,8 +24,8 @@ export function SortableEntryRow({
 }: {
   entry: BuilderEntry;
   isActive: boolean;
-  /** True when the active target has no equivalent and will skip this entry. */
-  excluded: boolean;
+  /** The target that does understand this entry, when the active one does not. */
+  excluded: 'nuvio' | 'fusion' | null;
   /** The worst thing the issue list says about this entry, if anything. */
   severity?: IssueSeverity;
   /** Every source here is resolved by the client, so none of it reaches us. */
@@ -53,10 +54,7 @@ export function SortableEntryRow({
       style={style}
       className={`flex items-center gap-2 rounded-md border border-l-[3px] px-2 py-2 text-sm transition-colors ${
         isCollection ? 'border-l-cyan-500' : 'border-l-violet-500'
-      } ${isActive ? 'border-primary bg-primary/10' : 'border-border hover:bg-accent/50'} ${
-        excluded ? 'opacity-50' : ''
-      }`}
-      title={excluded ? 'Not exported for the selected target' : undefined}
+      } ${isActive ? 'border-primary bg-primary/10' : 'border-border hover:bg-accent/50'}`}
     >
       <ReorderArrows
         label={entry.title || 'this'}
@@ -86,7 +84,8 @@ export function SortableEntryRow({
             />
           </span>
         )}
-        {allNative && (
+        {excluded && <ScopeChip scope={excluded} />}
+        {allNative && !excluded && (
           <span className="shrink-0 text-[10px] text-muted-foreground" title="Nuvio fetches these itself, so they cost this addon nothing">
             Nuvio
           </span>

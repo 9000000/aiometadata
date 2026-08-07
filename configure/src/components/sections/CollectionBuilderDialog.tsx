@@ -950,9 +950,10 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 <SortableContext items={entries.map(entry => entry.id)} strategy={verticalListSortingStrategy}>
                   <div className="max-h-56 space-y-1.5 overflow-y-auto pr-1 lg:max-h-none lg:overflow-visible lg:pr-0">
                     {entries.map((entry, index) => {
-                      const excluded =
-                        (target === 'nuvio' && entry.kind === 'classicRow')
-                        || (target === 'fusion' && entryIsNative(entry));
+                      const excluded: 'nuvio' | 'fusion' | null =
+                        target === 'nuvio' && entry.kind === 'classicRow' ? 'fusion'
+                        : target === 'fusion' && entryIsNative(entry) ? 'nuvio'
+                        : null;
                       return (
                         <SortableEntryRow
                           key={entry.id}

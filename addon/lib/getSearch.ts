@@ -2249,7 +2249,19 @@ async function performMdbListSearch(type: string, query: string, language: strin
       config.apiKeys.mdblist
     );
 
-    const metas = await Promise.all(batchMediaInfo.map(async (media: any) => {
+    const byTmdbId = new Map<string, any>();
+    for (const media of batchMediaInfo) {
+      const id = media?.ids?.tmdb ?? media?.ids?.tmdbid;
+      if (id != null) byTmdbId.set(String(id), media);
+    }
+    const rankedMediaInfo = tmdbIds
+      .map((id: any) => byTmdbId.get(String(id)))
+      .filter(Boolean);
+    for (const media of batchMediaInfo) {
+      if (!rankedMediaInfo.includes(media)) rankedMediaInfo.push(media);
+    }
+
+    const metas = await Promise.all(rankedMediaInfo.map(async (media: any) => {
 
       let releaseDates: any = null;
       if (type === 'movie' && media.ids?.tmdb && config.hideUnreleasedDigitalSearch) {

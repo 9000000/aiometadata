@@ -894,86 +894,84 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     <>
       <Dialog open={isOpen} onOpenChange={open => !open && requestClose()}>
         <DialogContent
-          className="h-[100dvh] max-h-[100dvh] w-screen max-w-none overflow-y-auto rounded-none p-4 sm:h-auto sm:max-h-[90vh] sm:w-full sm:max-w-6xl sm:rounded-lg sm:p-6"
+          className="grid h-[100dvh] max-h-[100dvh] w-screen max-w-none grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden rounded-none p-0 sm:h-[92vh] sm:max-h-[92vh] sm:w-[min(96vw,120rem)] sm:rounded-2xl"
           onInteractOutside={event => event.preventDefault()}
         >
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Layers className="h-5 w-5" />
-              Collections &amp; Widgets
-            </DialogTitle>
-            <DialogDescription>
-              Arrange your catalogs once, then export as Nuvio collection JSON or Fusion widget JSON. The switch below
-              only changes wording and which options apply; the design itself is shared.
-            </DialogDescription>
-          </DialogHeader>
+          <header className="flex flex-col gap-3 border-b px-5 py-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <DialogTitle className="flex items-center gap-2 text-lg font-semibold">
+                <Layers className="h-5 w-5" />
+                Collections &amp; Widgets
+              </DialogTitle>
+              <DialogDescription className="sr-only">
+                Arrange your catalogs once, then export as Nuvio collection JSON or Fusion widget JSON.
+              </DialogDescription>
+              <div className="flex gap-1 rounded-lg border p-1">
+                <button
+                  type="button"
+                  onClick={() => setTarget('nuvio')}
+                  className={`flex h-8 items-center gap-1.5 rounded-md px-3 text-sm transition-colors ${
+                    target === 'nuvio'
+                      ? 'bg-cyan-900/50 text-cyan-200 ring-1 ring-cyan-500/60'
+                      : 'text-muted-foreground hover:bg-accent/50'
+                  }`}
+                >
+                  <Tv className="h-4 w-4" /> Nuvio
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTarget('fusion')}
+                  className={`flex h-8 items-center gap-1.5 rounded-md px-3 text-sm transition-colors ${
+                    target === 'fusion'
+                      ? 'bg-violet-900/50 text-violet-200 ring-1 ring-violet-500/60'
+                      : 'text-muted-foreground hover:bg-accent/50'
+                  }`}
+                >
+                  <Rows3 className="h-4 w-4" /> Fusion
+                </button>
+              </div>
+              <Badge
+                variant="outline"
+                className={`ml-auto mr-8 h-7 px-2.5 text-xs ${
+                  stage === 'saved'
+                    ? 'border-emerald-600/50 text-emerald-400'
+                    : stage === 'applied'
+                      ? 'border-sky-600/50 text-sky-400'
+                      : 'border-amber-600/50 text-amber-400'
+                }`}
+                title={stageCopy.hint}
+              >
+                {stageCopy.label}
+              </Badge>
+            </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-muted-foreground">Building for</span>
-            <div className="flex gap-1 rounded-lg border p-1">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>
+                Catalogs read from {sourceList.origin === 'derived' ? 'your local config' : 'your saved manifest'}
+              </span>
               <button
                 type="button"
-                onClick={() => setTarget('nuvio')}
-                className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs transition-colors ${
-                  target === 'nuvio'
-                    ? 'bg-cyan-900/50 text-cyan-200 ring-1 ring-cyan-500/60'
-                    : 'text-muted-foreground hover:bg-accent/50'
-                }`}
+                onClick={() => setShowManifestField(value => !value)}
+                className="underline underline-offset-2 hover:text-foreground"
               >
-                <Tv className="h-3.5 w-3.5" /> Nuvio
-              </button>
-              <button
-                type="button"
-                onClick={() => setTarget('fusion')}
-                className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs transition-colors ${
-                  target === 'fusion'
-                    ? 'bg-violet-900/50 text-violet-200 ring-1 ring-violet-500/60'
-                    : 'text-muted-foreground hover:bg-accent/50'
-                }`}
-              >
-                <Rows3 className="h-3.5 w-3.5" /> Fusion
+                {showManifestField ? 'Hide' : 'Change source'}
               </button>
             </div>
-            <Badge
-              variant="outline"
-              className={`ml-auto h-6 px-2 text-[11px] ${
-                stage === 'saved'
-                  ? 'border-emerald-600/50 text-emerald-400'
-                  : stage === 'applied'
-                    ? 'border-sky-600/50 text-sky-400'
-                    : 'border-amber-600/50 text-amber-400'
-              }`}
-              title={stageCopy.hint}
-            >
-              {stageCopy.label}
-            </Badge>
-          </div>
+            {showManifestField && (
+              <div className="space-y-2">
+                <Label htmlFor="collection-manifest-url" className="text-sm font-medium">Manifest URL</Label>
+                <Input
+                  id="collection-manifest-url"
+                  value={manifestUrl}
+                  onChange={event => setManifestUrl(event.target.value)}
+                  placeholder="https://your-host/stremio/<uuid>/manifest.json"
+                  className="h-9 font-mono text-sm"
+                />
+              </div>
+            )}
+          </header>
 
-          <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-            <span>
-              Catalogs read from {sourceList.origin === 'derived' ? 'your local config' : 'your saved manifest'}
-            </span>
-            <button
-              type="button"
-              onClick={() => setShowManifestField(value => !value)}
-              className="underline underline-offset-2 hover:text-foreground"
-            >
-              {showManifestField ? 'Hide' : 'Change source'}
-            </button>
-          </div>
-          {showManifestField && (
-            <div className="space-y-1.5">
-              <Label htmlFor="collection-manifest-url" className="text-xs">Manifest URL</Label>
-              <Input
-                id="collection-manifest-url"
-                value={manifestUrl}
-                onChange={event => setManifestUrl(event.target.value)}
-                placeholder="https://your-host/stremio/<uuid>/manifest.json"
-                className="h-9 font-mono text-xs"
-              />
-            </div>
-          )}
-
+          <div className="@container min-h-0 overflow-hidden px-5 py-4">
           {target === 'fusion' && totalNative > 0 && (
             <div className="flex flex-col gap-2 rounded-md border border-amber-600/50 bg-amber-950/20 p-3 sm:flex-row sm:items-center sm:justify-between">
               <p className="flex items-start gap-1.5 text-xs text-amber-500">
@@ -1393,25 +1391,26 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               </Tabs>
             </div>
           </div>
+          </div>
 
-          <div className="flex flex-col gap-2 border-t pt-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
-            <div className="min-w-0 space-y-1 sm:mr-auto">
+          <footer className="flex flex-col gap-3 border-t px-5 py-4 @2xl:flex-row @2xl:flex-wrap @2xl:items-center @2xl:justify-end">
+            <div className="min-w-0 space-y-1 @2xl:mr-auto">
               {overBy > 0 && (
-                <p className="flex items-start gap-1.5 text-[11px] text-amber-500">
-                  <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+                <p className="flex items-start gap-1.5 text-xs text-amber-500">
+                  <AlertTriangle className="mt-px h-4 w-4 shrink-0" />
                   This design needs {pendingCount} new catalogs and there is room for {headroom}. Delete{' '}
                   {overBy} more catalog{overBy === 1 ? '' : 's'} worth of tiles to apply it.
                 </p>
               )}
               {overBy === 0 && pendingCount > 0 && (
-                <p className="text-[11px] text-emerald-500">
+                <p className="text-xs text-emerald-500">
                   {pendingCount} catalog{pendingCount === 1 ? '' : 's'} will be added when you save, leaving{' '}
                   {headroom - pendingCount} of your {catalogLimit} spare.
                 </p>
               )}
               {unresolvedSources.length > 0 && (
-                <p className="flex items-start gap-1.5 text-[11px] text-amber-500">
-                  <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+                <p className="flex items-start gap-1.5 text-xs text-amber-500">
+                  <AlertTriangle className="mt-px h-4 w-4 shrink-0" />
                   {unresolvedSources.length === 1
                     ? '1 source points at a catalog you do not have.'
                     : `${unresolvedSources.length} sources point at catalogs you do not have.`}{' '}
@@ -1419,8 +1418,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 </p>
               )}
               {pendingAdditions.needsAccount.length > 0 && (
-                <p className="flex items-start gap-1.5 text-[11px] text-amber-500">
-                  <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+                <p className="flex items-start gap-1.5 text-xs text-amber-500">
+                  <AlertTriangle className="mt-px h-4 w-4 shrink-0" />
                   This design uses your own {pendingAdditions.needsAccount.join(' and ')} catalogs, such as
                   your watchlist. Connect{' '}
                   {pendingAdditions.needsAccount.length === 1 ? 'that account' : 'those accounts'} first, or
@@ -1431,7 +1430,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 && pendingCount === 0
                 && unresolvedSources.length === 0
                 && pendingAdditions.needsAccount.length === 0 && (
-                <p className="text-[11px] text-muted-foreground">{stageCopy.hint}</p>
+                <p className="text-xs text-muted-foreground">{stageCopy.hint}</p>
               )}
             </div>
             {unresolvedSources.length > 0 && (
@@ -1448,7 +1447,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             >
               {isSaving ? 'Saving…' : verdict.label}
             </Button>
-          </div>
+          </footer>
         </DialogContent>
       </Dialog>
 

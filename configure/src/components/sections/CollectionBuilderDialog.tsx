@@ -1034,7 +1034,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               {entries.length === 0 && (
                 <div className="space-y-1.5 rounded-md border border-dashed p-2">
                   <p className="px-1 text-center text-xs text-muted-foreground">
-                    Nothing yet. Start from one of these:
+                    {starters.length > 0 ? 'Nothing yet. Start from one of these:' : 'Nothing yet.'}
                   </p>
                   {starters.map(template => (
                     <button
@@ -1055,9 +1055,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   <button
                     type="button"
                     onClick={() => addEntry(createCollectionDraft())}
-                    className="w-full rounded-md px-2 py-1.5 text-center text-xs text-muted-foreground hover:text-foreground"
+                    className={`w-full rounded-md px-2 text-center text-xs transition-colors ${
+                      starters.length > 0
+                        ? 'py-1.5 text-muted-foreground hover:text-foreground'
+                        : 'border py-3 font-medium hover:border-primary/50 hover:bg-accent/40'
+                    }`}
                   >
-                    or start empty
+                    {starters.length > 0 ? 'or start empty' : 'Start with a collection'}
                   </button>
                 </div>
               )}

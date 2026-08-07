@@ -22,6 +22,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { nextCopyTitle } from '@/lib/collectionBuilder/entryOps';
 import type { IssueSeverity } from '@/lib/collectionBuilder/issueCenter';
 import { catalogKey, type ManifestCatalog } from '@/lib/collectionBuilder/manifestSources';
 import { TERMS, type Target } from '@/lib/collectionBuilder/terms';
@@ -131,7 +132,7 @@ export function CollectionEditor({
   const duplicateFolder = (index: number) => {
     const original = entry.folders[index];
     if (!original) return;
-    const copy: FolderDraft = { ...clone(original), id: newId(), title: `${original.title} copy` };
+    const copy: FolderDraft = { ...clone(original), id: newId(), title: nextCopyTitle(original.title) };
     setSelectedFolderId(copy.id);
     setNewFolderId(copy.id);
     update({

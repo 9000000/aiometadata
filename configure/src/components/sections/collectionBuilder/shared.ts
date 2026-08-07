@@ -1,3 +1,4 @@
+import { nextCopyTitle } from '@/lib/collectionBuilder/entryOps';
 import { newId, type BuilderEntry, type FusionAspectRatio, type TileShape } from '@shared/types';
 
 export const SHAPE_LABELS: Record<TileShape, string> = {
@@ -55,7 +56,7 @@ export function entrySourceCount(entry: BuilderEntry): number {
 export function duplicateEntryDraft(entry: BuilderEntry): BuilderEntry {
   const copy = clone(entry);
   copy.id = newId();
-  copy.title = `${entry.title} copy`;
+  copy.title = nextCopyTitle(entry.title);
   if (copy.kind === 'collection') {
     copy.folders = copy.folders.map(folder => ({ ...folder, id: newId() }));
   }

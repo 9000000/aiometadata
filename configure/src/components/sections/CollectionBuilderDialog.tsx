@@ -1755,7 +1755,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
       <Dialog
         open={confirmApply}
-        onOpenChange={open => { if (!open) { setConfirmApply(false); setPendingNavigate(false); } }}
+        onOpenChange={open => { if (!open) setConfirmApply(false); }}
       >
         <DialogContent className="max-w-lg">
           <DialogHeader>
@@ -1779,13 +1779,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           <div className="flex flex-wrap justify-end gap-2 border-t pt-3">
             <Button
               variant="ghost"
-              onClick={() => { setConfirmApply(false); setPendingNavigate(false); }}
+              onClick={() => setConfirmApply(false)}
             >
               Back to editing
             </Button>
             <Button
               variant="outline"
-              onClick={() => { setConfirmApply(false); setPendingNavigate(false); setRemapOpen(true); }}
+              onClick={() => { setConfirmApply(false); setRemapOpen(true); }}
             >
               <Replace className="mr-1.5 h-4 w-4" /> Swap catalogs
             </Button>

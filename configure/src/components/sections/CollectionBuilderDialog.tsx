@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
   AlertTriangle,
@@ -38,6 +38,7 @@ import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useConfig } from '@/contexts/ConfigContext';
+import { useSave } from '@/contexts/SaveContext';
 import { getSourceBadgeStyle } from '@/lib/sourceBadges';
 
 import {
@@ -76,6 +77,7 @@ import {
   countProblems,
   withStagedCatalogs,
 } from '@/lib/collectionBuilder/problems';
+import { deriveSaveStage, describeSaveStage } from '@/lib/collectionBuilder/saveState';
 import { FUSION_CHIP, NUVIO_CHIP, TERMS, type Target } from '@/lib/collectionBuilder/terms';
 import { CollectionPreview } from './CollectionPreview';
 import { buildBlueprintLookup } from '@shared/blueprintLookup';
@@ -99,8 +101,6 @@ import { ClassicRowEditor } from './collectionBuilder/ClassicRowEditor';
 import { CollectionEditor } from './collectionBuilder/CollectionEditor';
 import { SortableEntryRow } from './collectionBuilder/EntryRail';
 import { clone, duplicateEntryDraft, entrySourceCount, type TagOption } from './collectionBuilder/shared';
-
-const SETTINGS_LAYOUT_NAVIGATE_EVENT = 'settings-layout:navigate';
 
 /**
  * Above this many catalogs an import stops to ask. A community file can carry
@@ -246,8 +246,28 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     [entries, sourceList.catalogs]
   );
   const [confirmApply, setConfirmApply] = useState(false);
-  const [pendingNavigate, setPendingNavigate] = useState(false);
+  const [pendingMode, setPendingMode] = useState<'apply' | 'save'>('apply');
   const [confirmClose, setConfirmClose] = useState(false);
+
+  const { requestSave, isSaving, isDirty: configDirty } = useSave();
+  const [pendingSave, setPendingSave] = useState(false);
+  const appliedSnapshot = useRef<string | null>(null);
+
+  const stage = deriveSaveStage({
+    builderJson: JSON.stringify(entries),
+    configJson: JSON.stringify(config.collections || []),
+    configDirty,
+  });
+  const stageCopy = describeSaveStage(stage);
+
+  // requestSave closes over config, so saving in the same tick as the apply
+  // would store the version from before it. This waits for the config to catch up.
+  useEffect(() => {
+    if (!pendingSave) return;
+    if (JSON.stringify(config.collections || []) !== appliedSnapshot.current) return;
+    setPendingSave(false);
+    requestSave();
+  }, [pendingSave, config.collections, requestSave]);
   const [remapOpen, setRemapOpen] = useState(false);
   const [remapChoices, setRemapChoices] = useState<Record<string, SourceDraft>>({});
   const [remapPickFor, setRemapPickFor] = useState<string | null>(null);
@@ -436,15 +456,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setPickerTarget(null);
   };
 
-  const applyToConfig = (
-    thenGoToConfiguration = false,
-    options: { withCatalogs?: boolean } = {}
-  ) => {
+  const applyToConfig = (options: { withCatalogs?: boolean; thenSave?: boolean } = {}) => {
     const addCatalogs = options.withCatalogs !== false && pendingCount > 0;
+    const applied = clone(entries);
 
     setConfig(prev => ({
       ...prev,
-      collections: clone(entries),
+      collections: applied,
       ...(addCatalogs && { catalogs: applyCatalogAdditions(prev.catalogs || [], pendingAdditions) }),
     }));
     setBaseline(JSON.stringify(entries));
@@ -454,52 +472,53 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       ? ` ${pendingCount} catalog${pendingCount === 1 ? '' : 's'} added.`
       : '';
 
-    if (thenGoToConfiguration) {
-      toast.success(`Applied.${catalogNote} Save your configuration to store it.`);
-      onClose();
-      window.dispatchEvent(
-        new CustomEvent(SETTINGS_LAYOUT_NAVIGATE_EVENT, {
-          detail: { tab: 'configuration', scrollToTop: true },
-        })
-      );
+    if (options.thenSave) {
+      appliedSnapshot.current = JSON.stringify(applied);
+      setPendingSave(true);
       return;
     }
+
     toast.success(
-      (entries.length === 1 ? '1 entry applied.' : `${entries.length} entries applied.`) +
-      `${catalogNote} Save your configuration to store it.`
+      (entries.length === 1 ? '1 entry applied.' : `${entries.length} entries applied.`) + catalogNote
     );
   };
 
-  const handleSave = (thenGoToConfiguration = false) => {
+  const handleSave = (mode: 'apply' | 'save') => {
     // The design stays valid for Nuvio, but applying it while building for
     // Fusion also publishes the hosted widgets URL, which would serve tiles the
     // export cannot fill.
     if (target === 'fusion' && totalNative > 0) {
-      setPendingNavigate(thenGoToConfiguration);
+      setPendingMode(mode);
       setNativeBlockFor('apply');
       return;
     }
     // A config over the ceiling is refused on save, so this has to stop here
     // rather than let the catalogs through and fail later.
     if (overBy > 0) {
-      setPendingNavigate(thenGoToConfiguration);
+      setPendingMode(mode);
       setOverLimitOpen(true);
       return;
     }
     // Catalogs nothing can rebuild render as empty rows rather than breaking
     // anything, so this asks rather than refuses.
     if (unresolvedSources.length > 0) {
-      setPendingNavigate(thenGoToConfiguration);
+      setPendingMode(mode);
       setConfirmApply(true);
       return;
     }
-    applyToConfig(thenGoToConfiguration);
+    applyToConfig({ thenSave: mode === 'save' });
   };
 
-  const hasUnappliedEntries = useMemo(
-    () => JSON.stringify(entries) !== JSON.stringify(config.collections || []),
-    [entries, config.collections]
-  );
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 's' || !(event.metaKey || event.ctrlKey)) return;
+      event.preventDefault();
+      handleSave('save');
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  });
 
   const hostedUrl = useMemo(() => {
     const base = stripManifestSuffix(manifestUrl);
@@ -844,6 +863,19 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 <Rows3 className="h-3.5 w-3.5" /> Fusion
               </button>
             </div>
+            <Badge
+              variant="outline"
+              className={`ml-auto h-6 px-2 text-[11px] ${
+                stage === 'saved'
+                  ? 'border-emerald-600/50 text-emerald-400'
+                  : stage === 'applied'
+                    ? 'border-sky-600/50 text-sky-400'
+                    : 'border-amber-600/50 text-amber-400'
+              }`}
+              title={stageCopy.hint}
+            >
+              {stageCopy.label}
+            </Badge>
           </div>
 
           {target === 'fusion' && totalNative > 0 && (
@@ -936,7 +968,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-2 py-2 text-[11px] text-amber-600 dark:text-amber-400">
                   {sourceList.error
                     ? `Could not read your manifest (${sourceList.error}). The catalog list is derived from your local config.`
-                    : 'Save your configuration to read the real manifest. Until then the catalog list is derived from your local config.'}
+                    : 'Save to read the real manifest. Until then the catalog list is derived from your local config.'}
                   {' '}Genre options and genre requirements only come from the manifest, so save first if a catalog needs one.
                 </div>
               )}
@@ -1102,9 +1134,9 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                         </div>
                         <p className="flex items-start gap-1.5 text-[11px] text-amber-500">
                           <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
-                          {hasUnappliedEntries
-                            ? 'The link serves what is saved on the server, which is not these edits yet. Apply to config, then save the configuration on the Config tab.'
-                            : 'The link serves what is saved on the server. Save the configuration on the Config tab, or it will still serve the version from before you opened this.'}
+                          {stage === 'saved'
+                            ? 'The link serves what is on the server, which is these edits.'
+                            : 'The link serves what is on the server, so save before you re-import it.'}
                         </p>
                         <p className="text-[11px] text-muted-foreground">
                           It rebuilds on every request, so re-importing after saving picks up your edits. Anyone with
@@ -1115,7 +1147,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       </>
                     ) : (
                       <p className="text-[11px] text-muted-foreground">
-                        Save your configuration first. The link is served per user, so it needs a saved config to read.
+                        Save first. The link is served per user, so it needs a saved config to read.
                       </p>
                     )}
                   </div>
@@ -1169,7 +1201,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               )}
               {overBy === 0 && pendingCount > 0 && (
                 <p className="text-[11px] text-emerald-500">
-                  {pendingCount} catalog{pendingCount === 1 ? '' : 's'} will be added when you apply, leaving{' '}
+                  {pendingCount} catalog{pendingCount === 1 ? '' : 's'} will be added when you save, leaving{' '}
                   {headroom - pendingCount} of your {catalogLimit} spare.
                 </p>
               )}
@@ -1195,10 +1227,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 && pendingCount === 0
                 && unresolvedSources.length === 0
                 && pendingAdditions.needsAccount.length === 0 && (
-                <p className="text-[11px] text-muted-foreground">
-                  Applying puts this in your configuration. It is only stored once you save the configuration
-                  itself on the Config tab.
-                </p>
+                <p className="text-[11px] text-muted-foreground">{stageCopy.hint}</p>
               )}
             </div>
             {unresolvedSources.length > 0 && (
@@ -1207,8 +1236,10 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               </Button>
             )}
             <Button variant="ghost" onClick={requestClose}>Close</Button>
-            <Button variant="outline" onClick={() => handleSave()}>Apply to config</Button>
-            <Button onClick={() => handleSave(true)}>Apply and go save</Button>
+            <Button variant="outline" onClick={() => handleSave('apply')}>Apply only</Button>
+            <Button onClick={() => handleSave('save')} disabled={isSaving}>
+              {isSaving ? 'Saving…' : 'Save'}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -1581,7 +1612,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             >
               <Replace className="mr-1.5 h-4 w-4" /> Swap catalogs
             </Button>
-            <Button onClick={() => { setConfirmApply(false); applyToConfig(pendingNavigate); }}>
+            <Button onClick={() => { setConfirmApply(false); applyToConfig({ thenSave: pendingMode === 'save' }); }}>
               Apply anyway
             </Button>
           </div>
@@ -1649,7 +1680,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             <Button variant="ghost" onClick={() => setOverLimitOpen(false)}>Back to editing</Button>
             <Button
               variant="outline"
-              onClick={() => { setOverLimitOpen(false); applyToConfig(pendingNavigate, { withCatalogs: false }); }}
+              onClick={() => { setOverLimitOpen(false); applyToConfig({ withCatalogs: false, thenSave: pendingMode === 'save' }); }}
             >
               Apply layout only
             </Button>

@@ -1,4 +1,4 @@
-import type { BuilderEntry } from '@shared/types';
+import type { BuilderEntry, FolderDraft } from '@shared/types';
 
 const COPY_SUFFIX = /^(.*?) copy(?: (\d+))?$/;
 
@@ -27,6 +27,40 @@ export function filterEntries(entries: BuilderEntry[], query: string): BuilderEn
   const needle = query.trim().toLowerCase();
   if (!needle) return entries;
   return entries.filter(entry => haystack(entry).includes(needle));
+}
+
+export interface FilteredEntry {
+  entry: BuilderEntry;
+  /** Folder ids to show. null means the entry itself matched: show them all. */
+  matchedFolderIds: Set<string> | null;
+}
+
+function folderHaystack(folder: FolderDraft): string {
+  const parts = [folder.title];
+  for (const source of folder.sources) parts.push(source.name || source.catalogId);
+  return parts.join(' ').toLowerCase();
+}
+
+export function filterEntryTree(entries: BuilderEntry[], query: string): FilteredEntry[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return entries.map(entry => ({ entry, matchedFolderIds: null }));
+
+  const result: FilteredEntry[] = [];
+  for (const entry of entries) {
+    if (entry.title.toLowerCase().includes(needle)) {
+      result.push({ entry, matchedFolderIds: null });
+      continue;
+    }
+    if (entry.kind === 'classicRow') {
+      if (haystack(entry).includes(needle)) result.push({ entry, matchedFolderIds: null });
+      continue;
+    }
+    const matched = new Set(
+      entry.folders.filter(folder => folderHaystack(folder).includes(needle)).map(folder => folder.id)
+    );
+    if (matched.size > 0) result.push({ entry, matchedFolderIds: matched });
+  }
+  return result;
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;

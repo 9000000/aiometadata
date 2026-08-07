@@ -64,7 +64,7 @@ import {
   type ImportResult,
   type MissingCatalogGroup,
 } from '@shared/importers';
-import { toFusionWidgets } from '@shared/fusionExport';
+import { toFusionWidgets, unsupportedClassicRows } from '@shared/fusionExport';
 import {
   buildIdentity,
   buildManifestUrl,
@@ -85,6 +85,7 @@ import {
   blockingIssues,
   buildIssueCenter,
   saveVerdict,
+  unsupportedRowMessage,
   type IssueRow,
   type IssueSeverity,
 } from '@/lib/collectionBuilder/issueCenter';
@@ -696,6 +697,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const handleSave = (mode: 'apply' | 'save'): boolean => {
     // Save is already disabled on these two, but Apply only is not, so they
     // still have to be caught here. The issue list is the advance notice.
+    if (rowTypeBlocked()) return false;
     if (target === 'fusion' && totalNative > 0) {
       setPendingMode(mode);
       setNativeBlockFor('apply');
@@ -926,6 +928,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     return Math.max(0, fusionTileTotal - kept);
   }, [fusionResult, fusionTileTotal]);
 
+  const unsupportedRows = useMemo(() => unsupportedClassicRows(entries), [entries]);
+
+  const unsupportedById = useMemo(
+    () => new Map(unsupportedRows.map(row => [row.id, unsupportedRowMessage(row.type, target)])),
+    [unsupportedRows, target]
+  );
+
   const totalNative = useMemo(
     () => entries.reduce((sum, entry) => sum + countNative(entry), 0),
     [entries, countNative]
@@ -967,8 +976,11 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const missingKeyNames = useMemo(() => missingKeys.map(key => key.name), [missingKeys]);
 
   const blocking = useMemo(
-    () => blockingIssues({ target, totalNative, overBy, pendingCount, headroom, missingKeys: missingKeyNames }),
-    [target, totalNative, overBy, pendingCount, headroom, missingKeyNames]
+    () => blockingIssues({
+      target, totalNative, overBy, pendingCount, headroom,
+      missingKeys: missingKeyNames, unsupportedRows,
+    }),
+    [target, totalNative, overBy, pendingCount, headroom, missingKeyNames, unsupportedRows]
   );
 
   const problems = useMemo(
@@ -1051,7 +1063,18 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     );
   };
 
+  /** Fusion refuses the whole file over one of these, so it must not leave here. */
+  const rowTypeBlocked = (): boolean => {
+    if (target !== 'fusion' || unsupportedRows.length === 0) return false;
+    const types = [...new Set(unsupportedRows.map(row => row.type))].join(' and ');
+    toast.error(`Fusion cannot import a row of type ${types}`, {
+      description: `${unsupportedRows.map(row => `"${row.title}"`).join(', ')}. One makes it reject the whole file. Move ${unsupportedRows.length === 1 ? 'it' : 'them'} into a collection folder, or add the row by hand in Fusion.`,
+    });
+    return true;
+  };
+
   const handleCopyUrl = async () => {
+    if (rowTypeBlocked()) return;
     if (target === 'fusion' && totalNative > 0) {
       setNativeBlockFor('link');
       return;
@@ -1063,6 +1086,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   };
 
   const handleCopy = async () => {
+    if (rowTypeBlocked()) return;
     if (target === 'fusion' && totalNative > 0) {
       setNativeBlockFor('copy');
       return;
@@ -1074,6 +1098,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   };
 
   const handleDownload = () => {
+    if (rowTypeBlocked()) return;
     if (target === 'fusion' && totalNative > 0) {
       setNativeBlockFor('download');
       return;
@@ -1418,6 +1443,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       onAddSource={() => setPickerTarget({ entryId: selected.id, folderId: null })}
                       focusTitle={titleFocusId === selected.id}
                       onTitleFocused={clearTitleFocus}
+                      unsupportedNote={unsupportedById.get(selected.id) ?? null}
                     />
                   )}
                   </div>

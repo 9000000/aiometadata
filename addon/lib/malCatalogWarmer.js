@@ -1,6 +1,7 @@
 const jikan = require('./mal');
 const { cacheWrapJikanApi, cacheWrapCatalog } = require('./getCache');
 const { parseAnimeCatalogMetaBatch } = require('../utils/parseProps');
+const { envInt } = require('../utils/envNumber');
 const malWarmerLogger = (require('consola').default || require('consola')).withTag('MAL Warmer');
 
 // Environment variable configuration with sensible defaults
@@ -16,10 +17,10 @@ const WARMUP_CONFIG = {
   intervalHours: parseInt(process.env.MAL_WARMUP_INTERVAL_HOURS) || 6,
   
   // Delay in seconds before first warmup after server start (default: 30s)
-  initialDelaySeconds: parseInt(process.env.MAL_WARMUP_INITIAL_DELAY_SECONDS) || 30,
+  initialDelaySeconds: envInt('MAL_WARMUP_INITIAL_DELAY_SECONDS', 30),
   
   // Extra delay between warmup tasks in ms (default: 100ms)
-  taskDelayMs: parseInt(process.env.MAL_WARMUP_TASK_DELAY_MS) || 100,
+  taskDelayMs: envInt('MAL_WARMUP_TASK_DELAY_MS', 100),
   
   // Enable quiet hours mode (only run during specific UTC hours)
   quietHoursEnabled: process.env.MAL_WARMUP_QUIET_HOURS_ENABLED === 'true', // Default: false
@@ -28,7 +29,7 @@ const WARMUP_CONFIG = {
   quietHoursRange: process.env.MAL_WARMUP_QUIET_HOURS_RANGE || '2-8',
   
   // Number of pages to warm for high-priority catalogs (default: 2)
-  priorityPages: parseInt(process.env.MAL_WARMUP_PRIORITY_PAGES) || 2,
+  priorityPages: envInt('MAL_WARMUP_PRIORITY_PAGES', 2),
   
   
   // Enable/disable specific catalog types
@@ -111,10 +112,10 @@ class MALCatalogWarmer {
     WARMUP_CONFIG.uuid = process.env.CACHE_WARMUP_UUID || 'system-cache-warmer';
     WARMUP_CONFIG.enabled = process.env.MAL_WARMUP_ENABLED !== 'false' && warmupMode === 'essential';
     WARMUP_CONFIG.intervalHours = parseInt(process.env.MAL_WARMUP_INTERVAL_HOURS) || 6;
-    WARMUP_CONFIG.taskDelayMs = parseInt(process.env.MAL_WARMUP_TASK_DELAY_MS) || 100;
+    WARMUP_CONFIG.taskDelayMs = envInt('MAL_WARMUP_TASK_DELAY_MS', 100);
     WARMUP_CONFIG.quietHoursEnabled = process.env.MAL_WARMUP_QUIET_HOURS_ENABLED === 'true';
     WARMUP_CONFIG.quietHoursRange = process.env.MAL_WARMUP_QUIET_HOURS_RANGE || '2-8';
-    WARMUP_CONFIG.priorityPages = parseInt(process.env.MAL_WARMUP_PRIORITY_PAGES) || 2;
+    WARMUP_CONFIG.priorityPages = envInt('MAL_WARMUP_PRIORITY_PAGES', 2);
     WARMUP_CONFIG.warmPriority = process.env.MAL_WARMUP_PRIORITY !== 'false';
     WARMUP_CONFIG.warmSchedule = process.env.MAL_WARMUP_SCHEDULE !== 'false';
     WARMUP_CONFIG.warmDecades = process.env.MAL_WARMUP_DECADES === 'true';

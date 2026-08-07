@@ -9,6 +9,7 @@ const {
 } = require('./getCache');
 const { getGenreList } = require('./getGenreList');
 const { parseAnimeCatalogMetaBatch } = require('../utils/parseProps');
+const { envInt } = require('../utils/envNumber');
 const jikan = require('./mal');
 const { buildProxyArtUrl } = require('./posterCache/proxyArt.js');
 const movielens = require('./movielens');
@@ -48,12 +49,12 @@ const WARMUP_CONFIG = {
   enabled: !!(process.env.CACHE_WARMUP_UUIDS || process.env.CACHE_WARMUP_UUID) && warmupMode() === 'comprehensive',
   uuids: parseWarmupUUIDs(),
   intervalHours: Math.max(12, parseFloat(process.env.CATALOG_WARMUP_INTERVAL_HOURS) || 24), // Daily default, minimum 12h (supports fractional hours like 0.5)
-  initialDelaySeconds: parseInt(process.env.CATALOG_WARMUP_INITIAL_DELAY_SECONDS) || 300,
-  maxPagesPerCatalog: parseInt(process.env.CATALOG_WARMUP_MAX_PAGES_PER_CATALOG) || 100,
+  initialDelaySeconds: envInt('CATALOG_WARMUP_INITIAL_DELAY_SECONDS', 300),
+  maxPagesPerCatalog: envInt('CATALOG_WARMUP_MAX_PAGES_PER_CATALOG', 100),
   resumeOnRestart: process.env.CATALOG_WARMUP_RESUME_ON_RESTART !== 'false',
   quietHoursEnabled: process.env.CATALOG_WARMUP_QUIET_HOURS_ENABLED === 'true',
   quietHoursRange: process.env.CATALOG_WARMUP_QUIET_HOURS || '02:00-06:00',
-  taskDelayMs: parseInt(process.env.CATALOG_WARMUP_TASK_DELAY_MS) || 100,
+  taskDelayMs: envInt('CATALOG_WARMUP_TASK_DELAY_MS', 100),
   logLevel: process.env.CATALOG_WARMUP_LOG_LEVEL || 'info',
   autoOnEpochChange: (process.env.CATALOG_WARMUP_AUTO_ON_EPOCH_CHANGE
     ?? process.env.CATALOG_WARMUP_AUTO_ON_VERSION_CHANGE) === 'true'
@@ -125,10 +126,10 @@ class ComprehensiveCatalogWarmer {
     this.config.uuids = parseWarmupUUIDs();
     this.config.enabled = !!(process.env.CACHE_WARMUP_UUIDS || process.env.CACHE_WARMUP_UUID) && (process.env.CACHE_WARMUP_MODE || 'essential') === 'comprehensive';
     this.config.intervalHours = Math.max(12, parseFloat(process.env.CATALOG_WARMUP_INTERVAL_HOURS) || 24);
-    this.config.maxPagesPerCatalog = parseInt(process.env.CATALOG_WARMUP_MAX_PAGES_PER_CATALOG) || 100;
+    this.config.maxPagesPerCatalog = envInt('CATALOG_WARMUP_MAX_PAGES_PER_CATALOG', 100);
     this.config.quietHoursEnabled = process.env.CATALOG_WARMUP_QUIET_HOURS_ENABLED === 'true';
     this.config.quietHoursRange = process.env.CATALOG_WARMUP_QUIET_HOURS || '02:00-06:00';
-    this.config.taskDelayMs = parseInt(process.env.CATALOG_WARMUP_TASK_DELAY_MS) || 100;
+    this.config.taskDelayMs = envInt('CATALOG_WARMUP_TASK_DELAY_MS', 100);
     this.config.logLevel = process.env.CATALOG_WARMUP_LOG_LEVEL || 'info';
     this.config.autoOnEpochChange = (process.env.CATALOG_WARMUP_AUTO_ON_EPOCH_CHANGE
       ?? process.env.CATALOG_WARMUP_AUTO_ON_VERSION_CHANGE) === 'true';

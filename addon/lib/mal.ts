@@ -94,9 +94,11 @@ if (!malDispatcher) {
   }
 }
 
-const MAX_CONCURRENT = parseInt(String(process.env.JIKAN_MAX_CONCURRENT), 10) || 2;
-const MIN_REQUEST_INTERVAL = parseInt(String(process.env.JIKAN_MIN_INTERVAL), 10) || 350;
-const MAX_REQUESTS_PER_MINUTE = parseInt(String(process.env.JIKAN_MAX_PER_MINUTE), 10) || 55;
+const { envInt }: any = require('../utils/envNumber');
+
+const MAX_CONCURRENT = envInt('JIKAN_MAX_CONCURRENT', 2, 1);
+const MIN_REQUEST_INTERVAL = envInt('JIKAN_MIN_INTERVAL', 350, 0);
+const MAX_REQUESTS_PER_MINUTE = envInt('JIKAN_MAX_PER_MINUTE', 55, 1);
 const MAX_RETRIES = 3;
 const RATE_LIMIT_DELAY = 2000;
 

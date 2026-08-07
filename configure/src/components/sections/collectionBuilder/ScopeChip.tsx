@@ -6,7 +6,7 @@ export function ScopeChip({ scope }: { scope: 'nuvio' | 'fusion' }) {
   return (
     <Badge
       variant="outline"
-      className={`h-5 shrink-0 px-1.5 text-[10px] font-medium ${scope === 'nuvio' ? NUVIO_CHIP : FUSION_CHIP}`}
+      className={`h-5 shrink-0 px-1.5 text-xs font-medium ${scope === 'nuvio' ? NUVIO_CHIP : FUSION_CHIP}`}
     >
       {scope === 'nuvio' ? 'Nuvio only' : 'Fusion only'}
     </Badge>

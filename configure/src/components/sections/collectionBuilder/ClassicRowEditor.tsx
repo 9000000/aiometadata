@@ -54,7 +54,7 @@ export function ClassicRowEditor({
 
       <div className="grid gap-4 @2xl:grid-cols-2">
         <div className="space-y-1.5">
-          <Label htmlFor={`${uid}-title`} className="text-xs">{terms.entryTitle}</Label>
+          <Label htmlFor={`${uid}-title`} className="text-sm font-medium">{terms.entryTitle}</Label>
           <Input
             id={`${uid}-title`}
             ref={titleRef}
@@ -73,8 +73,8 @@ export function ClassicRowEditor({
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <Label className="text-xs">Catalog</Label>
-          <Button variant="outline" size="sm" className="h-7" onClick={onAddSource}>
+          <Label className="text-sm font-medium">Catalog</Label>
+          <Button variant="outline" size="sm" className="h-8" onClick={onAddSource}>
             <Plus className="mr-1 h-3.5 w-3.5" /> {entry.source ? 'Change' : 'Pick catalog'}
           </Button>
         </div>
@@ -101,7 +101,7 @@ export function ClassicRowEditor({
 
       <div className="grid gap-4 @2xl:grid-cols-2">
         <div className="space-y-1.5">
-          <Label htmlFor={`${uid}-limit`} className="text-xs">Items shown</Label>
+          <Label htmlFor={`${uid}-limit`} className="text-sm font-medium">Items shown</Label>
           <Input
             id={`${uid}-limit`}
             type="number"
@@ -112,7 +112,7 @@ export function ClassicRowEditor({
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor={`${uid}-ttl`} className="text-xs">Cache TTL (seconds)</Label>
+          <Label htmlFor={`${uid}-ttl`} className="text-sm font-medium">Cache TTL (seconds)</Label>
           <Input
             id={`${uid}-ttl`}
             type="number"
@@ -123,7 +123,7 @@ export function ClassicRowEditor({
           />
         </div>
         <div className="space-y-2 @2xl:col-span-2">
-          <Label id={`${uid}-aspect`} className="text-xs">Aspect ratio</Label>
+          <Label id={`${uid}-aspect`} className="text-sm font-medium">Aspect ratio</Label>
           <div role="group" aria-labelledby={`${uid}-aspect`} className="flex gap-1 rounded-lg border p-1">
             {SHAPE_ORDER.map(shape => {
               const value = ASPECT_BY_SHAPE[shape];
@@ -149,7 +149,7 @@ export function ClassicRowEditor({
           </div>
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor={`${uid}-card-size`} className="text-xs">Card size</Label>
+          <Label htmlFor={`${uid}-card-size`} className="text-sm font-medium">Card size</Label>
           <Select
             value={entry.cardStyle}
             onValueChange={(value: ClassicRowDraft['cardStyle']) => update({ cardStyle: value })}
@@ -171,8 +171,8 @@ export function ClassicRowEditor({
             checked={Boolean(entry.numbered)}
             onCheckedChange={value => update({ numbered: value })}
           />
-          <Label htmlFor={`${uid}-numbered`} className="text-xs">Numbered ranking</Label>
-          <span className="text-[10px] text-muted-foreground">1, 2, 3 … over each card</span>
+          <Label htmlFor={`${uid}-numbered`} className="text-sm font-medium">Numbered ranking</Label>
+          <span className="text-xs text-muted-foreground">1, 2, 3 … over each card</span>
         </div>
         <div className="flex items-center gap-2">
           <Switch
@@ -180,7 +180,7 @@ export function ClassicRowEditor({
             checked={Boolean(entry.hideTitle)}
             onCheckedChange={value => update({ hideTitle: value })}
           />
-          <Label htmlFor={`${uid}-row-hide-title`} className="text-xs">Hide title</Label>
+          <Label htmlFor={`${uid}-row-hide-title`} className="text-sm font-medium">Hide title</Label>
         </div>
         <div className="flex items-center gap-2">
           <Switch
@@ -188,7 +188,7 @@ export function ClassicRowEditor({
             checked={entry.badges.providers}
             onCheckedChange={value => update({ badges: { ...entry.badges, providers: value } })}
           />
-          <Label htmlFor={`${uid}-provider-badges`} className="text-xs">Provider badges</Label>
+          <Label htmlFor={`${uid}-provider-badges`} className="text-sm font-medium">Provider badges</Label>
         </div>
         <div className="flex items-center gap-2">
           <Switch
@@ -196,7 +196,7 @@ export function ClassicRowEditor({
             checked={entry.badges.ratings}
             onCheckedChange={value => update({ badges: { ...entry.badges, ratings: value } })}
           />
-          <Label htmlFor={`${uid}-rating-badges`} className="text-xs">Rating badges</Label>
+          <Label htmlFor={`${uid}-rating-badges`} className="text-sm font-medium">Rating badges</Label>
         </div>
       </div>
     </div>

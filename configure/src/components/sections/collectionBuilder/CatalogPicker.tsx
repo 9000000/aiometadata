@@ -212,7 +212,7 @@ export function CatalogPicker({
             </div>
           )}
 
-          <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+          <div className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>
               {filtered.length === catalogs.length
                 ? `${catalogs.length} ${catalogs.length === 1 ? 'catalog' : 'catalogs'}`
@@ -287,29 +287,29 @@ export function CatalogPicker({
                         )}
                         <span className="min-w-0 flex-1 truncate">{catalog.name}</span>
                         {isAdded && (
-                          <span className="hidden shrink-0 text-[10px] text-muted-foreground sm:inline">added</span>
+                          <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">added</span>
                         )}
                         {catalog.pendingSave && (
                           <Badge
                             variant="outline"
-                            className="shrink-0 border-sky-600/50 bg-sky-900/50 text-[10px] text-sky-200"
+                            className="shrink-0 border-sky-600/50 bg-sky-900/50 text-xs text-sky-200"
                             title="In your config but not saved yet, so it is not in the manifest"
                           >
                             unsaved
                           </Badge>
                         )}
                         {catalog.genreRequired && (
-                          <Badge variant="outline" className="shrink-0 border-amber-600/50 bg-amber-800/60 text-[10px] text-amber-200">
+                          <Badge variant="outline" className="shrink-0 border-amber-600/50 bg-amber-800/60 text-xs text-amber-200">
                             genre
                           </Badge>
                         )}
                         <Badge
                           variant="outline"
-                          className={`shrink-0 text-[10px] font-semibold ${getSourceBadgeStyle(catalog.source)}`}
+                          className={`shrink-0 text-xs font-semibold ${getSourceBadgeStyle(catalog.source)}`}
                         >
                           {getSourceBadgeLabel(catalog.source)}
                         </Badge>
-                        <Badge variant="outline" className="hidden shrink-0 text-[10px] sm:inline-flex">
+                        <Badge variant="outline" className="hidden shrink-0 text-xs sm:inline-flex">
                           {catalog.type}
                         </Badge>
                       </button>
@@ -330,14 +330,14 @@ export function CatalogPicker({
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-7 px-2 text-xs"
+                  className="h-8 px-2 text-xs"
                   onClick={() => setSelected(prev => [...prev, ...unselectedAddable])}
                 >
                   Select all {addable.length}
                 </Button>
               )}
               {selected.length > 0 && (
-                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setSelected([])}>
+                <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => setSelected([])}>
                   Clear
                 </Button>
               )}

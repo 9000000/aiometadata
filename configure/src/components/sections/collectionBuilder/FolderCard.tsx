@@ -179,14 +179,14 @@ export function FolderCard({
           checked={Boolean(folder.hideTitle)}
           onCheckedChange={value => update({ hideTitle: value })}
         />
-        <Label htmlFor={`${uid}-hide-title`} className="text-xs">
+        <Label htmlFor={`${uid}-hide-title`} className="text-sm font-medium">
           Hide title on the {terms.child.toLowerCase()}
         </Label>
       </div>
 
       <div className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <Label className="text-xs" title={aliasHint('sources') ?? undefined}>{terms.sources}</Label>
+          <Label className="text-sm font-medium" title={aliasHint('sources') ?? undefined}>{terms.sources}</Label>
           <div className="flex flex-wrap items-center gap-1.5">
             {tagOptions.length > 0 && (
               <DropdownMenu>
@@ -274,7 +274,7 @@ export function FolderCard({
       {nuvioArtVisible && showExtras && (
         <div className="grid gap-4 rounded-lg border border-cyan-800/40 bg-cyan-950/20 p-4 @2xl:grid-cols-2 @4xl:grid-cols-3">
           <div className="space-y-1.5">
-            <Label htmlFor={`${uid}-emoji`} className="text-xs">Cover emoji</Label>
+            <Label htmlFor={`${uid}-emoji`} className="text-sm font-medium">Cover emoji</Label>
             <Input
               id={`${uid}-emoji`}
               value={folder.coverEmoji || ''}
@@ -295,7 +295,7 @@ export function FolderCard({
             onChange={next => update({ heroBackdropUrl: next })}
           />
           <div className="space-y-1.5">
-            <Label htmlFor={`${uid}-hero-video`} className="text-xs">Hero video URL</Label>
+            <Label htmlFor={`${uid}-hero-video`} className="text-sm font-medium">Hero video URL</Label>
             <Input
               id={`${uid}-hero-video`}
               value={folder.heroVideoUrl || ''}
@@ -316,7 +316,7 @@ export function FolderCard({
               checked={folder.focusGifEnabled !== false}
               onCheckedChange={value => update({ focusGifEnabled: value })}
             />
-            <Label htmlFor={`${uid}-focus-gif`} className="text-xs">Play focus GIF</Label>
+            <Label htmlFor={`${uid}-focus-gif`} className="text-sm font-medium">Play focus GIF</Label>
           </div>
         </div>
       )}

@@ -165,18 +165,18 @@ function PreviewTile({
         <TileArt folder={folder} focused={focused} allowEmoji={allowEmoji} />
       </span>
       {showTitle && (
-        <span className="line-clamp-2 text-[11px] leading-tight text-white/85">
+        <span className="line-clamp-2 text-xs leading-tight text-white/85">
           {title || `Untitled ${TERMS[target].child.toLowerCase()}`}
         </span>
       )}
-      {dropped && <span className="text-[10px] text-amber-400">left out of this export</span>}
+      {dropped && <span className="text-xs text-amber-400">left out of this export</span>}
     </button>
   );
 }
 
 function PreviewCaption() {
   return (
-    <p className="text-[11px] text-muted-foreground">
+    <p className="text-xs text-muted-foreground">
       Approximate. Tile art, shapes, titles, order and counts are exactly what you set; spacing, grids
       and card sizes are this addon&rsquo;s rendering, not the app&rsquo;s.
     </p>
@@ -250,7 +250,7 @@ function NuvioCollectionStage({
 
       <div className="relative flex h-full flex-col gap-3 overflow-y-auto p-4">
         {entry.pinToTop && (
-          <span className="w-fit rounded-full bg-cyan-500/20 px-2 py-0.5 text-[10px] text-cyan-200">
+          <span className="w-fit rounded-full bg-cyan-500/20 px-2 py-0.5 text-xs text-cyan-200">
             Pinned above your other collections
           </span>
         )}
@@ -274,14 +274,14 @@ function NuvioCollectionStage({
         {!asRows && entry.folders.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {entry.showAllTab !== false && (
-              <span className="rounded-full bg-white/90 px-2.5 py-0.5 text-[11px] font-medium text-black">
+              <span className="rounded-full bg-white/90 px-2.5 py-0.5 text-xs font-medium text-black">
                 All
               </span>
             )}
             {entry.folders.map((folder, index) => (
               <span
                 key={folder.id}
-                className={`rounded-full px-2.5 py-0.5 text-[11px] ${
+                className={`rounded-full px-2.5 py-0.5 text-xs ${
                   entry.showAllTab === false && index === 0
                     ? 'bg-white/90 font-medium text-black'
                     : 'bg-white/15 text-white/80'
@@ -294,7 +294,7 @@ function NuvioCollectionStage({
         )}
 
         {viewMode === 'FOLLOW_LAYOUT' && (
-          <span className="text-[10px] text-white/50">
+          <span className="text-xs text-white/50">
             Follow layout: the app&rsquo;s own layout setting picks between tabs and rows.
           </span>
         )}
@@ -310,7 +310,7 @@ function NuvioCollectionStage({
                   <span className="block truncate text-xs text-white/90">
                     {folder.hideTitle ? '' : folder.title.trim() || 'Untitled folder'}
                   </span>
-                  <span className="block text-[10px] text-white/50">
+                  <span className="block text-xs text-white/50">
                     {folder.sources.length} catalog{folder.sources.length === 1 ? '' : 's'}
                   </span>
                 </span>
@@ -373,7 +373,7 @@ function ClassicRowStage({ entry, target }: { entry: ClassicRowDraft; target: Ta
   return (
     <div className={target === 'nuvio' ? 'space-y-2' : ''}>
       {target === 'nuvio' && (
-        <p className="text-[11px] text-violet-300">
+        <p className="text-xs text-violet-300">
           Classic rows are Fusion only. Nuvio has no equivalent, so this row is left out of the Nuvio
           export.
         </p>
@@ -420,7 +420,7 @@ function ClassicRowStage({ entry, target }: { entry: ClassicRowDraft; target: Ta
                 )}
               </div>
             ))}
-            {extra > 0 && <span className="shrink-0 text-[11px] text-white/50">+{extra} more</span>}
+            {extra > 0 && <span className="shrink-0 text-xs text-white/50">+{extra} more</span>}
           </div>
         </div>
       </div>

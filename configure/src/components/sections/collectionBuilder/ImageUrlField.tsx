@@ -38,8 +38,8 @@ export function ImageUrlField({
   return (
     <div className="space-y-1.5">
       <div className="flex flex-wrap items-center gap-2">
-        <Label htmlFor={fieldId} className="text-xs">{label}</Label>
-        {hint && <span className="text-[10px] text-muted-foreground">{hint}</span>}
+        <Label htmlFor={fieldId} className="text-sm font-medium">{label}</Label>
+        {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
       </div>
       <div className="flex items-start gap-3">
         <div
@@ -83,7 +83,7 @@ export function ImageUrlField({
             className="h-9"
           />
           {status === 'error' && (
-            <p className="text-[10px] text-amber-500">
+            <p className="text-xs text-amber-500">
               The image did not load. Check the link is public and points straight at the file.
             </p>
           )}

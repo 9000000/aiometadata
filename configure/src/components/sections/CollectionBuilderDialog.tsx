@@ -1099,7 +1099,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       className="w-full rounded-md border px-2 py-1.5 text-left text-xs transition-colors hover:border-primary/50 hover:bg-accent/40"
                     >
                       <span className="block font-medium">{template.label}</span>
-                      <span className="block text-[10px] text-muted-foreground">{template.hint}</span>
+                      <span className="block text-xs text-muted-foreground">{template.hint}</span>
                     </button>
                   ))}
                   <button
@@ -1294,11 +1294,11 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge
                       variant="outline"
-                      className={`text-[11px] ${target === 'nuvio' ? NUVIO_CHIP : FUSION_CHIP}`}
+                      className={`text-xs ${target === 'nuvio' ? NUVIO_CHIP : FUSION_CHIP}`}
                     >
                       {target === 'nuvio' ? 'Nuvio collections' : 'Fusion widgets'}
                     </Badge>
-                    <span className="text-[11px] text-muted-foreground">Target and manifest URL are in the header</span>
+                    <span className="text-xs text-muted-foreground">Target and manifest URL are in the header</span>
                     <div className="ml-auto flex items-center gap-2">
                     <Button size="sm" variant="outline" onClick={handleCopy}>
                       {copied ? <Check className="mr-1.5 h-4 w-4" /> : <Copy className="mr-1.5 h-4 w-4" />}
@@ -1315,7 +1315,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                     <div className="flex flex-wrap items-center gap-2">
                       <LinkIcon className="h-4 w-4 text-primary" />
                       <Label htmlFor="collection-hosted-url" className="text-xs font-medium">Import by link</Label>
-                      <span className="text-[11px] text-muted-foreground">
+                      <span className="text-xs text-muted-foreground">
                         {target === 'fusion'
                           ? 'Paste this straight into Fusion instead of the JSON'
                           : 'Serves the same JSON live, if your app can read a URL'}
@@ -1335,13 +1335,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                             {copiedUrl ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                           </Button>
                         </div>
-                        <p className="flex items-start gap-1.5 text-[11px] text-amber-500">
+                        <p className="flex items-start gap-1.5 text-xs text-amber-500">
                           <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
                           {stage === 'saved'
                             ? 'The link serves what is on the server, which is these edits.'
                             : 'The link serves what is on the server, so save before you re-import it.'}
                         </p>
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-xs text-muted-foreground">
                           It rebuilds on every request, so re-importing after saving picks up your edits. Anyone with
                           the link can read it, same as your manifest URL{target === 'fusion' && usePlaceholder
                             ? ', and it always carries your real URL rather than the placeholder'
@@ -1349,7 +1349,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                         </p>
                       </>
                     ) : (
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="text-xs text-muted-foreground">
                         Save first. The link is served per user, so it needs a saved config to read.
                       </p>
                     )}
@@ -1367,13 +1367,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                           Make a copy for someone else
                         </Label>
                       </div>
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="text-xs text-muted-foreground">
                         Your addon link contains your user ID, and this file embeds it on every row. Turn this on to
                         blank it out before posting the file publicly. Whoever imports it here gets their own link
                         filled in automatically, so they end up with your layout pointing at their catalogs.
                       </p>
                       {usePlaceholder && (
-                        <p className="flex items-start gap-1.5 text-[11px] text-amber-500">
+                        <p className="flex items-start gap-1.5 text-xs text-amber-500">
                           <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
                           This copy is for handing out, not for your own use. It has no addon link in it, so
                           importing it back here is what puts one in.
@@ -1516,13 +1516,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             <div className="space-y-2 rounded-md border p-3">
               <div className="flex flex-wrap items-center gap-2">
                 {importPreview.format === 'unknown' ? (
-                  <Badge variant="outline" className="border-amber-600/50 bg-amber-800/60 text-[10px] text-amber-200">
+                  <Badge variant="outline" className="border-amber-600/50 bg-amber-800/60 text-xs text-amber-200">
                     unrecognised
                   </Badge>
                 ) : (
                   <Badge
                     variant="outline"
-                    className={`text-[10px] ${importPreview.format === 'fusion' ? FUSION_CHIP : NUVIO_CHIP}`}
+                    className={`text-xs ${importPreview.format === 'fusion' ? FUSION_CHIP : NUVIO_CHIP}`}
                   >
                     {importPreview.format === 'fusion'
                       ? 'Fusion widgets'
@@ -1538,12 +1538,12 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       `${importPreview.entries.reduce((n, e) => n + entrySourceCount(e), 0)} sources`}
                 </span>
                 {rebuildable > 0 && (
-                  <Badge variant="outline" className="border-emerald-600/50 bg-emerald-800/60 text-[10px] text-emerald-200">
+                  <Badge variant="outline" className="border-emerald-600/50 bg-emerald-800/60 text-xs text-emerald-200">
                     {rebuildable} catalog{rebuildable === 1 ? '' : 's'} rebuildable
                   </Badge>
                 )}
                 {importUnresolved.length > 0 && (
-                  <Badge variant="outline" className="border-amber-600/50 bg-amber-800/60 text-[10px] text-amber-200">
+                  <Badge variant="outline" className="border-amber-600/50 bg-amber-800/60 text-xs text-amber-200">
                     {importUnresolved.length} not in your catalogs
                   </Badge>
                 )}
@@ -1556,7 +1556,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       <Label htmlFor="convert-native" className="text-xs font-medium">
                         Route Nuvio's own sources through AIOMetadata
                       </Label>
-                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      <p className="mt-0.5 text-xs text-muted-foreground">
                         {importPreview.nativeCount} of this file's sources are fetched by Nuvio straight from
                         TMDB or Trakt. Left alone they work as they are and cost nothing. Turning this on gives
                         them your artwork, ratings and filters, at{' '}
@@ -1571,7 +1571,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                     />
                   </div>
                   {convertNative && importPreview.convertibleCount < importPreview.nativeCount && (
-                    <p className="text-[11px] text-muted-foreground">
+                    <p className="text-xs text-muted-foreground">
                       {importPreview.nativeCount - importPreview.convertibleCount} of them have no equivalent
                       here and stay with Nuvio.
                     </p>
@@ -1581,12 +1581,12 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
               {rebuildable > 0 && (
                 <div className="space-y-1 rounded-md border border-emerald-600/40 bg-emerald-950/20 p-2">
-                  <p className="text-[11px] text-emerald-500">
+                  <p className="text-xs text-emerald-500">
                     This file carries the definitions for {rebuildable} catalog{rebuildable === 1 ? '' : 's'} you
                     do not have. Only the ones your design still uses when you apply are added, so trimming the
                     collections trims what you take on.
                   </p>
-                  <ul className="space-y-0.5 text-[10px] text-muted-foreground">
+                  <ul className="space-y-0.5 text-xs text-muted-foreground">
                     {additionLabels(importAdditions, 6).map((label, index) => (
                       <li key={`${label}-${index}`}>{label}</li>
                     ))}
@@ -1598,7 +1598,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               )}
 
               {importAdditions.needsAccount.length > 0 && (
-                <p className="rounded-md border border-amber-600/40 bg-amber-950/20 p-2 text-[11px] text-amber-500">
+                <p className="rounded-md border border-amber-600/40 bg-amber-950/20 p-2 text-xs text-amber-500">
                   This file uses your own {importAdditions.needsAccount.join(' and ')} catalogs, such as your
                   watchlist. Connect {importAdditions.needsAccount.length === 1 ? 'that account' : 'those accounts'} and
                   import again to have them added.
@@ -1607,11 +1607,11 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
               {importUnresolved.length > 0 && (
                 <div className="space-y-1 rounded-md border border-amber-600/40 bg-amber-950/20 p-2">
-                  <p className="text-[11px] text-amber-500">
+                  <p className="text-xs text-amber-500">
                     These catalogs are not in your setup and the file does not say how to rebuild them. You can
                     still import, but those tiles will come up empty.
                   </p>
-                  <ul className="space-y-0.5 font-mono text-[10px] text-muted-foreground">
+                  <ul className="space-y-0.5 font-mono text-xs text-muted-foreground">
                     {importUnresolved.slice(0, 6).map((source, index) => (
                       <li key={`${source.catalogId}-${source.type}-${index}`}>
                         {source.catalogId} <span className="opacity-60">({source.type})</span>
@@ -1640,7 +1640,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               )}
 
               {importPreview.notes.length > 0 && (
-                <ul className="space-y-1 text-[11px] text-amber-500">
+                <ul className="space-y-1 text-xs text-amber-500">
                   {importPreview.notes.slice(0, 5).map((note, index) => (
                     <li key={index} className="flex items-start gap-1.5">
                       <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" /> {note}
@@ -1708,12 +1708,12 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       ? <Check className="h-4 w-4 shrink-0 text-primary" />
                       : <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />}
                     <span className="min-w-0 flex-1 truncate text-sm">{group.name}</span>
-                    <Badge variant="outline" className="shrink-0 text-[10px]">{group.type}</Badge>
-                    <span className="shrink-0 text-[11px] text-muted-foreground">
+                    <Badge variant="outline" className="shrink-0 text-xs">{group.type}</Badge>
+                    <span className="shrink-0 text-xs text-muted-foreground">
                       used {group.occurrences === 1 ? 'once' : `${group.occurrences} times`}
                     </span>
                   </div>
-                  <p className="font-mono text-[10px] text-muted-foreground">{group.catalogId}</p>
+                  <p className="font-mono text-xs text-muted-foreground">{group.catalogId}</p>
 
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-xs text-muted-foreground">replace with</span>
@@ -1721,19 +1721,19 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       <>
                         <Badge
                           variant="outline"
-                          className={`text-[10px] font-semibold ${getSourceBadgeStyle(
+                          className={`text-xs font-semibold ${getSourceBadgeStyle(
                             sourceList.catalogs.find(c => catalogKey(c) === catalogKey(chosen))?.source
                           )}`}
                         >
                           {chosen.name}
                         </Badge>
-                        <Button size="sm" variant="ghost" className="h-7" onClick={() => setRemapPickFor(group.key)}>
+                        <Button size="sm" variant="ghost" className="h-8" onClick={() => setRemapPickFor(group.key)}>
                           Change
                         </Button>
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="h-7"
+                          className="h-8"
                           onClick={() => setRemapChoices(prev => {
                             const next = { ...prev };
                             delete next[group.key];
@@ -1744,7 +1744,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                         </Button>
                       </>
                     ) : (
-                      <Button size="sm" variant="outline" className="h-7" onClick={() => setRemapPickFor(group.key)}>
+                      <Button size="sm" variant="outline" className="h-8" onClick={() => setRemapPickFor(group.key)}>
                         <Plus className="mr-1 h-3.5 w-3.5" /> Pick a catalog
                       </Button>
                     )}
@@ -1755,7 +1755,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           </div>
 
           <div className="flex flex-col gap-2 border-t pt-3 sm:flex-row sm:items-center sm:justify-end">
-            <span className="text-[11px] text-muted-foreground sm:mr-auto">
+            <span className="text-xs text-muted-foreground sm:mr-auto">
               {Object.keys(remapChoices).length} of {missingGroups.length} matched. Anything left unmatched stays
               as it is.
             </span>
@@ -1840,7 +1840,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             </DialogDescription>
           </DialogHeader>
 
-          <p className="rounded-md border bg-muted/30 p-2 text-[11px] text-muted-foreground">
+          <p className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">
             Swapping keeps the layout and points each one at a catalog you already have, everywhere it is used.
           </p>
 
@@ -1878,7 +1878,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             </DialogDescription>
           </DialogHeader>
 
-          <p className="rounded-md border bg-muted/30 p-2 text-[11px] text-muted-foreground">
+          <p className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">
             {nativeBlockFor === 'apply'
               ? 'The design is fine for Nuvio, so you can apply it and build for Nuvio instead. Applying also publishes your hosted widgets URL, which would hand out the same empty export.'
               : 'Switching to Nuvio gives you the complete export. Routing the sources through AIOMetadata keeps them on both targets, at one catalog each.'}
@@ -1916,7 +1916,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             </DialogDescription>
           </DialogHeader>
 
-          <p className="rounded-md border bg-muted/30 p-2 text-[11px] text-muted-foreground">
+          <p className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">
             You have {enabledCatalogCount} catalog{enabledCatalogCount === 1 ? '' : 's'} enabled. Every catalog
             added here becomes an entry in your manifest, which your client fetches each time it loads the addon.
           </p>

@@ -94,7 +94,7 @@ export function CollectionEditor({
     <div className="space-y-4">
       <div className="grid gap-4 @2xl:grid-cols-2">
         <div className="space-y-1.5">
-          <Label htmlFor={`${uid}-title`} className="text-xs">{terms.entryTitle}</Label>
+          <Label htmlFor={`${uid}-title`} className="text-sm font-medium">{terms.entryTitle}</Label>
           <Input
             id={`${uid}-title`}
             ref={titleRef}
@@ -109,7 +109,7 @@ export function CollectionEditor({
             checked={Boolean(entry.hideTitle)}
             onCheckedChange={value => update({ hideTitle: value })}
           />
-          <Label htmlFor={`${uid}-hide-title`} className="text-xs">Hide title</Label>
+          <Label htmlFor={`${uid}-hide-title`} className="text-sm font-medium">Hide title</Label>
           <ScopeChip scope="fusion" />
         </div>
       </div>
@@ -123,11 +123,11 @@ export function CollectionEditor({
         >
           <Tv className="h-4 w-4 shrink-0 text-cyan-400" />
           <Label className="cursor-pointer text-sm font-medium text-cyan-300">Nuvio presentation</Label>
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-xs text-muted-foreground">
             {target === 'fusion' ? 'Set here, unused by Fusion' : 'Fusion ignores these'}
           </span>
           <span className="flex-1" />
-          <span className="text-[11px] text-muted-foreground">{showNuvioBox ? 'Hide' : 'Show'}</span>
+          <span className="text-xs text-muted-foreground">{showNuvioBox ? 'Hide' : 'Show'}</span>
         </button>
 
         {showNuvioBox && (
@@ -140,7 +140,7 @@ export function CollectionEditor({
             onChange={next => update({ backdropImageUrl: next })}
           />
           <div className="space-y-1.5">
-            <Label htmlFor={`${uid}-view-mode`} className="text-xs">Folder view mode</Label>
+            <Label htmlFor={`${uid}-view-mode`} className="text-sm font-medium">Folder view mode</Label>
             <Select
               value={entry.viewMode || 'TABBED_GRID'}
               onValueChange={(value: CollectionDraft['viewMode']) => update({ viewMode: value })}
@@ -164,7 +164,7 @@ export function CollectionEditor({
               checked={Boolean(entry.pinToTop)}
               onCheckedChange={value => update({ pinToTop: value })}
             />
-            <Label htmlFor={`${uid}-pin`} className="text-xs">Pin to top</Label>
+            <Label htmlFor={`${uid}-pin`} className="text-sm font-medium">Pin to top</Label>
           </div>
           <div className="flex items-center gap-2">
             <Switch
@@ -172,7 +172,7 @@ export function CollectionEditor({
               checked={entry.focusGlowEnabled !== false}
               onCheckedChange={value => update({ focusGlowEnabled: value })}
             />
-            <Label htmlFor={`${uid}-glow`} className="text-xs">Focus glow</Label>
+            <Label htmlFor={`${uid}-glow`} className="text-sm font-medium">Focus glow</Label>
           </div>
           <div className="flex items-center gap-2">
             <Switch
@@ -180,7 +180,7 @@ export function CollectionEditor({
               checked={entry.showAllTab !== false}
               onCheckedChange={value => update({ showAllTab: value })}
             />
-            <Label htmlFor={`${uid}-all-tab`} className="text-xs">Show &ldquo;All&rdquo; tab</Label>
+            <Label htmlFor={`${uid}-all-tab`} className="text-sm font-medium">Show &ldquo;All&rdquo; tab</Label>
           </div>
         </div>
         </>
@@ -190,7 +190,7 @@ export function CollectionEditor({
 
       {nativeCount > 0 && (
         <div className="flex flex-col gap-2 rounded-md border p-3 @2xl:flex-row @2xl:items-center @2xl:justify-between">
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             <span className="font-medium text-foreground">{nativeCount}</span> source
             {nativeCount === 1 ? '' : 's'} here {nativeCount === 1 ? 'is' : 'are'} fetched by Nuvio straight from
             TMDB or Trakt. They cost this addon nothing. Routing them through it adds your artwork, ratings and

@@ -278,21 +278,22 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const [pendingSave, setPendingSave] = useState(false);
   const appliedSnapshot = useRef<string | null>(null);
 
-  const stage = deriveSaveStage({
-    builderJson: JSON.stringify(entries),
-    configJson: JSON.stringify(config.collections || []),
-    configDirty,
-  });
+  const builderJson = useMemo(() => JSON.stringify(entries), [entries]);
+  const savedJson = useMemo(() => JSON.stringify(config.collections || []), [config.collections]);
+  const stage = useMemo(
+    () => deriveSaveStage({ builderJson, configJson: savedJson, configDirty }),
+    [builderJson, savedJson, configDirty]
+  );
   const stageCopy = describeSaveStage(stage);
 
   // requestSave closes over config, so saving in the same tick as the apply
   // would store the version from before it. This waits for the config to catch up.
   useEffect(() => {
     if (!pendingSave) return;
-    if (JSON.stringify(config.collections || []) !== appliedSnapshot.current) return;
+    if (savedJson !== appliedSnapshot.current) return;
     setPendingSave(false);
     requestSave();
-  }, [pendingSave, config.collections, requestSave]);
+  }, [pendingSave, savedJson, requestSave]);
   const [remapOpen, setRemapOpen] = useState(false);
   const [remapChoices, setRemapChoices] = useState<Record<string, SourceDraft>>({});
   const [remapPickFor, setRemapPickFor] = useState<string | null>(null);
@@ -459,7 +460,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     );
   };
 
-  const isDirty = useMemo(() => JSON.stringify(entries) !== baseline, [entries, baseline]);
+  const isDirty = builderJson !== baseline;
 
   const requestClose = () => {
     if (isDirty) {

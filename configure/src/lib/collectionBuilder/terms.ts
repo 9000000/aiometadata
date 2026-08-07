@@ -39,23 +39,15 @@ export const TERMS: Record<Target, TargetTerms> = {
   fusion: CANONICAL,
 };
 
-export const ALIASES: Record<Target, Partial<Record<keyof TargetTerms, string>>> = {
-  nuvio: {
-    entryTitle: 'Fusion calls this the Widget title',
-    child: 'Fusion calls this an Item',
-    children: 'Fusion calls these Items',
-    shape: 'Fusion calls this Layout',
-    sources: 'Fusion calls these Catalogs',
-  },
-  fusion: {
-    entryTitle: 'Fusion calls this the Widget title',
-    child: 'Nuvio calls this a Folder',
-    children: 'Nuvio calls these Folders',
-    shape: 'Fusion calls this Layout',
-    sources: 'Fusion calls these Catalogs',
-  },
+/** The canonical words are Nuvio's, so the hint always names Fusion's. */
+export const ALIASES: Partial<Record<keyof TargetTerms, string>> = {
+  entryTitle: 'Fusion calls this the Widget title',
+  child: 'Fusion calls this an Item',
+  children: 'Fusion calls these Items',
+  shape: 'Fusion calls this Layout',
+  sources: 'Fusion calls these Catalogs',
 };
 
-export function aliasHint(target: Target, key: keyof TargetTerms): string | null {
-  return ALIASES[target][key] ?? null;
+export function aliasHint(key: keyof TargetTerms): string | null {
+  return ALIASES[key] ?? null;
 }

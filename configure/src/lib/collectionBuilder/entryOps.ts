@@ -70,3 +70,10 @@ export function describeEntryCount(entry: BuilderEntry): string {
   const catalogs = entry.folders.reduce((total, folder) => total + folder.sources.length, 0);
   return `${plural(entry.folders.length, 'folder')} · ${plural(catalogs, 'catalog')}`;
 }
+
+/** The same tally, short enough to leave the rail's width to the name. */
+export function tallyEntryCount(entry: BuilderEntry): string {
+  if (entry.kind === 'classicRow') return entry.source ? '1' : '0';
+  const catalogs = entry.folders.reduce((total, folder) => total + folder.sources.length, 0);
+  return `${entry.folders.length} · ${catalogs}`;
+}

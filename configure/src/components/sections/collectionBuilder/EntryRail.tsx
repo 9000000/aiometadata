@@ -17,6 +17,7 @@ export function SortableTreeRow({
   title,
   placeholder,
   count,
+  countHint,
   empty,
   icon: Icon,
   accent,
@@ -38,8 +39,10 @@ export function SortableTreeRow({
   depth: 0 | 1;
   title: string;
   placeholder: string;
-  /** Prepared by the caller: "6 folders · 36 catalogs" at depth 0, "6" at depth 1. */
+  /** Prepared by the caller: "6 · 36" at depth 0, "6" at depth 1. */
   count: string;
+  /** Spelled out for the tooltip, where the row has no room to say it. */
+  countHint?: string;
   empty: boolean;
   icon: LucideIcon;
   accent: string;
@@ -108,11 +111,16 @@ export function SortableTreeRow({
 
       <Icon className={`h-4 w-4 ${accent}`} />
 
-      <button type="button" onClick={onSelect} className="min-w-0 truncate py-1 text-left">
+      <button
+        type="button"
+        onClick={onSelect}
+        title={title || placeholder}
+        className="min-w-0 truncate py-1 text-left"
+      >
         {title || placeholder}
       </button>
 
-      <div className="flex items-center gap-1.5">
+      <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap">
         {severity && severity !== 'info' && (
           <AlertTriangle
             className={`h-4 w-4 ${severity === 'blocking' ? 'text-red-500' : 'text-amber-500'}`}
@@ -126,7 +134,10 @@ export function SortableTreeRow({
             aria-label="Nuvio fetches these itself, so they cost this addon nothing"
           />
         )}
-        <span className={`text-xs tabular-nums ${empty ? 'text-amber-400' : 'text-muted-foreground'}`}>
+        <span
+          title={countHint}
+          className={`text-xs tabular-nums ${empty ? 'text-amber-400' : 'text-muted-foreground'}`}
+        >
           {count}
         </span>
       </div>

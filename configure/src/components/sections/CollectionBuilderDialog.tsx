@@ -85,7 +85,12 @@ import {
   type IssueRow,
   type IssueSeverity,
 } from '@/lib/collectionBuilder/issueCenter';
-import { describeEntryCount, filterEntryTree, nextCopyTitle } from '@/lib/collectionBuilder/entryOps';
+import {
+  describeEntryCount,
+  filterEntryTree,
+  nextCopyTitle,
+  tallyEntryCount,
+} from '@/lib/collectionBuilder/entryOps';
 import { deriveSaveStage, describeSaveStage } from '@/lib/collectionBuilder/saveState';
 import { listStarterTemplates } from '@/lib/collectionBuilder/templates';
 import { FUSION_CHIP, NUVIO_CHIP, TERMS, type Target } from '@/lib/collectionBuilder/terms';
@@ -1131,7 +1136,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           </header>
 
           <div className="@container/panes min-h-0 overflow-hidden px-5 py-4">
-          <div className="grid h-full min-h-0 gap-4 @2xl:grid-cols-[18rem_minmax(0,1fr)] @6xl:grid-cols-[18rem_minmax(0,1fr)_24rem]">
+          <div className="grid h-full min-h-0 gap-4 @2xl:grid-cols-[20rem_minmax(0,1fr)] @6xl:grid-cols-[20rem_minmax(0,1fr)_24rem]">
             <div className="flex min-h-0 flex-col gap-2 overflow-y-auto pr-1">
               <div className="flex gap-2">
                 <Button
@@ -1220,7 +1225,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                             depth={0}
                             title={entry.title}
                             placeholder="Untitled"
-                            count={describeEntryCount(entry)}
+                            count={tallyEntryCount(entry)}
+                            countHint={describeEntryCount(entry)}
                             empty={entrySourceCount(entry) === 0}
                             icon={entry.kind === 'collection' ? Layers : entry.numbered ? ListOrdered : Rows3}
                             accent={entry.kind === 'collection' ? 'text-cyan-400' : 'text-violet-400'}
@@ -1252,6 +1258,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                               title={folder.title}
                               placeholder="Untitled folder"
                               count={String(folder.sources.length)}
+                              countHint={`${folder.sources.length} catalog${folder.sources.length === 1 ? '' : 's'}`}
                               empty={folder.sources.length === 0}
                               icon={Folder}
                               accent="text-muted-foreground"
@@ -1309,6 +1316,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <TabsList>
                   <TabsTrigger value="design">Design</TabsTrigger>
+                  <TabsTrigger value="preview">Preview</TabsTrigger>
                   <TabsTrigger value="json">Export &amp; share</TabsTrigger>
                 </TabsList>
 
@@ -1371,17 +1379,15 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       onTitleFocused={clearTitleFocus}
                     />
                   )}
-                  {selected && (
-                    <div className="mt-4 rounded-lg border p-4 @6xl/panes:hidden">
-                      <span className="mb-3 block text-sm font-medium text-muted-foreground">Live preview</span>
-                      <CollectionPreview
-                        entry={selected}
-                        target={target}
-                        onEditFolder={folderId => goToProblem(selected.id, folderId)}
-                      />
-                    </div>
-                  )}
                   </div>
+                </TabsContent>
+
+                <TabsContent value="preview" className="pt-4">
+                  <CollectionPreview
+                    entry={selected}
+                    target={target}
+                    onEditFolder={folderId => selected && goToProblem(selected.id, folderId)}
+                  />
                 </TabsContent>
 
                 <TabsContent value="json" className="space-y-3 pt-4">

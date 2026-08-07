@@ -1128,8 +1128,11 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                         : target === 'fusion' && entryIsNative(entry) ? 'nuvio'
                         : null;
                       const folders = entry.kind === 'collection'
-                        ? entry.folders.filter(folder => !matchedFolderIds || matchedFolderIds.has(folder.id))
+                        ? entry.folders
+                            .map((folder, folderIndex) => ({ folder, folderIndex }))
+                            .filter(({ folder }) => !matchedFolderIds || matchedFolderIds.has(folder.id))
                         : [];
+                      const folderCount = entry.kind === 'collection' ? entry.folders.length : 0;
                       const expanded = expandedIds.has(entry.id);
                       return (
                         <div key={entry.id}>
@@ -1162,7 +1165,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                             onSelect={() => setSelection({ entryId: entry.id, folderId: null })}
                             onDelete={() => removeEntry(entry.id)}
                           />
-                          {expanded && folders.map((folder, folderIndex) => (
+                          {expanded && folders.map(({ folder, folderIndex }) => (
                             <SortableTreeRow
                               key={folder.id}
                               id={folder.id}
@@ -1177,7 +1180,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                               allNative={folder.sources.length > 0 && folder.sources.every(isNativeSource)}
                               isActive={selection.folderId === folder.id}
                               canMoveUp={folderIndex > 0}
-                              canMoveDown={folderIndex < folders.length - 1}
+                              canMoveDown={folderIndex < folderCount - 1}
                               onMoveTo={position => moveFolderTo(entry.id, folderIndex, position)}
                               onDuplicate={() => duplicateFolderIn(entry.id, folderIndex)}
                               onSelect={() => setSelection({ entryId: entry.id, folderId: folder.id })}

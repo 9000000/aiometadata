@@ -219,9 +219,14 @@ function genreOptions(entry: any): string[] | undefined {
   return options.length > 0 ? options : undefined;
 }
 
-/** Catalogs are only unique on (id, type): tmdb.top exists for both movie and series. */
+/**
+ * Catalogs are only unique on (id, type): tmdb.top exists for both movie and
+ * series. The type is folded because a Fusion file spells it lowercase while a
+ * manifest carries the displayType as written, so `Anime` and `anime` are the
+ * same catalog.
+ */
 export function catalogKey(catalog: { id?: string; catalogId?: string; type: string }): string {
-  return `${catalog.id ?? catalog.catalogId ?? ''}:${catalog.type}`;
+  return `${catalog.id ?? catalog.catalogId ?? ''}:${String(catalog.type ?? '').toLowerCase()}`;
 }
 
 /** Sources whose catalog is not in the resolved catalog list, keyed for lookup. */

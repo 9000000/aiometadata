@@ -1010,7 +1010,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     <>
       <Dialog open={isOpen} onOpenChange={open => !open && requestClose()}>
         <DialogContent
-          className="@container grid h-[100dvh] max-h-[100dvh] w-screen max-w-none grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden rounded-none p-0 sm:h-[92vh] sm:max-h-[92vh] sm:w-[min(96vw,120rem)] sm:rounded-2xl"
+          className="@container grid h-[100dvh] max-h-[100dvh] w-screen max-w-none grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden rounded-none p-0 sm:h-[92vh] sm:p-0 sm:max-h-[92vh] sm:w-[min(96vw,120rem)] sm:rounded-2xl"
           onInteractOutside={event => event.preventDefault()}
         >
           <header className="flex flex-col gap-3 border-b px-5 py-4">

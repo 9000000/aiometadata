@@ -3,6 +3,7 @@ import { SUFFIX_TYPES } from './catalogBlueprints';
 import type { AppConfig, CatalogConfig } from '@/contexts/config';
 import type { AddonIdentity, BuilderEntry, SourceDraft } from '@shared/types';
 import { isNativeSource } from '@shared/catalogReconstruction';
+import { isUserSpecific } from '@shared/catalogSharing';
 
 /** A catalog as it is addressable in the generated manifest. */
 export interface ManifestCatalog {
@@ -89,10 +90,7 @@ export function deriveManifestCatalog(catalog: CatalogConfig): ManifestCatalog {
     source: catalog.source,
     tags: catalog.tags,
     genres,
-    // getManifest sets `isRequired: showInHome ? false : true` on every branch.
-    // Only worth flagging when we also have genres to offer, which locally means
-    // catalogs imported from another addon's manifest, and when none of them is
-    // the "None" that makes going without one a valid choice.
+    // Mirrors isGenreRequired: genres to offer, and no "None" among them.
     genreRequired: !catalog.showInHome
       && (genres?.length ?? 0) > 0
       && !genres?.some(genre => genre === 'None'),
@@ -143,8 +141,7 @@ export async function loadCatalogSources(
     const genresById = new Map<string, string[] | undefined>();
     const sourceById = new Map<string, string | undefined>();
     const tagsById = new Map<string, string[] | undefined>();
-    // The manifest has already spent the displayType, so only the config still
-    // knows what a catalog's own type was.
+    // The manifest has spent the displayType, so only the config still has the original.
     const baseTypeById = new Map<string, string | undefined>();
     for (const catalog of derived) {
       genresById.set(`${catalog.id}:${catalog.type}`, catalog.genres);
@@ -208,10 +205,8 @@ function needsNonGenreExtra(entry: any): boolean {
 }
 
 /**
- * getManifest marks genre required on every catalog that is not on the home row,
- * whether or not the catalog needs one, so `isRequired` alone flags far more than
- * it should. A list that offers "None" is saying the unfiltered whole is a valid
- * answer, and those do serve without a genre, so only the rest can go empty.
+ * getManifest marks genre required on every non-home catalog, so `isRequired` alone
+ * over-flags. Offering "None" means unfiltered is valid, and those do serve.
  */
 function isGenreRequired(entry: any): boolean {
   if (!Array.isArray(entry?.extra)) return false;
@@ -259,11 +254,7 @@ export function catalogKey(catalog: { id?: string; catalogId?: string; type: str
   return `${catalog.id ?? catalog.catalogId ?? ''}:${String(catalog.type ?? '').toLowerCase()}`;
 }
 
-/**
- * The genre to start a source on: what the manifest says it will use anyway,
- * falling back to the first option only when it declares none. Never a guess for
- * a catalog that serves fine without one.
- */
+/** What the manifest says it will use anyway, so never a guess. */
 function startingGenre(catalog: ManifestCatalog): string | null {
   if (!catalog.genreRequired) return null;
   return trimmed(catalog.genreDefault) || catalog.genres?.[0] || null;
@@ -280,12 +271,7 @@ export function sourceFromCatalog(catalog: ManifestCatalog): SourceDraft {
   };
 }
 
-/**
- * An imported file can name a catalog that needs a genre without carrying one,
- * either because it predates us exporting genres or because the app that wrote it
- * has no field for one. The row would come back empty, so start it on the genre
- * the manifest already declares rather than leaving it broken.
- */
+/** A file that carries no genre for a catalog that needs one leaves an empty row. */
 export function fillMissingGenres(
   entries: BuilderEntry[],
   catalogs: ManifestCatalog[]
@@ -324,10 +310,7 @@ export function findUnknownSources(
   return unknown;
 }
 
-/**
- * Rewrites every source in place, returning the original reference when none
- * changed so callers can run this in an effect without re-triggering themselves.
- */
+/** Same reference when nothing changed, so an effect using this cannot re-trigger. */
 function mapSources(
   entries: BuilderEntry[],
   rewrite: (source: SourceDraft) => SourceDraft
@@ -365,11 +348,8 @@ function mapSources(
 }
 
 /**
- * On a suffixed id the suffix is the catalog's original type and the manifest type
- * is the displayType that renamed it, so the two carry different facts and only
- * the pair identifies the catalog. `tmdb.top_movie` shown as series and a plain
- * `tmdb.top` movie catalog are the same thing; the sibling `tmdb.top` series
- * catalog is not, and matching on the displayType alone would pick that one.
+ * A suffixed id spells the original type while the manifest type is the displayType
+ * that renamed it, so only the pair identifies a catalog across setups.
  */
 function baseCatalogKey(id: string, type: string, baseType?: string): string {
   for (const suffix of SUFFIX_TYPES) {
@@ -381,18 +361,12 @@ function baseCatalogKey(id: string, type: string, baseType?: string): string {
       return `${base}:${suffix}`;
     }
   }
-  // A user catalog is never suffixed, so only a recorded baseType can tell it
-  // from the same list under another type. Files written before it existed have
-  // none, and fall back to the type they do carry.
   return `${id}:${(trimmed(baseType) || type).toLowerCase()}`;
 }
 
 /**
- * A manifest id only carries the original type as a suffix when the catalog has a
- * displayType, so one setup addresses MAL By Studio as `mal.studios` and another
- * as `mal.studios_anime`. An imported source spells it whichever way the author's
- * manifest did, and the wrong spelling returns nothing rather than failing, so
- * point it at the form this manifest actually serves.
+ * The same catalog is `mal.studios` in one setup and `mal.studios_anime` in
+ * another. An import spells it the author's way, which returns nothing here.
  */
 export function realignSourceIds(
   entries: BuilderEntry[],
@@ -435,7 +409,6 @@ export function healSourceNames(
     if (!match) return source;
 
     const name = match.name && match.name !== source.name ? match.name : undefined;
-    // Designs built before the export carried it, so that the next export does.
     const baseType = match.baseType && match.baseType !== source.baseType
       ? match.baseType
       : undefined;
@@ -459,6 +432,12 @@ export interface SourceIssue {
   folderId?: string;
 }
 
+/** Ids that name one person's own list, whoever's file they arrived in. */
+function isPersonalListId(catalogId: string): boolean {
+  if (isUserSpecific(catalogId)) return true;
+  return catalogId.startsWith('publicmetadb.list.');
+}
+
 /** Flags sources whose catalog is no longer in the manifest, or whose type is mixed case. */
 export function findSourceIssues(
   entries: BuilderEntry[],
@@ -476,7 +455,9 @@ export function findSourceIssues(
         entryId,
         entryTitle,
         folderId,
-        message: `"${label}" is not in your manifest. It may have been disabled, merged, or removed.`,
+        message: isPersonalListId(trimmed(source.catalogId))
+          ? `"${label}" belongs to whoever built this file and cannot be rebuilt here. Swap it for your own list, or remove it.`
+          : `"${label}" is not in your manifest. It may have been disabled, merged, or removed.`,
       });
     } else if (match.genreRequired && !trimmed(source.genre)) {
       issues.push({

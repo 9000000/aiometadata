@@ -1,4 +1,5 @@
 import type { SourceDraft } from './types';
+import { isPrivateList, isUserSpecific } from './catalogSharing';
 
 /**
  * A catalog carried inside a collection file, in the shape the config stores it.
@@ -428,6 +429,9 @@ export function fromEmbedded(raw: unknown): CatalogBlueprint | null {
   const blueprint = carrier.catalog;
   if (!isRecord(blueprint)) return null;
   if (!trimmed(blueprint.id) || !trimmed(blueprint.type) || !trimmed(blueprint.source)) return null;
+
+  // Older files still carry these, and rebuilding one gives the importer a dead catalog.
+  if (isUserSpecific(trimmed(blueprint.id)) || isPrivateList(blueprint as any)) return null;
 
   return {
     ...blueprint,

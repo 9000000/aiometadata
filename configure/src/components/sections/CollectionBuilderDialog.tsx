@@ -754,8 +754,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     previewImport(await file.text());
   };
 
-  // Realigned first, so the panel counts what the import will actually add rather
-  // than the ids the file happens to spell.
+  // Realigned first, so the panel counts what the import will add, not what it spells.
   const importUnknown = useMemo(
     () => (importPreview
       ? findUnknownSources(

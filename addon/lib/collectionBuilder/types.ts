@@ -9,12 +9,7 @@ export interface SourceDraft {
   type: string;
   name: string;
   genre?: string | null;
-  /**
-   * The catalog's own type, before a displayType renamed it. A built-in catalog
-   * spells this in its manifest id suffix, but a user catalog never does, so
-   * without it an imported list cannot be told from its own sibling of another
-   * type. Neither target reads it; it exists to survive the round trip.
-   */
+  /** The catalog's own type, before a displayType renamed it. Neither target reads it. */
   baseType?: string;
   /**
    * A source Nuvio resolves against TMDB or Trakt itself (CollectionModels.kt

@@ -208,6 +208,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setSelectedId(saved[0]?.id ?? null);
     setStagedBlueprints([]);
     setActiveTab('design');
+    setRailQuery('');
     setFocusFolder(null);
     setTitleFocusId(null);
     setManifestUrl(buildManifestUrl(auth.userUUID));
@@ -984,7 +985,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 <Upload className="mr-1.5 h-4 w-4" /> Import JSON
               </Button>
 
-              {entries.length > 6 && (
+              {(entries.length > 6 || railQuery !== '') && (
                 <div className="relative">
                   <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                   <Input

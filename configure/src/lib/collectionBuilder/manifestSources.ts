@@ -300,6 +300,8 @@ export interface SourceIssue {
   entryId: string;
   entryTitle: string;
   message: string;
+  /** Set when the source sits in a folder, so a caller can open the right one. */
+  folderId?: string;
 }
 
 /** Flags sources whose catalog is no longer in the manifest, or whose type is mixed case. */
@@ -310,7 +312,7 @@ export function findSourceIssues(
   const byKey = new Map(catalogs.map(catalog => [catalogKey(catalog), catalog]));
   const issues: SourceIssue[] = [];
 
-  const check = (source: SourceDraft, entryId: string, entryTitle: string) => {
+  const check = (source: SourceDraft, entryId: string, entryTitle: string, folderId?: string) => {
     if (isNativeSource(source)) return;
     const label = trimmed(source.name) || trimmed(source.catalogId) || 'unnamed';
     const match = byKey.get(catalogKey(source));
@@ -318,12 +320,14 @@ export function findSourceIssues(
       issues.push({
         entryId,
         entryTitle,
+        folderId,
         message: `"${label}" is not in your manifest. It may have been disabled, merged, or removed.`,
       });
     } else if (match.genreRequired && !trimmed(source.genre)) {
       issues.push({
         entryId,
         entryTitle,
+        folderId,
         message: `"${label}" requires a genre. Pick one, or it returns nothing.`,
       });
     }
@@ -331,6 +335,7 @@ export function findSourceIssues(
       issues.push({
         entryId,
         entryTitle,
+        folderId,
         message: `"${label}" has a mixed-case type ("${source.type}"). Nuvio lowercases it when requesting the catalog.`,
       });
     }
@@ -340,7 +345,7 @@ export function findSourceIssues(
     if (entry.kind === 'collection') {
       for (const folder of entry.folders) {
         for (const source of folder.sources) {
-          check(source, entry.id, folder.title || entry.title);
+          check(source, entry.id, folder.title || entry.title, folder.id);
         }
       }
       continue;

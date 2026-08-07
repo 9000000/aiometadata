@@ -193,6 +193,8 @@ export interface ExportNote {
   entryId: string;
   entryTitle: string;
   message: string;
+  /** Absent means information; a tile the user built disappearing is a warning. */
+  severity?: 'warning' | 'info';
 }
 
 export interface ExportResult<T> {

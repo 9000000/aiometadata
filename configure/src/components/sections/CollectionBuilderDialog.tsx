@@ -1,28 +1,21 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
   AlertTriangle,
   Check,
-  ChevronDown,
-  ChevronUp,
+  ChevronRight,
   Copy,
   Download,
   Folder,
-  FolderPlus,
-  GripVertical,
   Layers,
-  Link as LinkIcon,
   ListOrdered,
-  Replace,
-  Tags,
-  Upload,
+  Link as LinkIcon,
   Plus,
+  Replace,
   Rows3,
-  Image as ImageIcon,
-  ImageOff,
   Search,
-  Trash2,
   Tv,
+  Upload,
 } from 'lucide-react';
 import {
   DndContext,
@@ -38,10 +31,8 @@ import {
   arrayMove,
   SortableContext,
   sortableKeyboardCoordinates,
-  useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
 
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -49,33 +40,21 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useConfig } from '@/contexts/ConfigContext';
-import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { getSourceBadgeLabel, getSourceBadgeStyle } from '@/lib/sourceBadges';
-import { getTagColor } from '@/lib/tagColors';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { useSave } from '@/contexts/SaveContext';
+import { getSourceBadgeStyle } from '@/lib/sourceBadges';
 
 import {
   createClassicRowDraft,
   createCollectionDraft,
   createFolderDraft,
-  hasNuvioCollectionSettings,
-  hasNuvioFolderArt,
+  newId,
+  type AddonIdentity,
   type BuilderEntry,
-  type ClassicRowDraft,
   type CollectionDraft,
   type ExportNote,
-  type FolderDraft,
-  type FusionAspectRatio,
   type SourceDraft,
-  type TileShape,
 } from '@shared/types';
 import { toNuvioCollections } from '@shared/nuvioExport';
 import {
@@ -98,6 +77,24 @@ import {
   type CatalogSourceList,
   type ManifestCatalog,
 } from '@/lib/collectionBuilder/manifestSources';
+import { buildProblemTargets, withStagedCatalogs } from '@/lib/collectionBuilder/problems';
+import {
+  blockingIssues,
+  buildIssueCenter,
+  saveVerdict,
+  type IssueRow,
+  type IssueSeverity,
+} from '@/lib/collectionBuilder/issueCenter';
+import {
+  describeEntryCount,
+  filterEntryTree,
+  nextCopyTitle,
+  tallyEntryCount,
+} from '@/lib/collectionBuilder/entryOps';
+import { deriveSaveStage, describeSaveStage } from '@/lib/collectionBuilder/saveState';
+import { listStarterTemplates } from '@/lib/collectionBuilder/templates';
+import { FUSION_CHIP, NUVIO_CHIP, TERMS, type Target } from '@/lib/collectionBuilder/terms';
+import { CollectionPreview } from './CollectionPreview';
 import { buildBlueprintLookup } from '@shared/blueprintLookup';
 import {
   additionCount,
@@ -110,13 +107,16 @@ import {
   dedupeBlueprints,
   fromNativeSource,
   isNativeSource,
-  nativeLabel,
   type CatalogBlueprint,
 } from '@shared/catalogReconstruction';
 import type { ShareableCatalog } from '@shared/catalogSharing';
-import type { AddonIdentity } from '@shared/types';
 
-const SETTINGS_LAYOUT_NAVIGATE_EVENT = 'settings-layout:navigate';
+import { CatalogPicker } from './collectionBuilder/CatalogPicker';
+import { StatusBar } from './collectionBuilder/StatusBar';
+import { ClassicRowEditor } from './collectionBuilder/ClassicRowEditor';
+import { CollectionEditor } from './collectionBuilder/CollectionEditor';
+import { SortableTreeRow } from './collectionBuilder/EntryRail';
+import { clone, duplicateEntryDraft, entrySourceCount, type TagOption } from './collectionBuilder/shared';
 
 /**
  * Above this many catalogs an import stops to ask. A community file can carry
@@ -129,1247 +129,45 @@ interface CollectionBuilderDialogProps {
   onClose: () => void;
 }
 
-const SHAPE_LABELS: Record<TileShape, string> = {
-  POSTER: 'Poster',
-  LANDSCAPE: 'Wide',
-  SQUARE: 'Square',
-};
+const SEVERITY_RANK: Record<IssueSeverity, number> = { blocking: 0, warning: 1, info: 2 };
 
-const SHAPE_ORDER: TileShape[] = ['POSTER', 'LANDSCAPE', 'SQUARE'];
+/** The worst thing said about each entry or folder, for its badge on the rail. */
+function severityByField(rows: IssueRow[], field: 'entryId' | 'folderId'): Map<string, IssueSeverity> {
+  const worst = new Map<string, IssueSeverity>();
+  for (const row of rows) {
+    const id = row[field];
+    if (!id) continue;
+    const current = worst.get(id);
+    if (!current || SEVERITY_RANK[row.severity] < SEVERITY_RANK[current]) worst.set(id, row.severity);
+  }
+  return worst;
+}
 
-/** Classic rows spell the same three shapes lowercase, on presentation.aspectRatio. */
-const ASPECT_BY_SHAPE: Record<TileShape, FusionAspectRatio> = {
-  POSTER: 'poster',
-  LANDSCAPE: 'wide',
-  SQUARE: 'square',
-};
-
-/** Rough proportions so the choice reads at a glance. */
-const SHAPE_PREVIEW: Record<TileShape, string> = {
-  POSTER: 'h-4 w-[11px]',
-  LANDSCAPE: 'h-3 w-5',
-  SQUARE: 'h-4 w-4',
-};
-
-const NUVIO_CHIP = 'bg-cyan-800/70 text-cyan-200 border-cyan-600/50';
-const FUSION_CHIP = 'bg-violet-800/70 text-violet-200 border-violet-600/50';
-
-type Target = 'nuvio' | 'fusion';
-
-interface TagOption {
-  name: string;
-  color: string;
-  count: number;
+function collectIds(entries: BuilderEntry[]): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    ids.add(entry.id);
+    if (entry.kind !== 'collection') continue;
+    for (const folder of entry.folders) ids.add(folder.id);
+  }
+  return ids;
 }
 
 /**
- * The same draft feeds both apps, but each names the pieces differently.
- * Fusion wording matches the labels Fusion tooling uses for the same fields
- * ("Widget Title", "Item Title", "Layout", "Aspect Ratio", "Image URL").
+ * An exported design carries its ids, and importing one twice would otherwise
+ * seat two entries on the same id: deleting either would take both. Only the
+ * clashes are reissued, so a design imported once keeps the ids Nuvio knows it by.
  */
-const TERMS: Record<Target, {
-  entryTitle: string;
-  collection: string;
-  row: string;
-  child: string;
-  children: string;
-  childTitle: string;
-  addChild: string;
-  shape: string;
-  shapeOther: string;
-  cover: string;
-  sources: string;
-}> = {
-  nuvio: {
-    entryTitle: 'Title',
-    collection: 'Collection',
-    row: 'Row',
-    child: 'Folder',
-    children: 'Folders',
-    childTitle: 'Folder title',
-    addChild: 'Add folder',
-    shape: 'Tile shape',
-    shapeOther: 'Fusion calls this layout',
-    cover: 'Cover image URL',
-    sources: 'Sources',
-  },
-  fusion: {
-    entryTitle: 'Widget title',
-    collection: 'Collection widget',
-    row: 'Classic row',
-    child: 'Item',
-    children: 'Items',
-    childTitle: 'Item title',
-    addChild: 'Add item',
-    shape: 'Layout',
-    shapeOther: 'Nuvio calls this tileShape',
-    cover: 'Image URL',
-    sources: 'Catalogs',
-  },
-};
-
-/** Marks a control that only one of the two targets understands. */
-function ScopeChip({ scope }: { scope: 'nuvio' | 'fusion' }) {
-  return (
-    <Badge
-      variant="outline"
-      className={`h-5 shrink-0 px-1.5 text-[10px] font-medium ${scope === 'nuvio' ? NUVIO_CHIP : FUSION_CHIP}`}
-    >
-      {scope === 'nuvio' ? 'Nuvio only' : 'Fusion only'}
-    </Badge>
-  );
-}
-
-type PreviewAspect = 'poster' | 'wide' | 'square' | 'logo';
-
-const PREVIEW_BOX: Record<PreviewAspect, string> = {
-  poster: 'h-24 w-16',
-  wide: 'h-16 w-[7.1rem]',
-  square: 'h-20 w-20',
-  logo: 'h-12 w-[7.1rem]',
-};
-
-const ASPECT_BY_TILE: Record<TileShape, PreviewAspect> = {
-  POSTER: 'poster',
-  LANDSCAPE: 'wide',
-  SQUARE: 'square',
-};
-
-/** URL input with a live thumbnail, so art can be judged before exporting. */
-function ImageUrlField({
-  label,
-  value,
-  aspect,
-  placeholder = 'https://...',
-  hint,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  aspect: PreviewAspect;
-  placeholder?: string;
-  hint?: string;
-  onChange: (next: string) => void;
-}) {
-  const [debounced, setDebounced] = useState(value);
-  const [status, setStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle');
-
-  // Wait for a pause in typing so a half-typed URL is not fetched on every key.
-  useEffect(() => {
-    const timer = setTimeout(() => setDebounced(value.trim()), 400);
-    return () => clearTimeout(timer);
-  }, [value]);
-
-  useEffect(() => {
-    setStatus(debounced ? 'loading' : 'idle');
-  }, [debounced]);
-
-  return (
-    <div className="space-y-1.5">
-      <div className="flex flex-wrap items-center gap-2">
-        <Label className="text-xs">{label}</Label>
-        {hint && <span className="text-[10px] text-muted-foreground">{hint}</span>}
-      </div>
-      <div className="flex items-start gap-3">
-        <div
-          className={`relative shrink-0 overflow-hidden rounded-md border ${PREVIEW_BOX[aspect]} ${
-            status === 'error' ? 'border-amber-600/60 bg-amber-950/20' : 'border-dashed bg-muted/40'
-          }`}
-        >
-          {debounced && status !== 'error' && (
-            <img
-              key={debounced}
-              src={debounced}
-              alt=""
-              loading="lazy"
-              referrerPolicy="no-referrer"
-              onLoad={() => setStatus('ok')}
-              onError={() => setStatus('error')}
-              className={`h-full w-full ${aspect === 'logo' ? 'object-contain p-1' : 'object-cover'} ${
-                status === 'ok' ? 'opacity-100' : 'opacity-0'
-              } transition-opacity`}
-            />
-          )}
-          {status === 'loading' && <div className="absolute inset-0 animate-pulse bg-muted" />}
-          {status === 'idle' && (
-            <div className="flex h-full w-full items-center justify-center text-muted-foreground/50">
-              <ImageIcon className="h-4 w-4" />
-            </div>
-          )}
-          {status === 'error' && (
-            <div className="flex h-full w-full flex-col items-center justify-center gap-1 px-1 text-center text-amber-500">
-              <ImageOff className="h-4 w-4" />
-              <span className="text-[9px] leading-tight">won&rsquo;t load</span>
-            </div>
-          )}
-        </div>
-        <div className="min-w-0 flex-1 space-y-1">
-          <Input
-            value={value}
-            onChange={event => onChange(event.target.value)}
-            placeholder={placeholder}
-            className="h-9"
-          />
-          {status === 'error' && (
-            <p className="text-[10px] text-amber-500">
-              The image did not load. Check the link is public and points straight at the file.
-            </p>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value));
-}
-
-function entrySourceCount(entry: BuilderEntry): number {
-  if (entry.kind === 'classicRow') return entry.source ? 1 : 0;
-  return entry.folders.reduce((total, folder) => total + folder.sources.length, 0);
-}
-
-// ---- Reordering ----
-
-function ReorderArrows({
-  label,
-  canMoveUp,
-  canMoveDown,
-  onMove,
-}: {
-  label: string;
-  canMoveUp: boolean;
-  canMoveDown: boolean;
-  onMove: (delta: number) => void;
-}) {
-  const buttonClass =
-    'flex h-3.5 w-4 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-25';
-  return (
-    <div className="flex shrink-0 flex-col">
-      <button
-        type="button"
-        className={buttonClass}
-        disabled={!canMoveUp}
-        onClick={() => onMove(-1)}
-        title={`Move ${label} up`}
-        aria-label={`Move ${label} up`}
-      >
-        <ChevronUp className="h-3 w-3" />
-      </button>
-      <button
-        type="button"
-        className={buttonClass}
-        disabled={!canMoveDown}
-        onClick={() => onMove(1)}
-        title={`Move ${label} down`}
-        aria-label={`Move ${label} down`}
-      >
-        <ChevronDown className="h-3 w-3" />
-      </button>
-    </div>
-  );
-}
-
-// ---- Entry rail ----
-
-function SortableEntryRow({
-  entry,
-  isActive,
-  excluded,
-  hasUnknown,
-  allNative,
-  canMoveUp,
-  canMoveDown,
-  onMove,
-  onSelect,
-  onDelete,
-}: {
-  entry: BuilderEntry;
-  isActive: boolean;
-  /** True when the active target has no equivalent and will skip this entry. */
-  excluded: boolean;
-  /** True when it points at a catalog that is not in the user's setup. */
-  hasUnknown: boolean;
-  /** Every source here is resolved by the client, so none of it reaches us. */
-  allNative?: boolean;
-  canMoveUp: boolean;
-  canMoveDown: boolean;
-  onMove: (delta: number) => void;
-  onSelect: () => void;
-  onDelete: () => void;
-}) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.id });
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    zIndex: isDragging ? 50 : 'auto',
-  };
-  const isCollection = entry.kind === 'collection';
-  const Icon = isCollection ? Layers : entry.numbered ? ListOrdered : Rows3;
-  const count = entrySourceCount(entry);
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className={`flex items-center gap-2 rounded-md border border-l-[3px] px-2 py-2 text-sm transition-colors ${
-        isCollection ? 'border-l-cyan-500' : 'border-l-violet-500'
-      } ${isActive ? 'border-primary bg-primary/10' : 'border-border hover:bg-accent/50'} ${
-        excluded ? 'opacity-50' : ''
-      }`}
-      title={excluded ? 'Not exported for the selected target' : undefined}
-    >
-      <ReorderArrows
-        label={entry.title || 'this'}
-        canMoveUp={canMoveUp}
-        canMoveDown={canMoveDown}
-        onMove={onMove}
-      />
-      <button type="button" className="cursor-grab touch-none text-muted-foreground" {...attributes} {...listeners}>
-        <GripVertical className="h-4 w-4" />
-      </button>
-      <button type="button" onClick={onSelect} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-        <Icon className={`h-4 w-4 shrink-0 ${isCollection ? 'text-cyan-400' : 'text-violet-400'}`} />
-        <span className="min-w-0 flex-1 truncate">{entry.title || 'Untitled'}</span>
-        {hasUnknown && (
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
-        )}
-        {allNative && (
-          <span className="shrink-0 text-[10px] text-muted-foreground" title="Nuvio fetches these itself, so they cost this addon nothing">
-            Nuvio
-          </span>
-        )}
-        <span
-          className={`shrink-0 rounded-full px-1.5 text-[10px] font-medium ${
-            count === 0 ? 'bg-amber-800/60 text-amber-200' : 'bg-muted text-muted-foreground'
-          }`}
-        >
-          {count}
-        </span>
-      </button>
-      <button type="button" onClick={onDelete} className="text-muted-foreground hover:text-destructive">
-        <Trash2 className="h-4 w-4" />
-      </button>
-    </div>
-  );
-}
-
-// ---- Catalog picker ----
-
-function CatalogPicker({
-  isOpen,
-  catalogs,
-  pendingKeys,
-  multiple,
-  existingKeys,
-  onConfirm,
-  onClose,
-}: {
-  isOpen: boolean;
-  catalogs: ManifestCatalog[];
-  pendingKeys?: Set<string>;
-  /** Classic rows hold a single catalog, so selection collapses to one there. */
-  multiple: boolean;
-  /** Already on the tile, shown as such instead of being silently deduped. */
-  existingKeys: string[];
-  onConfirm: (picked: ManifestCatalog[]) => void;
-  onClose: () => void;
-}) {
-  const [query, setQuery] = useState('');
-  const [selected, setSelected] = useState<string[]>([]);
-
-  useEffect(() => {
-    if (isOpen) {
-      setQuery('');
-      setSelected([]);
+function reissueTakenIds(entries: BuilderEntry[], taken: Set<string>): void {
+  for (const entry of entries) {
+    if (!entry.id || taken.has(entry.id)) entry.id = newId();
+    taken.add(entry.id);
+    if (entry.kind !== 'collection') continue;
+    for (const folder of entry.folders) {
+      if (!folder.id || taken.has(folder.id)) folder.id = newId();
+      taken.add(folder.id);
     }
-  }, [isOpen]);
-
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return catalogs;
-    return catalogs.filter(catalog =>
-      `${catalog.name} ${catalog.id} ${catalog.type} ${catalog.source || ''}`.toLowerCase().includes(needle)
-    );
-  }, [catalogs, query]);
-
-  const alreadyAdded = useMemo(() => new Set(existingKeys), [existingKeys]);
-
-  const toggle = (catalog: ManifestCatalog) => {
-    const key = catalogKey(catalog);
-    if (alreadyAdded.has(key)) return;
-    if (!multiple) {
-      onConfirm([catalog]);
-      onClose();
-      return;
-    }
-    setSelected(prev => (prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]));
-  };
-
-  const confirm = () => {
-    const byKey = new Map(catalogs.map(catalog => [catalogKey(catalog), catalog]));
-    onConfirm(selected.map(key => byKey.get(key)).filter((c): c is ManifestCatalog => Boolean(c)));
-    onClose();
-  };
-
-  return (
-    <Dialog open={isOpen} onOpenChange={open => !open && onClose()}>
-      <DialogContent className="max-w-xl">
-        <DialogHeader>
-          <DialogTitle>{multiple ? 'Add catalogs' : 'Pick a catalog'}</DialogTitle>
-          <DialogDescription>
-            {multiple
-              ? 'Select as many as you want, then add them all at once.'
-              : 'Classic rows read from a single catalog.'}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            autoFocus
-            value={query}
-            onChange={event => setQuery(event.target.value)}
-            placeholder="Search catalogs"
-            className="pl-9"
-          />
-        </div>
-        <div className="max-h-80 space-y-1 overflow-y-auto">
-          {filtered.length === 0 && (
-            <p className="py-6 text-center text-sm text-muted-foreground">No catalogs match that search.</p>
-          )}
-          {filtered.map(catalog => {
-            const key = catalogKey(catalog);
-            const isAdded = alreadyAdded.has(key);
-            const isSelected = selected.includes(key);
-            return (
-              <button
-                key={key}
-                type="button"
-                disabled={isAdded}
-                onClick={() => toggle(catalog)}
-                className={`flex w-full items-center gap-2 rounded-md border px-2 py-2 text-left text-sm transition-colors ${
-                  isAdded
-                    ? 'cursor-default border-transparent opacity-45'
-                    : isSelected
-                      ? 'border-primary/60 bg-primary/10'
-                      : 'border-transparent hover:border-border hover:bg-accent/50'
-                }`}
-              >
-                {multiple && (
-                  <span
-                    className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                      isSelected || isAdded
-                        ? 'border-primary bg-primary text-primary-foreground'
-                        : 'border-muted-foreground/40'
-                    }`}
-                  >
-                    {(isSelected || isAdded) && <Check className="h-3 w-3" />}
-                  </span>
-                )}
-                <span className="min-w-0 flex-1 truncate">{catalog.name}</span>
-                {isAdded && <span className="hidden shrink-0 text-[10px] text-muted-foreground sm:inline">added</span>}
-                {catalog.pendingSave && (
-                  <Badge
-                    variant="outline"
-                    className="shrink-0 border-sky-600/50 bg-sky-900/50 text-[10px] text-sky-200"
-                    title="In your config but not saved yet, so it is not in the manifest"
-                  >
-                    unsaved
-                  </Badge>
-                )}
-                {catalog.genreRequired && (
-                  <Badge variant="outline" className="shrink-0 border-amber-600/50 bg-amber-800/60 text-[10px] text-amber-200">
-                    genre
-                  </Badge>
-                )}
-                <Badge
-                  variant="outline"
-                  className={`shrink-0 text-[10px] font-semibold ${getSourceBadgeStyle(catalog.source)}`}
-                >
-                  {getSourceBadgeLabel(catalog.source)}
-                </Badge>
-                <Badge variant="outline" className="hidden shrink-0 text-[10px] sm:inline-flex">
-                  {catalog.type}
-                </Badge>
-              </button>
-            );
-          })}
-        </div>
-        {multiple && (
-          <div className="flex items-center justify-between border-t pt-3">
-            <span className="text-xs text-muted-foreground">
-              {selected.length === 0
-                ? 'Nothing selected'
-                : `${selected.length} selected`}
-            </span>
-            <div className="flex gap-2">
-              <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-              <Button size="sm" disabled={selected.length === 0} onClick={confirm}>
-                Add {selected.length > 0 ? selected.length : ''}
-              </Button>
-            </div>
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ---- Source row ----
-
-function SourceRow({
-  source,
-  catalogs,
-  pendingKeys,
-  onChange,
-  onRemove,
-  onReplace,
-}: {
-  source: SourceDraft;
-  catalogs: ManifestCatalog[];
-  /** Sources an apply would add a catalog for, so not missing, just not saved yet. */
-  pendingKeys?: Set<string>;
-  onChange: (next: SourceDraft) => void;
-  onRemove: () => void;
-  /** Swap this one for a catalog the user has. */
-  onReplace?: () => void;
-}) {
-  const native = isNativeSource(source);
-  const match = native ? undefined : catalogs.find(catalog => catalogKey(catalog) === catalogKey(source));
-  const genres = match?.genres || [];
-  const genreRequired = Boolean(match?.genreRequired);
-  const pending = !native && !match && Boolean(pendingKeys?.has(catalogKey(source)));
-  const unknown = !native && !match && !pending;
-
-  return (
-    <div
-      className={`flex flex-col gap-2 rounded-md border px-2 py-2 sm:flex-row sm:flex-wrap sm:items-center ${
-        unknown
-          ? 'border-amber-600/60 bg-amber-950/20'
-          : pending ? 'border-emerald-600/50 bg-emerald-950/20' : 'bg-muted/30'
-      }`}
-    >
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-      {unknown && <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />}
-      <span
-        className="min-w-0 flex-1 truncate text-sm"
-        title={`${source.catalogId} (${source.type})`}
-      >
-        {match?.name || source.name || source.catalogId}
-      </span>
-      {native ? (
-        <>
-          <Badge variant="outline" className="shrink-0 text-[10px] font-semibold">
-            {nativeLabel(source)}
-          </Badge>
-          <span className="shrink-0 text-[10px] text-muted-foreground">served by Nuvio</span>
-        </>
-      ) : pending ? (
-        <span className="shrink-0 text-[10px] text-emerald-500" title={`${source.catalogId} (${source.type})`}>
-          added on apply
-        </span>
-      ) : unknown ? (
-        <>
-          <span className="shrink-0 text-[10px] text-amber-500" title={`${source.catalogId} (${source.type})`}>
-            not in your catalogs
-          </span>
-          {onReplace && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 shrink-0 border-amber-600/60 text-amber-200 hover:bg-amber-900/40"
-              onClick={onReplace}
-            >
-              <Replace className="mr-1 h-3.5 w-3.5" /> Replace
-            </Button>
-          )}
-        </>
-      ) : (
-        <Badge
-          variant="outline"
-          className={`shrink-0 text-[10px] font-semibold ${getSourceBadgeStyle(match?.source)}`}
-        >
-          {getSourceBadgeLabel(match?.source)}
-        </Badge>
-      )}
-        <Badge variant="outline" className="shrink-0 text-[10px]">{source.type}</Badge>
-      </div>
-      <div className="flex min-w-0 items-center gap-2 sm:shrink-0">
-      {genres.length > 0 && (
-        <Select
-          value={source.genre || '__all__'}
-          onValueChange={value => onChange({ ...source, genre: value === '__all__' ? null : value })}
-        >
-          <SelectTrigger className={`h-8 min-w-0 flex-1 sm:w-40 sm:flex-none ${genreRequired && !source.genre ? 'border-amber-500' : ''}`}>
-            <SelectValue placeholder={genreRequired ? 'Pick a genre' : 'All genres'} />
-          </SelectTrigger>
-          <SelectContent>
-            {!genreRequired && <SelectItem value="__all__">All genres</SelectItem>}
-            {genres.map(genre => (
-              <SelectItem key={genre} value={genre}>{genre}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
-      <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={onRemove}>
-        <Trash2 className="h-4 w-4" />
-      </Button>
-      </div>
-    </div>
-  );
-}
-
-// ---- Folder rail ----
-
-function SortableFolderRow({
-  folder,
-  hasUnknown,
-  allNative,
-  placeholder,
-  isActive,
-  canMoveUp,
-  canMoveDown,
-  onMove,
-  onSelect,
-  onDelete,
-}: {
-  folder: FolderDraft;
-  hasUnknown: boolean;
-  /** Every source here is resolved by the client, so none of it reaches us. */
-  allNative?: boolean;
-  placeholder: string;
-  isActive: boolean;
-  canMoveUp: boolean;
-  canMoveDown: boolean;
-  onMove: (delta: number) => void;
-  onSelect: () => void;
-  onDelete: () => void;
-}) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: folder.id });
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    zIndex: isDragging ? 50 : 'auto',
-  };
-  const count = folder.sources.length;
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className={`flex items-center gap-1.5 rounded-md border px-1.5 py-1.5 text-sm transition-colors ${
-        isActive ? 'border-primary bg-primary/10' : 'border-border hover:bg-accent/50'
-      }`}
-    >
-      <ReorderArrows
-        label={folder.title || 'this'}
-        canMoveUp={canMoveUp}
-        canMoveDown={canMoveDown}
-        onMove={onMove}
-      />
-      <button type="button" className="cursor-grab touch-none text-muted-foreground" {...attributes} {...listeners}>
-        <GripVertical className="h-4 w-4" />
-      </button>
-      <button type="button" onClick={onSelect} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-        <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate">{folder.title || placeholder}</span>
-        {hasUnknown && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />}
-        {allNative && (
-          <span className="shrink-0 text-[10px] text-muted-foreground" title="Nuvio fetches these itself, so they cost this addon nothing">
-            Nuvio
-          </span>
-        )}
-        <span
-          className={`shrink-0 rounded-full px-1.5 text-[10px] font-medium ${
-            count === 0 ? 'bg-amber-800/60 text-amber-200' : 'bg-muted text-muted-foreground'
-          }`}
-        >
-          {count}
-        </span>
-      </button>
-      <button type="button" onClick={onDelete} className="text-muted-foreground hover:text-destructive">
-        <Trash2 className="h-4 w-4" />
-      </button>
-    </div>
-  );
-}
-
-// ---- Folder card ----
-
-function FolderCard({
-  folder,
-  catalogs,
-  pendingKeys,
-  target,
-  onChange,
-  onRemove,
-  onAddSource,
-  onReplaceSource,
-  tagOptions,
-  onAddByTag,
-}: {
-  folder: FolderDraft;
-  catalogs: ManifestCatalog[];
-  pendingKeys?: Set<string>;
-  target: Target;
-  onChange: (next: FolderDraft) => void;
-  onRemove: () => void;
-  onAddSource: () => void;
-  onReplaceSource: (index: number) => void;
-  tagOptions: TagOption[];
-  onAddByTag: (tag: string) => void;
-}) {
-  const terms = TERMS[target];
-  const [showExtras, setShowExtras] = useState(false);
-  const nuvioArtVisible = target === 'nuvio' || hasNuvioFolderArt(folder);
-
-  const update = (patch: Partial<FolderDraft>) => onChange({ ...folder, ...patch });
-
-  return (
-    <div className="space-y-3 rounded-lg border p-3">
-      <div className="flex items-center gap-2">
-        <Input
-          value={folder.title}
-          onChange={event => update({ title: event.target.value })}
-          placeholder={terms.childTitle}
-          className="h-9 min-w-0 flex-1"
-        />
-        <Button variant="ghost" size="icon" className="h-9 w-9" onClick={onRemove}>
-          <Trash2 className="h-4 w-4" />
-        </Button>
-      </div>
-
-      <div className="space-y-1.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <Label className="text-xs">{terms.shape}</Label>
-          <span className="text-[10px] text-muted-foreground">
-            {terms.shapeOther}
-          </span>
-        </div>
-        <div className="flex gap-1 rounded-lg border p-1">
-          {SHAPE_ORDER.map(shape => {
-            const active = folder.shape === shape;
-            return (
-              <button
-                key={shape}
-                type="button"
-                onClick={() => update({ shape })}
-                className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-colors ${
-                  active ? 'bg-primary/15 text-foreground ring-1 ring-primary/50' : 'text-muted-foreground hover:bg-accent/50'
-                }`}
-              >
-                <span
-                  className={`shrink-0 rounded-[2px] border ${SHAPE_PREVIEW[shape]} ${
-                    active ? 'border-primary bg-primary/40' : 'border-muted-foreground/50'
-                  }`}
-                />
-                <span className="truncate">{SHAPE_LABELS[shape]}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <ImageUrlField
-        label={terms.cover}
-        value={folder.coverImageUrl || ''}
-        aspect={ASPECT_BY_TILE[folder.shape]}
-        hint="preview follows the tile shape above"
-        onChange={next => update({ coverImageUrl: next })}
-      />
-
-      <div className="flex items-center gap-2">
-        <Switch checked={Boolean(folder.hideTitle)} onCheckedChange={value => update({ hideTitle: value })} />
-        <Label className="text-xs">Hide title on the {terms.child.toLowerCase()}</Label>
-      </div>
-
-      <div className="space-y-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <Label className="text-xs">{terms.sources}</Label>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {tagOptions.length > 0 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-7">
-                    <Tags className="mr-1 h-3.5 w-3.5" /> Add by tag
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  {tagOptions.map(tag => (
-                    <DropdownMenuItem key={tag.name} onClick={() => onAddByTag(tag.name)}>
-                      <span className={`mr-2 h-2.5 w-2.5 shrink-0 rounded-full ${getTagColor(tag.color).swatch}`} />
-                      <span className="flex-1 truncate">{tag.name}</span>
-                      <span className="ml-2 text-xs text-muted-foreground">{tag.count}</span>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-            <Button variant="outline" size="sm" className="h-7" onClick={onAddSource}>
-              <Plus className="mr-1 h-3.5 w-3.5" /> Add catalog
-            </Button>
-          </div>
-        </div>
-        {folder.sources.length === 0 && (
-          <p className="rounded-md border border-dashed px-2 py-3 text-center text-xs text-muted-foreground">
-            No catalogs yet. Both Nuvio and Fusion drop tiles that have none.
-          </p>
-        )}
-        {folder.sources.map((source, index) => (
-          <SourceRow
-            key={`${catalogKey(source)}-${index}`}
-            source={source}
-            catalogs={catalogs}
-            pendingKeys={pendingKeys}
-            onChange={next => update({ sources: folder.sources.map((s, i) => (i === index ? next : s)) })}
-            onRemove={() => update({ sources: folder.sources.filter((_, i) => i !== index) })}
-            onReplace={() => onReplaceSource(index)}
-          />
-        ))}
-      </div>
-
-      {nuvioArtVisible && (
-        <button
-          type="button"
-          onClick={() => setShowExtras(!showExtras)}
-          className="flex items-center gap-1.5 text-xs text-cyan-400 underline-offset-2 hover:underline"
-        >
-          <Tv className="h-3.5 w-3.5" />
-          {showExtras ? 'Hide' : 'Show'} Nuvio artwork
-          {target === 'fusion' && <ScopeChip scope="nuvio" />}
-        </button>
-      )}
-      {nuvioArtVisible && showExtras && (
-        <div className="grid gap-3 rounded-lg border border-cyan-800/40 bg-cyan-950/20 p-3 lg:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label className="text-xs">Cover emoji</Label>
-            <Input
-              value={folder.coverEmoji || ''}
-              onChange={event => update({ coverEmoji: event.target.value })}
-              className="h-9"
-            />
-          </div>
-          <ImageUrlField
-            label="Focus GIF URL"
-            value={folder.focusGifUrl || ''}
-            aspect={ASPECT_BY_TILE[folder.shape]}
-            onChange={next => update({ focusGifUrl: next })}
-          />
-          <ImageUrlField
-            label="Hero backdrop URL"
-            value={folder.heroBackdropUrl || ''}
-            aspect="wide"
-            onChange={next => update({ heroBackdropUrl: next })}
-          />
-          <div className="space-y-1.5">
-            <Label className="text-xs">Hero video URL</Label>
-            <Input
-              value={folder.heroVideoUrl || ''}
-              onChange={event => update({ heroVideoUrl: event.target.value })}
-              placeholder="https://..."
-              className="h-9"
-            />
-          </div>
-          <ImageUrlField
-            label="Title logo URL"
-            value={folder.titleLogoUrl || ''}
-            aspect="logo"
-            onChange={next => update({ titleLogoUrl: next })}
-          />
-          <div className="flex items-center gap-2 pt-6">
-            <Switch
-              checked={folder.focusGifEnabled !== false}
-              onCheckedChange={value => update({ focusGifEnabled: value })}
-            />
-            <Label className="text-xs">Play focus GIF</Label>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---- Collection editor ----
-
-function CollectionEditor({
-  entry,
-  catalogs,
-  pendingKeys,
-  target,
-  onChange,
-  onAddSource,
-  onReplaceSource,
-  tagOptions,
-  onAddByTag,
-  nativeCount,
-  onConvertNative,
-}: {
-  entry: CollectionDraft;
-  catalogs: ManifestCatalog[];
-  pendingKeys?: Set<string>;
-  target: Target;
-  onChange: (next: CollectionDraft) => void;
-  onAddSource: (folderId: string) => void;
-  onReplaceSource: (folderId: string, index: number) => void;
-  tagOptions: TagOption[];
-  onAddByTag: (folderId: string, tag: string) => void;
-  /** Sources here that Nuvio resolves itself and this addon could take over. */
-  nativeCount: number;
-  onConvertNative: () => void;
-}) {
-  const terms = TERMS[target];
-  const [showNuvioBox, setShowNuvioBox] = useState(target === 'nuvio');
-  const nuvioBoxVisible = target === 'nuvio' || hasNuvioCollectionSettings(entry);
-
-  useEffect(() => {
-    setShowNuvioBox(target === 'nuvio');
-  }, [target]);
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
-  );
-
-  const update = (patch: Partial<CollectionDraft>) => onChange({ ...entry, ...patch });
-
-  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
-  const activeIndex = Math.max(entry.folders.findIndex(folder => folder.id === selectedFolderId), 0);
-  const activeFolder = entry.folders[activeIndex] ?? null;
-
-  const knownKeys = useMemo(() => new Set(catalogs.map(catalogKey)), [catalogs]);
-
-  const handleDragEnd = (event: DragEndEvent) => {
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-    const from = entry.folders.findIndex(folder => folder.id === active.id);
-    const to = entry.folders.findIndex(folder => folder.id === over.id);
-    if (from < 0 || to < 0) return;
-    update({ folders: arrayMove(entry.folders, from, to) });
-  };
-
-  const moveFolder = (index: number, delta: number) => {
-    const to = index + delta;
-    if (to < 0 || to >= entry.folders.length) return;
-    update({ folders: arrayMove(entry.folders, index, to) });
-  };
-
-  const addFolder = () => {
-    const folder = createFolderDraft();
-    setSelectedFolderId(folder.id);
-    update({ folders: [...entry.folders, folder] });
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="grid gap-3 lg:grid-cols-2">
-        <div className="space-y-1.5">
-          <Label className="text-xs">{terms.entryTitle}</Label>
-          <Input value={entry.title} onChange={event => update({ title: event.target.value })} className="h-9" />
-        </div>
-        <div className="flex items-end gap-2 pb-2">
-          <Switch checked={Boolean(entry.hideTitle)} onCheckedChange={value => update({ hideTitle: value })} />
-          <Label className="text-xs">Hide title</Label>
-          <ScopeChip scope="fusion" />
-        </div>
-      </div>
-
-      {nuvioBoxVisible && (
-      <div className="space-y-3 rounded-lg border border-cyan-800/40 bg-cyan-950/20 p-3">
-        <button
-          type="button"
-          onClick={() => setShowNuvioBox(!showNuvioBox)}
-          className="flex w-full items-center gap-2 text-left"
-        >
-          <Tv className="h-4 w-4 shrink-0 text-cyan-400" />
-          <Label className="cursor-pointer text-sm font-medium text-cyan-300">Nuvio presentation</Label>
-          <span className="text-[11px] text-muted-foreground">
-            {target === 'fusion' ? 'Set here, unused by Fusion' : 'Fusion ignores these'}
-          </span>
-          <span className="flex-1" />
-          <span className="text-[11px] text-muted-foreground">{showNuvioBox ? 'Hide' : 'Show'}</span>
-        </button>
-
-        {showNuvioBox && (
-        <>
-        <div className="grid gap-3 lg:grid-cols-2">
-          <ImageUrlField
-            label="Backdrop image URL"
-            value={entry.backdropImageUrl || ''}
-            aspect="wide"
-            onChange={next => update({ backdropImageUrl: next })}
-          />
-          <div className="space-y-1.5">
-            <Label className="text-xs">Folder view mode</Label>
-            <Select
-              value={entry.viewMode || 'TABBED_GRID'}
-              onValueChange={(value: CollectionDraft['viewMode']) => update({ viewMode: value })}
-            >
-              <SelectTrigger className="h-9">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="TABBED_GRID">Tabbed grid</SelectItem>
-                <SelectItem value="ROWS">Rows</SelectItem>
-                <SelectItem value="FOLLOW_LAYOUT">Follow layout</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap gap-x-6 gap-y-2">
-          <div className="flex items-center gap-2">
-            <Switch checked={Boolean(entry.pinToTop)} onCheckedChange={value => update({ pinToTop: value })} />
-            <Label className="text-xs">Pin to top</Label>
-          </div>
-          <div className="flex items-center gap-2">
-            <Switch
-              checked={entry.focusGlowEnabled !== false}
-              onCheckedChange={value => update({ focusGlowEnabled: value })}
-            />
-            <Label className="text-xs">Focus glow</Label>
-          </div>
-          <div className="flex items-center gap-2">
-            <Switch checked={entry.showAllTab !== false} onCheckedChange={value => update({ showAllTab: value })} />
-            <Label className="text-xs">Show "All" tab</Label>
-          </div>
-        </div>
-        </>
-        )}
-      </div>
-      )}
-
-      {nativeCount > 0 && (
-        <div className="flex flex-col gap-2 rounded-md border p-2 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-[11px] text-muted-foreground">
-            <span className="font-medium text-foreground">{nativeCount}</span> source
-            {nativeCount === 1 ? '' : 's'} here {nativeCount === 1 ? 'is' : 'are'} fetched by Nuvio straight from
-            TMDB or Trakt. They cost this addon nothing. Routing them through it adds your artwork, ratings and
-            filters, and a catalog to your setup for each.
-          </p>
-          <Button variant="outline" size="sm" className="shrink-0" onClick={onConvertNative}>
-            <Replace className="mr-1.5 h-4 w-4" /> Route through AIOMetadata
-          </Button>
-        </div>
-      )}
-
-      <div className="flex items-center justify-between border-t pt-3">
-        <Label className="text-sm font-medium">{terms.children}</Label>
-        <Button variant="outline" size="sm" onClick={addFolder}>
-          <FolderPlus className="mr-1.5 h-4 w-4" /> {terms.addChild}
-        </Button>
-      </div>
-
-      {entry.folders.length === 0 ? (
-        <p className="rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground">
-          Use &ldquo;{terms.addChild}&rdquo;, then point it at one or more of your catalogs.
-        </p>
-      ) : (
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,13rem)_minmax(0,1fr)]">
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-            <SortableContext items={entry.folders.map(folder => folder.id)} strategy={verticalListSortingStrategy}>
-              <div className="max-h-48 space-y-1.5 overflow-y-auto pr-1 lg:max-h-none lg:overflow-visible lg:pr-0">
-                {entry.folders.map((folder, index) => (
-                  <SortableFolderRow
-                    key={folder.id}
-                    folder={folder}
-                    placeholder={`Untitled ${terms.child.toLowerCase()}`}
-                    hasUnknown={folder.sources.some(source =>
-                      !isNativeSource(source)
-                      && !knownKeys.has(catalogKey(source))
-                      && !pendingKeys?.has(catalogKey(source))
-                    )}
-                    allNative={folder.sources.length > 0 && folder.sources.every(isNativeSource)}
-                    isActive={index === activeIndex}
-                    canMoveUp={index > 0}
-                    canMoveDown={index < entry.folders.length - 1}
-                    onMove={delta => moveFolder(index, delta)}
-                    onSelect={() => setSelectedFolderId(folder.id)}
-                    onDelete={() => update({ folders: entry.folders.filter((_, i) => i !== index) })}
-                  />
-                ))}
-              </div>
-            </SortableContext>
-          </DndContext>
-
-          <div className="min-w-0">
-            {activeFolder && (
-              <FolderCard
-                key={activeFolder.id}
-                folder={activeFolder}
-                catalogs={catalogs}
-            pendingKeys={pendingKeys}
-                target={target}
-                onChange={next =>
-                  update({ folders: entry.folders.map((f, i) => (i === activeIndex ? next : f)) })}
-                onRemove={() => update({ folders: entry.folders.filter((_, i) => i !== activeIndex) })}
-                onAddSource={() => onAddSource(activeFolder.id)}
-                onReplaceSource={index => onReplaceSource(activeFolder.id, index)}
-                tagOptions={tagOptions}
-                onAddByTag={tag => onAddByTag(activeFolder.id, tag)}
-              />
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---- Classic row editor ----
-
-function ClassicRowEditor({
-  entry,
-  catalogs,
-  pendingKeys,
-  target,
-  onChange,
-  onAddSource,
-}: {
-  entry: ClassicRowDraft;
-  catalogs: ManifestCatalog[];
-  pendingKeys?: Set<string>;
-  target: Target;
-  onChange: (next: ClassicRowDraft) => void;
-  onAddSource: () => void;
-}) {
-  const terms = TERMS[target];
-  const update = (patch: Partial<ClassicRowDraft>) => onChange({ ...entry, ...patch });
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2 rounded-md border border-violet-700/50 bg-violet-950/30 px-3 py-2 text-xs text-violet-300">
-        <Rows3 className="h-4 w-4 shrink-0" />
-        Classic rows are Fusion only. Nuvio has no equivalent, so this row is left out of the Nuvio export.
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="space-y-1.5">
-          <Label className="text-xs">{terms.entryTitle}</Label>
-          <Input value={entry.title} onChange={event => update({ title: event.target.value })} className="h-9" />
-        </div>
-        <ImageUrlField
-          label={terms.cover}
-          value={entry.backgroundImageURL || ''}
-          aspect={entry.aspectRatio === 'wide' ? 'wide' : entry.aspectRatio === 'square' ? 'square' : 'poster'}
-          onChange={next => update({ backgroundImageURL: next })}
-        />
-      </div>
-
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <Label className="text-xs">Catalog</Label>
-          <Button variant="outline" size="sm" className="h-7" onClick={onAddSource}>
-            <Plus className="mr-1 h-3.5 w-3.5" /> {entry.source ? 'Change' : 'Pick catalog'}
-          </Button>
-        </div>
-        {entry.source ? (
-          <SourceRow
-            source={entry.source}
-            catalogs={catalogs}
-            pendingKeys={pendingKeys}
-            onChange={next => update({ source: next })}
-            onRemove={() => update({ source: null })}
-            onReplace={onAddSource}
-          />
-        ) : (
-          <p className="rounded-md border border-dashed px-2 py-3 text-center text-xs text-muted-foreground">
-            No catalog selected. Fusion drops rows without one.
-          </p>
-        )}
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="space-y-1.5">
-          <Label className="text-xs">Items shown</Label>
-          <Input
-            type="number"
-            min={1}
-            value={entry.limit}
-            onChange={event => update({ limit: Math.max(1, parseInt(event.target.value, 10) || 1) })}
-            className="h-9"
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label className="text-xs">Cache TTL (seconds)</Label>
-          <Input
-            type="number"
-            min={0}
-            value={entry.cacheTTL}
-            onChange={event => update({ cacheTTL: Math.max(0, parseInt(event.target.value, 10) || 0) })}
-            className="h-9"
-          />
-        </div>
-        <div className="space-y-1.5 sm:col-span-2">
-          <Label className="text-xs">Aspect ratio</Label>
-          <div className="flex gap-1 rounded-lg border p-1">
-            {SHAPE_ORDER.map(shape => {
-              const value = ASPECT_BY_SHAPE[shape];
-              const active = entry.aspectRatio === value;
-              return (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => update({ aspectRatio: value })}
-                  className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-colors ${
-                    active ? 'bg-primary/15 text-foreground ring-1 ring-primary/50' : 'text-muted-foreground hover:bg-accent/50'
-                  }`}
-                >
-                  <span
-                    className={`shrink-0 rounded-[2px] border ${SHAPE_PREVIEW[shape]} ${
-                      active ? 'border-primary bg-primary/40' : 'border-muted-foreground/50'
-                    }`}
-                  />
-                  <span className="truncate">{SHAPE_LABELS[shape]}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        <div className="space-y-1.5">
-          <Label className="text-xs">Card size</Label>
-          <Select
-            value={entry.cardStyle}
-            onValueChange={(value: ClassicRowDraft['cardStyle']) => update({ cardStyle: value })}
-          >
-            <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="small">Small</SelectItem>
-              <SelectItem value="medium">Medium</SelectItem>
-              <SelectItem value="large">Large</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap gap-x-6 gap-y-2">
-        <div className="flex items-center gap-2">
-          <Switch checked={Boolean(entry.numbered)} onCheckedChange={value => update({ numbered: value })} />
-          <Label className="text-xs">Numbered ranking</Label>
-          <span className="text-[10px] text-muted-foreground">1, 2, 3 … over each card</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Switch checked={Boolean(entry.hideTitle)} onCheckedChange={value => update({ hideTitle: value })} />
-          <Label className="text-xs">Hide title</Label>
-        </div>
-        <div className="flex items-center gap-2">
-          <Switch
-            checked={entry.badges.providers}
-            onCheckedChange={value => update({ badges: { ...entry.badges, providers: value } })}
-          />
-          <Label className="text-xs">Provider badges</Label>
-        </div>
-        <div className="flex items-center gap-2">
-          <Switch
-            checked={entry.badges.ratings}
-            onCheckedChange={value => update({ badges: { ...entry.badges, ratings: value } })}
-          />
-          <Label className="text-xs">Rating badges</Label>
-        </div>
-      </div>
-    </div>
-  );
+  }
 }
 
 // ---- Main dialog ----
@@ -1380,7 +178,20 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const [entries, setEntries] = useState<BuilderEntry[]>([]);
   /** Entries as they stood when opened or last applied, to spot real edits. */
   const [baseline, setBaseline] = useState('[]');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selection, setSelection] = useState<{ entryId: string; folderId: string | null }>(
+    { entryId: '', folderId: null }
+  );
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [activeTab, setActiveTab] = useState('design');
+  const [railQuery, setRailQuery] = useState('');
+  const [showManifestField, setShowManifestField] = useState(false);
+  const [titleFocusId, setTitleFocusId] = useState<string | null>(null);
+  const clearTitleFocus = useCallback(() => setTitleFocusId(null), []);
+
+  const selectedId = selection.entryId || null;
+  const setSelectedId = useCallback((id: string | null) => {
+    setSelection({ entryId: id ?? '', folderId: null });
+  }, []);
   const [target, setTarget] = useState<Target>('nuvio');
   const [manifestUrl, setManifestUrl] = useState('');
   const [usePlaceholder, setUsePlaceholder] = useState(false);
@@ -1392,6 +203,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState('');
   const [importPreview, setImportPreview] = useState<ImportResult | null>(null);
+  const [confirmReplace, setConfirmReplace] = useState(false);
   const [stagedBlueprints, setStagedBlueprints] = useState<CatalogBlueprint[]>([]);
   const [convertNative, setConvertNative] = useState(false);
   const [overLimitOpen, setOverLimitOpen] = useState(false);
@@ -1411,6 +223,10 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setBaseline(JSON.stringify(saved));
     setSelectedId(saved[0]?.id ?? null);
     setStagedBlueprints([]);
+    setActiveTab('design');
+    setRailQuery('');
+    setExpandedIds(new Set(saved[0]?.id ? [saved[0].id] : []));
+    setTitleFocusId(null);
     setManifestUrl(buildManifestUrl(auth.userUUID));
   }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1464,23 +280,38 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   );
 
   const notes: ExportNote[] = target === 'nuvio' ? nuvioResult.notes : fusionResult.notes;
-  const issues = useMemo(() => findSourceIssues(entries, sourceList.catalogs), [entries, sourceList.catalogs]);
 
   const unknownSources = useMemo(
     () => findUnknownSources(entries, sourceList.catalogs),
     [entries, sourceList.catalogs]
   );
   const [confirmApply, setConfirmApply] = useState(false);
-  const [pendingNavigate, setPendingNavigate] = useState(false);
+  const [pendingMode, setPendingMode] = useState<'apply' | 'save'>('apply');
   const [confirmClose, setConfirmClose] = useState(false);
+
+  const { requestSave, isSaving, isDirty: configDirty, canSave: configCanSave, missingKeys } = useSave();
+  const [pendingSave, setPendingSave] = useState(false);
+  const appliedSnapshot = useRef<string | null>(null);
+
+  const builderJson = useMemo(() => JSON.stringify(entries), [entries]);
+  const savedJson = useMemo(() => JSON.stringify(config.collections || []), [config.collections]);
+  const stage = useMemo(
+    () => deriveSaveStage({ builderJson, configJson: savedJson, configDirty }),
+    [builderJson, savedJson, configDirty]
+  );
+  const stageCopy = describeSaveStage(stage);
+
+  // requestSave closes over config, so saving in the same tick as the apply
+  // would store the version from before it. This waits for the config to catch up.
+  useEffect(() => {
+    if (!pendingSave) return;
+    if (savedJson !== appliedSnapshot.current) return;
+    setPendingSave(false);
+    requestSave();
+  }, [pendingSave, savedJson, requestSave]);
   const [remapOpen, setRemapOpen] = useState(false);
   const [remapChoices, setRemapChoices] = useState<Record<string, SourceDraft>>({});
   const [remapPickFor, setRemapPickFor] = useState<string | null>(null);
-
-  const missingGroups: MissingCatalogGroup[] = useMemo(
-    () => groupMissingCatalogs(unknownSources),
-    [unknownSources]
-  );
 
   const applyRemap = () => {
     const { entries: next, replaced } = remapSources(entries, remapChoices);
@@ -1492,6 +323,39 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   const selected = entries.find(entry => entry.id === selectedId) || null;
 
+  const visibleTree = useMemo(
+    () => filterEntryTree(entries, railQuery).map(({ entry, matchedFolderIds }) => ({
+      entry,
+      // Reorder targets have to come from the full list, or a move made while
+      // filtering would land in the wrong slot.
+      folders: entry.kind === 'collection'
+        ? entry.folders
+            .map((folder, folderIndex) => ({ folder, folderIndex }))
+            .filter(({ folder }) => !matchedFolderIds || matchedFolderIds.has(folder.id))
+        : [],
+      forceExpand: matchedFolderIds !== null,
+    })),
+    [entries, railQuery]
+  );
+
+  const railItemIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const { entry, folders, forceExpand } of visibleTree) {
+      ids.push(entry.id);
+      if (forceExpand || expandedIds.has(entry.id)) for (const { folder } of folders) ids.push(folder.id);
+    }
+    return ids;
+  }, [visibleTree, expandedIds]);
+
+  const folderOwners = useMemo(() => {
+    const owners = new Map<string, string>();
+    for (const entry of entries) {
+      if (entry.kind !== 'collection') continue;
+      for (const folder of entry.folders) owners.set(folder.id, entry.id);
+    }
+    return owners;
+  }, [entries]);
+
   const updateEntry = useCallback((next: BuilderEntry) => {
     setEntries(prev => prev.map(entry => (entry.id === next.id ? next : entry)));
   }, []);
@@ -1499,33 +363,187 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const addEntry = (entry: BuilderEntry) => {
     setEntries(prev => [...prev, entry]);
     setSelectedId(entry.id);
+    setActiveTab('design');
+    setTitleFocusId(entry.id);
+  };
+
+  /**
+   * Deletes here are frequent and mostly intended, so they undo rather than ask.
+   * Undo is the inverse of the one change rather than a whole-draft snapshot, so
+   * anything edited while the toast is still up survives it.
+   */
+  const undoableUpdate = (
+    label: string,
+    apply: (prev: BuilderEntry[]) => BuilderEntry[],
+    undo: (prev: BuilderEntry[]) => BuilderEntry[]
+  ) => {
+    setEntries(apply);
+    toast.success(label, { action: { label: 'Undo', onClick: () => setEntries(undo) }, duration: 6000 });
   };
 
   const removeEntry = (id: string) => {
-    setEntries(prev => {
-      const next = prev.filter(entry => entry.id !== id);
-      setSelectedId(current => (current === id ? next[0]?.id ?? null : current));
-      return next;
-    });
+    const at = entries.findIndex(entry => entry.id === id);
+    if (at < 0) return;
+    const doomed = entries[at];
+    const remaining = entries.filter(entry => entry.id !== id);
+    if (selectedId === id) setSelectedId(remaining[0]?.id ?? null);
+    undoableUpdate(
+      `Deleted ${doomed.title || 'entry'}`,
+      prev => prev.filter(entry => entry.id !== id),
+      prev => (prev.some(entry => entry.id === id)
+        ? prev
+        : [...prev.slice(0, at), doomed, ...prev.slice(at)])
+    );
   };
+
+  const editEntryUndoable = (
+    label: string,
+    entryId: string,
+    apply: (entry: CollectionDraft) => CollectionDraft,
+    undo: (entry: CollectionDraft) => CollectionDraft
+  ) => {
+    const over = (fn: (entry: CollectionDraft) => CollectionDraft) => (prev: BuilderEntry[]) =>
+      prev.map(entry => (entry.id === entryId && entry.kind === 'collection' ? fn(entry) : entry));
+    undoableUpdate(label, over(apply), over(undo));
+  };
+
+  const goToProblem = (entryId: string | null, folderId: string | null) => {
+    if (!entryId) return;
+    setSelection({ entryId, folderId });
+    setActiveTab('design');
+    if (folderId) setExpandedIds(prev => new Set(prev).add(entryId));
+  };
+
+  useEffect(() => {
+    if (!selection.entryId) return;
+    setExpandedIds(prev => (prev.has(selection.entryId) ? prev : new Set(prev).add(selection.entryId)));
+  }, [selection.entryId]);
 
   const handleRailDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
+    const activeId = String(active.id);
+    const overId = String(over.id);
+    const activeOwner = folderOwners.get(activeId);
+    const overOwner = folderOwners.get(overId);
+
+    if (activeOwner) {
+      const destinationId = overOwner ?? overId;
+      if (destinationId === activeOwner) {
+        setEntries(prev => prev.map(entry => {
+          if (entry.id !== activeOwner || entry.kind !== 'collection') return entry;
+          const from = entry.folders.findIndex(folder => folder.id === activeId);
+          const to = entry.folders.findIndex(folder => folder.id === overId);
+          if (from < 0 || to < 0) return entry;
+          return { ...entry, folders: arrayMove(entry.folders, from, to) };
+        }));
+        return;
+      }
+      const destination = entries.find(entry => entry.id === destinationId);
+      if (!destination || destination.kind !== 'collection') {
+        toast.error(`${terms.row}s hold one catalog, so a ${terms.child.toLowerCase()} cannot move into one.`);
+        return;
+      }
+      setEntries(prev => {
+        const source = prev.find(entry => entry.id === activeOwner);
+        if (!source || source.kind !== 'collection') return prev;
+        const moved = source.folders.find(folder => folder.id === activeId);
+        if (!moved) return prev;
+        return prev.map(entry => {
+          if (entry.kind !== 'collection') return entry;
+          if (entry.id === activeOwner) {
+            return { ...entry, folders: entry.folders.filter(folder => folder.id !== activeId) };
+          }
+          if (entry.id === destinationId) {
+            const at = entry.folders.findIndex(folder => folder.id === overId);
+            const folders = [...entry.folders];
+            folders.splice(at < 0 ? folders.length : at, 0, moved);
+            return { ...entry, folders };
+          }
+          return entry;
+        });
+      });
+      setExpandedIds(prev => new Set(prev).add(destinationId));
+      setSelection({ entryId: destinationId, folderId: activeId });
+      return;
+    }
+
+    const overEntryId = overOwner ?? overId;
     setEntries(prev => {
-      const from = prev.findIndex(entry => entry.id === active.id);
-      const to = prev.findIndex(entry => entry.id === over.id);
-      if (from < 0 || to < 0) return prev;
+      const from = prev.findIndex(entry => entry.id === activeId);
+      const to = prev.findIndex(entry => entry.id === overEntryId);
+      if (from < 0 || to < 0 || from === to) return prev;
       return arrayMove(prev, from, to);
     });
   };
 
-  const moveEntry = (index: number, delta: number) => {
+  const moveEntryTo = (index: number, position: 'top' | 'bottom') => {
     setEntries(prev => {
-      const to = index + delta;
-      if (to < 0 || to >= prev.length) return prev;
+      const to = position === 'top' ? 0 : prev.length - 1;
+      if (to === index) return prev;
       return arrayMove(prev, index, to);
     });
+  };
+
+  const duplicateEntry = (id: string) => {
+    const original = entries.find(entry => entry.id === id);
+    if (!original) return;
+    const copy = duplicateEntryDraft(original);
+    setEntries(prev => {
+      const at = prev.findIndex(entry => entry.id === id);
+      if (at < 0) return prev;
+      return [...prev.slice(0, at + 1), copy, ...prev.slice(at + 1)];
+    });
+    setSelectedId(copy.id);
+    setTitleFocusId(copy.id);
+  };
+
+  const overEntry = (entryId: string, fn: (entry: CollectionDraft) => CollectionDraft) =>
+    (prev: BuilderEntry[]) =>
+      prev.map(item => (item.id === entryId && item.kind === 'collection' ? fn(item) : item));
+
+  const moveFolderTo = (entryId: string, index: number, position: 'top' | 'bottom') => {
+    setEntries(overEntry(entryId, entry => ({
+      ...entry,
+      folders: arrayMove(entry.folders, index, position === 'top' ? 0 : entry.folders.length - 1),
+    })));
+  };
+
+  const addFolderIn = (entryId: string) => {
+    const folder = createFolderDraft();
+    setEntries(overEntry(entryId, current => ({ ...current, folders: [...current.folders, folder] })));
+    setSelection({ entryId, folderId: folder.id });
+    setTitleFocusId(folder.id);
+  };
+
+  const duplicateFolderIn = (entryId: string, index: number) => {
+    const entry = entries.find(item => item.id === entryId);
+    if (!entry || entry.kind !== 'collection') return;
+    const original = entry.folders[index];
+    if (!original) return;
+    const copy = { ...clone(original), id: newId(), title: nextCopyTitle(original.title) };
+    setEntries(overEntry(entryId, current => ({
+      ...current,
+      folders: [...current.folders.slice(0, index + 1), copy, ...current.folders.slice(index + 1)],
+    })));
+    setSelection({ entryId, folderId: copy.id });
+    setTitleFocusId(copy.id);
+  };
+
+  const removeFolderIn = (entryId: string, index: number) => {
+    const entry = entries.find(item => item.id === entryId);
+    if (!entry || entry.kind !== 'collection') return;
+    const doomed = entry.folders[index];
+    if (!doomed) return;
+    setSelection(current => (current.folderId === doomed.id ? { entryId, folderId: null } : current));
+    editEntryUndoable(
+      `Deleted ${doomed.title || 'folder'}`,
+      entryId,
+      current => ({ ...current, folders: current.folders.filter(f => f.id !== doomed.id) }),
+      current => (current.folders.some(f => f.id === doomed.id)
+        ? current
+        : { ...current, folders: [...current.folders.slice(0, index), doomed, ...current.folders.slice(index)] })
+    );
   };
 
   const pickerExistingKeys = useMemo(() => {
@@ -1548,6 +566,12 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       .filter(tag => counts.has(tag.name))
       .map(tag => ({ name: tag.name, color: tag.color, count: counts.get(tag.name) ?? 0 }));
   }, [sourceList.catalogs, config.tags]);
+
+  // Below tagOptions: it reads that, and a const is dead until its own line runs.
+  const starters = useMemo(
+    () => listStarterTemplates({ catalogs: sourceList.catalogs, tags: tagOptions }),
+    [sourceList.catalogs, tagOptions]
+  );
 
   const addSourcesByTag = (entryId: string, folderId: string, tag: string) => {
     const matching = sourceList.catalogs.filter(catalog => (catalog.tags ?? []).includes(tag));
@@ -1582,7 +606,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     );
   };
 
-  const isDirty = useMemo(() => JSON.stringify(entries) !== baseline, [entries, baseline]);
+  const isDirty = builderJson !== baseline;
 
   const requestClose = () => {
     if (isDirty) {
@@ -1636,15 +660,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setPickerTarget(null);
   };
 
-  const applyToConfig = (
-    thenGoToConfiguration = false,
-    options: { withCatalogs?: boolean } = {}
-  ) => {
+  const applyToConfig = (options: { withCatalogs?: boolean; thenSave?: boolean } = {}) => {
     const addCatalogs = options.withCatalogs !== false && pendingCount > 0;
+    const applied = clone(entries);
 
     setConfig(prev => ({
       ...prev,
-      collections: clone(entries),
+      collections: applied,
       ...(addCatalogs && { catalogs: applyCatalogAdditions(prev.catalogs || [], pendingAdditions) }),
     }));
     setBaseline(JSON.stringify(entries));
@@ -1654,52 +676,64 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       ? ` ${pendingCount} catalog${pendingCount === 1 ? '' : 's'} added.`
       : '';
 
-    if (thenGoToConfiguration) {
-      toast.success(`Applied.${catalogNote} Save your configuration to store it.`);
-      onClose();
-      window.dispatchEvent(
-        new CustomEvent(SETTINGS_LAYOUT_NAVIGATE_EVENT, {
-          detail: { tab: 'configuration', scrollToTop: true },
-        })
-      );
+    if (options.thenSave && configCanSave) {
+      appliedSnapshot.current = JSON.stringify(applied);
+      setPendingSave(true);
       return;
     }
+
     toast.success(
-      (entries.length === 1 ? '1 entry applied.' : `${entries.length} entries applied.`) +
-      `${catalogNote} Save your configuration to store it.`
+      (entries.length === 1 ? '1 entry applied.' : `${entries.length} entries applied.`) + catalogNote,
+      options.thenSave
+        ? { description: `Not saved: ${missingKeyNames.join(', ')} still needs filling in on the Configuration tab.` }
+        : undefined
     );
   };
 
-  const handleSave = (thenGoToConfiguration = false) => {
-    // The design stays valid for Nuvio, but applying it while building for
-    // Fusion also publishes the hosted widgets URL, which would serve tiles the
-    // export cannot fill.
+  /** False when a gate took over, so callers can hold off on closing. */
+  const handleSave = (mode: 'apply' | 'save'): boolean => {
+    // Save is already disabled on these two, but Apply only is not, so they
+    // still have to be caught here. The issue list is the advance notice.
     if (target === 'fusion' && totalNative > 0) {
-      setPendingNavigate(thenGoToConfiguration);
+      setPendingMode(mode);
       setNativeBlockFor('apply');
-      return;
+      return false;
     }
-    // A config over the ceiling is refused on save, so this has to stop here
-    // rather than let the catalogs through and fail later.
     if (overBy > 0) {
-      setPendingNavigate(thenGoToConfiguration);
+      setPendingMode(mode);
       setOverLimitOpen(true);
-      return;
+      return false;
     }
     // Catalogs nothing can rebuild render as empty rows rather than breaking
     // anything, so this asks rather than refuses.
     if (unresolvedSources.length > 0) {
-      setPendingNavigate(thenGoToConfiguration);
+      setPendingMode(mode);
       setConfirmApply(true);
-      return;
+      return false;
     }
-    applyToConfig(thenGoToConfiguration);
+    applyToConfig({ thenSave: mode === 'save' });
+    return true;
   };
 
-  const hasUnappliedEntries = useMemo(
-    () => JSON.stringify(entries) !== JSON.stringify(config.collections || []),
-    [entries, config.collections]
-  );
+  const subDialogOpen = importOpen
+    || pickerTarget !== null
+    || remapOpen
+    || confirmApply
+    || confirmClose
+    || overLimitOpen
+    || nativeBlockFor !== null;
+
+  useEffect(() => {
+    if (!isOpen || subDialogOpen) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 's' || !(event.metaKey || event.ctrlKey)) return;
+      event.preventDefault();
+      if (isSaving || !verdict.canSave) return;
+      handleSave('save');
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  });
 
   const hostedUrl = useMemo(() => {
     const base = stripManifestSuffix(manifestUrl);
@@ -1738,7 +772,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           importUnknown,
           config.apiKeys || {}
         )
-      : { added: [], enabled: [], resolved: new Set<string>(), needsAccount: [] }),
+      : {
+        added: [],
+        enabled: [],
+        resolved: new Set<string>(),
+        needsAccount: [],
+        needsAccountKeys: new Set<string>(),
+      }),
     [importPreview, importUnknown, config.catalogs, config.apiKeys]
   );
 
@@ -1772,21 +812,24 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   /**
    * Sources that resolve to a catalog an apply would add. They are absent from
    * the manifest, so without this they would read as missing rather than staged.
+   * A catalog waiting on an account it does not have is resolved but not added,
+   * so it stays out: it is missing, and saying otherwise is the more costly lie.
    */
-  const pendingKeys = useMemo(
-    () => (pendingCount > 0 ? pendingAdditions.resolved : new Set<string>()),
-    [pendingAdditions, pendingCount]
+  const pendingKeys = useMemo(() => {
+    if (pendingCount === 0) return new Set<string>();
+    const { resolved, needsAccountKeys } = pendingAdditions;
+    if (needsAccountKeys.size === 0) return resolved;
+    return new Set([...resolved].filter(key => !needsAccountKeys.has(key)));
+  }, [pendingAdditions, pendingCount]);
+
+  const issueCatalogs = useMemo(
+    () => withStagedCatalogs(sourceList.catalogs, pendingKeys),
+    [sourceList.catalogs, pendingKeys]
   );
 
-  /** Entries still pointing at a catalog neither the config nor the import can serve. */
-  const entriesWithUnresolved = useMemo(() => {
-    const ids = new Set<string>();
-    for (const entry of entries) {
-      const missing = findUnknownSources([entry], sourceList.catalogs);
-      if (missing.some(source => !pendingKeys.has(catalogKey(source)))) ids.add(entry.id);
-    }
-    return ids;
-  }, [entries, sourceList.catalogs, pendingKeys]);
+  const issues = useMemo(() => findSourceIssues(entries, issueCatalogs), [entries, issueCatalogs]);
+
+  const problemTargets = useMemo(() => buildProblemTargets(entries), [entries]);
 
   const countNative = useCallback((entry: BuilderEntry) => {
     const sources = entry.kind === 'classicRow'
@@ -1888,6 +931,11 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     [unknownSources, pendingAdditions]
   );
 
+  const missingGroups: MissingCatalogGroup[] = useMemo(
+    () => groupMissingCatalogs(unresolvedSources),
+    [unresolvedSources]
+  );
+
   const enabledCatalogCount = useMemo(
     () => (config.catalogs || []).filter(catalog => catalog.enabled !== false).length,
     [config.catalogs]
@@ -1899,12 +947,47 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const headroom = Math.max(0, catalogLimit - enabledCatalogCount);
   const overBy = Math.max(0, pendingCount - headroom);
 
+  // Below overBy and totalNative on purpose: blockingIssues reads both, and a
+  // const is in its temporal dead zone until its own line runs.
+  const missingKeyNames = useMemo(() => missingKeys.map(key => key.name), [missingKeys]);
+
+  const blocking = useMemo(
+    () => blockingIssues({ target, totalNative, overBy, pendingCount, headroom, missingKeys: missingKeyNames }),
+    [target, totalNative, overBy, pendingCount, headroom, missingKeyNames]
+  );
+
+  const problems = useMemo(
+    () => buildIssueCenter({ blocking, issues, notes, targets: problemTargets }),
+    [blocking, issues, notes, problemTargets]
+  );
+
+  const verdict = useMemo(() => saveVerdict(problems), [problems]);
+
+  // Not a fault in the design, so it stays out of the verdict, but it changes
+  // what the editor can offer and belongs on the same shelf as the rest.
+  const statusRows = useMemo(() => {
+    if (sourceList.origin !== 'derived') return problems;
+    const message = sourceList.error
+      ? `Could not read your manifest (${sourceList.error}). The catalog list is derived from your local config, so genre options and genre requirements are missing.`
+      : 'Save to read the real manifest. Until then the catalog list is derived from your local config, so genre options and genre requirements are missing.';
+    return [
+      { key: 'derived-manifest', message, severity: 'warning' as IssueSeverity, entryId: null, folderId: null },
+      ...problems,
+    ];
+  }, [problems, sourceList.origin, sourceList.error]);
+
+  const worstByEntry = useMemo(() => severityByField(problems, 'entryId'), [problems]);
+
+  const worstByFolder = useMemo(() => severityByField(problems, 'folderId'), [problems]);
+
   const runImport = (mode: 'replace' | 'merge') => {
     if (!importPreview || importPreview.entries.length === 0) return;
+    setConfirmReplace(false);
     const incoming = healSourceNames(
       clone(importPreview.entries) as BuilderEntry[],
       sourceList.catalogs
     );
+    reissueTakenIds(incoming, mode === 'merge' ? collectIds(entries) : new Set<string>());
 
     setStagedBlueprints(prev => dedupeBlueprints(
       mode === 'replace' ? importPreview.blueprints : [...prev, ...importPreview.blueprints]
@@ -1970,71 +1053,91 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     <>
       <Dialog open={isOpen} onOpenChange={open => !open && requestClose()}>
         <DialogContent
-          className="max-w-6xl max-h-[90vh] overflow-y-auto"
+          className="@container grid h-[100dvh] max-h-[100dvh] w-screen max-w-none grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden rounded-none p-0 sm:h-[92vh] sm:p-0 sm:max-h-[92vh] sm:w-[min(96vw,120rem)] sm:rounded-2xl"
           onInteractOutside={event => event.preventDefault()}
         >
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Layers className="h-5 w-5" />
-              Collections &amp; Widgets
-            </DialogTitle>
-            <DialogDescription>
-              Arrange your catalogs once, then export as Nuvio collection JSON or Fusion widget JSON. The switch below
-              only changes wording and which options apply; the design itself is shared.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-muted-foreground">Building for</span>
-            <div className="flex gap-1 rounded-lg border p-1">
-              <button
-                type="button"
-                onClick={() => setTarget('nuvio')}
-                className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs transition-colors ${
-                  target === 'nuvio'
-                    ? 'bg-cyan-900/50 text-cyan-200 ring-1 ring-cyan-500/60'
-                    : 'text-muted-foreground hover:bg-accent/50'
-                }`}
-              >
-                <Tv className="h-3.5 w-3.5" /> Nuvio
-              </button>
-              <button
-                type="button"
-                onClick={() => setTarget('fusion')}
-                className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs transition-colors ${
-                  target === 'fusion'
-                    ? 'bg-violet-900/50 text-violet-200 ring-1 ring-violet-500/60'
-                    : 'text-muted-foreground hover:bg-accent/50'
-                }`}
-              >
-                <Rows3 className="h-3.5 w-3.5" /> Fusion
-              </button>
-            </div>
-          </div>
-
-          {target === 'fusion' && totalNative > 0 && (
-            <div className="flex flex-col gap-2 rounded-md border border-amber-600/50 bg-amber-950/20 p-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="flex items-start gap-1.5 text-xs text-amber-500">
-                <AlertTriangle className="mt-px h-4 w-4 shrink-0" />
-                <span>
-                  Fusion cannot serve {totalNative} of these sources. Nuvio fetches them from TMDB and Trakt
-                  itself, and Fusion has no equivalent, so the tiles using them are left out of this export.
-                  Routing them through AIOMetadata is the only way to keep them.
-                </span>
-              </p>
-              <Button
-                size="sm"
+          <header className="flex max-h-[40dvh] min-h-0 flex-col gap-3 overflow-y-auto border-b px-5 py-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <DialogTitle className="flex items-center gap-2 text-lg font-semibold">
+                <Layers className="h-5 w-5" />
+                Collections &amp; Widgets
+              </DialogTitle>
+              <DialogDescription className="sr-only">
+                Arrange your catalogs once, then export as Nuvio collection JSON or Fusion widget JSON.
+              </DialogDescription>
+              <div className="flex gap-1 rounded-lg border p-1">
+                <button
+                  type="button"
+                  onClick={() => setTarget('nuvio')}
+                  className={`flex h-8 items-center gap-1.5 rounded-md px-3 text-sm transition-colors ${
+                    target === 'nuvio'
+                      ? 'bg-cyan-900/50 text-cyan-200 ring-1 ring-cyan-500/60'
+                      : 'text-muted-foreground hover:bg-accent/50'
+                  }`}
+                >
+                  <Tv className="h-4 w-4" /> Nuvio
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTarget('fusion')}
+                  className={`flex h-8 items-center gap-1.5 rounded-md px-3 text-sm transition-colors ${
+                    target === 'fusion'
+                      ? 'bg-violet-900/50 text-violet-200 ring-1 ring-violet-500/60'
+                      : 'text-muted-foreground hover:bg-accent/50'
+                  }`}
+                >
+                  <Rows3 className="h-4 w-4" /> Fusion
+                </button>
+              </div>
+              <Badge
                 variant="outline"
-                className="shrink-0 border-amber-600/60 text-amber-200 hover:bg-amber-900/40"
-                onClick={() => convertNativeSources()}
+                className={`ml-auto mr-8 h-7 px-2.5 text-xs ${
+                  stage === 'saved'
+                    ? 'border-emerald-600/50 text-emerald-400'
+                    : stage === 'applied'
+                      ? 'border-sky-600/50 text-sky-400'
+                      : 'border-amber-600/50 text-amber-400'
+                }`}
+                title={stageCopy.hint}
               >
-                <Replace className="mr-1.5 h-4 w-4" /> Route all through AIOMetadata
-              </Button>
+                {stageCopy.label}
+              </Badge>
             </div>
-          )}
 
-          <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-            <div className="space-y-2">
+            <StatusBar
+              rows={statusRows}
+              onGoTo={goToProblem}
+              trailing={
+                <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  Catalogs read from{' '}
+                  {sourceList.origin === 'derived' ? 'your local config' : 'your saved manifest'}
+                  <button
+                    type="button"
+                    onClick={() => setShowManifestField(value => !value)}
+                    className="underline underline-offset-2 hover:text-foreground"
+                  >
+                    {showManifestField ? 'Hide' : 'Change source'}
+                  </button>
+                </span>
+              }
+            />
+            {showManifestField && (
+              <div className="space-y-2">
+                <Label htmlFor="collection-manifest-url" className="text-sm font-medium">Manifest URL</Label>
+                <Input
+                  id="collection-manifest-url"
+                  value={manifestUrl}
+                  onChange={event => setManifestUrl(event.target.value)}
+                  placeholder="https://your-host/stremio/<uuid>/manifest.json"
+                  className="h-9 font-mono text-sm"
+                />
+              </div>
+            )}
+          </header>
+
+          <div className="@container/panes min-h-0 overflow-hidden px-5 py-4">
+          <div className="grid h-full min-h-0 gap-4 @2xl:grid-cols-[20rem_minmax(0,1fr)] @6xl:grid-cols-[20rem_minmax(0,1fr)_24rem]">
+            <div className="flex min-h-0 flex-col gap-2 overflow-y-auto pr-1">
               <div className="flex gap-2">
                 <Button
                   size="sm"
@@ -2057,59 +1160,184 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 <Upload className="mr-1.5 h-4 w-4" /> Import JSON
               </Button>
 
+              {(entries.length > 6 || railQuery !== '') && (
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={railQuery}
+                    onChange={event => setRailQuery(event.target.value)}
+                    placeholder={`Filter ${entries.length} entries`}
+                    className="h-8 pl-8 text-xs"
+                  />
+                </div>
+              )}
+
               {entries.length === 0 && (
-                <p className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
-                  Nothing yet. Start with a collection.
-                </p>
+                <div className="space-y-1.5 rounded-md border border-dashed p-2">
+                  <p className="px-1 text-center text-xs text-muted-foreground">
+                    {starters.length > 0 ? 'Nothing yet. Start from one of these:' : 'Nothing yet.'}
+                  </p>
+                  {starters.map(template => (
+                    <button
+                      key={template.id}
+                      type="button"
+                      onClick={() => {
+                        const built = template.build();
+                        setEntries(built);
+                        setSelectedId(built[0]?.id ?? null);
+                        toast.success(`Started from "${template.label}"`);
+                      }}
+                      className="w-full rounded-md border px-2 py-1.5 text-left text-xs transition-colors hover:border-primary/50 hover:bg-accent/40"
+                    >
+                      <span className="block font-medium">{template.label}</span>
+                      <span className="block text-xs text-muted-foreground">{template.hint}</span>
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => addEntry(createCollectionDraft())}
+                    className={`w-full rounded-md px-2 text-center text-xs transition-colors ${
+                      starters.length > 0
+                        ? 'py-1.5 text-muted-foreground hover:text-foreground'
+                        : 'border py-3 font-medium hover:border-primary/50 hover:bg-accent/40'
+                    }`}
+                  >
+                    {starters.length > 0 ? 'or start empty' : 'Start with a collection'}
+                  </button>
+                </div>
               )}
 
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleRailDragEnd}>
-                <SortableContext items={entries.map(entry => entry.id)} strategy={verticalListSortingStrategy}>
-                  <div className="max-h-56 space-y-1.5 overflow-y-auto pr-1 lg:max-h-none lg:overflow-visible lg:pr-0">
-                    {entries.map((entry, index) => (
-                      <SortableEntryRow
-                        key={entry.id}
-                        entry={entry}
-                        excluded={
-                          (target === 'nuvio' && entry.kind === 'classicRow')
-                          || (target === 'fusion' && entryIsNative(entry))
-                        }
-                        hasUnknown={entriesWithUnresolved.has(entry.id)}
-                        allNative={entryIsNative(entry)}
-                        isActive={entry.id === selectedId}
-                        canMoveUp={index > 0}
-                        canMoveDown={index < entries.length - 1}
-                        onMove={delta => moveEntry(index, delta)}
-                        onSelect={() => setSelectedId(entry.id)}
-                        onDelete={() => removeEntry(entry.id)}
-                      />
-                    ))}
+                <SortableContext items={railItemIds} strategy={verticalListSortingStrategy}>
+                  <div className="space-y-0.5">
+                    {visibleTree.map(({ entry, folders, forceExpand }) => {
+                      const index = entries.findIndex(item => item.id === entry.id);
+                      const excluded: 'nuvio' | 'fusion' | null =
+                        target === 'nuvio' && entry.kind === 'classicRow' ? 'fusion'
+                        : target === 'fusion' && entryIsNative(entry) ? 'nuvio'
+                        : null;
+                      const folderCount = entry.kind === 'collection' ? entry.folders.length : 0;
+                      const expanded = forceExpand || expandedIds.has(entry.id);
+                      return (
+                        <div key={entry.id}>
+                          <SortableTreeRow
+                            id={entry.id}
+                            depth={0}
+                            title={entry.title}
+                            placeholder="Untitled"
+                            count={tallyEntryCount(entry)}
+                            countHint={describeEntryCount(entry)}
+                            empty={entrySourceCount(entry) === 0}
+                            icon={entry.kind === 'collection' ? Layers : entry.numbered ? ListOrdered : Rows3}
+                            accent={entry.kind === 'collection' ? 'text-cyan-400' : 'text-violet-400'}
+                            severity={excluded ? undefined : worstByEntry.get(entry.id)}
+                            allNative={entryIsNative(entry)}
+                            excluded={excluded}
+                            isActive={selection.entryId === entry.id && selection.folderId === null}
+                            isAncestor={selection.entryId === entry.id && selection.folderId !== null}
+                            expanded={expanded}
+                            onToggleExpand={folders.length > 0
+                              ? () => setExpandedIds(prev => {
+                                  const next = new Set(prev);
+                                  if (next.has(entry.id)) next.delete(entry.id); else next.add(entry.id);
+                                  return next;
+                                })
+                              : undefined}
+                            canMoveUp={index > 0}
+                            canMoveDown={index < entries.length - 1}
+                            onMoveTo={position => moveEntryTo(index, position)}
+                            onDuplicate={() => duplicateEntry(entry.id)}
+                            onSelect={() => setSelection({ entryId: entry.id, folderId: null })}
+                            onDelete={() => removeEntry(entry.id)}
+                          />
+                          {expanded && folders.map(({ folder, folderIndex }) => (
+                            <SortableTreeRow
+                              key={folder.id}
+                              id={folder.id}
+                              depth={1}
+                              title={folder.title}
+                              placeholder="Untitled folder"
+                              count={String(folder.sources.length)}
+                              countHint={`${folder.sources.length} catalog${folder.sources.length === 1 ? '' : 's'}`}
+                              empty={folder.sources.length === 0}
+                              icon={Folder}
+                              accent="text-muted-foreground"
+                              severity={worstByFolder.get(folder.id)}
+                              allNative={folder.sources.length > 0 && folder.sources.every(isNativeSource)}
+                              isActive={selection.folderId === folder.id}
+                              canMoveUp={folderIndex > 0}
+                              canMoveDown={folderIndex < folderCount - 1}
+                              onMoveTo={position => moveFolderTo(entry.id, folderIndex, position)}
+                              onDuplicate={() => duplicateFolderIn(entry.id, folderIndex)}
+                              onSelect={() => setSelection({ entryId: entry.id, folderId: folder.id })}
+                              onDelete={() => removeFolderIn(entry.id, folderIndex)}
+                            />
+                          ))}
+                        </div>
+                      );
+                    })}
+                    {railQuery.trim() && visibleTree.length === 0 && (
+                      <p className="px-1 py-3 text-center text-xs text-muted-foreground">
+                        Nothing matches that filter.
+                      </p>
+                    )}
                   </div>
                 </SortableContext>
               </DndContext>
 
-              {sourceList.origin === 'derived' && (
-                <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-2 py-2 text-[11px] text-amber-600 dark:text-amber-400">
-                  {sourceList.error
-                    ? `Could not read your manifest (${sourceList.error}). The catalog list is derived from your local config.`
-                    : 'Save your configuration to read the real manifest. Until then the catalog list is derived from your local config.'}
-                  {' '}Genre options and genre requirements only come from the manifest, so save first if a catalog needs one.
-                </div>
-              )}
             </div>
 
-            <div className="min-w-0">
-              <Tabs defaultValue="design">
+            <div className="@container min-h-0 min-w-0 overflow-y-auto">
+              {selected && (
+                <div className="sticky top-0 z-10 -mx-1 mb-4 flex items-center gap-1.5 border-b bg-card/95 px-1 py-2 text-sm backdrop-blur">
+                  <button
+                    type="button"
+                    onClick={() => setSelection({ entryId: selected.id, folderId: null })}
+                    className={`truncate rounded px-1 py-0.5 hover:bg-accent/60 ${
+                      selection.folderId ? 'text-muted-foreground hover:text-foreground' : 'font-medium'
+                    }`}
+                  >
+                    {selected.title || 'Untitled'}
+                  </button>
+                  {selection.folderId && (
+                    <>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="truncate font-medium">
+                        {selected.kind === 'collection'
+                          ? selected.folders.find(folder => folder.id === selection.folderId)?.title
+                            || 'Untitled folder'
+                          : ''}
+                      </span>
+                    </>
+                  )}
+                </div>
+              )}
+
+              <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <TabsList>
                   <TabsTrigger value="design">Design</TabsTrigger>
-                  <TabsTrigger value="json">JSON</TabsTrigger>
+                  <TabsTrigger value="preview">Preview</TabsTrigger>
+                  <TabsTrigger value="json">Export &amp; share</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="design" className="pt-4">
+                  <div className="min-w-0">
                   {!selected && (
-                    <p className="rounded-md border border-dashed px-3 py-10 text-center text-sm text-muted-foreground">
-                      Select something on the left, or create a collection.
-                    </p>
+                    <div className="rounded-md border border-dashed px-3 py-10 text-center text-sm text-muted-foreground">
+                      <p>
+                        {entries.length > 0
+                          ? 'Select something on the left to edit it.'
+                          : 'Nothing to edit yet.'}
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-3"
+                        onClick={() => addEntry(createCollectionDraft())}
+                      >
+                        <Layers className="mr-1.5 h-4 w-4 text-cyan-400" /> New {terms.collection.toLowerCase()}
+                      </Button>
+                    </div>
                   )}
                   {selected?.kind === 'collection' && (
                     <CollectionEditor
@@ -2118,6 +1346,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       pendingKeys={pendingKeys}
                       target={target}
                       onChange={updateEntry}
+                      onUndoableChange={(label, apply, undo) =>
+                        editEntryUndoable(label, selected.id, apply, undo)}
                       onAddSource={folderId => setPickerTarget({ entryId: selected.id, folderId })}
                       onReplaceSource={(folderId, index) =>
                         setPickerTarget({ entryId: selected.id, folderId, replaceIndex: index })}
@@ -2125,6 +1355,16 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       onAddByTag={(folderId, tag) => addSourcesByTag(selected.id, folderId, tag)}
                       nativeCount={countNative(selected)}
                       onConvertNative={() => convertNativeSources(selected.id)}
+                      selectedFolderId={selection.folderId}
+                      onAddFolder={() => addFolderIn(selected.id)}
+                      onRemoveFolder={() => {
+                        const index = selected.folders.findIndex(f => f.id === selection.folderId);
+                        if (index >= 0) removeFolderIn(selected.id, index);
+                      }}
+                      focusFolderTitle={titleFocusId === selection.folderId}
+                      onFolderTitleFocused={clearTitleFocus}
+                      focusTitle={titleFocusId === selected.id}
+                      onTitleFocused={clearTitleFocus}
                     />
                   )}
                   {selected?.kind === 'classicRow' && (
@@ -2135,19 +1375,30 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       target={target}
                       onChange={updateEntry}
                       onAddSource={() => setPickerTarget({ entryId: selected.id, folderId: null })}
+                      focusTitle={titleFocusId === selected.id}
+                      onTitleFocused={clearTitleFocus}
                     />
                   )}
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="preview" className="pt-4">
+                  <CollectionPreview
+                    entry={selected}
+                    target={target}
+                    onEditFolder={folderId => selected && goToProblem(selected.id, folderId)}
+                  />
                 </TabsContent>
 
                 <TabsContent value="json" className="space-y-3 pt-4">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge
                       variant="outline"
-                      className={`text-[11px] ${target === 'nuvio' ? NUVIO_CHIP : FUSION_CHIP}`}
+                      className={`text-xs ${target === 'nuvio' ? NUVIO_CHIP : FUSION_CHIP}`}
                     >
                       {target === 'nuvio' ? 'Nuvio collections' : 'Fusion widgets'}
                     </Badge>
-                    <span className="text-[11px] text-muted-foreground">switch target in the header</span>
+                    <span className="text-xs text-muted-foreground">Target and manifest URL are in the header</span>
                     <div className="ml-auto flex items-center gap-2">
                     <Button size="sm" variant="outline" onClick={handleCopy}>
                       {copied ? <Check className="mr-1.5 h-4 w-4" /> : <Copy className="mr-1.5 h-4 w-4" />}
@@ -2159,21 +1410,12 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                     </div>
                   </div>
 
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">Manifest URL</Label>
-                    <Input
-                      value={manifestUrl}
-                      onChange={event => setManifestUrl(event.target.value)}
-                      placeholder="https://your-host/stremio/<uuid>/manifest.json"
-                      className="h-9 font-mono text-xs"
-                    />
-                  </div>
 
                   <div className="space-y-1.5 rounded-lg border border-primary/40 bg-primary/5 p-3">
                     <div className="flex flex-wrap items-center gap-2">
                       <LinkIcon className="h-4 w-4 text-primary" />
-                      <Label className="text-xs font-medium">Import by link</Label>
-                      <span className="text-[11px] text-muted-foreground">
+                      <Label htmlFor="collection-hosted-url" className="text-xs font-medium">Import by link</Label>
+                      <span className="text-xs text-muted-foreground">
                         {target === 'fusion'
                           ? 'Paste this straight into Fusion instead of the JSON'
                           : 'Serves the same JSON live, if your app can read a URL'}
@@ -2182,18 +1424,24 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                     {hostedUrl ? (
                       <>
                         <div className="flex gap-2">
-                          <Input readOnly value={hostedUrl} className="h-9 font-mono text-xs" onClick={e => (e.target as HTMLInputElement).select()} />
-                          <Button size="sm" variant="outline" className="shrink-0" onClick={handleCopyUrl}>
+                          <Input id="collection-hosted-url" readOnly value={hostedUrl} className="h-9 font-mono text-xs" onClick={e => (e.target as HTMLInputElement).select()} />
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="shrink-0"
+                            onClick={handleCopyUrl}
+                            aria-label="Copy the import link"
+                          >
                             {copiedUrl ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                           </Button>
                         </div>
-                        <p className="flex items-start gap-1.5 text-[11px] text-amber-500">
+                        <p className="flex items-start gap-1.5 text-xs text-amber-500">
                           <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
-                          {hasUnappliedEntries
-                            ? 'The link serves what is saved on the server, which is not these edits yet. Apply to config, then save the configuration on the Config tab.'
-                            : 'The link serves what is saved on the server. Save the configuration on the Config tab, or it will still serve the version from before you opened this.'}
+                          {stage === 'saved'
+                            ? 'The link serves what is on the server, which is these edits.'
+                            : 'The link serves what is on the server, so save before you re-import it.'}
                         </p>
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-xs text-muted-foreground">
                           It rebuilds on every request, so re-importing after saving picks up your edits. Anyone with
                           the link can read it, same as your manifest URL{target === 'fusion' && usePlaceholder
                             ? ', and it always carries your real URL rather than the placeholder'
@@ -2201,8 +1449,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                         </p>
                       </>
                     ) : (
-                      <p className="text-[11px] text-muted-foreground">
-                        Save your configuration first. The link is served per user, so it needs a saved config to read.
+                      <p className="text-xs text-muted-foreground">
+                        Save first. The link is served per user, so it needs a saved config to read.
                       </p>
                     )}
                   </div>
@@ -2210,16 +1458,22 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   {target === 'fusion' && (
                     <div className="space-y-1.5 rounded-lg border p-3">
                       <div className="flex items-center gap-2">
-                        <Switch checked={usePlaceholder} onCheckedChange={setUsePlaceholder} />
-                        <Label className="text-xs font-medium">Make a copy for someone else</Label>
+                        <Switch
+                          id="collection-use-placeholder"
+                          checked={usePlaceholder}
+                          onCheckedChange={setUsePlaceholder}
+                        />
+                        <Label htmlFor="collection-use-placeholder" className="text-xs font-medium">
+                          Make a copy for someone else
+                        </Label>
                       </div>
-                      <p className="text-[11px] text-muted-foreground">
+                      <p className="text-xs text-muted-foreground">
                         Your addon link contains your user ID, and this file embeds it on every row. Turn this on to
                         blank it out before posting the file publicly. Whoever imports it here gets their own link
                         filled in automatically, so they end up with your layout pointing at their catalogs.
                       </p>
                       {usePlaceholder && (
-                        <p className="flex items-start gap-1.5 text-[11px] text-amber-500">
+                        <p className="flex items-start gap-1.5 text-xs text-amber-500">
                           <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
                           This copy is for handing out, not for your own use. It has no addon link in it, so
                           importing it back here is what puts one in.
@@ -2231,71 +1485,103 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   <textarea
                     readOnly
                     value={json}
-                    className="h-80 w-full resize-none rounded-md border bg-muted p-3 font-mono text-xs focus:outline-none"
+                    className="h-56 w-full resize-none rounded-md border bg-muted p-3 font-mono text-xs focus:outline-none sm:h-80"
                     onClick={event => (event.target as HTMLTextAreaElement).select()}
                   />
-
-                  {(notes.length > 0 || issues.length > 0) && (
-                    <div className="space-y-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
-                      <div className="flex items-center gap-2 text-xs font-medium text-amber-600 dark:text-amber-400">
-                        <AlertTriangle className="h-4 w-4" /> Worth checking
-                      </div>
-                      <ul className="space-y-1 text-xs text-muted-foreground">
-                        {issues.slice(0, 8).map((issue, index) => (
-                          <li key={`issue-${index}`}>{issue.message}</li>
-                        ))}
-                        {issues.length > 8 && <li>and {issues.length - 8} more</li>}
-                        {notes.slice(0, 8).map((note, index) => (
-                          <li key={`note-${index}`}>{note.message}</li>
-                        ))}
-                        {notes.length > 8 && <li>and {notes.length - 8} more</li>}
-                      </ul>
-                    </div>
-                  )}
                 </TabsContent>
               </Tabs>
             </div>
+
+            <div className="hidden min-h-0 min-w-0 overflow-y-auto @6xl/panes:block">
+              <div className="sticky top-0 rounded-lg border p-4">
+                <span className="mb-3 block text-sm font-medium text-muted-foreground">Live preview</span>
+                <CollectionPreview
+                  entry={selected}
+                  target={target}
+                  onEditFolder={folderId => selected && goToProblem(selected.id, folderId)}
+                />
+              </div>
+            </div>
+          </div>
           </div>
 
-          <div className="flex flex-col gap-2 border-t pt-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
-            {overBy > 0 ? (
-              <p className="flex items-start gap-1.5 text-[11px] text-amber-500 sm:mr-auto">
-                <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
-                This design needs {pendingCount} new catalogs and there is room for {headroom}. Delete{' '}
-                {overBy} more catalog{overBy === 1 ? '' : 's'} worth of tiles to apply it.
-              </p>
-            ) : pendingCount > 0 ? (
-              <p className="text-[11px] text-emerald-500 sm:mr-auto">
-                {pendingCount} catalog{pendingCount === 1 ? '' : 's'} will be added when you apply, leaving{' '}
-                {headroom - pendingCount} of your {catalogLimit} spare.
-              </p>
-            ) : unresolvedSources.length > 0 ? (
-              <>
-                <p className="flex items-start gap-1.5 text-[11px] text-amber-500 sm:mr-auto">
-                  <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+          <footer className="flex max-h-[30dvh] min-h-0 flex-col gap-3 overflow-y-auto border-t px-5 py-4 @2xl:flex-row @2xl:flex-wrap @2xl:items-center @2xl:justify-end">
+            <div className="min-w-0 space-y-1 @2xl:mr-auto">
+              {overBy > 0 && (
+                <p className="flex items-start gap-1.5 text-xs text-amber-500">
+                  <AlertTriangle className="mt-px h-4 w-4 shrink-0" />
+                  This design needs {pendingCount} new catalogs and there is room for {headroom}. Delete{' '}
+                  {overBy} more catalog{overBy === 1 ? '' : 's'} worth of tiles to apply it.
+                </p>
+              )}
+              {overBy === 0 && pendingCount > 0 && (
+                <p className="text-xs text-emerald-500">
+                  {pendingCount} catalog{pendingCount === 1 ? '' : 's'} will be added when you save, leaving{' '}
+                  {headroom - pendingCount} of your {catalogLimit} spare.
+                </p>
+              )}
+              {unresolvedSources.length > 0 && (
+                <p className="flex items-start gap-1.5 text-xs text-amber-500">
+                  <AlertTriangle className="mt-px h-4 w-4 shrink-0" />
                   {unresolvedSources.length === 1
                     ? '1 source points at a catalog you do not have.'
                     : `${unresolvedSources.length} sources point at catalogs you do not have.`}{' '}
                   Swap them for yours, or leave them and those tiles come up empty.
                 </p>
-                <Button variant="outline" onClick={() => setRemapOpen(true)}>
-                  <Replace className="mr-1.5 h-4 w-4" /> Swap catalogs
-                </Button>
-              </>
-            ) : (
-              <p className="text-[11px] text-muted-foreground sm:mr-auto">
-                Applying puts this in your configuration. It is only stored once you save the configuration
-                itself on the Config tab.
-              </p>
+              )}
+              {pendingAdditions.needsAccount.length > 0 && (
+                <p className="flex items-start gap-1.5 text-xs text-amber-500">
+                  <AlertTriangle className="mt-px h-4 w-4 shrink-0" />
+                  This design uses your own {pendingAdditions.needsAccount.join(' and ')} catalogs, such as
+                  your watchlist. Connect{' '}
+                  {pendingAdditions.needsAccount.length === 1 ? 'that account' : 'those accounts'} first, or
+                  applying leaves those tiles empty.
+                </p>
+              )}
+              {overBy === 0
+                && pendingCount === 0
+                && unresolvedSources.length === 0
+                && pendingAdditions.needsAccount.length === 0 && (
+                <p className="text-xs text-muted-foreground">{stageCopy.hint}</p>
+              )}
+            </div>
+            {target === 'fusion' && totalNative > 0 && (
+              <Button
+                variant="outline"
+                className="h-9 border-amber-600/60 text-amber-200 hover:bg-amber-900/40"
+                onClick={() => convertNativeSources()}
+              >
+                <Replace className="mr-1.5 h-4 w-4" /> Route all through AIOMetadata
+              </Button>
+            )}
+            {overBy > 0 && (
+              <Button
+                variant="outline"
+                className="h-9"
+                onClick={() => { setPendingMode('save'); setOverLimitOpen(true); }}
+              >
+                Apply the layout without the catalogs
+              </Button>
+            )}
+            {unresolvedSources.length > 0 && (
+              <Button variant="outline" onClick={() => setRemapOpen(true)}>
+                <Replace className="mr-1.5 h-4 w-4" /> Swap catalogs
+              </Button>
             )}
             <Button variant="ghost" onClick={requestClose}>Close</Button>
-            <Button variant="outline" onClick={() => handleSave()}>Apply to config</Button>
-            <Button onClick={() => handleSave(true)}>Apply and go save</Button>
-          </div>
+            <Button variant="outline" onClick={() => handleSave('apply')}>Apply only</Button>
+            <Button
+              onClick={() => handleSave('save')}
+              disabled={isSaving || !verdict.canSave}
+              title={verdict.canSave ? undefined : 'Resolve the issues listed above first'}
+            >
+              {isSaving ? 'Saving…' : verdict.label}
+            </Button>
+          </footer>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={importOpen} onOpenChange={open => { if (!open) { setImportOpen(false); setImportText(''); setImportPreview(null); } }}>
+      <Dialog open={importOpen} onOpenChange={open => { if (!open) { setImportOpen(false); setImportText(''); setImportPreview(null); setConfirmReplace(false); } }}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Import collections</DialogTitle>
@@ -2330,13 +1616,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             <div className="space-y-2 rounded-md border p-3">
               <div className="flex flex-wrap items-center gap-2">
                 {importPreview.format === 'unknown' ? (
-                  <Badge variant="outline" className="border-amber-600/50 bg-amber-800/60 text-[10px] text-amber-200">
+                  <Badge variant="outline" className="border-amber-600/50 bg-amber-800/60 text-xs text-amber-200">
                     unrecognised
                   </Badge>
                 ) : (
                   <Badge
                     variant="outline"
-                    className={`text-[10px] ${importPreview.format === 'fusion' ? FUSION_CHIP : NUVIO_CHIP}`}
+                    className={`text-xs ${importPreview.format === 'fusion' ? FUSION_CHIP : NUVIO_CHIP}`}
                   >
                     {importPreview.format === 'fusion'
                       ? 'Fusion widgets'
@@ -2352,12 +1638,12 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       `${importPreview.entries.reduce((n, e) => n + entrySourceCount(e), 0)} sources`}
                 </span>
                 {rebuildable > 0 && (
-                  <Badge variant="outline" className="border-emerald-600/50 bg-emerald-800/60 text-[10px] text-emerald-200">
+                  <Badge variant="outline" className="border-emerald-600/50 bg-emerald-800/60 text-xs text-emerald-200">
                     {rebuildable} catalog{rebuildable === 1 ? '' : 's'} rebuildable
                   </Badge>
                 )}
                 {importUnresolved.length > 0 && (
-                  <Badge variant="outline" className="border-amber-600/50 bg-amber-800/60 text-[10px] text-amber-200">
+                  <Badge variant="outline" className="border-amber-600/50 bg-amber-800/60 text-xs text-amber-200">
                     {importUnresolved.length} not in your catalogs
                   </Badge>
                 )}
@@ -2370,7 +1656,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       <Label htmlFor="convert-native" className="text-xs font-medium">
                         Route Nuvio's own sources through AIOMetadata
                       </Label>
-                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      <p className="mt-0.5 text-xs text-muted-foreground">
                         {importPreview.nativeCount} of this file's sources are fetched by Nuvio straight from
                         TMDB or Trakt. Left alone they work as they are and cost nothing. Turning this on gives
                         them your artwork, ratings and filters, at{' '}
@@ -2385,7 +1671,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                     />
                   </div>
                   {convertNative && importPreview.convertibleCount < importPreview.nativeCount && (
-                    <p className="text-[11px] text-muted-foreground">
+                    <p className="text-xs text-muted-foreground">
                       {importPreview.nativeCount - importPreview.convertibleCount} of them have no equivalent
                       here and stay with Nuvio.
                     </p>
@@ -2395,12 +1681,12 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
               {rebuildable > 0 && (
                 <div className="space-y-1 rounded-md border border-emerald-600/40 bg-emerald-950/20 p-2">
-                  <p className="text-[11px] text-emerald-500">
+                  <p className="text-xs text-emerald-500">
                     This file carries the definitions for {rebuildable} catalog{rebuildable === 1 ? '' : 's'} you
                     do not have. Only the ones your design still uses when you apply are added, so trimming the
                     collections trims what you take on.
                   </p>
-                  <ul className="space-y-0.5 text-[10px] text-muted-foreground">
+                  <ul className="space-y-0.5 text-xs text-muted-foreground">
                     {additionLabels(importAdditions, 6).map((label, index) => (
                       <li key={`${label}-${index}`}>{label}</li>
                     ))}
@@ -2412,7 +1698,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               )}
 
               {importAdditions.needsAccount.length > 0 && (
-                <p className="rounded-md border border-amber-600/40 bg-amber-950/20 p-2 text-[11px] text-amber-500">
+                <p className="rounded-md border border-amber-600/40 bg-amber-950/20 p-2 text-xs text-amber-500">
                   This file uses your own {importAdditions.needsAccount.join(' and ')} catalogs, such as your
                   watchlist. Connect {importAdditions.needsAccount.length === 1 ? 'that account' : 'those accounts'} and
                   import again to have them added.
@@ -2421,11 +1707,11 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
               {importUnresolved.length > 0 && (
                 <div className="space-y-1 rounded-md border border-amber-600/40 bg-amber-950/20 p-2">
-                  <p className="text-[11px] text-amber-500">
+                  <p className="text-xs text-amber-500">
                     These catalogs are not in your setup and the file does not say how to rebuild them. You can
                     still import, but those tiles will come up empty.
                   </p>
-                  <ul className="space-y-0.5 font-mono text-[10px] text-muted-foreground">
+                  <ul className="space-y-0.5 font-mono text-xs text-muted-foreground">
                     {importUnresolved.slice(0, 6).map((source, index) => (
                       <li key={`${source.catalogId}-${source.type}-${index}`}>
                         {source.catalogId} <span className="opacity-60">({source.type})</span>
@@ -2454,7 +1740,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               )}
 
               {importPreview.notes.length > 0 && (
-                <ul className="space-y-1 text-[11px] text-amber-500">
+                <ul className="space-y-1 text-xs text-amber-500">
                   {importPreview.notes.slice(0, 5).map((note, index) => (
                     <li key={index} className="flex items-start gap-1.5">
                       <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" /> {note}
@@ -2466,21 +1752,30 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           )}
 
           <div className="flex flex-wrap justify-end gap-2 border-t pt-3">
-            <Button variant="ghost" onClick={() => { setImportOpen(false); setImportText(''); setImportPreview(null); }}>
+            <Button variant="ghost" onClick={() => { setImportOpen(false); setImportText(''); setImportPreview(null); setConfirmReplace(false); }}>
               Cancel
             </Button>
             <Button
               variant="outline"
               disabled={!importPreview || importPreview.entries.length === 0}
-              onClick={() => runImport('merge')}
+              className={confirmReplace ? 'border-destructive text-destructive' : undefined}
+              onClick={() => {
+                if (entries.length > 0 && !confirmReplace) {
+                  setConfirmReplace(true);
+                  return;
+                }
+                runImport('replace');
+              }}
             >
-              Add to existing
+              {confirmReplace
+                ? `Really discard ${entries.length}?`
+                : entries.length > 0 ? `Replace all ${entries.length}` : 'Replace all'}
             </Button>
             <Button
               disabled={!importPreview || importPreview.entries.length === 0}
-              onClick={() => runImport('replace')}
+              onClick={() => runImport('merge')}
             >
-              Replace all
+              Add to existing
             </Button>
           </div>
         </DialogContent>
@@ -2513,12 +1808,12 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       ? <Check className="h-4 w-4 shrink-0 text-primary" />
                       : <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />}
                     <span className="min-w-0 flex-1 truncate text-sm">{group.name}</span>
-                    <Badge variant="outline" className="shrink-0 text-[10px]">{group.type}</Badge>
-                    <span className="shrink-0 text-[11px] text-muted-foreground">
+                    <Badge variant="outline" className="shrink-0 text-xs">{group.type}</Badge>
+                    <span className="shrink-0 text-xs text-muted-foreground">
                       used {group.occurrences === 1 ? 'once' : `${group.occurrences} times`}
                     </span>
                   </div>
-                  <p className="font-mono text-[10px] text-muted-foreground">{group.catalogId}</p>
+                  <p className="font-mono text-xs text-muted-foreground">{group.catalogId}</p>
 
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-xs text-muted-foreground">replace with</span>
@@ -2526,19 +1821,19 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       <>
                         <Badge
                           variant="outline"
-                          className={`text-[10px] font-semibold ${getSourceBadgeStyle(
+                          className={`text-xs font-semibold ${getSourceBadgeStyle(
                             sourceList.catalogs.find(c => catalogKey(c) === catalogKey(chosen))?.source
                           )}`}
                         >
                           {chosen.name}
                         </Badge>
-                        <Button size="sm" variant="ghost" className="h-7" onClick={() => setRemapPickFor(group.key)}>
+                        <Button size="sm" variant="ghost" className="h-8" onClick={() => setRemapPickFor(group.key)}>
                           Change
                         </Button>
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="h-7"
+                          className="h-8"
                           onClick={() => setRemapChoices(prev => {
                             const next = { ...prev };
                             delete next[group.key];
@@ -2549,7 +1844,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                         </Button>
                       </>
                     ) : (
-                      <Button size="sm" variant="outline" className="h-7" onClick={() => setRemapPickFor(group.key)}>
+                      <Button size="sm" variant="outline" className="h-8" onClick={() => setRemapPickFor(group.key)}>
                         <Plus className="mr-1 h-3.5 w-3.5" /> Pick a catalog
                       </Button>
                     )}
@@ -2560,7 +1855,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           </div>
 
           <div className="flex flex-col gap-2 border-t pt-3 sm:flex-row sm:items-center sm:justify-end">
-            <span className="text-[11px] text-muted-foreground sm:mr-auto">
+            <span className="text-xs text-muted-foreground sm:mr-auto">
               {Object.keys(remapChoices).length} of {missingGroups.length} matched. Anything left unmatched stays
               as it is.
             </span>
@@ -2577,6 +1872,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
         catalogs={sourceList.catalogs}
         multiple={false}
         existingKeys={[]}
+        tagOptions={tagOptions}
         onConfirm={picked => {
           const catalog = picked[0];
           if (!catalog || !remapPickFor) return;
@@ -2615,9 +1911,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             </Button>
             <Button
               onClick={() => {
-                applyToConfig();
                 setConfirmClose(false);
-                onClose();
+                if (handleSave('apply')) onClose();
               }}
             >
               Apply and close
@@ -2626,20 +1921,48 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
         </DialogContent>
       </Dialog>
 
-      <ConfirmDialog
-        isOpen={confirmApply}
-        onClose={() => { setConfirmApply(false); setPendingNavigate(false); }}
-        onConfirm={() => applyToConfig(pendingNavigate)}
-        variant="default"
-        title="Some catalogs are missing"
-        confirmText="Apply anyway"
-        description={
-          `${unresolvedSources.length === 1 ? '1 source points' : `${unresolvedSources.length} sources point`} at a catalog ` +
-          `that is not in your setup: ${unresolvedSources.slice(0, 3).map(s => s.catalogId).join(', ')}` +
-          `${unresolvedSources.length > 3 ? `, and ${unresolvedSources.length - 3} more` : ''}. ` +
-          'Those tiles will come up empty until you add and enable the catalogs. Everything else works as normal.'
-        }
-      />
+      <Dialog
+        open={confirmApply}
+        onOpenChange={open => { if (!open) setConfirmApply(false); }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-500" /> Some catalogs are missing
+            </DialogTitle>
+            <DialogDescription>
+              {unresolvedSources.length === 1
+                ? '1 source points'
+                : `${unresolvedSources.length} sources point`} at a catalog that is not in your setup:{' '}
+              {unresolvedSources.slice(0, 3).map(source => source.catalogId).join(', ')}
+              {unresolvedSources.length > 3 ? `, and ${unresolvedSources.length - 3} more` : ''}. Those tiles will
+              come up empty until you add and enable the catalogs. Everything else works as normal.
+            </DialogDescription>
+          </DialogHeader>
+
+          <p className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">
+            Swapping keeps the layout and points each one at a catalog you already have, everywhere it is used.
+          </p>
+
+          <div className="flex flex-wrap justify-end gap-2 border-t pt-3">
+            <Button
+              variant="ghost"
+              onClick={() => setConfirmApply(false)}
+            >
+              Back to editing
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => { setConfirmApply(false); setRemapOpen(true); }}
+            >
+              <Replace className="mr-1.5 h-4 w-4" /> Swap catalogs
+            </Button>
+            <Button onClick={() => { setConfirmApply(false); applyToConfig({ thenSave: pendingMode === 'save' }); }}>
+              Apply anyway
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={nativeBlockFor !== null} onOpenChange={open => { if (!open) setNativeBlockFor(null); }}>
         <DialogContent className="max-w-lg">
@@ -2655,7 +1978,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             </DialogDescription>
           </DialogHeader>
 
-          <p className="rounded-md border bg-muted/30 p-2 text-[11px] text-muted-foreground">
+          <p className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">
             {nativeBlockFor === 'apply'
               ? 'The design is fine for Nuvio, so you can apply it and build for Nuvio instead. Applying also publishes your hosted widgets URL, which would hand out the same empty export.'
               : 'Switching to Nuvio gives you the complete export. Routing the sources through AIOMetadata keeps them on both targets, at one catalog each.'}
@@ -2693,7 +2016,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             </DialogDescription>
           </DialogHeader>
 
-          <p className="rounded-md border bg-muted/30 p-2 text-[11px] text-muted-foreground">
+          <p className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">
             You have {enabledCatalogCount} catalog{enabledCatalogCount === 1 ? '' : 's'} enabled. Every catalog
             added here becomes an entry in your manifest, which your client fetches each time it loads the addon.
           </p>
@@ -2702,7 +2025,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             <Button variant="ghost" onClick={() => setOverLimitOpen(false)}>Back to editing</Button>
             <Button
               variant="outline"
-              onClick={() => { setOverLimitOpen(false); applyToConfig(pendingNavigate, { withCatalogs: false }); }}
+              onClick={() => { setOverLimitOpen(false); applyToConfig({ withCatalogs: false, thenSave: pendingMode === 'save' }); }}
             >
               Apply layout only
             </Button>
@@ -2715,6 +2038,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
         catalogs={sourceList.catalogs}
         multiple={pickerTarget?.folderId !== null && typeof pickerTarget?.replaceIndex !== 'number'}
         existingKeys={pickerExistingKeys}
+        tagOptions={tagOptions}
         onConfirm={handlePick}
         onClose={() => setPickerTarget(null)}
       />

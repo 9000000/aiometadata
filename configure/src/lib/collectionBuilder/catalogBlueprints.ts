@@ -110,6 +110,11 @@ export interface CatalogAdditions {
   resolved: Set<string>;
   /** Services whose own catalogs the file uses, but which are not connected. */
   needsAccount: string[];
+  /**
+   * The subset of `resolved` an apply will not actually add, because the account
+   * it belongs to is not connected. Accounted for, but not staged.
+   */
+  needsAccountKeys: Set<string>;
 }
 
 export function additionCount(additions: CatalogAdditions): number {
@@ -153,6 +158,7 @@ export function resolveCatalogAdditions(
   }
 
   const needsAccount = new Set<string>();
+  const needsAccountKeys = new Set<string>();
 
   const take = (key: string): boolean => {
     if (claimed.has(key)) return false;
@@ -175,9 +181,12 @@ export function resolveCatalogAdditions(
     if (personal) {
       // Reported either way: unconnected ones are explained by needsAccount, so
       // they must not also surface as catalogs nothing knows how to rebuild.
-      resolved.add(`${source.catalogId}:${source.type}`);
+      // They are still not being added, which needsAccountKeys keeps sayable.
+      const key = `${source.catalogId}:${source.type}`;
+      resolved.add(key);
       if (!String(apiKeys?.[personal.account.key] || '').trim()) {
         needsAccount.add(personal.account.label);
+        needsAccountKeys.add(key);
         continue;
       }
       if (take(`${source.catalogId}:${personal.catalog.type}`)) {
@@ -209,7 +218,7 @@ export function resolveCatalogAdditions(
     }
   }
 
-  return { added, enabled, resolved, needsAccount: [...needsAccount] };
+  return { added, enabled, resolved, needsAccount: [...needsAccount], needsAccountKeys };
 }
 
 /** Applies the additions, leaving every other catalog and the ordering alone. */

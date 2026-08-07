@@ -77,6 +77,7 @@ function toFolder(
       entryId: folder.id,
       entryTitle: collectionTitle,
       message: `A folder without a title was skipped. Nuvio drops folders that have no title.`,
+      severity: 'warning',
     });
     return null;
   }
@@ -97,6 +98,7 @@ function toFolder(
       entryId: folder.id,
       entryTitle: title,
       message: `Source "${trimmed(source.name) || trimmed(source.catalogId) || 'unnamed'}" is missing a catalog id or type and was skipped.`,
+      severity: 'warning',
     });
   }
 
@@ -105,6 +107,7 @@ function toFolder(
       entryId: folder.id,
       entryTitle: title,
       message: `Folder "${title}" has no usable sources and was skipped.`,
+      severity: 'warning',
     });
     return null;
   }
@@ -146,6 +149,7 @@ export function toNuvioCollections(
         entryId: entry.id,
         entryTitle: entry.title,
         message: `"${trimmed(entry.title) || 'Untitled row'}" is a classic row. Nuvio has no equivalent, so it is only included in the Fusion export.`,
+        severity: 'info',
       });
       continue;
     }
@@ -157,6 +161,7 @@ export function toNuvioCollections(
         entryId: entry.id,
         entryTitle: entry.title,
         message: 'A collection without a title was skipped. Nuvio drops collections that have no title.',
+        severity: 'warning',
       });
       continue;
     }

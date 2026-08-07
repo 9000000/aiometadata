@@ -3734,7 +3734,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
   }
 
   let suffixType = null;
-  const suffixMatch = id.match(/_(movie|series|anime)$/);
+  const suffixMatch = id.match(/_(movie|series|anime|all)$/);
   if (suffixMatch) {
     suffixType = suffixMatch[1];
   }
@@ -3763,7 +3763,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
   // e.g. "streaming.nfx_series" -> "streaming.nfx"
   if (!catalogConfig) {
     consola.debug(`[CATALOG ROUTE] No catalog config found for id: ${id}, type: ${type}`);
-    const strippedId = id.replace(/_(movie|series|anime)$/, '');
+    const strippedId = id.replace(/_(movie|series|anime|all)$/, '');
     
     // Only proceed if a replacement actually happened
     if (strippedId !== id) {

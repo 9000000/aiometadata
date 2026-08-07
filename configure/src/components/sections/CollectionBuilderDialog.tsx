@@ -48,6 +48,7 @@ import {
   newId,
   type AddonIdentity,
   type BuilderEntry,
+  type CollectionDraft,
   type ExportNote,
   type SourceDraft,
 } from '@shared/types';
@@ -319,28 +320,44 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setTitleFocusId(entry.id);
   };
 
-  /** Deletes here are frequent and mostly intended, so they undo rather than ask. */
-  const undoableUpdate = (label: string, compute: (prev: BuilderEntry[]) => BuilderEntry[]) => {
-    const snapshot = clone(entries);
-    const restore = () => {
-      setEntries(snapshot);
-      setSelectedId(current => (snapshot.some(entry => entry.id === current) ? current : snapshot[0]?.id ?? null));
-    };
-    setEntries(prev => compute(prev));
-    toast.success(label, { action: { label: 'Undo', onClick: restore }, duration: 6000 });
+  /**
+   * Deletes here are frequent and mostly intended, so they undo rather than ask.
+   * Undo is the inverse of the one change rather than a whole-draft snapshot, so
+   * anything edited while the toast is still up survives it.
+   */
+  const undoableUpdate = (
+    label: string,
+    apply: (prev: BuilderEntry[]) => BuilderEntry[],
+    undo: (prev: BuilderEntry[]) => BuilderEntry[]
+  ) => {
+    setEntries(apply);
+    toast.success(label, { action: { label: 'Undo', onClick: () => setEntries(undo) }, duration: 6000 });
   };
 
   const removeEntry = (id: string) => {
-    const doomed = entries.find(entry => entry.id === id);
-    undoableUpdate(`Deleted ${doomed?.title || 'entry'}`, prev => {
-      const next = prev.filter(entry => entry.id !== id);
-      setSelectedId(current => (current === id ? next[0]?.id ?? null : current));
-      return next;
-    });
+    const at = entries.findIndex(entry => entry.id === id);
+    if (at < 0) return;
+    const doomed = entries[at];
+    const remaining = entries.filter(entry => entry.id !== id);
+    setSelectedId(current => (current === id ? remaining[0]?.id ?? null : current));
+    undoableUpdate(
+      `Deleted ${doomed.title || 'entry'}`,
+      prev => prev.filter(entry => entry.id !== id),
+      prev => (prev.some(entry => entry.id === id)
+        ? prev
+        : [...prev.slice(0, at), doomed, ...prev.slice(at)])
+    );
   };
 
-  const updateEntryUndoable = (label: string, next: BuilderEntry) => {
-    undoableUpdate(label, prev => prev.map(entry => (entry.id === next.id ? next : entry)));
+  const editEntryUndoable = (
+    label: string,
+    entryId: string,
+    apply: (entry: CollectionDraft) => CollectionDraft,
+    undo: (entry: CollectionDraft) => CollectionDraft
+  ) => {
+    const over = (fn: (entry: CollectionDraft) => CollectionDraft) => (prev: BuilderEntry[]) =>
+      prev.map(entry => (entry.id === entryId && entry.kind === 'collection' ? fn(entry) : entry));
+    undoableUpdate(label, over(apply), over(undo));
   };
 
   const goToProblem = (entryId: string | null, folderId: string | null) => {
@@ -1197,7 +1214,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       pendingKeys={pendingKeys}
                       target={target}
                       onChange={updateEntry}
-                      onUndoableChange={updateEntryUndoable}
+                      onUndoableChange={(label, apply, undo) =>
+                        editEntryUndoable(label, selected.id, apply, undo)}
                       onAddSource={folderId => setPickerTarget({ entryId: selected.id, folderId })}
                       onReplaceSource={(folderId, index) =>
                         setPickerTarget({ entryId: selected.id, folderId, replaceIndex: index })}

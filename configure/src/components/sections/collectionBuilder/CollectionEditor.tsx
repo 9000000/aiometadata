@@ -58,8 +58,12 @@ export function CollectionEditor({
   pendingKeys?: Set<string>;
   target: Target;
   onChange: (next: CollectionDraft) => void;
-  /** Same as onChange, but the caller offers an Undo for it. */
-  onUndoableChange?: (label: string, next: CollectionDraft) => void;
+  /** Same as onChange, but the caller offers an Undo that replays the inverse. */
+  onUndoableChange?: (
+    label: string,
+    apply: (entry: CollectionDraft) => CollectionDraft,
+    undo: (entry: CollectionDraft) => CollectionDraft
+  ) => void;
   onAddSource: (folderId: string) => void;
   onReplaceSource: (folderId: string, index: number) => void;
   tagOptions: TagOption[];
@@ -145,9 +149,18 @@ export function CollectionEditor({
 
   const removeFolder = (index: number) => {
     const doomed = entry.folders[index];
-    const next = { ...entry, folders: entry.folders.filter((_, i) => i !== index) };
-    if (onUndoableChange) onUndoableChange(`Deleted ${doomed?.title || 'folder'}`, next);
-    else onChange(next);
+    if (!doomed) return;
+    const apply = (current: CollectionDraft): CollectionDraft => ({
+      ...current,
+      folders: current.folders.filter(folder => folder.id !== doomed.id),
+    });
+    const undo = (current: CollectionDraft): CollectionDraft => (
+      current.folders.some(folder => folder.id === doomed.id)
+        ? current
+        : { ...current, folders: [...current.folders.slice(0, index), doomed, ...current.folders.slice(index)] }
+    );
+    if (onUndoableChange) onUndoableChange(`Deleted ${doomed.title || 'folder'}`, apply, undo);
+    else onChange(apply(entry));
   };
 
   const addFolder = () => {
@@ -320,10 +333,14 @@ export function CollectionEditor({
                 target={target}
                 onChange={next =>
                   update({ folders: entry.folders.map((f, i) => (i === activeIndex ? next : f)) })}
-                onUndoableChange={onUndoableChange && ((label, next) => onUndoableChange(label, {
-                  ...entry,
-                  folders: entry.folders.map((f, i) => (i === activeIndex ? next : f)),
-                }))}
+                onUndoableChange={onUndoableChange && ((label, apply, undo) => {
+                  const over = (fn: (folder: FolderDraft) => FolderDraft) =>
+                    (current: CollectionDraft): CollectionDraft => ({
+                      ...current,
+                      folders: current.folders.map(f => (f.id === activeFolder.id ? fn(f) : f)),
+                    });
+                  onUndoableChange(label, over(apply), over(undo));
+                })}
                 onRemove={() => removeFolder(activeIndex)}
                 onAddSource={() => onAddSource(activeFolder.id)}
                 onReplaceSource={index => onReplaceSource(activeFolder.id, index)}

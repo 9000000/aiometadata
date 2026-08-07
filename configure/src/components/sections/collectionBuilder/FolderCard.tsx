@@ -165,8 +165,12 @@ export function FolderCard({
   pendingKeys?: Set<string>;
   target: Target;
   onChange: (next: FolderDraft) => void;
-  /** Same as onChange, but the caller offers an Undo for it. */
-  onUndoableChange?: (label: string, next: FolderDraft) => void;
+  /** Same as onChange, but the caller offers an Undo that replays the inverse. */
+  onUndoableChange?: (
+    label: string,
+    apply: (folder: FolderDraft) => FolderDraft,
+    undo: (folder: FolderDraft) => FolderDraft
+  ) => void;
   onRemove: () => void;
   onAddSource: () => void;
   onReplaceSource: (index: number) => void;
@@ -342,10 +346,17 @@ export function FolderCard({
                   pendingKeys={pendingKeys}
                   onChange={next => update({ sources: folder.sources.map((s, i) => (i === index ? next : s)) })}
                   onRemove={() => {
-                    const next = { ...folder, sources: folder.sources.filter((_, i) => i !== index) };
+                    const apply = (current: FolderDraft): FolderDraft => ({
+                      ...current,
+                      sources: current.sources.filter((_, i) => i !== index),
+                    });
+                    const undo = (current: FolderDraft): FolderDraft => ({
+                      ...current,
+                      sources: [...current.sources.slice(0, index), source, ...current.sources.slice(index)],
+                    });
                     const label = `Removed ${source.name || source.catalogId}`;
-                    if (onUndoableChange) onUndoableChange(label, next);
-                    else onChange(next);
+                    if (onUndoableChange) onUndoableChange(label, apply, undo);
+                    else onChange(apply(folder));
                   }}
                   onReplace={() => onReplaceSource(index)}
                 />

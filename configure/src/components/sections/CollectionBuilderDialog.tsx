@@ -10,6 +10,7 @@ import {
   Plus,
   Replace,
   Rows3,
+  Search,
   Tv,
   Upload,
 } from 'lucide-react';
@@ -79,6 +80,7 @@ import {
   type IssueRow,
   type IssueSeverity,
 } from '@/lib/collectionBuilder/issueCenter';
+import { filterEntries } from '@/lib/collectionBuilder/entryOps';
 import { deriveSaveStage, describeSaveStage } from '@/lib/collectionBuilder/saveState';
 import { FUSION_CHIP, NUVIO_CHIP, TERMS, type Target } from '@/lib/collectionBuilder/terms';
 import { CollectionPreview } from './CollectionPreview';
@@ -167,6 +169,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('design');
   const [dockPreview, setDockPreview] = useState(true);
+  const [railQuery, setRailQuery] = useState('');
   const [focusFolder, setFocusFolder] = useState<{ entryId: string; folderId: string } | null>(null);
   const [titleFocusId, setTitleFocusId] = useState<string | null>(null);
   const clearFocusFolder = useCallback(() => setFocusFolder(null), []);
@@ -300,6 +303,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   const selected = entries.find(entry => entry.id === selectedId) || null;
 
+  const visibleEntries = useMemo(() => filterEntries(entries, railQuery), [entries, railQuery]);
+
   const updateEntry = useCallback((next: BuilderEntry) => {
     setEntries(prev => prev.map(entry => (entry.id === next.id ? next : entry)));
   }, []);
@@ -350,14 +355,6 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       const to = prev.findIndex(entry => entry.id === over.id);
       if (from < 0 || to < 0) return prev;
       return arrayMove(prev, from, to);
-    });
-  };
-
-  const moveEntry = (index: number, delta: number) => {
-    setEntries(prev => {
-      const to = index + delta;
-      if (to < 0 || to >= prev.length) return prev;
-      return arrayMove(prev, index, to);
     });
   };
 
@@ -954,6 +951,18 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 <Upload className="mr-1.5 h-4 w-4" /> Import JSON
               </Button>
 
+              {entries.length > 6 && (
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={railQuery}
+                    onChange={event => setRailQuery(event.target.value)}
+                    placeholder={`Filter ${entries.length} entries`}
+                    className="h-8 pl-8 text-xs"
+                  />
+                </div>
+              )}
+
               {entries.length === 0 && (
                 <button
                   type="button"
@@ -966,9 +975,12 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               )}
 
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleRailDragEnd}>
-                <SortableContext items={entries.map(entry => entry.id)} strategy={verticalListSortingStrategy}>
+                <SortableContext items={visibleEntries.map(entry => entry.id)} strategy={verticalListSortingStrategy}>
                   <div className="max-h-56 space-y-1.5 overflow-y-auto pr-1 lg:max-h-none lg:overflow-visible lg:pr-0">
-                    {entries.map((entry, index) => {
+                    {visibleEntries.map(entry => {
+                      // Reorder targets have to come from the full list, or a move
+                      // made while filtering would land in the wrong slot.
+                      const index = entries.findIndex(item => item.id === entry.id);
                       const excluded: 'nuvio' | 'fusion' | null =
                         target === 'nuvio' && entry.kind === 'classicRow' ? 'fusion'
                         : target === 'fusion' && entryIsNative(entry) ? 'nuvio'
@@ -983,7 +995,6 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                           isActive={entry.id === selectedId}
                           canMoveUp={index > 0}
                           canMoveDown={index < entries.length - 1}
-                          onMove={delta => moveEntry(index, delta)}
                           onMoveTo={position => moveEntryTo(index, position)}
                           onDuplicate={() => duplicateEntry(entry.id)}
                           onSelect={() => setSelectedId(entry.id)}
@@ -991,6 +1002,11 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                         />
                       );
                     })}
+                    {railQuery.trim() && visibleEntries.length === 0 && (
+                      <p className="px-1 py-3 text-center text-[11px] text-muted-foreground">
+                        Nothing matches that filter.
+                      </p>
+                    )}
                   </div>
                 </SortableContext>
               </DndContext>

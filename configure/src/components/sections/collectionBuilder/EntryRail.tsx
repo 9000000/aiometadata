@@ -1,12 +1,13 @@
-import { AlertTriangle, GripVertical, Layers, ListOrdered, Rows3, Trash2 } from 'lucide-react';
+import { AlertTriangle, GripVertical, Layers, ListOrdered, Rows3 } from 'lucide-react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
 import type { IssueSeverity } from '@/lib/collectionBuilder/issueCenter';
 import type { BuilderEntry } from '@shared/types';
+import { describeEntryCount } from '@/lib/collectionBuilder/entryOps';
 import { ScopeChip } from './ScopeChip';
 import { entrySourceCount } from './shared';
-import { ReorderArrows, RowActions } from './SourceRow';
+import { RowActions } from './SourceRow';
 
 export function SortableEntryRow({
   entry,
@@ -16,7 +17,6 @@ export function SortableEntryRow({
   allNative,
   canMoveUp,
   canMoveDown,
-  onMove,
   onMoveTo,
   onDuplicate,
   onSelect,
@@ -32,7 +32,6 @@ export function SortableEntryRow({
   allNative?: boolean;
   canMoveUp: boolean;
   canMoveDown: boolean;
-  onMove: (delta: number) => void;
   onMoveTo: (position: 'top' | 'bottom') => void;
   onDuplicate: () => void;
   onSelect: () => void;
@@ -56,12 +55,6 @@ export function SortableEntryRow({
         isCollection ? 'border-l-cyan-500' : 'border-l-violet-500'
       } ${isActive ? 'border-primary bg-primary/10' : 'border-border hover:bg-accent/50'}`}
     >
-      <ReorderArrows
-        label={entry.title || 'this'}
-        canMoveUp={canMoveUp}
-        canMoveDown={canMoveDown}
-        onMove={onMove}
-      />
       <button
         type="button"
         className="cursor-grab touch-none text-muted-foreground"
@@ -92,10 +85,10 @@ export function SortableEntryRow({
         )}
         <span
           className={`shrink-0 rounded-full px-1.5 text-[10px] font-medium ${
-            count === 0 ? 'bg-amber-800/60 text-amber-200' : 'bg-muted text-muted-foreground'
+            count === 0 ? 'bg-amber-800/60 text-amber-200' : 'text-muted-foreground'
           }`}
         >
-          {count}
+          {describeEntryCount(entry)}
         </span>
       </button>
       <RowActions
@@ -104,15 +97,8 @@ export function SortableEntryRow({
         canMoveDown={canMoveDown}
         onDuplicate={onDuplicate}
         onMoveTo={onMoveTo}
+        onDelete={onDelete}
       />
-      <button
-        type="button"
-        onClick={onDelete}
-        className="text-muted-foreground hover:text-destructive"
-        aria-label={`Delete ${entry.title || 'this entry'}`}
-      >
-        <Trash2 className="h-4 w-4" />
-      </button>
     </div>
   );
 }

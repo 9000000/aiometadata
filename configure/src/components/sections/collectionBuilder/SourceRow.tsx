@@ -73,12 +73,17 @@ export function RowActions({
   canMoveDown,
   onDuplicate,
   onMoveTo,
+  onDelete,
+  deleteLabel,
 }: {
   label: string;
   canMoveUp: boolean;
   canMoveDown: boolean;
   onDuplicate: () => void;
   onMoveTo: (position: 'top' | 'bottom') => void;
+  /** Omitted where the row already carries its own delete control. */
+  onDelete?: () => void;
+  deleteLabel?: string;
 }) {
   return (
     <DropdownMenu>
@@ -101,6 +106,11 @@ export function RowActions({
         <DropdownMenuItem disabled={!canMoveDown} onClick={() => onMoveTo('bottom')}>
           <ChevronsDown className="mr-2 h-3.5 w-3.5" /> Move to bottom
         </DropdownMenuItem>
+        {onDelete && (
+          <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={onDelete}>
+            <Trash2 className="mr-2 h-3.5 w-3.5" /> {deleteLabel ?? 'Delete'}
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

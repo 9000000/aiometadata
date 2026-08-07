@@ -92,7 +92,7 @@ export function CollectionEditor({
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 lg:grid-cols-2">
+      <div className="grid gap-4 @2xl:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor={`${uid}-title`} className="text-xs">{terms.entryTitle}</Label>
           <Input
@@ -132,7 +132,7 @@ export function CollectionEditor({
 
         {showNuvioBox && (
         <>
-        <div className="grid gap-3 lg:grid-cols-2">
+        <div className="grid gap-4 @2xl:grid-cols-2">
           <ImageUrlField
             label="Backdrop image URL"
             value={entry.backdropImageUrl || ''}
@@ -189,7 +189,7 @@ export function CollectionEditor({
       )}
 
       {nativeCount > 0 && (
-        <div className="flex flex-col gap-2 rounded-md border p-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-2 rounded-md border p-3 @2xl:flex-row @2xl:items-center @2xl:justify-between">
           <p className="text-[11px] text-muted-foreground">
             <span className="font-medium text-foreground">{nativeCount}</span> source
             {nativeCount === 1 ? '' : 's'} here {nativeCount === 1 ? 'is' : 'are'} fetched by Nuvio straight from

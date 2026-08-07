@@ -52,7 +52,7 @@ export function ClassicRowEditor({
         Classic rows are Fusion only. Nuvio has no equivalent, so this row is left out of the Nuvio export.
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-4 @2xl:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor={`${uid}-title`} className="text-xs">{terms.entryTitle}</Label>
           <Input
@@ -99,7 +99,7 @@ export function ClassicRowEditor({
         )}
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-4 @2xl:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor={`${uid}-limit`} className="text-xs">Items shown</Label>
           <Input
@@ -122,7 +122,7 @@ export function ClassicRowEditor({
             className="h-9"
           />
         </div>
-        <div className="space-y-1.5 sm:col-span-2">
+        <div className="space-y-2 @2xl:col-span-2">
           <Label id={`${uid}-aspect`} className="text-xs">Aspect ratio</Label>
           <div role="group" aria-labelledby={`${uid}-aspect`} className="flex gap-1 rounded-lg border p-1">
             {SHAPE_ORDER.map(shape => {

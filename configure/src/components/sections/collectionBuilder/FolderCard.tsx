@@ -110,7 +110,7 @@ export function FolderCard({
   };
 
   return (
-    <div className="space-y-3 rounded-lg border p-3">
+    <div className="@container space-y-5 rounded-lg border p-4">
       <div className="flex items-center gap-2">
         <Label htmlFor={`${uid}-title`} className="sr-only">{terms.childTitle}</Label>
         <Input
@@ -132,44 +132,46 @@ export function FolderCard({
         </Button>
       </div>
 
-      <div className="space-y-1.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <Label id={`${uid}-shape`} className="text-xs">{terms.shape}</Label>
-          {aliasHint('shape') && (
-            <span className="text-[10px] text-muted-foreground">{aliasHint('shape')}</span>
-          )}
-        </div>
-        <div role="group" aria-labelledby={`${uid}-shape`} className="flex gap-1 rounded-lg border p-1">
-          {SHAPE_ORDER.map(shape => {
-            const active = folder.shape === shape;
-            return (
-              <button
-                key={shape}
-                type="button"
-                onClick={() => update({ shape })}
-                className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-colors ${
-                  active ? 'bg-primary/15 text-foreground ring-1 ring-primary/50' : 'text-muted-foreground hover:bg-accent/50'
-                }`}
-              >
-                <span
-                  className={`shrink-0 rounded-[2px] border ${SHAPE_PREVIEW[shape]} ${
-                    active ? 'border-primary bg-primary/40' : 'border-muted-foreground/50'
+      <div className="grid gap-4 @2xl:grid-cols-2">
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-baseline gap-2">
+            <Label id={`${uid}-shape`} className="text-sm font-medium">{terms.shape}</Label>
+            {aliasHint('shape') && (
+              <span className="text-xs text-muted-foreground">{aliasHint('shape')}</span>
+            )}
+          </div>
+          <div role="group" aria-labelledby={`${uid}-shape`} className="flex gap-1 rounded-lg border p-1">
+            {SHAPE_ORDER.map(shape => {
+              const active = folder.shape === shape;
+              return (
+                <button
+                  key={shape}
+                  type="button"
+                  onClick={() => update({ shape })}
+                  className={`flex h-9 min-w-0 flex-1 items-center justify-center gap-2 rounded-md px-3 text-sm transition-colors ${
+                    active ? 'bg-primary/15 text-foreground ring-1 ring-primary/50' : 'text-muted-foreground hover:bg-accent/50'
                   }`}
-                />
-                <span className="truncate">{SHAPE_LABELS[shape]}</span>
-              </button>
-            );
-          })}
+                >
+                  <span
+                    className={`shrink-0 rounded-[2px] border ${SHAPE_PREVIEW[shape]} ${
+                      active ? 'border-primary bg-primary/40' : 'border-muted-foreground/50'
+                    }`}
+                  />
+                  {SHAPE_LABELS[shape]}
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
 
-      <ImageUrlField
-        label={terms.cover}
-        value={folder.coverImageUrl || ''}
-        aspect={ASPECT_BY_TILE[folder.shape]}
-        hint="preview follows the tile shape above"
-        onChange={next => update({ coverImageUrl: next })}
-      />
+        <ImageUrlField
+          label={terms.cover}
+          value={folder.coverImageUrl || ''}
+          aspect={ASPECT_BY_TILE[folder.shape]}
+          hint="preview follows the tile shape above"
+          onChange={next => update({ coverImageUrl: next })}
+        />
+      </div>
 
       <div className="flex items-center gap-2">
         <Switch
@@ -189,7 +191,7 @@ export function FolderCard({
             {tagOptions.length > 0 && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-7">
+                  <Button variant="outline" size="sm" className="h-8">
                     <Tags className="mr-1 h-3.5 w-3.5" /> Add by tag
                   </Button>
                 </DropdownMenuTrigger>
@@ -204,7 +206,7 @@ export function FolderCard({
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            <Button variant="outline" size="sm" className="h-7" onClick={onAddSource}>
+            <Button variant="outline" size="sm" className="h-8" onClick={onAddSource}>
               <Plus className="mr-1 h-3.5 w-3.5" /> Add catalog
             </Button>
           </div>
@@ -270,7 +272,7 @@ export function FolderCard({
         </button>
       )}
       {nuvioArtVisible && showExtras && (
-        <div className="grid gap-3 rounded-lg border border-cyan-800/40 bg-cyan-950/20 p-3 lg:grid-cols-2">
+        <div className="grid gap-4 rounded-lg border border-cyan-800/40 bg-cyan-950/20 p-4 @2xl:grid-cols-2 @4xl:grid-cols-3">
           <div className="space-y-1.5">
             <Label htmlFor={`${uid}-emoji`} className="text-xs">Cover emoji</Label>
             <Input

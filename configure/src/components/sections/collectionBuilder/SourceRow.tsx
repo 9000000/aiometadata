@@ -152,85 +152,78 @@ export function SourceRow({
     <div
       ref={innerRef}
       style={style}
-      className={`flex flex-col gap-2 rounded-md border px-2 py-2 sm:flex-row sm:flex-wrap sm:items-center ${
+      className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-md border px-3 py-2 @md:grid-cols-[auto_minmax(0,1fr)_auto_auto] ${
         unknown
           ? 'border-amber-600/60 bg-amber-950/20'
           : pending ? 'border-emerald-600/50 bg-emerald-950/20' : 'bg-muted/30'
       }`}
     >
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-      {leading}
-      {unknown && <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />}
-      <span
-        className="min-w-0 flex-1 truncate text-sm"
-        title={`${source.catalogId} (${source.type})`}
-      >
-        {label}
-      </span>
-      {native ? (
-        <>
-          <Badge variant="outline" className="shrink-0 text-[10px] font-semibold">
-            {nativeLabel(source)}
-          </Badge>
-          <span className="shrink-0 text-[10px] text-muted-foreground">served by Nuvio</span>
-        </>
-      ) : pending ? (
-        <span className="shrink-0 text-[10px] text-emerald-500" title={`${source.catalogId} (${source.type})`}>
-          added on apply
-        </span>
-      ) : unknown ? (
-        <>
-          <span className="shrink-0 text-[10px] text-amber-500" title={`${source.catalogId} (${source.type})`}>
-            not in your catalogs
-          </span>
-          {onReplace && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 shrink-0 border-amber-600/60 text-amber-200 hover:bg-amber-900/40"
-              onClick={onReplace}
-            >
-              <Replace className="mr-1 h-3.5 w-3.5" /> Replace
-            </Button>
-          )}
-        </>
-      ) : (
-        <Badge
-          variant="outline"
-          className={`shrink-0 text-[10px] font-semibold ${getSourceBadgeStyle(match?.source)}`}
-        >
-          {getSourceBadgeLabel(match?.source)}
-        </Badge>
-      )}
-        <Badge variant="outline" className="shrink-0 text-[10px]">{source.type}</Badge>
+      <div className="flex items-center gap-2">
+        {leading}
+        {unknown && <AlertTriangle className="h-4 w-4 text-amber-500" />}
       </div>
-      <div className="flex min-w-0 items-center gap-2 sm:shrink-0">
-      {genres.length > 0 && (
-        <Select
-          value={source.genre || '__all__'}
-          onValueChange={value => onChange({ ...source, genre: value === '__all__' ? null : value })}
-        >
-          <SelectTrigger className={`h-8 min-w-0 flex-1 sm:w-40 sm:flex-none ${genreRequired && !source.genre ? 'border-amber-500' : ''}`}>
-            <SelectValue placeholder={genreRequired ? 'Pick a genre' : 'All genres'} />
-          </SelectTrigger>
-          <SelectContent>
-            {!genreRequired && <SelectItem value="__all__">All genres</SelectItem>}
-            {genres.map(genre => (
-              <SelectItem key={genre} value={genre}>{genre}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
+
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="min-w-0 flex-1 truncate text-sm" title={`${source.catalogId} (${source.type})`}>
+          {label}
+        </span>
+        {native ? (
+          <>
+            <Badge variant="outline" className="text-xs font-semibold">{nativeLabel(source)}</Badge>
+            <span className="text-xs text-muted-foreground">served by Nuvio</span>
+          </>
+        ) : pending ? (
+          <span className="text-xs text-emerald-500">added on apply</span>
+        ) : unknown ? (
+          <span className="text-xs text-amber-500">not in your catalogs</span>
+        ) : (
+          <Badge variant="outline" className={`text-xs font-semibold ${getSourceBadgeStyle(match?.source)}`}>
+            {getSourceBadgeLabel(match?.source)}
+          </Badge>
+        )}
+        <Badge variant="outline" className="text-xs">{source.type}</Badge>
+      </div>
+
+      <div className="col-start-2 flex items-center gap-2 @md:col-start-3">
+        {unknown && onReplace && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 border-amber-600/60 text-amber-200 hover:bg-amber-900/40"
+            onClick={onReplace}
+          >
+            <Replace className="mr-1.5 h-4 w-4" /> Replace
+          </Button>
+        )}
+        {genres.length > 0 && (
+          <Select
+            value={source.genre || '__all__'}
+            onValueChange={value => onChange({ ...source, genre: value === '__all__' ? null : value })}
+          >
+            <SelectTrigger
+              className={`h-9 w-44 ${genreRequired && !source.genre ? 'border-amber-500' : ''}`}
+            >
+              <SelectValue placeholder={genreRequired ? 'Pick a genre' : 'All genres'} />
+            </SelectTrigger>
+            <SelectContent>
+              {!genreRequired && <SelectItem value="__all__">All genres</SelectItem>}
+              {genres.map(genre => (
+                <SelectItem key={genre} value={genre}>{genre}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+      </div>
+
       <Button
         variant="ghost"
         size="icon"
-        className="h-8 w-8 shrink-0"
+        className="col-start-3 row-start-1 h-8 w-8 @md:col-start-4"
         onClick={onRemove}
         aria-label={`Remove ${label}`}
       >
         <Trash2 className="h-4 w-4" />
       </Button>
-      </div>
     </div>
   );
 }

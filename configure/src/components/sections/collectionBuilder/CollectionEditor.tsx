@@ -271,8 +271,7 @@ export function CollectionEditor({
           onClick={addFolder}
           className="w-full rounded-md border border-dashed px-3 py-6 text-center text-sm text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent/40 hover:text-foreground"
         >
-          Nothing here yet. Add {terms.child.toLowerCase() === 'folder' ? 'a folder' : 'an item'}, then point it at
-          one or more of your catalogs.
+          Nothing here yet. Add a folder, then point it at one or more of your catalogs.
         </button>
       ) : (
         <div className="grid gap-3 lg:grid-cols-[minmax(0,13rem)_minmax(0,1fr)]">

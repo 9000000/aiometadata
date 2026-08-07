@@ -32,7 +32,7 @@ import {
 import { getTagColor } from '@/lib/tagColors';
 import type { IssueSeverity } from '@/lib/collectionBuilder/issueCenter';
 import { catalogKey, type ManifestCatalog } from '@/lib/collectionBuilder/manifestSources';
-import { TERMS, type Target } from '@/lib/collectionBuilder/terms';
+import { aliasHint, TERMS, type Target } from '@/lib/collectionBuilder/terms';
 import { hasNuvioFolderArt, type FolderDraft } from '@shared/types';
 
 import { ImageUrlField } from './ImageUrlField';
@@ -236,9 +236,9 @@ export function FolderCard({
       <div className="space-y-1.5">
         <div className="flex flex-wrap items-center gap-2">
           <Label id={`${uid}-shape`} className="text-xs">{terms.shape}</Label>
-          <span className="text-[10px] text-muted-foreground">
-            {terms.shapeOther}
-          </span>
+          {aliasHint(target, 'shape') && (
+            <span className="text-[10px] text-muted-foreground">{aliasHint(target, 'shape')}</span>
+          )}
         </div>
         <div role="group" aria-labelledby={`${uid}-shape`} className="flex gap-1 rounded-lg border p-1">
           {SHAPE_ORDER.map(shape => {
@@ -285,7 +285,7 @@ export function FolderCard({
 
       <div className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <Label className="text-xs">{terms.sources}</Label>
+          <Label className="text-xs" title={aliasHint(target, 'sources') ?? undefined}>{terms.sources}</Label>
           <div className="flex flex-wrap items-center gap-1.5">
             {tagOptions.length > 0 && (
               <DropdownMenu>

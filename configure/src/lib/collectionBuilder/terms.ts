@@ -12,41 +12,50 @@ export interface TargetTerms {
   childTitle: string;
   addChild: string;
   shape: string;
-  shapeOther: string;
   cover: string;
   sources: string;
 }
 
 /**
- * The same draft feeds both apps, but each names the pieces differently.
- * Fusion wording matches the labels Fusion tooling uses for the same fields
- * ("Widget Title", "Item Title", "Layout", "Aspect Ratio", "Image URL").
+ * One vocabulary for both targets. An object that renamed itself when the
+ * target changed could not be documented or remembered, so the other app's
+ * word is a hint from ALIASES instead of a substitution.
  */
+const CANONICAL: TargetTerms = {
+  entryTitle: 'Title',
+  collection: 'Collection',
+  row: 'Row',
+  child: 'Folder',
+  children: 'Folders',
+  childTitle: 'Folder title',
+  addChild: 'Add folder',
+  shape: 'Tile shape',
+  cover: 'Cover image URL',
+  sources: 'Sources',
+};
+
 export const TERMS: Record<Target, TargetTerms> = {
+  nuvio: CANONICAL,
+  fusion: CANONICAL,
+};
+
+export const ALIASES: Record<Target, Partial<Record<keyof TargetTerms, string>>> = {
   nuvio: {
-    entryTitle: 'Title',
-    collection: 'Collection',
-    row: 'Row',
-    child: 'Folder',
-    children: 'Folders',
-    childTitle: 'Folder title',
-    addChild: 'Add folder',
-    shape: 'Tile shape',
-    shapeOther: 'Fusion calls this layout',
-    cover: 'Cover image URL',
-    sources: 'Sources',
+    entryTitle: 'Fusion calls this the Widget title',
+    child: 'Fusion calls this an Item',
+    children: 'Fusion calls these Items',
+    shape: 'Fusion calls this Layout',
+    sources: 'Fusion calls these Catalogs',
   },
   fusion: {
-    entryTitle: 'Widget title',
-    collection: 'Collection widget',
-    row: 'Classic row',
-    child: 'Item',
-    children: 'Items',
-    childTitle: 'Item title',
-    addChild: 'Add item',
-    shape: 'Layout',
-    shapeOther: 'Nuvio calls this tileShape',
-    cover: 'Image URL',
-    sources: 'Catalogs',
+    entryTitle: 'Fusion calls this the Widget title',
+    child: 'Nuvio calls this a Folder',
+    children: 'Nuvio calls these Folders',
+    shape: 'Fusion calls this Layout',
+    sources: 'Fusion calls these Catalogs',
   },
 };
+
+export function aliasHint(target: Target, key: keyof TargetTerms): string | null {
+  return ALIASES[target][key] ?? null;
+}

@@ -423,14 +423,43 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     const overOwner = folderOwners.get(overId);
 
     if (activeOwner) {
-      if (overOwner !== activeOwner) return;
-      setEntries(prev => prev.map(entry => {
-        if (entry.id !== activeOwner || entry.kind !== 'collection') return entry;
-        const from = entry.folders.findIndex(folder => folder.id === activeId);
-        const to = entry.folders.findIndex(folder => folder.id === overId);
-        if (from < 0 || to < 0) return entry;
-        return { ...entry, folders: arrayMove(entry.folders, from, to) };
-      }));
+      const destinationId = overOwner ?? overId;
+      if (destinationId === activeOwner) {
+        setEntries(prev => prev.map(entry => {
+          if (entry.id !== activeOwner || entry.kind !== 'collection') return entry;
+          const from = entry.folders.findIndex(folder => folder.id === activeId);
+          const to = entry.folders.findIndex(folder => folder.id === overId);
+          if (from < 0 || to < 0) return entry;
+          return { ...entry, folders: arrayMove(entry.folders, from, to) };
+        }));
+        return;
+      }
+      const destination = entries.find(entry => entry.id === destinationId);
+      if (!destination || destination.kind !== 'collection') {
+        toast.error(`${terms.row}s hold one catalog, so a ${terms.child.toLowerCase()} cannot move into one.`);
+        return;
+      }
+      setEntries(prev => {
+        const source = prev.find(entry => entry.id === activeOwner);
+        if (!source || source.kind !== 'collection') return prev;
+        const moved = source.folders.find(folder => folder.id === activeId);
+        if (!moved) return prev;
+        return prev.map(entry => {
+          if (entry.kind !== 'collection') return entry;
+          if (entry.id === activeOwner) {
+            return { ...entry, folders: entry.folders.filter(folder => folder.id !== activeId) };
+          }
+          if (entry.id === destinationId) {
+            const at = entry.folders.findIndex(folder => folder.id === overId);
+            const folders = [...entry.folders];
+            folders.splice(at < 0 ? folders.length : at, 0, moved);
+            return { ...entry, folders };
+          }
+          return entry;
+        });
+      });
+      setExpandedIds(prev => new Set(prev).add(destinationId));
+      setSelection({ entryId: destinationId, folderId: activeId });
       return;
     }
 

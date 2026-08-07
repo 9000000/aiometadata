@@ -1,20 +1,32 @@
-import { AlertTriangle, GripVertical, Layers, ListOrdered, Rows3 } from 'lucide-react';
+import { AlertTriangle, ChevronRight, GripVertical, Tv, type LucideIcon } from 'lucide-react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
 import type { IssueSeverity } from '@/lib/collectionBuilder/issueCenter';
-import type { BuilderEntry } from '@shared/types';
-import { describeEntryCount } from '@/lib/collectionBuilder/entryOps';
 import { ScopeChip } from './ScopeChip';
-import { entrySourceCount } from './shared';
 import { RowActions } from './SourceRow';
 
-export function SortableEntryRow({
-  entry,
-  isActive,
-  excluded,
+/**
+ * One row for both levels of the rail tree. Entries and folders differed only
+ * in depth and in which controls they carried, and keeping two near-identical
+ * components in step across two files had already drifted once.
+ */
+export function SortableTreeRow({
+  id,
+  depth,
+  title,
+  placeholder,
+  count,
+  empty,
+  icon: Icon,
+  accent,
   severity,
   allNative,
+  excluded,
+  isActive,
+  isAncestor,
+  expanded,
+  onToggleExpand,
   canMoveUp,
   canMoveDown,
   onMoveTo,
@@ -22,14 +34,23 @@ export function SortableEntryRow({
   onSelect,
   onDelete,
 }: {
-  entry: BuilderEntry;
-  isActive: boolean;
-  /** The target that does understand this entry, when the active one does not. */
-  excluded: 'nuvio' | 'fusion' | null;
-  /** The worst thing the issue list says about this entry, if anything. */
+  id: string;
+  depth: 0 | 1;
+  title: string;
+  placeholder: string;
+  /** Prepared by the caller: "6 folders · 36 catalogs" at depth 0, "6" at depth 1. */
+  count: string;
+  empty: boolean;
+  icon: LucideIcon;
+  accent: string;
   severity?: IssueSeverity;
-  /** Every source here is resolved by the client, so none of it reaches us. */
   allNative?: boolean;
+  excluded?: 'nuvio' | 'fusion' | null;
+  isActive: boolean;
+  /** A descendant is selected: mark this row without claiming the selection. */
+  isAncestor?: boolean;
+  expanded?: boolean;
+  onToggleExpand?: () => void;
   canMoveUp: boolean;
   canMoveDown: boolean;
   onMoveTo: (position: 'top' | 'bottom') => void;
@@ -37,68 +58,88 @@ export function SortableEntryRow({
   onSelect: () => void;
   onDelete: () => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
     zIndex: isDragging ? 50 : 'auto',
   };
-  const isCollection = entry.kind === 'collection';
-  const Icon = isCollection ? Layers : entry.numbered ? ListOrdered : Rows3;
-  const count = entrySourceCount(entry);
+
+  // Reserved tracks rather than conditional rendering, so revealing a control
+  // on hover does not shift the name it sits beside.
+  const reveal = 'opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100';
 
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className={`flex items-center gap-2 rounded-md border border-l-[3px] px-2 py-2 text-sm transition-colors ${
-        isCollection ? 'border-l-cyan-500' : 'border-l-violet-500'
-      } ${isActive ? 'border-primary bg-primary/10' : 'border-border hover:bg-accent/50'}`}
+      className={`group grid grid-cols-[1.25rem_1.25rem_auto_minmax(0,1fr)_auto_1.25rem] items-center gap-1.5 rounded-md pr-1 text-sm transition-colors ${
+        depth === 0 ? 'h-9 pl-1' : 'h-8 pl-7'
+      } ${
+        isActive
+          ? 'bg-primary/15 ring-1 ring-primary/50'
+          : isAncestor ? 'bg-accent/40' : 'hover:bg-accent/50'
+      }`}
     >
       <button
         type="button"
-        className="cursor-grab touch-none text-muted-foreground"
-        aria-label={`Drag ${entry.title || 'this entry'} to reorder`}
+        className={`flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground ${
+          onToggleExpand ? '' : 'invisible'
+        }`}
+        onClick={onToggleExpand}
+        aria-label={expanded ? `Collapse ${title || placeholder}` : `Expand ${title || placeholder}`}
+        aria-expanded={onToggleExpand ? Boolean(expanded) : undefined}
+        tabIndex={onToggleExpand ? 0 : -1}
+      >
+        <ChevronRight className={`h-4 w-4 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+      </button>
+
+      <button
+        type="button"
+        className={`flex h-5 w-5 cursor-grab touch-none items-center justify-center text-muted-foreground ${reveal}`}
+        aria-label={`Drag ${title || placeholder} to reorder`}
         {...attributes}
         {...listeners}
       >
         <GripVertical className="h-4 w-4" />
       </button>
-      <button type="button" onClick={onSelect} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-        <Icon className={`h-4 w-4 shrink-0 ${isCollection ? 'text-cyan-400' : 'text-violet-400'}`} />
-        <span className="min-w-0 flex-1 truncate">{entry.title || 'Untitled'}</span>
+
+      <Icon className={`h-4 w-4 ${accent}`} />
+
+      <button type="button" onClick={onSelect} className="min-w-0 truncate py-1 text-left">
+        {title || placeholder}
+      </button>
+
+      <div className="flex items-center gap-1.5">
         {severity && severity !== 'info' && (
-          <span
-            className="shrink-0"
-            title={severity === 'blocking' ? 'Must be fixed before saving' : 'Worth checking'}
-          >
-            <AlertTriangle
-              className={`h-3.5 w-3.5 ${severity === 'blocking' ? 'text-red-500' : 'text-amber-500'}`}
-            />
-          </span>
+          <AlertTriangle
+            className={`h-4 w-4 ${severity === 'blocking' ? 'text-red-500' : 'text-amber-500'}`}
+            aria-label={severity === 'blocking' ? 'Must be fixed before saving' : 'Worth checking'}
+          />
         )}
         {excluded && <ScopeChip scope={excluded} />}
         {allNative && !excluded && (
-          <span className="shrink-0 text-[10px] text-muted-foreground" title="Nuvio fetches these itself, so they cost this addon nothing">
-            Nuvio
-          </span>
+          <Tv
+            className="h-4 w-4 text-muted-foreground"
+            aria-label="Nuvio fetches these itself, so they cost this addon nothing"
+          />
         )}
-        <span
-          className={`shrink-0 rounded-full px-1.5 text-[10px] font-medium ${
-            count === 0 ? 'bg-amber-800/60 text-amber-200' : 'text-muted-foreground'
-          }`}
-        >
-          {describeEntryCount(entry)}
+        <span className={`text-xs tabular-nums ${empty ? 'text-amber-400' : 'text-muted-foreground'}`}>
+          {count}
         </span>
-      </button>
-      <RowActions
-        label={entry.title || 'this entry'}
-        canMoveUp={canMoveUp}
-        canMoveDown={canMoveDown}
-        onDuplicate={onDuplicate}
-        onMoveTo={onMoveTo}
-        onDelete={onDelete}
-      />
+      </div>
+
+      <div className={reveal}>
+        <RowActions
+          label={title || placeholder}
+          canMoveUp={canMoveUp}
+          canMoveDown={canMoveDown}
+          onDuplicate={onDuplicate}
+          onMoveTo={onMoveTo}
+          onDelete={onDelete}
+          deleteLabel={depth === 0 ? 'Delete' : 'Delete folder'}
+        />
+      </div>
     </div>
   );
 }

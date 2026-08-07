@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { AlertTriangle, Folder, GripVertical, Plus, Tags, Trash2, Tv } from 'lucide-react';
+import { Plus, Tags, Trash2, Tv } from 'lucide-react';
 import {
   DndContext,
   closestCenter,
@@ -14,10 +14,8 @@ import {
   arrayMove,
   SortableContext,
   sortableKeyboardCoordinates,
-  useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -30,120 +28,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { getTagColor } from '@/lib/tagColors';
-import type { IssueSeverity } from '@/lib/collectionBuilder/issueCenter';
 import { catalogKey, type ManifestCatalog } from '@/lib/collectionBuilder/manifestSources';
 import { aliasHint, TERMS, type Target } from '@/lib/collectionBuilder/terms';
 import { hasNuvioFolderArt, type FolderDraft } from '@shared/types';
 
 import { ImageUrlField } from './ImageUrlField';
 import { ScopeChip } from './ScopeChip';
-import { ReorderArrows, RowActions, SortableSourceRow } from './SourceRow';
+import { SortableSourceRow } from './SourceRow';
 import { ASPECT_BY_TILE, SHAPE_LABELS, SHAPE_ORDER, SHAPE_PREVIEW, type TagOption } from './shared';
-
-export function SortableFolderRow({
-  folder,
-  severity,
-  allNative,
-  placeholder,
-  isActive,
-  canMoveUp,
-  canMoveDown,
-  onMove,
-  onMoveTo,
-  onDuplicate,
-  onSelect,
-  onDelete,
-}: {
-  folder: FolderDraft;
-  /** The worst thing the issue list says about this folder, if anything. */
-  severity?: IssueSeverity;
-  /** Every source here is resolved by the client, so none of it reaches us. */
-  allNative?: boolean;
-  placeholder: string;
-  isActive: boolean;
-  canMoveUp: boolean;
-  canMoveDown: boolean;
-  onMove: (delta: number) => void;
-  onMoveTo: (position: 'top' | 'bottom') => void;
-  onDuplicate: () => void;
-  onSelect: () => void;
-  onDelete: () => void;
-}) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: folder.id });
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    zIndex: isDragging ? 50 : 'auto',
-  };
-  const count = folder.sources.length;
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className={`flex items-center gap-1.5 rounded-md border px-1.5 py-1.5 text-sm transition-colors ${
-        isActive ? 'border-primary bg-primary/10' : 'border-border hover:bg-accent/50'
-      }`}
-    >
-      <ReorderArrows
-        label={folder.title || 'this'}
-        canMoveUp={canMoveUp}
-        canMoveDown={canMoveDown}
-        onMove={onMove}
-      />
-      <button
-        type="button"
-        className="cursor-grab touch-none text-muted-foreground"
-        aria-label={`Drag ${folder.title || placeholder} to reorder`}
-        {...attributes}
-        {...listeners}
-      >
-        <GripVertical className="h-4 w-4" />
-      </button>
-      <button type="button" onClick={onSelect} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-        <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate">{folder.title || placeholder}</span>
-        {severity && severity !== 'info' && (
-          <span
-            className="shrink-0"
-            title={severity === 'blocking' ? 'Must be fixed before saving' : 'Worth checking'}
-          >
-            <AlertTriangle
-              className={`h-3.5 w-3.5 ${severity === 'blocking' ? 'text-red-500' : 'text-amber-500'}`}
-            />
-          </span>
-        )}
-        {allNative && (
-          <span className="shrink-0 text-[10px] text-muted-foreground" title="Nuvio fetches these itself, so they cost this addon nothing">
-            Nuvio
-          </span>
-        )}
-        <span
-          className={`shrink-0 rounded-full px-1.5 text-[10px] font-medium ${
-            count === 0 ? 'bg-amber-800/60 text-amber-200' : 'bg-muted text-muted-foreground'
-          }`}
-        >
-          {count}
-        </span>
-      </button>
-      <RowActions
-        label={folder.title || placeholder}
-        canMoveUp={canMoveUp}
-        canMoveDown={canMoveDown}
-        onDuplicate={onDuplicate}
-        onMoveTo={onMoveTo}
-      />
-      <button
-        type="button"
-        onClick={onDelete}
-        className="text-muted-foreground hover:text-destructive"
-        aria-label={`Delete ${folder.title || placeholder}`}
-      >
-        <Trash2 className="h-4 w-4" />
-      </button>
-    </div>
-  );
-}
 
 export function FolderCard({
   folder,

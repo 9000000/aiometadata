@@ -139,6 +139,7 @@ export interface FusionAddonCatalogSource {
     addonId: string;
     catalogId: string;
     type: string;
+    genre?: string;
   };
 }
 

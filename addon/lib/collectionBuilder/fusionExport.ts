@@ -113,12 +113,14 @@ function toDataSource(
 
   const composite = `${manifestType}::${plainId}`;
   const catalogType = resolveFusionCatalogType(composite, manifestType);
+  const genre = trimmed(source.genre);
   return {
     kind: 'addonCatalog',
     payload: attach({
       addonId,
       catalogId: normalizeCatalogId(composite, catalogType),
       type: catalogType,
+      ...(genre ? { genre } : {}),
     }, `${plainId}:${source.type}`),
   };
 }
@@ -159,14 +161,6 @@ function toCollectionItem(
       });
       continue;
     }
-    if (trimmed(source.genre)) {
-      notes.push({
-        entryId: folder.id,
-        entryTitle: name,
-        message: `Genre "${trimmed(source.genre)}" on "${trimmed(source.name) || plainLabel(source)}" is dropped. Fusion requests a catalog as <type>/<id> with no genre.`,
-        severity: 'info',
-      });
-    }
     dataSources.push(mapped);
   }
 
@@ -199,10 +193,6 @@ function toCollectionItem(
     ...(imageURL ? { imageURL } : {}),
     dataSources,
   };
-}
-
-function plainLabel(source: SourceDraft): string {
-  return trimmed(source.catalogId) || 'unnamed';
 }
 
 /** Fusion namespaces widget ids by kind: `collection.<id>` and `catalog.<id>`. */
@@ -258,15 +248,6 @@ export function toFusionWidgets(
       });
       continue;
     }
-    if (entry.source && trimmed(entry.source.genre)) {
-      notes.push({
-        entryId: entry.id,
-        entryTitle: title,
-        message: `Genre "${trimmed(entry.source.genre)}" is dropped. Fusion requests a catalog as <type>/<id> with no genre.`,
-        severity: 'info',
-      });
-    }
-
     widgets.push({
       id: prefixedId(id, 'catalog.'),
       title,

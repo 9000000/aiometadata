@@ -311,7 +311,12 @@ function fusionSource(
   const embedded = fromEmbedded(payload);
   if (embedded) blueprints.push(embedded);
 
-  return { catalogId: split.catalogId, type: split.type, name: split.catalogId, genre: split.genre };
+  return {
+    catalogId: split.catalogId,
+    type: split.type,
+    name: split.catalogId,
+    genre: trimmed(payload.genre) || split.genre,
+  };
 }
 
 /** Widget files spell a tile title/imageAspect/imageURL, collection files name/layout/backgroundImageURL. */

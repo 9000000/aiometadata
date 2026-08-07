@@ -290,6 +290,26 @@ function mapSources(
 }
 
 /**
+ * On a suffixed id the suffix is the catalog's original type and the manifest type
+ * is the displayType that renamed it, so the two carry different facts and only
+ * the pair identifies the catalog. `tmdb.top_movie` shown as series and a plain
+ * `tmdb.top` movie catalog are the same thing; the sibling `tmdb.top` series
+ * catalog is not, and matching on the displayType alone would pick that one.
+ */
+function baseCatalogKey(id: string, type: string): string {
+  for (const suffix of SUFFIX_TYPES) {
+    if (!id.toLowerCase().endsWith(`_${suffix}`)) continue;
+    const base = id.slice(0, -(suffix.length + 1));
+    // createCatalog only suffixes built-in catalogs, so an id that merely ends
+    // that way keeps its own name.
+    if (allCatalogDefinitions.some(def => def.id === base && def.type === suffix)) {
+      return `${base}:${suffix}`;
+    }
+  }
+  return `${id}:${type.toLowerCase()}`;
+}
+
+/**
  * A manifest id only carries the original type as a suffix when the catalog has a
  * displayType, so one setup addresses MAL By Studio as `mal.studios` and another
  * as `mal.studios_anime`. An imported source spells it whichever way the author's
@@ -301,40 +321,18 @@ export function realignSourceIds(
   catalogs: ManifestCatalog[]
 ): BuilderEntry[] {
   const known = new Set(catalogs.map(catalogKey));
-  const byId = new Map<string, ManifestCatalog[]>();
+  const byBase = new Map<string, ManifestCatalog>();
   for (const catalog of catalogs) {
-    const bucket = byId.get(catalog.id);
-    if (bucket) bucket.push(catalog);
-    else byId.set(catalog.id, [catalog]);
+    const key = baseCatalogKey(catalog.id, catalog.type);
+    if (!byBase.has(key)) byBase.set(key, catalog);
   }
-
-  const candidateIds = (source: SourceDraft): string[] => {
-    const id = trimmed(source.catalogId);
-    const type = trimmed(source.type);
-    const ids: string[] = [];
-    for (const suffix of SUFFIX_TYPES) {
-      if (id.toLowerCase().endsWith(`_${suffix}`)) ids.push(id.slice(0, -(suffix.length + 1)));
-    }
-    if (type) ids.push(`${id}_${type.toLowerCase()}`);
-    return ids;
-  };
 
   const realign = (source: SourceDraft): SourceDraft => {
     if (isNativeSource(source)) return source;
     if (known.has(catalogKey(source))) return source;
-
-    for (const candidate of candidateIds(source)) {
-      const matches = byId.get(candidate);
-      if (!matches || matches.length === 0) continue;
-      // Ambiguity is left to the repoint dialog: the same id under two types is a
-      // choice, and guessing it wrong is worse than saying the catalog is missing.
-      const match = matches.length === 1
-        ? matches[0]
-        : matches.find(entry => catalogKey(entry) === catalogKey({ ...source, catalogId: candidate }));
-      if (!match) continue;
-      return { ...source, catalogId: match.id, type: match.type };
-    }
-    return source;
+    const match = byBase.get(baseCatalogKey(trimmed(source.catalogId), trimmed(source.type)));
+    if (!match) return source;
+    return { ...source, catalogId: match.id, type: match.type };
   };
 
   return mapSources(entries, realign);

@@ -18,6 +18,8 @@ export interface BlockingInput {
   overBy: number;
   pendingCount: number;
   headroom: number;
+  /** Required API keys the configuration is still missing, by display name. */
+  missingKeys: string[];
 }
 
 export interface IssueCenterArgs {
@@ -40,8 +42,25 @@ const RANK: Record<IssueSeverity, number> = { blocking: 0, warning: 1, info: 2 }
  * The two conditions that refuse a save outright, as rows so they sit in the
  * same list as everything else rather than ambushing the user at the button.
  */
-export function blockingIssues({ target, totalNative, overBy, pendingCount, headroom }: BlockingInput): IssueRow[] {
+export function blockingIssues({
+  target,
+  totalNative,
+  overBy,
+  pendingCount,
+  headroom,
+  missingKeys,
+}: BlockingInput): IssueRow[] {
   const rows: IssueRow[] = [];
+
+  if (missingKeys.length > 0) {
+    rows.push({
+      key: 'block-missing-keys',
+      severity: 'blocking',
+      message: `Your configuration cannot be saved until ${missingKeys.join(', ')} ${missingKeys.length === 1 ? 'is' : 'are'} filled in on the Configuration tab. Apply only keeps this design without saving.`,
+      entryId: null,
+      folderId: null,
+    });
+  }
 
   if (overBy > 0) {
     rows.push({

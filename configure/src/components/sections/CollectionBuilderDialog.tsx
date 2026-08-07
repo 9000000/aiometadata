@@ -273,7 +273,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const [pendingMode, setPendingMode] = useState<'apply' | 'save'>('apply');
   const [confirmClose, setConfirmClose] = useState(false);
 
-  const { requestSave, isSaving, isDirty: configDirty } = useSave();
+  const { requestSave, isSaving, isDirty: configDirty, canSave: configCanSave, missingKeys } = useSave();
   const [pendingSave, setPendingSave] = useState(false);
   const appliedSnapshot = useRef<string | null>(null);
 
@@ -512,14 +512,17 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       ? ` ${pendingCount} catalog${pendingCount === 1 ? '' : 's'} added.`
       : '';
 
-    if (options.thenSave) {
+    if (options.thenSave && configCanSave) {
       appliedSnapshot.current = JSON.stringify(applied);
       setPendingSave(true);
       return;
     }
 
     toast.success(
-      (entries.length === 1 ? '1 entry applied.' : `${entries.length} entries applied.`) + catalogNote
+      (entries.length === 1 ? '1 entry applied.' : `${entries.length} entries applied.`) + catalogNote,
+      options.thenSave
+        ? { description: `Not saved: ${missingKeyNames.join(', ')} still needs filling in on the Configuration tab.` }
+        : undefined
     );
   };
 
@@ -771,9 +774,11 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   // Below overBy and totalNative on purpose: blockingIssues reads both, and a
   // const is in its temporal dead zone until its own line runs.
+  const missingKeyNames = useMemo(() => missingKeys.map(key => key.name), [missingKeys]);
+
   const blocking = useMemo(
-    () => blockingIssues({ target, totalNative, overBy, pendingCount, headroom }),
-    [target, totalNative, overBy, pendingCount, headroom]
+    () => blockingIssues({ target, totalNative, overBy, pendingCount, headroom, missingKeys: missingKeyNames }),
+    [target, totalNative, overBy, pendingCount, headroom, missingKeyNames]
   );
 
   const problems = useMemo(

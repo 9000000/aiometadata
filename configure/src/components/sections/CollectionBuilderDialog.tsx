@@ -544,27 +544,29 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     );
   };
 
-  const handleSave = (mode: 'apply' | 'save') => {
+  /** False when a gate took over, so callers can hold off on closing. */
+  const handleSave = (mode: 'apply' | 'save'): boolean => {
     // Save is already disabled on these two, but Apply only is not, so they
     // still have to be caught here. The issue list is the advance notice.
     if (target === 'fusion' && totalNative > 0) {
       setPendingMode(mode);
       setNativeBlockFor('apply');
-      return;
+      return false;
     }
     if (overBy > 0) {
       setPendingMode(mode);
       setOverLimitOpen(true);
-      return;
+      return false;
     }
     // Catalogs nothing can rebuild render as empty rows rather than breaking
     // anything, so this asks rather than refuses.
     if (unresolvedSources.length > 0) {
       setPendingMode(mode);
       setConfirmApply(true);
-      return;
+      return false;
     }
     applyToConfig({ thenSave: mode === 'save' });
+    return true;
   };
 
   const subDialogOpen = importOpen
@@ -1776,9 +1778,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             </Button>
             <Button
               onClick={() => {
-                applyToConfig();
                 setConfirmClose(false);
-                onClose();
+                if (handleSave('apply')) onClose();
               }}
             >
               Apply and close

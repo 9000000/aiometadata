@@ -170,6 +170,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const [activeTab, setActiveTab] = useState('design');
   const [dockPreview, setDockPreview] = useState(true);
   const [railQuery, setRailQuery] = useState('');
+  const [showManifestField, setShowManifestField] = useState(false);
   const [focusFolder, setFocusFolder] = useState<{ entryId: string; folderId: string } | null>(null);
   const [titleFocusId, setTitleFocusId] = useState<string | null>(null);
   const clearFocusFolder = useCallback(() => setFocusFolder(null), []);
@@ -906,6 +907,31 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             </Badge>
           </div>
 
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+            <span>
+              Catalogs read from {sourceList.origin === 'derived' ? 'your local config' : 'your saved manifest'}
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowManifestField(value => !value)}
+              className="underline underline-offset-2 hover:text-foreground"
+            >
+              {showManifestField ? 'Hide' : 'Change source'}
+            </button>
+          </div>
+          {showManifestField && (
+            <div className="space-y-1.5">
+              <Label htmlFor="collection-manifest-url" className="text-xs">Manifest URL</Label>
+              <Input
+                id="collection-manifest-url"
+                value={manifestUrl}
+                onChange={event => setManifestUrl(event.target.value)}
+                placeholder="https://your-host/stremio/<uuid>/manifest.json"
+                className="h-9 font-mono text-xs"
+              />
+            </div>
+          )}
+
           {target === 'fusion' && totalNative > 0 && (
             <div className="flex flex-col gap-2 rounded-md border border-amber-600/50 bg-amber-950/20 p-3 sm:flex-row sm:items-center sm:justify-between">
               <p className="flex items-start gap-1.5 text-xs text-amber-500">
@@ -1017,6 +1043,14 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                     ? `Could not read your manifest (${sourceList.error}). The catalog list is derived from your local config.`
                     : 'Save to read the real manifest. Until then the catalog list is derived from your local config.'}
                   {' '}Genre options and genre requirements only come from the manifest, so save first if a catalog needs one.
+                  {' '}
+                  <button
+                    type="button"
+                    onClick={() => setShowManifestField(true)}
+                    className="underline underline-offset-2 hover:text-foreground"
+                  >
+                    Set the manifest URL
+                  </button>
                 </div>
               )}
             </div>
@@ -1091,7 +1125,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 <TabsList>
                   <TabsTrigger value="design">Design</TabsTrigger>
                   <TabsTrigger value="preview">Preview</TabsTrigger>
-                  <TabsTrigger value="json">JSON</TabsTrigger>
+                  <TabsTrigger value="json">Export &amp; share</TabsTrigger>
                   {!dockPreview && (
                     <button
                       type="button"
@@ -1198,7 +1232,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                     >
                       {target === 'nuvio' ? 'Nuvio collections' : 'Fusion widgets'}
                     </Badge>
-                    <span className="text-[11px] text-muted-foreground">switch target in the header</span>
+                    <span className="text-[11px] text-muted-foreground">Target and manifest URL are in the header</span>
                     <div className="ml-auto flex items-center gap-2">
                     <Button size="sm" variant="outline" onClick={handleCopy}>
                       {copied ? <Check className="mr-1.5 h-4 w-4" /> : <Copy className="mr-1.5 h-4 w-4" />}
@@ -1210,16 +1244,6 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                     </div>
                   </div>
 
-                  <div className="space-y-1.5">
-                    <Label htmlFor="collection-manifest-url" className="text-xs">Manifest URL</Label>
-                    <Input
-                      id="collection-manifest-url"
-                      value={manifestUrl}
-                      onChange={event => setManifestUrl(event.target.value)}
-                      placeholder="https://your-host/stremio/<uuid>/manifest.json"
-                      className="h-9 font-mono text-xs"
-                    />
-                  </div>
 
                   <div className="space-y-1.5 rounded-lg border border-primary/40 bg-primary/5 p-3">
                     <div className="flex flex-wrap items-center gap-2">

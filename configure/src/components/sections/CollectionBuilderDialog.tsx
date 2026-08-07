@@ -1092,7 +1092,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             )}
           </header>
 
-          <div className="@container min-h-0 overflow-hidden px-5 py-4">
+          <div className="@container/panes min-h-0 overflow-hidden px-5 py-4">
           <div className="grid h-full min-h-0 gap-4 @2xl:grid-cols-[18rem_minmax(0,1fr)] @6xl:grid-cols-[18rem_minmax(0,1fr)_24rem]">
             <div className="flex min-h-0 flex-col gap-2 overflow-y-auto pr-1">
               <div className="flex gap-2">
@@ -1331,6 +1331,16 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       onTitleFocused={clearTitleFocus}
                     />
                   )}
+                  {selected && (
+                    <div className="mt-4 rounded-lg border p-4 @6xl/panes:hidden">
+                      <span className="mb-3 block text-sm font-medium text-muted-foreground">Live preview</span>
+                      <CollectionPreview
+                        entry={selected}
+                        target={target}
+                        onEditFolder={folderId => goToProblem(selected.id, folderId)}
+                      />
+                    </div>
+                  )}
                   </div>
                 </TabsContent>
 
@@ -1436,7 +1446,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               </Tabs>
             </div>
 
-            <div className="hidden min-h-0 min-w-0 overflow-y-auto @6xl:block">
+            <div className="hidden min-h-0 min-w-0 overflow-y-auto @6xl/panes:block">
               <div className="sticky top-0 rounded-lg border p-4">
                 <span className="mb-3 block text-sm font-medium text-muted-foreground">Live preview</span>
                 <CollectionPreview

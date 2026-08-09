@@ -7,7 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Download, Upload, FileText, Shield, AlertCircle, Loader2, Trash2, Lock } from "lucide-react";
+import { Download, Upload, FileText, Shield, AlertCircle, Loader2, Trash2, Lock, Link as LinkIcon } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { exportConfigFile } from "@/lib/exportConfigFile";
@@ -19,6 +19,7 @@ export function ConfigImportExport() {
   const [excludeApiKeys, setExcludeApiKeys] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [importUrl, setImportUrl] = useState("");
   const [isDeleting, setIsDeleting] = useState(false);
   const [addonVersion, setAddonVersion] = useState("");
   const [showResetDialog, setShowResetDialog] = useState(false);
@@ -64,6 +65,73 @@ export function ConfigImportExport() {
     }
   };
 
+  const applyImport = (importData: any) => {
+    // Validate the import data
+    if (!importData.config || !importData.version) {
+      throw new Error("Invalid configuration file format");
+    }
+
+    // Check if this is a different version (basic version check)
+    if (importData.version !== addonVersion) {
+      toast.warning("Configuration file version mismatch", {
+        description: `This file was exported from version ${importData.version}, but you're running ${addonVersion}. Some settings may not import correctly.`
+      });
+    }
+
+    const mergedConfig = {
+      ...importData.config,
+      apiKeys: (() => {
+        if (importData.metadata?.apiKeysExcluded) {
+          return config.apiKeys;
+        }
+
+        if (!importData.config.apiKeys) {
+          return config.apiKeys;
+        }
+
+        const importedKeys = importData.config.apiKeys;
+        const allKeysEmpty = Object.values(importedKeys).every(key => !key || (typeof key === 'string' && key.trim() === ''));
+
+        if (allKeysEmpty) {
+          return config.apiKeys;
+        }
+
+        return importedKeys;
+      })()
+    };
+
+    setConfig(prev => ({
+      ...mergedConfig,
+      catalogSetupComplete: true,
+      apiKeys: {
+        ...mergedConfig.apiKeys,
+        customDescriptionBlurb: prev.apiKeys.customDescriptionBlurb,
+      },
+    }));
+
+    toast.success("Configuration imported successfully!", {
+      description: `Imported ${importData.metadata?.enabledCatalogs || 0} enabled catalogs`
+    });
+
+    // Show summary of what was imported
+    const summary = {
+      catalogs: importData.config.catalogs?.length || 0,
+      enabledCatalogs: importData.config.catalogs?.filter((catalog: { enabled?: boolean }) => catalog.enabled).length || 0,
+      apiKeysIncluded: !importData.metadata?.apiKeysExcluded,
+      language: importData.config.language,
+      providers: importData.config.providers
+    };
+
+    console.log('Import summary:', summary);
+  };
+
+  const reportImportError = (error: unknown, fallback: string) => {
+    console.error('Import error:', error);
+    toast.error("Failed to import configuration", {
+      description: error instanceof Error ? error.message : fallback
+    });
+  };
+
   const importConfig = () => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -74,77 +142,69 @@ export function ConfigImportExport() {
 
       setIsImporting(true);
       try {
-        const text = await file.text();
-        const importData = JSON.parse(text);
-
-        // Validate the import data
-        if (!importData.config || !importData.version) {
-          throw new Error("Invalid configuration file format");
-        }
-
-        // Check if this is a different version (basic version check)
-        if (importData.version !== addonVersion) {
-          toast.warning("Configuration file version mismatch", {
-            description: `This file was exported from version ${importData.version}, but you're running ${addonVersion}. Some settings may not import correctly.`
-          });
-        }
-
-        const mergedConfig = {
-          ...importData.config,
-          apiKeys: (() => {
-            if (importData.metadata?.apiKeysExcluded) {
-              return config.apiKeys;
-            }
-            
-            if (!importData.config.apiKeys) {
-              return config.apiKeys;
-            }
-            
-            const importedKeys = importData.config.apiKeys;
-            const allKeysEmpty = Object.values(importedKeys).every(key => !key || (typeof key === 'string' && key.trim() === ''));
-            
-            if (allKeysEmpty) {
-              return config.apiKeys;
-            }
-            
-            return importedKeys;
-          })()
-        };
-
-        setConfig(prev => ({
-          ...mergedConfig,
-          catalogSetupComplete: true,
-          apiKeys: {
-            ...mergedConfig.apiKeys,
-            customDescriptionBlurb: prev.apiKeys.customDescriptionBlurb,
-          },
-        }));
-
-        toast.success("Configuration imported successfully!", {
-          description: `Imported ${importData.metadata?.enabledCatalogs || 0} enabled catalogs`
-        });
-
-        // Show summary of what was imported
-        const summary = {
-          catalogs: importData.config.catalogs?.length || 0,
-          enabledCatalogs: importData.config.catalogs?.filter((catalog: { enabled?: boolean }) => catalog.enabled).length || 0,
-          apiKeysIncluded: !importData.metadata?.apiKeysExcluded,
-          language: importData.config.language,
-          providers: importData.config.providers
-        };
-
-        console.log('Import summary:', summary);
-
+        applyImport(JSON.parse(await file.text()));
       } catch (error) {
-        console.error('Import error:', error);
-        toast.error("Failed to import configuration", {
-          description: error instanceof Error ? error.message : "Invalid file format"
-        });
+        reportImportError(error, "Invalid file format");
       } finally {
         setIsImporting(false);
       }
     };
     input.click();
+  };
+
+  const readJson = async (target: string) => {
+    const response = await fetch(target);
+    const body = await response.text();
+
+    if (!response.ok) {
+      let message = `The link returned ${response.status}`;
+      try {
+        message = JSON.parse(body)?.error || message;
+      } catch {
+        /* empty */
+      }
+      throw new Error(message);
+    }
+
+    try {
+      const parsed = JSON.parse(body);
+      return typeof parsed === 'string' ? JSON.parse(parsed) : parsed;
+    } catch {
+      throw new Error("That link did not return JSON");
+    }
+  };
+
+  const importFromUrl = async () => {
+    const url = importUrl.trim();
+
+    try {
+      const { protocol } = new URL(url);
+      if (protocol !== 'http:' && protocol !== 'https:') {
+        throw new Error('unsupported protocol');
+      }
+    } catch {
+      toast.error("Enter a valid link", {
+        description: "It has to start with http:// or https://"
+      });
+      return;
+    }
+
+    setIsImporting(true);
+    try {
+      let data: any;
+      try {
+        data = await readJson(url);
+      } catch (error) {
+        if (!(error instanceof TypeError)) throw error;
+        data = await readJson(`/api/proxy-manifest?url=${encodeURIComponent(url)}`);
+      }
+      applyImport(data);
+      setImportUrl('');
+    } catch (error) {
+      reportImportError(error, "Could not read that link");
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   const resetConfig = () => {
@@ -318,8 +378,8 @@ export function ConfigImportExport() {
               </div>
             </div>
 
-            <Button 
-              onClick={importConfig} 
+            <Button
+              onClick={importConfig}
               disabled={isImporting}
               variant="outline"
               className="w-full"
@@ -336,6 +396,47 @@ export function ConfigImportExport() {
                 </>
               )}
             </Button>
+
+            <div className="flex items-center gap-3">
+              <div className="h-px flex-1 bg-border" />
+              <span className="text-xs text-muted-foreground">or from a link</span>
+              <div className="h-px flex-1 bg-border" />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="import-url" className="flex items-center gap-2 text-sm font-medium">
+                <LinkIcon className="h-4 w-4" />
+                Configuration URL
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  id="import-url"
+                  type="url"
+                  inputMode="url"
+                  value={importUrl}
+                  onChange={(e) => setImportUrl(e.target.value)}
+                  placeholder="https://example.com/aiometadata-config.json"
+                  disabled={isImporting}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && importUrl.trim()) {
+                      void importFromUrl();
+                    }
+                  }}
+                />
+                <Button
+                  onClick={() => void importFromUrl()}
+                  disabled={isImporting || !importUrl.trim()}
+                  variant="outline"
+                  className="shrink-0"
+                >
+                  {isImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Fetch"}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Point this at a hosted export, such as a raw file link or a paste. Only the person you got the link
+                from can see what it holds, so treat it the way you would treat a config file someone sent you.
+              </p>
+            </div>
           </CardContent>
         </Card>
       </div>

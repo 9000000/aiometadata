@@ -385,6 +385,10 @@ function contentTypeForKey(key: string): string {
   return 'unknown';
 }
 
+function wasCachedAtNominalTtl(classifier: any, value: any, key: string): boolean {
+  return classifier(value, null, key).ttl === null;
+}
+
 function classifyResult(result: any, error: any = null, cacheKey: string | null = null): { type: string; ttl: number | null } {
   if (error) {
     const errorMessage = error.message?.toLowerCase() || '';
@@ -529,7 +533,9 @@ async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: n
             }
             updateCacheHealth(versionedKey, 'hit', true);
 
-            if (wantsRefreshAhead && isDueForRefresh(pttlMs, ttl)) {
+            if (wantsRefreshAhead
+              && isDueForRefresh(pttlMs, ttl)
+              && wasCachedAtNominalTtl(resultClassifier, parsed, key)) {
               runRefreshAhead(versionedKey, async () => {
                 const fresh = await method();
                 if (fresh === null || fresh === undefined) return false;

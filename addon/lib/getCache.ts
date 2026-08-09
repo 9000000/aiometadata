@@ -41,6 +41,14 @@ function parsePositiveIntEnv(envValue: any, defaultValue: number, minValue: numb
 
 
 const { withEpoch, withGlobalEpoch }: any = require('./cacheEpoch');
+const {
+  isRefreshAheadEnabled,
+  isDueForRefresh,
+  mayReplaceOnRefresh,
+  runRefreshAhead,
+  getRefreshAheadStats,
+  resetRefreshAheadStats,
+}: any = require('./cacheRefreshAhead');
 
 function META_TTL() { return parseInt(process.env.META_TTL || String(7 * 24 * 60 * 60), 10); }
 function CATALOG_TTL() { return parseInt(process.env.CATALOG_TTL || String(1 * 24 * 60 * 60), 10); }
@@ -369,6 +377,18 @@ async function attemptSelfHealing(key: string, originalError: any): Promise<bool
   }
 }
 
+function contentTypeForKey(key: string): string {
+  if (key.startsWith('meta')) return 'meta';
+  if (key.startsWith('catalog')) return 'catalog';
+  if (key.startsWith('search')) return 'search';
+  if (key.startsWith('genre')) return 'genre';
+  return 'unknown';
+}
+
+function wasCachedAtNominalTtl(classifier: any, value: any, key: string): boolean {
+  return classifier(value, null, key).ttl === null;
+}
+
 function classifyResult(result: any, error: any = null, cacheKey: string | null = null): { type: string; ttl: number | null } {
   if (error) {
     const errorMessage = error.message?.toLowerCase() || '';
@@ -472,13 +492,18 @@ async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: n
     resultClassifier = classifyResult,
     maxRetries = SELF_HEALING_CONFIG.maxRetries,
     onHit,
+    refreshAhead = false,
   } = options;
+
+  const wantsRefreshAhead = refreshAhead === true && isRefreshAheadEnabled();
 
   let retries = 0;
 
   while (retries <= maxRetries) {
   try {
-    const cached = await redis.getBuffer(versionedKey);
+    const [cached, pttlMs] = wantsRefreshAhead
+      ? await Promise.all([redis.getBuffer(versionedKey), redis.pttl(versionedKey)])
+      : [await redis.getBuffer(versionedKey), -1];
     if (cached) {
         try {
           const parsed = await decodeCachePayload(cached);
@@ -507,6 +532,25 @@ async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: n
               }
             }
             updateCacheHealth(versionedKey, 'hit', true);
+
+            if (wantsRefreshAhead) {
+              try {
+                if (isDueForRefresh(pttlMs, ttl) && wasCachedAtNominalTtl(resultClassifier, parsed, key)) {
+                  runRefreshAhead(versionedKey, async () => {
+                    const fresh = await method();
+                    if (fresh === null || fresh === undefined) return false;
+                    if (resultClassifier(fresh, null, key).type !== 'SUCCESS') return false;
+                    if (!mayReplaceOnRefresh(parsed, fresh)) return false;
+                    if (!cacheValidator.validateBeforeCache(fresh, contentTypeForKey(key)).isValid) return false;
+                    const written = await redis.set(versionedKey, await encodeCachePayload(fresh), 'EX', ttl, 'XX');
+                    return Boolean(written);
+                  }, pttlMs).catch(() => {});
+                }
+              } catch (refreshError: any) {
+                cacheLogger.warn(`[Cache] Refresh-ahead check failed for ${versionedKey}:`, refreshError);
+              }
+            }
+
             return parsed;
           }
         } catch (parseError: any) {
@@ -524,16 +568,7 @@ async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: n
       updateCacheHealth(versionedKey, 'miss', true);
 
     if (result !== null && result !== undefined) {
-        let contentType = 'unknown';
-        if (key.startsWith('meta')) {
-          contentType = 'meta';
-        } else if (key.startsWith('catalog')) {
-          contentType = 'catalog';
-        } else if (key.startsWith('search')) {
-          contentType = 'search';
-        } else if (key.startsWith('genre')) {
-          contentType = 'genre';
-        }
+        const contentType = contentTypeForKey(key);
         const validation = cacheValidator.validateBeforeCache(result, contentType);
 
         if (!validation.isValid) {
@@ -1421,6 +1456,7 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
   const existingOnHit = options.onHit;
   options = {
     ...options,
+    refreshAhead: !isAiringTodayCatalog,
     onHit: (hit: any) => {
       if (typeof existingOnHit === 'function') {
         existingOnHit(hit);
@@ -2355,6 +2391,7 @@ function getCacheHealth(): any {
     coldStoreHits: cacheHealth.coldStoreHits,
     coldStoreMisses: cacheHealth.coldStoreMisses,
     coldStoreComponents: cacheHealth.coldStoreComponents,
+    refreshAhead: getRefreshAheadStats(),
     hitRate: total > 0 ? ((cacheHealth.hits / total) * 100).toFixed(2) : '0.00',
     errorRate: total > 0 ? ((cacheHealth.errors / total) * 100).toFixed(2) : '0.00',
     totalRequests: total,
@@ -2374,6 +2411,7 @@ function clearCacheHealth(): void {
   cacheHealth.coldStoreHits = 0;
   cacheHealth.coldStoreMisses = 0;
   cacheHealth.coldStoreComponents = 0;
+  resetRefreshAheadStats();
   cacheHealth.errorCounts = {};
   cacheHealth.keyAccessCounts.clear();
   cacheHealthLogger.info('Statistics cleared');

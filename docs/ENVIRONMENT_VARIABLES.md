@@ -48,6 +48,11 @@ cp .env.example .env
 - **Description**: Maximum number of log entries kept in the in-memory ring buffer for the dashboard logs tab. Lower this on memory-constrained instances.
 - **Example**: `LOG_BUFFER_SIZE=5000`
 
+### `RESPONSE_COMPRESSION_ENABLED`
+- **Default**: `true`
+- **Description**: Compress HTTP responses with gzip or brotli, whichever the client negotiates. A 20-item catalog page drops from about 99 KB to about 22 KB for roughly 1 ms of CPU. Images, server-sent events and responses under 1 KB are left alone. Set false only if a reverse proxy in front is already compressing.
+- **Example**: `RESPONSE_COMPRESSION_ENABLED=false`
+
 ---
 
 ## Database Configuration
@@ -89,6 +94,21 @@ cp .env.example .env
 - **Required**: Yes
 - **Description**: Redis connection URL for caching (required for the app to function)
 - **Example**: `REDIS_URL=redis://localhost:6379`
+
+### `CATALOG_REFRESH_AHEAD_ENABLED`
+- **Default**: `true`
+- **Description**: Rebuild a catalog in the background when a request arrives near the end of its cache lifetime, so the cached copy is served immediately and the rebuild never lands on a user request. Only catalogs are affected. Cache TTLs are unchanged, so nothing is served staler than `CATALOG_TTL` already allows.
+- **Example**: `CATALOG_REFRESH_AHEAD_ENABLED=false`
+
+### `CATALOG_REFRESH_AHEAD_FRACTION`
+- **Default**: `0.1`
+- **Description**: How much of an entry's lifetime counts as due for a background rebuild, as a fraction. `0.1` means the final tenth, so the last 2.4 hours of a 24 hour catalog. Values outside 0 to 0.5 fall back to `0.1`.
+- **Example**: `CATALOG_REFRESH_AHEAD_FRACTION=0.2`
+
+### `CATALOG_REFRESH_AHEAD_MAX_CONCURRENT`
+- **Default**: `3`
+- **Description**: How many background catalog rebuilds may run at once. Anything over the limit is skipped rather than queued, which is safe because the entry it would have refreshed is still fresh. This bounds upstream fan-out when many catalogs fall due together, which happens because the warmer writes them all within about a minute of each other.
+- **Example**: `CATALOG_REFRESH_AHEAD_MAX_CONCURRENT=5`
 
 ---
 

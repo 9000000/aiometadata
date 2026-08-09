@@ -172,6 +172,9 @@ function extractIdsFromMeta(meta) {
   return ids;
 }
 
+const { createResponseCompression } = require('./utils/responseCompression');
+addon.use(createResponseCompression());
+
 // Parse JSON and URL-encoded bodies for API routes
 addon.use(express.json({ limit: '2mb' }));
 addon.use(express.urlencoded({ extended: true }));

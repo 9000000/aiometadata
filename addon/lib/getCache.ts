@@ -542,8 +542,8 @@ async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: n
                 if (resultClassifier(fresh, null, key).type !== 'SUCCESS') return false;
                 if (!mayReplaceOnRefresh(parsed, fresh)) return false;
                 if (!cacheValidator.validateBeforeCache(fresh, contentTypeForKey(key)).isValid) return false;
-                await redis.set(versionedKey, await encodeCachePayload(fresh), 'EX', ttl);
-                return true;
+                const written = await redis.set(versionedKey, await encodeCachePayload(fresh), 'EX', ttl, 'XX');
+                return Boolean(written);
               }).catch(() => {});
             }
 

@@ -345,6 +345,36 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     type: 'number',
     default: 3,
   },
+  {
+    key: 'CATALOG_REFRESH_AHEAD_ENABLED',
+    envVar: 'CATALOG_REFRESH_AHEAD_ENABLED',
+    label: 'Catalog Refresh Ahead',
+    description: 'Rebuild a catalog in the background when a request arrives near the end of its cache lifetime, so the cached copy is served immediately and the rebuild never lands on a user request. Only catalogs are affected, and nothing is ever served older than the catalog TTL already allows.',
+    category: 'Cache',
+    type: 'boolean',
+    default: true,
+  },
+  {
+    key: 'CATALOG_REFRESH_AHEAD_FRACTION',
+    envVar: 'CATALOG_REFRESH_AHEAD_FRACTION',
+    label: 'Refresh Ahead Window',
+    description: 'How much of a catalog entry lifetime counts as due for a background rebuild, as a fraction. 0.1 means the final tenth, so the last 2.4 hours of a 24 hour catalog. Values outside 0 to 0.5 fall back to 0.1.',
+    category: 'Cache',
+    type: 'number',
+    default: 0.1,
+    min: 0.01,
+    max: 0.5,
+  },
+  {
+    key: 'CATALOG_REFRESH_AHEAD_MAX_CONCURRENT',
+    envVar: 'CATALOG_REFRESH_AHEAD_MAX_CONCURRENT',
+    label: 'Refresh Ahead Concurrency',
+    description: 'How many background catalog rebuilds may run at once. Anything over the limit is skipped rather than queued, which is safe because the entry it would have refreshed is still fresh. This bounds upstream fan-out when many catalogs fall due together.',
+    category: 'Cache',
+    type: 'number',
+    default: 3,
+    min: 1,
+  },
 
   // --- Features ---
   {

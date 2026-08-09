@@ -533,18 +533,22 @@ async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: n
             }
             updateCacheHealth(versionedKey, 'hit', true);
 
-            if (wantsRefreshAhead
-              && isDueForRefresh(pttlMs, ttl)
-              && wasCachedAtNominalTtl(resultClassifier, parsed, key)) {
-              runRefreshAhead(versionedKey, async () => {
-                const fresh = await method();
-                if (fresh === null || fresh === undefined) return false;
-                if (resultClassifier(fresh, null, key).type !== 'SUCCESS') return false;
-                if (!mayReplaceOnRefresh(parsed, fresh)) return false;
-                if (!cacheValidator.validateBeforeCache(fresh, contentTypeForKey(key)).isValid) return false;
-                const written = await redis.set(versionedKey, await encodeCachePayload(fresh), 'EX', ttl, 'XX');
-                return Boolean(written);
-              }).catch(() => {});
+            if (wantsRefreshAhead) {
+              try {
+                if (isDueForRefresh(pttlMs, ttl) && wasCachedAtNominalTtl(resultClassifier, parsed, key)) {
+                  runRefreshAhead(versionedKey, async () => {
+                    const fresh = await method();
+                    if (fresh === null || fresh === undefined) return false;
+                    if (resultClassifier(fresh, null, key).type !== 'SUCCESS') return false;
+                    if (!mayReplaceOnRefresh(parsed, fresh)) return false;
+                    if (!cacheValidator.validateBeforeCache(fresh, contentTypeForKey(key)).isValid) return false;
+                    const written = await redis.set(versionedKey, await encodeCachePayload(fresh), 'EX', ttl, 'XX');
+                    return Boolean(written);
+                  }, pttlMs).catch(() => {});
+                }
+              } catch (refreshError: any) {
+                cacheLogger.warn(`[Cache] Refresh-ahead check failed for ${versionedKey}:`, refreshError);
+              }
             }
 
             return parsed;
@@ -1452,7 +1456,7 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
   const existingOnHit = options.onHit;
   options = {
     ...options,
-    refreshAhead: true,
+    refreshAhead: !isAiringTodayCatalog,
     onHit: (hit: any) => {
       if (typeof existingOnHit === 'function') {
         existingOnHit(hit);

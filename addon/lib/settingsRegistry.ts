@@ -358,7 +358,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'CATALOG_REFRESH_AHEAD_FRACTION',
     envVar: 'CATALOG_REFRESH_AHEAD_FRACTION',
     label: 'Refresh Ahead Window',
-    description: 'How much of a catalog entry lifetime counts as due for a background rebuild, as a fraction. 0.1 means the final tenth, so the last 2.4 hours of a 24 hour catalog. Values outside 0 to 0.5 fall back to 0.1.',
+    description: 'How much of a catalog entry lifetime counts as due for a background rebuild, as a fraction. 0.1 means the final tenth, so the last 2.4 hours of a 24 hour catalog. Values outside 0.01 to 0.5 fall back to 0.1.',
     category: 'Cache',
     type: 'number',
     default: 0.1,

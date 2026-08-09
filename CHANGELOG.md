@@ -2,6 +2,90 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.12.0](https://github.com/cedya77/aiometadata/compare/v2.11.0...v2.12.0) (2026-08-07)
+
+
+### Features
+
+* **auth:** require signing in to reach the config page and its API ([ea8983c](https://github.com/cedya77/aiometadata/commit/ea8983cbddebdc0f44fdf9a8c44c05934f97042d))
+* **builder:** collapse the advisory banners into one status bar ([47ae36d](https://github.com/cedya77/aiometadata/commit/47ae36dc11cfde57deb3f27555bf22e6cfa49368))
+* **builder:** give the builder a full-screen shell with a pinned footer ([204fab9](https://github.com/cedya77/aiometadata/commit/204fab991ce5601d08394ab0b9c95fedb7b8302d))
+* **builder:** put folders in the rail and lift selection to the dialog ([0f51ed2](https://github.com/cedya77/aiometadata/commit/0f51ed2d081f7c2dbad09f60b0d327d0fadf43f3))
+* **builder:** report which folders a rail query matched ([f6581fb](https://github.com/cedya77/aiometadata/commit/f6581fb4cfa1213880f63c443438f45b3afda245))
+* **collections:** carry a catalog's own type through an export so an import can match it ([0f96c15](https://github.com/cedya77/aiometadata/commit/0f96c15d8c93d86abd53a88c927153c350c33957))
+* **collections:** derive one save stage for the builder ([b5d5993](https://github.com/cedya77/aiometadata/commit/b5d599318f6ff8ba9d76ef69c9608ceca3720b74))
+* **collections:** dock the preview beside the editor on wide screens ([9f495c1](https://github.com/cedya77/aiometadata/commit/9f495c1fb8f846dfd4822e0753c9497cd223537b))
+* **collections:** give the entry rail room to read and a filter ([1c62954](https://github.com/cedya77/aiometadata/commit/1c62954463ecaad36dafa2da7cf14b6940130a69))
+* **collections:** label an excluded entry instead of only dimming it ([7c595c8](https://github.com/cedya77/aiometadata/commit/7c595c8dc7aa56b3bc1fa1c91f8862864e6e6917))
+* **collections:** make deleting undoable and confirm a replacing import ([dd7d833](https://github.com/cedya77/aiometadata/commit/dd7d833165239a212d0116e94aeafa0eb4371eb9))
+* **collections:** make the builder a full-height sheet on small screens ([4045049](https://github.com/cedya77/aiometadata/commit/4045049a77e661ce1feeb1fe6c9e8d5fab2c7618))
+* **collections:** merge an imported file into what it shares an id with ([6b4adca](https://github.com/cedya77/aiometadata/commit/6b4adca4d56c1276490f987d4f6288c28a587121))
+* **collections:** name the addons an exported file needs installed ([f7bcd94](https://github.com/cedya77/aiometadata/commit/f7bcd9487ee5462f593d879243a9d1c18676b027))
+* **collections:** name the same thing the same way on both targets ([519f3db](https://github.com/cedya77/aiometadata/commit/519f3db3ab4ff23f1cffcb05f6102e03cd26f579))
+* **collections:** number repeated copies instead of stacking the word ([f26d870](https://github.com/cedya77/aiometadata/commit/f26d8707041f7fd710742034e78748420b016424))
+* **collections:** offer starter layouts instead of an empty rail ([9ce58b7](https://github.com/cedya77/aiometadata/commit/9ce58b7e1bf6a8b5e1587fc02160d54e91e86f68))
+* **collections:** put the manifest source where it can be acted on ([2ad390e](https://github.com/cedya77/aiometadata/commit/2ad390efa77d20190834c6ca9ef12bd207fa7710))
+* **collections:** rank builder problems by severity ([82884a3](https://github.com/cedya77/aiometadata/commit/82884a37016a11327b531ffe291b1d37e2f58d25))
+* **collections:** rework the builder into panes with a ranked issue list ([4308a7a](https://github.com/cedya77/aiometadata/commit/4308a7a30dd95808ca32bd68d77a0a3e9a328182))
+* **collections:** save the builder in one step instead of three ([ae3e281](https://github.com/cedya77/aiometadata/commit/ae3e281f4244bc36cebaaaaf856b7f9874158cbd))
+* **collections:** show one ranked issue list and put its verdict on save ([32769bf](https://github.com/cedya77/aiometadata/commit/32769bf141632be1b444e4dc951fdcac4f048655))
+* **collections:** warn on a classic row whose type Fusion will not import ([bf8d979](https://github.com/cedya77/aiometadata/commit/bf8d97939ba40d963158dc9648d9d88ebfea92eb))
+
+
+### Bug Fixes
+
+* **anime:** honour a zero delay instead of treating it as unset ([638d5da](https://github.com/cedya77/aiometadata/commit/638d5da5566869d2e608de92c40e01e4890cbd71))
+* **art proxy:** answer 404 when the poster proxy has no fallback to redirect to ([90dd65d](https://github.com/cedya77/aiometadata/commit/90dd65d1cf17386d844ce6eff3715035d4c0bc52))
+* **builder:** act on the real folder index when the rail is filtered ([3255983](https://github.com/cedya77/aiometadata/commit/32559832efd579a39ae34bf0681a5694fef8540d))
+* **builder:** drop the breadcrumb when nothing is selected ([e54a9d9](https://github.com/cedya77/aiometadata/commit/e54a9d91f19429c5aae29e25d88d1c3ca275e414))
+* **builder:** drop the dialog padding above the small breakpoint ([6b55b5d](https://github.com/cedya77/aiometadata/commit/6b55b5d0691e7d9b498dd7b43abd173dec67f972))
+* **builder:** expand the selected entry when the dialog reopens ([b1d5988](https://github.com/cedya77/aiometadata/commit/b1d5988ba47c176f3572fe0f801ed7abed17561e))
+* **builder:** focus the title of a folder you just added ([3d92d2e](https://github.com/cedya77/aiometadata/commit/3d92d2e4751d64245fe0a55c7b1995c8bedaa68d))
+* **builder:** give the footer and the editor a container to query ([e9b2c68](https://github.com/cedya77/aiometadata/commit/e9b2c68387e4c086a22588ff20e4e422e7f02e26))
+* **builder:** keep the preview reachable below the widest layout ([45c492f](https://github.com/cedya77/aiometadata/commit/45c492f7c9b91fdc156f3c858b03960602429961))
+* **builder:** let a folder drag land in another collection ([ab0ee6c](https://github.com/cedya77/aiometadata/commit/ab0ee6c5514b78214f1a1b5c6769bb4d8522cf6d))
+* **builder:** let folder rows reorder by drag again ([acb6251](https://github.com/cedya77/aiometadata/commit/acb6251e8707525017c8fb0bca7243595df9fd5e))
+* **builder:** restore preview section & un-truncate catalog names ([fccb85e](https://github.com/cedya77/aiometadata/commit/fccb85e36dc6900842a82b5dc5a1434051a8831c))
+* **builder:** show the folders the rail filter matched ([a7e1ac2](https://github.com/cedya77/aiometadata/commit/a7e1ac29e5870ce2fde2f6682d2214e652c2aed5))
+* **builder:** show the row controls where nothing can hover ([53f8c07](https://github.com/cedya77/aiometadata/commit/53f8c07d61bf855e76e76e36841ff5ab9fa3f3d8))
+* **builder:** stop source row meta overflowing the delete button ([82a6414](https://github.com/cedya77/aiometadata/commit/82a641473f96b7cc6efa0600071b52daa166c64a))
+* **builder:** stop the header and footer crowding out the panes ([01feef5](https://github.com/cedya77/aiometadata/commit/01feef56f00f16f3606db8eae360f967e68768d4))
+* **cache:** pass the key to the classifier so a Jikan object is not read as empty ([114ff36](https://github.com/cedya77/aiometadata/commit/114ff3676b3579b9afd7369de42f70cd0e42476f))
+* **catalogs:** resolve a catalog whose display type suffix is _all ([eaade76](https://github.com/cedya77/aiometadata/commit/eaade76900520bdf9000654f8cc3e3bce66813d7))
+* **collections:** carry a source genre through the Fusion export and back ([da2a388](https://github.com/cedya77/aiometadata/commit/da2a388bc48a3cc12d534494b6f75ca3b5a3da2e))
+* **collections:** drop the resets for state the save mode replaced ([598baac](https://github.com/cedya77/aiometadata/commit/598baaca712b79609768e332ccfc8712c01667a8))
+* **collections:** give an imported entry a free id when the file's is taken ([d6165c5](https://github.com/cedya77/aiometadata/commit/d6165c562f3f8454ed2e65c35c334aa2a4c94534))
+* **collections:** keep a personal PublicMetaDB list out of a shared catalog ([0f02825](https://github.com/cedya77/aiometadata/commit/0f02825c58d81dbd44d7c2d41c4525f5c4bf77ee))
+* **collections:** keep a picker selection when the filters change ([0211926](https://github.com/cedya77/aiometadata/commit/0211926b7ef98ffe0079c3a1f7d551fd3da7c292))
+* **collections:** keep Enter on a picker button doing that button's job ([de1aae9](https://github.com/cedya77/aiometadata/commit/de1aae908f1a45e9211efe977b9173d8073d8f93))
+* **collections:** keep ids joinable when a Fusion export prefixes them ([3849fd2](https://github.com/cedya77/aiometadata/commit/3849fd25c67c07ed568e6abc1d6e7114c55de6f5))
+* **collections:** keep the entry filter reachable once it is set ([4ecab06](https://github.com/cedya77/aiometadata/commit/4ecab06984d17c8f64075fcb6ff2bb0ecda29e44))
+* **collections:** keep the export payload to the fields Fusion expects ([3bf2fb0](https://github.com/cedya77/aiometadata/commit/3bf2fb0e05a15bd269915d13af3b0c9e05e28c7e))
+* **collections:** make the picker's filter chips reachable by keyboard ([d99804b](https://github.com/cedya77/aiometadata/commit/d99804b6a61b44a148af65d5febb7faac6dbf0fe))
+* **collections:** match a manifest catalog whose type differs only in case ([0e01e96](https://github.com/cedya77/aiometadata/commit/0e01e962f43452a3a1344fa5dc291859e54dceaf))
+* **collections:** match a suffixed catalog on its original type, not its display type ([f74f571](https://github.com/cedya77/aiometadata/commit/f74f57111841eee1558b9ea72bbe59c397cd3772))
+* **collections:** name Fusion's word in every alias hint ([fd691af](https://github.com/cedya77/aiometadata/commit/fd691af4fa0f4aded8f7c7fa23a79345247859da))
+* **collections:** only ask for a genre where the catalog needs one, and start it on the declared default ([2cc967e](https://github.com/cedya77/aiometadata/commit/2cc967efb29b08e6170ebce55d3e7b1266dae81c))
+* **collections:** point a source problem at the folder holding it ([0c332bb](https://github.com/cedya77/aiometadata/commit/0c332bb88144d5b9125a2e94078b249a53f088b1))
+* **collections:** point an imported source at the id this manifest serves ([885a99b](https://github.com/cedya77/aiometadata/commit/885a99b73866c9113af518afd1d2c8ac402c0105))
+* **collections:** route apply and close through the save gates ([c4e1376](https://github.com/cedya77/aiometadata/commit/c4e1376d872a1a6f789f4fc62e3940ddd36e71a0))
+* **collections:** say when the save cannot reach the server ([206ddf3](https://github.com/cedya77/aiometadata/commit/206ddf318c3640771266a2c37ee03de4aee7768f))
+* **collections:** stop a catalog waiting on an account reading as staged ([ed63504](https://github.com/cedya77/aiometadata/commit/ed635049831701473ef30c8f6695cf0ee741b11f))
+* **collections:** stop an imported file rebuilding someone else's personal list ([69d87a7](https://github.com/cedya77/aiometadata/commit/69d87a7518645ef749257948839114a06dada94f))
+* **collections:** stop export notes reading as a missing catalog ([6f45940](https://github.com/cedya77/aiometadata/commit/6f4594060c0d294b95bbda65c842f9231097263c))
+* **collections:** stop offering starters there are none of ([e8c4ded](https://github.com/cedya77/aiometadata/commit/e8c4dedf6664da5cc412ebd8f48929ab73954cea))
+* **collections:** stop the builder reselecting what you already typed ([e45668b](https://github.com/cedya77/aiometadata/commit/e45668b1df05cbe2842143f6b0ec1b83cb97a9f7))
+* **collections:** stop the pointer stealing the picker's keyboard selection ([aafe970](https://github.com/cedya77/aiometadata/commit/aafe97032c70fd7f0951981383295bc666819a84))
+* **collections:** stop the save shortcut firing from a nested dialog ([3fff28d](https://github.com/cedya77/aiometadata/commit/3fff28d193a81455daacbc21ebc0cd819f0ea360))
+* **collections:** undo only the delete it was offered for ([f71ecbb](https://github.com/cedya77/aiometadata/commit/f71ecbb68c835ea670a5be71ae22c71adde7dce1))
+* **search:** keep MDBList's ranking through the batch enrichment ([cebecc8](https://github.com/cedya77/aiometadata/commit/cebecc8fe43f4a5fa00cad9bb672e85fc8ce043f))
+
+
+### Performance Improvements
+
+* **anime:** cache episode pages separately instead of the whole list ([7faba54](https://github.com/cedya77/aiometadata/commit/7faba543bbc9cd9ab581d6ede594e7a6161d3b9b))
+* **collections:** stop restringifying the draft on every parent render ([b2f9a24](https://github.com/cedya77/aiometadata/commit/b2f9a24a79708e9ba2b76c983a27a02b12f7470e))
+
 ## [2.11.0](https://github.com/cedya77/aiometadata/compare/v2.10.0...v2.11.0) (2026-08-06)
 
 

@@ -14,13 +14,19 @@ function isEnabled(): boolean {
   }
 }
 
+function mountedPath(req: any): string {
+  const baseUrl = typeof req.baseUrl === 'string' ? req.baseUrl : '';
+  const path = typeof req.path === 'string' ? req.path : '';
+  return `${baseUrl}${path}`;
+}
+
 function shouldCompressResponse(req: any, res: any): boolean {
   if (!isEnabled()) return false;
 
   const contentType = res.getHeader('Content-Type');
   if (typeof contentType === 'string' && contentType.startsWith(SSE_CONTENT_TYPE)) return false;
 
-  if (typeof req.path === 'string' && req.path.startsWith(POSTER_CACHE_ROUTE)) return false;
+  if (mountedPath(req).startsWith(POSTER_CACHE_ROUTE)) return false;
 
   return compressionMiddleware.filter(req, res);
 }

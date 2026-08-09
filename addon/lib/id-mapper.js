@@ -23,7 +23,7 @@ const REMOTE_MAPPING_URL ='https://raw.githubusercontent.com/Fribb/anime-lists/r
 // Startup mapping downloads only: a transient connect failure here degrades the
 // mapper for the whole process lifetime, so these are worth retrying.
 const { BOOTSTRAP_HTTP_OPTIONS: BOOTSTRAP_RETRY } = require('../utils/httpClient');
-const REMOTE_KITSU_TO_IMDB_MAPPING_URL = 'https://raw.githubusercontent.com/TheBeastLT/stremio-kitsu-anime/bbf149474f610885629b95b1b9ce4408c3c1353d/static/data/imdb_mapping.json';
+const REMOTE_KITSU_TO_IMDB_MAPPING_URL = 'https://raw.githubusercontent.com/TheBeastLT/stremio-kitsu-anime/master/static/data/imdb_mapping.json';
 const REMOTE_TRAKT_ANIME_MOVIES_URL = 'https://github.com/rensetsu/db.trakt.extended-anitrakt/releases/download/latest/movies_ex.json';
 const REMOTE_ANIME_API_URL = 'https://raw.githubusercontent.com/nattadasu/animeApi/refs/heads/v3/database/animeapi.tsv';
 const LOCAL_CACHE_PATH = path.join(process.cwd(), 'addon', 'data', 'anime-list-full.json.cache');
@@ -806,8 +806,50 @@ function processAndIndexTraktAnimeMovies(moviesArray) {
  * avoiding a full download if the local cache is up-to-date.
  * @param {boolean} force - If true, bypass ETag check and force re-download
  */
+function parseKitsuToImdbMapping(value, source) {
+  let parsed = value;
+  for (let attempt = 0; attempt < 2 && typeof parsed === 'string'; attempt++) {
+    parsed = JSON.parse(parsed);
+  }
+
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error(`${source} did not yield a mapping`);
+  }
+
+  const entries = Array.isArray(parsed) ? parsed : Object.values(parsed);
+  if (entries.length === 0 || !entries.slice(0, 5).every(entry => entry && typeof entry === 'object')) {
+    throw new Error(`${source} yielded ${entries.length} entries that are not mapping objects`);
+  }
+
+  let mapping;
+  if (entries.some(entry => entry.kitsu_id !== undefined)) {
+    mapping = {};
+    for (const entry of entries) {
+      const id = parseInt(entry.kitsu_id, 10);
+      if (Number.isFinite(id)) mapping[id] = entry;
+    }
+  } else if (Array.isArray(parsed)) {
+    throw new Error(`${source} yielded a list whose entries carry no kitsu_id`);
+  } else {
+    mapping = parsed;
+  }
+
+  const count = Object.keys(mapping).length;
+  if (count === 0) {
+    throw new Error(`${source} yielded no usable kitsu ids`);
+  }
+  if (!Object.values(mapping).slice(0, 5).some(entry => entry.imdb_id)) {
+    throw new Error(`${source} yielded entries carrying no imdb_id`);
+  }
+
+  if (typeof value === 'string' && typeof JSON.parse(value) === 'string') {
+    logger.warn(`[ID Mapper] [Kitsu-IMDB] Repaired a double-encoded mapping from ${source}.`);
+  }
+  return mapping;
+}
+
 async function downloadAndProcessKitsuToImdbMapping(force = false, skipReloadOnUnchangedEtag = false) {
-  const useRedisCache = redis; 
+  const useRedisCache = redis;
 
   try {
     if (useRedisCache && !force) {
@@ -829,7 +871,7 @@ async function downloadAndProcessKitsuToImdbMapping(force = false, skipReloadOnU
         try {
           logger.debug('[ID Mapper] [Kitsu-IMDB] No changes detected. Loading from local disk cache...');
           const fileContent = await fs.readFile(LOCAL_KITSU_TO_IMDB_MAPPING_PATH, 'utf-8');
-          kitsuToImdbMapping = JSON.parse(fileContent);
+          kitsuToImdbMapping = parseKitsuToImdbMapping(fileContent, 'local cache');
           kitsuToImdbMappingCount = Object.keys(kitsuToImdbMapping).length;
           isKitsuToImdbInitialized = true;
           // Update last check timestamp even when using cache
@@ -839,7 +881,7 @@ async function downloadAndProcessKitsuToImdbMapping(force = false, skipReloadOnU
           logger.debug(`[ID Mapper] [Kitsu-IMDB] Successfully loaded ${kitsuToImdbMappingCount} mappings from local cache.`);
           return { success: true, message: 'Loaded from cache (no changes)', count: kitsuToImdbMappingCount };
         } catch (e) {
-          logger.warn('[ID Mapper] [Kitsu-IMDB] ETag matched, but local cache was unreadable. Forcing re-download.');
+          logger.warn(`[ID Mapper] [Kitsu-IMDB] ETag matched, but local cache was unusable (${e.message}). Forcing re-download.`);
         }
       }
     } else if (force) {
@@ -850,7 +892,7 @@ async function downloadAndProcessKitsuToImdbMapping(force = false, skipReloadOnU
 
     logger.debug('[ID Mapper] [Kitsu-IMDB] Downloading Kitsu to IMDB mapping...');
     const response = await httpGet(REMOTE_KITSU_TO_IMDB_MAPPING_URL, BOOTSTRAP_RETRY);
-    kitsuToImdbMapping = response.data;
+    kitsuToImdbMapping = parseKitsuToImdbMapping(response.data, 'remote download');
     kitsuToImdbMappingCount = Object.keys(kitsuToImdbMapping).length;
     const jsonData = JSON.stringify(kitsuToImdbMapping);
 
@@ -873,7 +915,7 @@ async function downloadAndProcessKitsuToImdbMapping(force = false, skipReloadOnU
     
     try {
       const fileContent = await fs.readFile(LOCAL_KITSU_TO_IMDB_MAPPING_PATH, 'utf-8');
-      kitsuToImdbMapping = JSON.parse(fileContent);
+      kitsuToImdbMapping = parseKitsuToImdbMapping(fileContent, 'local cache (fallback)');
       kitsuToImdbMappingCount = Object.keys(kitsuToImdbMapping).length;
       isKitsuToImdbInitialized = true;
       logger.debug('[ID Mapper] [Kitsu-IMDB] Successfully loaded data from local cache on fallback.');
@@ -1381,6 +1423,37 @@ function getKitsuToImdbMappingsByImdbId(imdbId) {
  * @param {Object} imdbMetadata - The IMDB metadata containing episode information
  * @returns {Array} Enriched episodes array
  */
+function enrichMalEpisodesFromTvdbBridge(videos, kitsuId) {
+  const mapping = getMappingByKitsuId(kitsuId);
+  const imdbId = mapping?.imdb_id;
+  const anidbId = mapping?.anidb_id;
+  if (!imdbId || !anidbId) return null;
+
+  const { resolveTvdbEpisodeFromAnidbEpisode } = require('./anime-list-mapper');
+
+  let mapped = 0;
+  const enriched = videos.map(video => {
+    const episodeNumber = parseInt(video.episode, 10);
+    if (!Number.isFinite(episodeNumber)) return video;
+
+    const bridge = resolveTvdbEpisodeFromAnidbEpisode(anidbId, 1, episodeNumber);
+    if (!bridge || !Number.isFinite(bridge.tvdbSeason) || !Number.isFinite(bridge.tvdbEpisode)) return video;
+
+    mapped += 1;
+    return {
+      ...video,
+      id: `${imdbId}:${bridge.tvdbSeason}:${bridge.tvdbEpisode}`,
+      imdb_id: imdbId,
+      imdbSeason: bridge.tvdbSeason,
+      imdbEpisode: bridge.tvdbEpisode,
+    };
+  });
+
+  if (mapped === 0) return null;
+  logger.debug(`[enrichMalEpisodes] Bridged ${mapped}/${videos.length} episodes for kitsuId ${kitsuId} via AniDB ${anidbId} to IMDB ${imdbId}`);
+  return enriched;
+}
+
 async function enrichMalEpisodes(videos, kitsuId, preserveIds = false) {
   logger.debug(`[enrichMalEpisodes] Called with kitsuId: ${kitsuId}, videos count: ${videos?.length || 0}`);
   
@@ -1390,8 +1463,10 @@ async function enrichMalEpisodes(videos, kitsuId, preserveIds = false) {
   }
 
   const imdbInfo = getKitsuToImdbMapping(kitsuId);
-  if (!imdbInfo) {
-    logger.debug(`[enrichMalEpisodes] No IMDB mapping found for kitsuId: ${kitsuId}, returning null (no enrichment)`);
+  if (!imdbInfo || !imdbInfo.imdb_id) {
+    const bridged = preserveIds ? null : enrichMalEpisodesFromTvdbBridge(videos, kitsuId);
+    if (bridged) return bridged;
+    logger.debug(`[enrichMalEpisodes] No usable IMDB mapping for kitsuId: ${kitsuId}, returning null (no enrichment)`);
     return null;
   }
 

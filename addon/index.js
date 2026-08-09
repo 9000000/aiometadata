@@ -10,6 +10,8 @@ const addon = express();
 //addon.set('trust proxy', true);
 
 const { getCatalog } = require("./lib/getCatalog");
+const { applyCatalogFilters, catalogFiltersActive } = require("./utils/catalogFilters");
+const { cursorKey, resolveStartPage, writeCursor, fillFilteredPage } = require("./lib/catalogPagination");
 const anilist = require("./lib/anilist");
 const { getSearch } = require("./lib/getSearch");
 const { getManifest, DEFAULT_LANGUAGE } = require("./lib/getManifest");
@@ -4014,6 +4016,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
     // Set by any branch whose handler already ran applyCatalogFilters internally
     // (external addon catalogs filter before computing their pagination cursor).
     let filtersAlreadyApplied = false;
+    let pendingCursor = null;
 
       if (cleanId === 'search' || cleanId === 'gemini.search' || cleanId === 'people_search') {
       let originalSearchId = null;
@@ -4127,12 +4130,11 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
       const skipValue = extraArgs.skip !== undefined ? parseInt(extraArgs.skip) : 0;
       const result = await getCatalog(actualType, language, catalogPage, cleanId, genreName, config, userUUID, false, skipValue);
       responseData = { metas: result.metas || [] };
+      filtersAlreadyApplied = true;
       } else {
-      // Use regular catalog cache wrapper
-      responseData = await cacheWrapper(userUUID, catalogKey, async () => {
+      const { genre: genreName, type_filter } = extraArgs;
+      const runCatalogPage = async (page, skipOverride) => {
         let metas = [];
-        const { genre: genreName, type_filter } = extraArgs;
-        const page = catalogPage;
         const args = [actualType, language, page];
         switch (cleanId) {
           case "tmdb.trending":
@@ -4186,16 +4188,50 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
             break;
           }
           default: {
-            const skipValue = extraArgs.skip ? parseInt(extraArgs.skip) : undefined;
-            metas = (await getCatalog(actualType, language, page, cleanId, genreName, config, userUUID, false, skipValue)).metas;
+            metas = (await getCatalog(actualType, language, page, cleanId, genreName, config, userUUID, false, skipOverride)).metas;
             break;
           }
       }
       return { metas: metas || [] };
-    }, cacheOptions);
+    };
+
+    const keyForPage = (page) => {
+      const pageArgs = { ...cacheExtraArgs };
+      if (page > 1) pageArgs.page = page; else delete pageArgs.page;
+      return `${cleanId}:${actualType}:${stableStringify(pageArgs)}`;
+    };
+
+    const legacySkip = extraArgs.skip ? parseInt(extraArgs.skip) : undefined;
+    const readPage = (page, skipOverride) =>
+      cacheWrapper(userUUID, keyForPage(page), () => runCatalogPage(page, skipOverride), cacheOptions);
+
+    if (catalogFiltersActive({ config, catalogConfig, cleanId })) {
+      const key = cursorKey(userUUID, cleanId, actualType, genreName);
+      const skipValue = legacySkip || 0;
+      const { startPage, startOffset, matched } = await resolveStartPage(key, skipValue, catalogPage);
+
+      const filled = await fillFilteredPage({
+        startPage,
+        startOffset,
+        pageSize: catalogPageSize,
+        fetchPage: async (page) => (await readPage(page, undefined))?.metas || [],
+        filter: (metas) => applyCatalogFilters(metas, { type: actualType, config, catalogConfig, cleanId }),
+      });
+
+      responseData = { metas: filled.metas };
+      filtersAlreadyApplied = true;
+      pendingCursor = { key, skip: skipValue, page: filled.nextPage, offset: filled.nextOffset };
+
+      consola.debug(
+        `[Catalog] ${cleanId}: filled ${filled.metas.length}/${catalogPageSize} from ${filled.pagesRead} page(s) ` +
+        `(skip=${skipValue}, start=${startPage}+${startOffset}, next=${filled.nextPage}+${filled.nextOffset}, ` +
+        `cursor=${matched ? 'hit' : 'miss'}, exhausted=${filled.exhausted})`
+      );
+    } else {
+      responseData = await readPage(catalogPage, legacySkip);
+    }
     }
     if (!filtersAlreadyApplied && responseData?.metas && Array.isArray(responseData.metas) && responseData.metas.length > 0) {
-      const { applyCatalogFilters } = require('./utils/catalogFilters');
       responseData.metas = await applyCatalogFilters(responseData.metas, {
         type: actualType,
         config,
@@ -4218,6 +4254,14 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
         consola.debug(`[Catalog Route] Deduped ${responseData.metas.length - deduped.length} duplicate metas by id`);
         responseData = { ...responseData, metas: deduped };
       }
+    }
+
+    if (pendingCursor) {
+      await writeCursor(pendingCursor.key, {
+        served: pendingCursor.skip + (responseData?.metas?.length || 0),
+        upstreamPage: pendingCursor.page,
+        pageOffset: pendingCursor.offset,
+      });
     }
 
 

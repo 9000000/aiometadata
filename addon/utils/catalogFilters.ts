@@ -70,6 +70,37 @@ interface CatalogFilterOptions {
   cleanId: string;
 }
 
+const WATCHED_FILTERS: [string, string][] = [
+  ['traktTokenId', 'hideWatchedTrakt'],
+  ['anilistTokenId', 'hideWatchedAnilist'],
+  ['mdblist', 'hideWatchedMdblist'],
+  ['simklTokenId', 'hideWatchedSimkl'],
+];
+
+function catalogFiltersActive({ config, catalogConfig, cleanId }: Omit<CatalogFilterOptions, 'type'>): boolean {
+  const isSearch = ['search', 'people_search', 'gemini.search'].includes(cleanId);
+
+  if (!isSearch && config.ageRating && String(config.ageRating).toLowerCase() !== 'none') return true;
+
+  const catalogHideDigital = catalogConfig?.metadata?.hideUnreleasedDigital;
+  const hideUnreleasedDigital = isSearch
+    ? !!config.hideUnreleasedDigitalSearch
+    : (catalogHideDigital !== undefined ? catalogHideDigital : !!config.hideUnreleasedDigital);
+  if (hideUnreleasedDigital) return true;
+
+  if (isSearch ? config.hideUnreleasedShowsSearch : config.hideUnreleasedShows) return true;
+
+  if (!isHideWatchedExcluded(cleanId)) {
+    for (const [credential, flag] of WATCHED_FILTERS) {
+      if (!config.apiKeys?.[credential]) continue;
+      const catalogHide = catalogConfig?.metadata?.[flag];
+      if (catalogHide !== undefined ? catalogHide : !!config[flag]) return true;
+    }
+  }
+
+  return Boolean(config.exclusionKeywords || config.regexExclusionFilter || config.exclusionGenres);
+}
+
 async function applyCatalogFilters(metas: any[], { type, config, catalogConfig, cleanId }: CatalogFilterOptions): Promise<any[]> {
   if (!Array.isArray(metas) || metas.length === 0) return metas;
 
@@ -276,4 +307,4 @@ async function applyCatalogFilters(metas: any[], { type, config, catalogConfig, 
   return metas;
 }
 
-module.exports = { applyCatalogFilters };
+module.exports = { applyCatalogFilters, catalogFiltersActive };

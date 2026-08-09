@@ -1681,6 +1681,8 @@ function findProvider(providerId: string): any {
   return provider;
 }
 
+const EXTERNAL_SEEN_ID_MEMORY = 500;
+
 async function getExternalAddonCatalog(type: string, catalogId: string, genre: string, page: number, language: string, config: UserConfig, userUUID: string, includeVideos: boolean = false, skip?: number): Promise<any[]> {
   try {
     const userCatalog = config.catalogs?.find(c => c.id === catalogId && c.type === type);
@@ -1697,6 +1699,7 @@ async function getExternalAddonCatalog(type: string, catalogId: string, genre: s
 
     const cursorKey = useCursor ? `catalog-cursor:${userUUID}:${catalogId}:${type}:${genre || 'all'}` : null;
     let upstreamSkip: number;
+    const seenIds = new Set<string>();
 
     if (!useCursor) {
       upstreamSkip = stremioSkip;
@@ -1709,6 +1712,7 @@ async function getExternalAddonCatalog(type: string, catalogId: string, genre: s
         const cursor = JSON.parse(raw);
         if (cursor.served === stremioSkip) {
           upstreamSkip = cursor.upstreamOffset;
+          for (const id of cursor.seenIds || []) seenIds.add(id);
         } else {
           logger.debug(`[External Addon] ${catalogId}: cursor mismatch (served=${cursor.served}, skip=${stremioSkip}) - falling back to skip offset`);
           upstreamSkip = stremioSkip;
@@ -1722,35 +1726,59 @@ async function getExternalAddonCatalog(type: string, catalogId: string, genre: s
 
     logger.info(`[External Addon] ${catalogId}: type=${type}, stremioSkip=${stremioSkip}, upstreamSkip=${upstreamSkip}, genre=${genre || 'none'}`);
 
-    const cacheKey = `custom-batch:${catalogId}:${genre || 'all'}:skip=${upstreamSkip}`;
-    const items = await cacheWrap(cacheKey, async () => {
-      return await fetchStremThruCatalog(catalogUrl, upstreamSkip, genre);
-    }, catalogTTL, { enableErrorCaching: true, maxRetries: 2 });
-
-    if (!items?.length) {
-      logger.debug(`[External Addon] No items returned for ${catalogId} at skip=${upstreamSkip}`);
-      return [];
-    }
-
     // Filter here (not at the catalog route) so the pagination cursor below counts
     // post-filter items. The route detects this via filtersAlreadyApplied and skips re-filtering.
-    const { applyCatalogFilters } = require('../utils/catalogFilters.js');
+    const { applyCatalogFilters, catalogFiltersActive } = require('../utils/catalogFilters.js');
+    const { fillMaxPages } = require('./catalogPagination');
+
+    const readBatch = async (offset: number) => {
+      const cacheKey = `custom-batch:${catalogId}:${genre || 'all'}:skip=${offset}`;
+      return await cacheWrap(cacheKey, async () => {
+        return await fetchStremThruCatalog(catalogUrl, offset, genre);
+      }, catalogTTL, { enableErrorCaching: true, maxRetries: 2 });
+    };
+
     const collected: any[] = [];
+    let offset = upstreamSkip;
+    let batchesRead = 0;
 
-    for (let i = 0; i < items.length; i += batchSize) {
-      const chunk = items.slice(i, i + batchSize);
-      let metas = await parseStremThruItems(chunk, type, genre, language, config, includeVideos);
-      metas = await applyCatalogFilters(metas, { type, config, catalogConfig: userCatalog, cleanId: catalogId });
-      collected.push(...metas);
+    const filtersActive = catalogFiltersActive({ config, catalogConfig: userCatalog, cleanId: catalogId });
+    const maxBatches = filtersActive ? fillMaxPages() : 1;
+
+    while (collected.length < batchSize && batchesRead < maxBatches) {
+      const items = await readBatch(offset);
+      batchesRead += 1;
+      if (!items?.length) {
+        logger.debug(`[External Addon] No items returned for ${catalogId} at skip=${offset}`);
+        break;
+      }
+
+      for (let i = 0; i < items.length; i += batchSize) {
+        const chunk = items.slice(i, i + batchSize);
+        let metas = await parseStremThruItems(chunk, type, genre, language, config, includeVideos);
+        metas = await applyCatalogFilters(metas, { type, config, catalogConfig: userCatalog, cleanId: catalogId });
+        for (const meta of metas) {
+          const id = meta?.id;
+          if (id && seenIds.has(id)) continue;
+          if (id) seenIds.add(id);
+          collected.push(meta);
+        }
+      }
+      offset += items.length;
     }
 
-    if (cursorKey && collected.length > 0) {
+    if (cursorKey && offset > upstreamSkip) {
       const newServed = stremioSkip + collected.length;
-      const newUpstream = upstreamSkip + items.length;
-      await redis!.set(cursorKey, JSON.stringify({ served: newServed, upstreamOffset: newUpstream }), 'EX', catalogTTL);
+      const recentIds = [...seenIds].slice(-EXTERNAL_SEEN_ID_MEMORY);
+      await redis!.set(
+        cursorKey,
+        JSON.stringify({ served: newServed, upstreamOffset: offset, seenIds: recentIds }),
+        'EX',
+        catalogTTL
+      );
     }
 
-    logger.success(`[External Addon] ${catalogId}: ${collected.length}/${items.length} items (stremioSkip=${stremioSkip}, nextUpstream=${upstreamSkip + items.length})`);
+    logger.success(`[External Addon] ${catalogId}: ${collected.length} items from ${batchesRead} batch(es) (stremioSkip=${stremioSkip}, nextUpstream=${offset})`);
     return collected;
 
   } catch (err: any) {
@@ -3206,6 +3234,7 @@ async function getMergedCatalog(
   });
   if (validSources.length === 0) return [];
 
+  const { applyCatalogFilters } = require('../utils/catalogFilters.js');
   const pageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE as string) || 20;
   const stremioSkip = skip ?? (page - 1) * pageSize;
   const hasGenreFilter = !!(genre && genre !== 'None' && normalizeGenreKey(genre));
@@ -3281,7 +3310,7 @@ async function getMergedCatalog(
     return 'None';
   };
 
-  const fetchSourcePage = async (src: any, srcPage: number): Promise<any[]> => {
+  const fetchSourcePage = async (src: any, srcPage: number): Promise<{ items: any[]; rawLength: number }> => {
     try {
       const effectiveGenre = genre || await resolveDefaultGenre(src.catalogId, src.catalogType) || '';
       const cacheArgs = buildCatalogCacheArgs(src.catalogId, src.catalogType, srcPage, effectiveGenre, config);
@@ -3294,17 +3323,23 @@ async function getMergedCatalog(
       }, { config });
 
       const raw = result?.metas || [];
-      if (!hasGenreFilter) return raw;
-      const filtered = filterMetasByGenre(raw, genre);
-      if (filtered.length !== raw.length) {
-        logger.debug(
-          `[Merged] ${src.catalogId}: genre="${genre}" dropped ${raw.length - filtered.length}/${raw.length} metas`
-        );
+      let items = raw;
+
+      if (hasGenreFilter) {
+        items = filterMetasByGenre(items, genre);
+        if (items.length !== raw.length) {
+          logger.debug(
+            `[Merged] ${src.catalogId}: genre="${genre}" dropped ${raw.length - items.length}/${raw.length} metas`
+          );
+        }
       }
-      return filtered;
+
+      items = await applyCatalogFilters(items, { type, config, catalogConfig, cleanId: catalogId });
+
+      return { items, rawLength: raw.length };
     } catch (err: any) {
       logger.warn(`[Merged] Source ${src.catalogId} failed: ${err.message}`);
-      return [];
+      return { items: [], rawLength: 0 };
     }
   };
 
@@ -3369,14 +3404,14 @@ async function getMergedCatalog(
         continue;
       }
 
-      const items = await fetchSourcePage(src, srcPage);
+      const { items, rawLength } = await fetchSourcePage(src, srcPage);
       const { added, consumed } = collectDeduped(items, collected);
       if (consumed >= items.length) {
-        if (added === 0 && items.length > 0) {
+        if (rawLength === 0 || (items.length > 0 && added === 0)) {
           markSourcePage(src, 0);
           activeSourceIdx++;
         } else {
-          const exhausted = markSourcePage(src, items.length);
+          const exhausted = markSourcePage(src, rawLength);
           if (exhausted) activeSourceIdx++;
         }
       }
@@ -3405,14 +3440,14 @@ async function getMergedCatalog(
       }
       consecutiveSkips = 0;
 
-      const items = await fetchSourcePage(src, srcPage);
+      const { items, rawLength } = await fetchSourcePage(src, srcPage);
       const { added, consumed } = collectDeduped(items, collected);
       if (consumed >= items.length) {
-        if (added === 0 && items.length > 0) {
+        if (rawLength === 0 || (items.length > 0 && added === 0)) {
           markSourcePage(src, 0);
           exhaustedCount++;
         } else {
-          const exhausted = markSourcePage(src, items.length);
+          const exhausted = markSourcePage(src, rawLength);
           if (exhausted) exhaustedCount++;
         }
       }
@@ -3428,12 +3463,12 @@ async function getMergedCatalog(
         validSources.map(async (src: any) => {
           const key = `${src.catalogId}:${src.catalogType}`;
           const srcPage = perSourcePage.get(key)!;
-          if (srcPage <= 0) return [];
+          if (srcPage <= 0) return { items: [], rawLength: 0 };
           return fetchSourcePage(src, srcPage);
         })
       );
 
-      const tagged = roundRobinInterleaveTagged(results);
+      const tagged = roundRobinInterleaveTagged(results.map(r => r.items));
       const { added, consumedPerSource } = collectDedupedTagged(
         tagged.map(t => ({ meta: t.item, srcIdx: t.srcIdx })),
         collected
@@ -3442,17 +3477,17 @@ async function getMergedCatalog(
       for (let i = 0; i < validSources.length; i++) {
         const key = `${validSources[i].catalogId}:${validSources[i].catalogType}`;
         if (perSourcePage.get(key)! <= 0) continue;
-        if (results[i].length === 0) {
+        if (results[i].rawLength === 0) {
           if (markSourcePage(validSources[i], 0)) exhaustedCount++;
-        } else if (consumedPerSource[i] >= results[i].length) {
-          if (markSourcePage(validSources[i], results[i].length)) exhaustedCount++;
+        } else if (consumedPerSource[i] >= results[i].items.length) {
+          if (markSourcePage(validSources[i], results[i].rawLength)) exhaustedCount++;
         }
       }
 
-      if (added === 0) {
+      if (added === 0 && results.some(r => r.items.length > 0)) {
         for (let i = 0; i < validSources.length; i++) {
           const key = `${validSources[i].catalogId}:${validSources[i].catalogType}`;
-          if (perSourcePage.get(key)! > 0 && results[i].length > 0) {
+          if (perSourcePage.get(key)! > 0 && results[i].items.length > 0) {
             markSourcePage(validSources[i], 0);
             exhaustedCount++;
           }
@@ -3462,7 +3497,7 @@ async function getMergedCatalog(
     }
   }
 
-  if (cursorKey && collected.length > 0) {
+  if (cursorKey) {
     const newCursor: MergedCursor = {
       served: stremioSkip + collected.length,
       perSource: validSources.map((s: any) => ({

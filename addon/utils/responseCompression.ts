@@ -1,3 +1,5 @@
+export {};
+
 const compressionMiddleware: any = require('compression');
 const { getSetting }: any = require('../lib/settingsService');
 const { POSTER_CACHE_ROUTE }: any = require('../lib/posterCache/config');

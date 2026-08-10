@@ -1424,6 +1424,43 @@ addon.get("/api/mdblist/lists/top", async (req, res) => {
   }
 });
 
+// Proxy: Get a list's items, poster URLs included.
+// Declared above /:username/:listname, which would otherwise swallow this path.
+addon.get("/api/mdblist/lists/:listId/items", async (req, res) => {
+  try {
+    const { listId } = req.params;
+    const { apikey, limit } = req.query;
+
+    if (!apikey) {
+      return res.status(400).json({ error: "apikey is required" });
+    }
+
+    const params = new URLSearchParams({ apikey, append_to_response: 'poster' });
+    const parsedLimit = Number.parseInt(limit, 10);
+    if (Number.isFinite(parsedLimit) && parsedLimit > 0) {
+      params.set('limit', String(Math.min(parsedLimit, 50)));
+    }
+
+    const url = `https://api.mdblist.com/lists/${listId}/items?${params.toString()}`;
+    const response = await makeRateLimitedMDBListRequest(url, apikey, `MDBList Proxy - Get List Items ${listId}`);
+
+    const payload = response.data || {};
+    const items = [...(payload.movies || []), ...(payload.shows || [])];
+    res.json({
+      items: items.map(item => ({
+        id: item.id,
+        title: item.title,
+        mediatype: item.mediatype,
+        poster: item.poster || null,
+      })),
+    });
+  } catch (error) {
+    consola.error("[MDBList Proxy] Error fetching list items:", error.message);
+    const status = error.response?.status || 500;
+    res.status(status).json({ error: error.message || "Failed to fetch list items" });
+  }
+});
+
 // Proxy: Get list details by username/listname
 addon.get("/api/mdblist/lists/:username/:listname", async (req, res) => {
   try {

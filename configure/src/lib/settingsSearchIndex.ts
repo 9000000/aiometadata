@@ -588,24 +588,29 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ['discover', 'tmdb', 'filter', 'custom catalog'],
   },
 
-  // ── Presets — coarse, anchor: null ──
-  // PresetManager.tsx is 3,094 lines.
+  // ── Setup — coarse, anchor: null ──
   {
-    id: 'presets.wizard', section: 'presets', anchor: null,
-    label: 'Preset Wizard',
-    description: 'Pick a preset, choose safety and labels, optionally add streaming-service discover catalogs, import trusted MDBList collections, and generate AI-powered catalogs.',
-    keywords: ['preset', 'wizard', 'quick setup'],
+    id: 'presets.startingLineup', section: 'presets', anchor: null,
+    label: 'Starting lineup',
+    description: 'Say what you watch and pick how many built-in catalogs to turn on, then preview the result before applying it.',
+    keywords: ['setup', 'preset', 'template', 'lineup', 'quick setup', 'starter', 'wizard'],
   },
   {
-    id: 'presets.guidedSetup', section: 'presets', anchor: null,
-    label: 'Guided Setup',
-    description: 'Answer a few questions and we will choose for you.',
-    keywords: ['guided', 'quiz', 'questions', 'wizard'],
+    id: 'presets.anime', section: 'presets', anchor: null,
+    label: 'Anime handling',
+    description: 'Choose whether anime is included and which source supplies its metadata and artwork.',
+    keywords: ['anime', 'kitsu', 'mal', 'tvdb', 'grouped seasons'],
+  },
+  {
+    id: 'presets.curators', section: 'presets', anchor: null,
+    label: 'Curator lineups',
+    description: 'Browse curated MDBList collections and import the lists you want. Needs your own MDBList key.',
+    keywords: ['curator', 'mdblist', 'lists', 'curated', 'import'],
   },
   {
     id: 'presets.backup', section: 'presets', anchor: null,
-    label: 'Configuration Backup',
-    description: 'Export your full configuration, including API keys, as a backup, or apply a preset with an automatic backup first.',
+    label: 'Configuration backup',
+    description: 'Download your full configuration, including API keys, before applying a setup that replaces your catalogs.',
     keywords: ['backup', 'export', 'import', 'share', 'config'],
   },
 ];

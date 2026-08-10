@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, type ComponentType, type LazyExoticComponent } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ComponentType, type LazyExoticComponent } from "react";
 import { motion } from "framer-motion";
 import {
   ChevronLeft, ChevronRight,
@@ -13,12 +13,15 @@ import { useBreakpoint } from '@/hooks/use-breakpoint';
 import { useSettingsRoute } from '@/hooks/useSettingsRoute';
 import { useAnchorFocus } from '@/hooks/useAnchorFocus';
 import { SettingsSearch } from '@/components/settings/SettingsSearch';
+import { useConfig } from '@/contexts/ConfigContext';
 import { MobileSaveBar } from '@/components/layout/MobileSaveBar';
 import { SidebarSaveButton } from '@/components/layout/SidebarSaveButton';
 import {
   SETTINGS_SECTIONS,
   adjacentSections,
+  hasExplicitSection,
   hashFor,
+  isExistingConfigUrl,
   isSettingsSectionId,
   parseRoute,
   type SettingsSectionId,
@@ -26,7 +29,7 @@ import {
 import { cn } from '@/lib/utils';
 
 const SECTION_IMPORTS: Record<SettingsSectionId, () => Promise<{ default: ComponentType }>> = {
-  'presets': () => import('./sections/PresetManager').then((m) => ({ default: m.PresetManager as ComponentType })),
+  'presets': () => import('./setup/SetupPage').then((m) => ({ default: m.SetupPage as ComponentType })),
   'general': () => import('./sections/GeneralSettings').then((m) => ({ default: m.GeneralSettings as ComponentType })),
   'integrations': () => import('./sections/IntegrationsSettings').then((m) => ({ default: m.IntegrationsSettings as ComponentType })),
   'providers': () => import('./sections/ProvidersSettings').then((m) => ({ default: m.ProvidersSettings as ComponentType })),
@@ -45,6 +48,7 @@ const LazyDashboard = lazy(() =>
   import('./dashboard/Dashboard').then((module) => ({ default: module.Dashboard }))
 );
 const LazyRatingPage = lazy(() => import('./RatingPage'));
+const LazySetupPage = lazy(() => import('./setup/SetupPage').then((m) => ({ default: m.SetupPage })));
 
 const SETTINGS_LAYOUT_NAVIGATE_EVENT = 'settings-layout:navigate';
 
@@ -69,6 +73,13 @@ const SECTION_VIEWS: Record<SettingsSectionId, {
 export function SettingsLayout() {
   const { isMobile } = useBreakpoint();
   const { section, anchor, navigate, focusNonce, refocus } = useSettingsRoute();
+  const { config } = useConfig();
+  // Captured once: applying flips the flag, and reacting to it would drop the user mid-flow.
+  const [isFirstRun, setIsFirstRun] = useState(() =>
+    config.catalogSetupComplete === false
+    && !hasExplicitSection(window.location.hash)
+    && !isExistingConfigUrl(window.location.pathname)
+  );
   const isFirstRender = useRef(true);
   const mainRef = useRef<HTMLElement | null>(null);
   useAnchorFocus(anchor, focusNonce, mainRef);
@@ -79,6 +90,9 @@ export function SettingsLayout() {
   };
 
   useEffect(() => {
+    // Writing a section into the URL during first run would make a refresh look like an
+    // explicit request for that section, skipping setup.
+    if (isFirstRun) return;
     const route = parseRoute(window.location.hash);
     const canonical = hashFor(route.section, route.anchor);
     if (window.location.hash !== canonical) {
@@ -88,7 +102,7 @@ export function SettingsLayout() {
         `${window.location.pathname}${window.location.search}${canonical}`
       );
     }
-  }, []);
+  }, [isFirstRun]);
 
   useEffect(() => {
     if (isFirstRender.current) {
@@ -138,6 +152,22 @@ export function SettingsLayout() {
         <SectionErrorBoundary label="Dashboard" fallback={skeleton}>
           <Suspense fallback={skeleton}>
             <LazyDashboard />
+          </Suspense>
+        </SectionErrorBoundary>
+      </div>
+    );
+  }
+
+  if (isFirstRun) {
+    const skeleton = <SectionSkeleton spec={SECTION_SKELETONS['presets'] ?? GENERIC_SKELETON} label="setup" />;
+    return (
+      <div className="w-full">
+        <SectionErrorBoundary label="Setup" fallback={skeleton}>
+          <Suspense fallback={skeleton}>
+            <LazySetupPage
+              variant="fullscreen"
+              onExit={(target) => { setIsFirstRun(false); navigate(target); }}
+            />
           </Suspense>
         </SectionErrorBoundary>
       </div>

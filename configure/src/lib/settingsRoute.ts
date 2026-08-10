@@ -27,7 +27,22 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   { id: 'configuration', title: 'Configuration' },
 ];
 
-export const DEFAULT_SECTION: SettingsSectionId = 'presets';
+export const DEFAULT_SECTION: SettingsSectionId = 'general';
+
+/** `/stremio/<name>/configure` means an existing config is being opened, not a first run. */
+export function isExistingConfigUrl(pathname: string): boolean {
+  const parts = pathname.split('/');
+  const configure = parts.findIndex(part => part.toLowerCase() === 'configure');
+  const stremio = parts.findIndex(part => part.toLowerCase() === 'stremio');
+  return stremio !== -1 && (configure === stremio + 2 || configure === stremio + 3);
+}
+
+/** True when the URL names a section outright, which must beat any default. */
+export function hasExplicitSection(hash: string): boolean {
+  const raw = (hash || '').trim().replace(/^#/, '');
+  const slash = raw.indexOf('/');
+  return isSettingsSectionId((slash === -1 ? raw : raw.slice(0, slash)).toLowerCase());
+}
 
 export function isSettingsSectionId(value: string): value is SettingsSectionId {
   return SETTINGS_SECTIONS.some((section) => section.id === value);

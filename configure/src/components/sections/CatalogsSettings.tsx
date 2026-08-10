@@ -44,7 +44,6 @@ import { SelectByTagControl } from '@/components/SelectByTagControl';
 import { CatalogTagRow } from '@/components/CatalogTagRow';
 import { TagFilterBar } from '@/components/TagFilterBar';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { CatalogStarterChoice } from '@/components/CatalogStarterChoice';
 import {
   showBulkEnableSuccess,
   showBulkDisableSuccess,
@@ -3857,16 +3856,6 @@ function CatalogsSettingsContent({
     useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
-  const [hasChosenCatalogSetup, setHasChosenCatalogSetup] = useState(
-    () => config.catalogSetupComplete === true
-  );
-
-  useEffect(() => {
-    if (config.catalogSetupComplete) {
-      setHasChosenCatalogSetup(true);
-    }
-  }, [config.catalogSetupComplete]);
-
   // Stable so a memoized row is not re-rendered by a new function identity.
   const handleEditDiscover = useCallback((catalog: CatalogConfig) => {
     setEditingDiscoverCatalog(catalog);
@@ -3926,33 +3915,6 @@ function CatalogsSettingsContent({
     });
   }, [setConfig]);
 
-  const handleLoadDefaults = () => {
-    setConfig(prev => ({
-      ...prev,
-      catalogSetupComplete: true,
-      catalogs: allCatalogDefinitions.map(c => ({
-        id: c.id,
-        name: c.name,
-        type: c.type,
-        source: c.source,
-        enabled: c.isEnabledByDefault || false,
-        showInHome: c.showOnHomeByDefault || false,
-        enableRatingPosters: true,
-        randomizePerPage: false,
-      })),
-    }));
-    setHasChosenCatalogSetup(true);
-  };
-  
-  const handleStartBlank = () => {
-    setConfig(prev => ({
-      ...prev,
-      catalogSetupComplete: true,
-      catalogs: [],
-    }));
-    setHasChosenCatalogSetup(true);
-    setIsTmdbDiscoverBuilderOpen(true);
-  };
 
 
   // Check if TVDB key is available
@@ -4836,15 +4798,6 @@ function CatalogsSettingsContent({
       setLoadingAction(null);
     }
   };
-
-  if (!hasChosenCatalogSetup) {
-    return (
-      <CatalogStarterChoice
-        onChooseDefaults={handleLoadDefaults}
-        onChooseBlank={handleStartBlank}
-      />
-    );
-  }
 
   return (
     <div className={cn(

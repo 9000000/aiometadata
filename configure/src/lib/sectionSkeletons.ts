@@ -63,11 +63,11 @@ const THREE_COLUMN_GAP_6 = 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6
 
 export const SECTION_SKELETONS: Record<SettingsSectionId, SkeletonSpec> = {
   'presets': {
-    className: 'mx-auto w-full max-w-6xl space-y-6',
+    className: 'mx-auto w-full max-w-5xl space-y-10',
     blocks: [
       { kind: 'hero' },
-      { kind: 'card', card: { descriptionLines: 2, control: 'select' } },
-      { kind: 'card', card: { descriptionLines: 1, control: 'switch-list', controlCount: 3 } },
+      { kind: 'grid', className: THREE_COLUMN_GAP_6, cards: Array.from({ length: 3 }, () => ({ descriptionLines: 2, control: 'text' as const })) },
+      { kind: 'grid', className: THREE_COLUMN_GAP_6, cards: Array.from({ length: 3 }, () => ({ descriptionLines: 2, control: 'text' as const })) },
     ],
   },
 

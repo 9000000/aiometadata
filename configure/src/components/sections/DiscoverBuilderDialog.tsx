@@ -164,6 +164,15 @@ const TMDB_TV_STATUS_OPTIONS = [
   { value: '5', label: 'Pilot' },
 ] as const;
 
+const TMDB_MOVIE_RELEASE_TYPE_OPTIONS = [
+  { value: '1', label: 'Premiere' },
+  { value: '2', label: 'Theatrical (limited)' },
+  { value: '3', label: 'Theatrical' },
+  { value: '4', label: 'Digital' },
+  { value: '5', label: 'Physical' },
+  { value: '6', label: 'TV' },
+] as const;
+
 const TVDB_MOVIE_SORT_OPTIONS = [
   { value: 'score', label: 'Score' },
   { value: 'firstAired', label: 'First Aired' },
@@ -601,7 +610,8 @@ function applyDynamicTmdbDateTokens(
   movieDatePreset: DatePresetKey,
   seriesDatePreset: DatePresetKey,
   airDatePreset: DatePresetKey,
-  releasedOnly: boolean
+  releasedOnly: boolean,
+  movieReleaseTypesSelected: boolean = false
 ): Record<string, string | number | boolean> {
   const serializedParams = { ...params };
 
@@ -612,6 +622,18 @@ function applyDynamicTmdbDateTokens(
   if (catalogType === 'movie' && isRelativeDatePreset(movieDatePreset)) {
     serializedParams['primary_release_date.gte'] = buildTmdbDateToken(movieDatePreset, 'from');
     serializedParams['primary_release_date.lte'] = buildTmdbDateToken(movieDatePreset, 'to');
+    if (movieReleaseTypesSelected) {
+      serializedParams['release_date.gte'] = buildTmdbDateToken(movieDatePreset, 'from');
+      serializedParams['release_date.lte'] = buildTmdbDateToken(movieDatePreset, 'to');
+    }
+  } else if (
+    catalogType === 'movie'
+    && movieReleaseTypesSelected
+    && !releasedOnly
+    && serializedParams['release_date.lte']
+    && !serializedParams['primary_release_date.lte']
+  ) {
+    serializedParams['release_date.lte'] = buildTmdbDateToken('today', 'to');
   }
 
   if (catalogType === 'series' && isRelativeDatePreset(seriesDatePreset)) {
@@ -779,6 +801,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
   const [includeAdult, setIncludeAdult] = useState<boolean>(config.includeAdult);
   const [releasedOnly, setReleasedOnly] = useState<boolean>(false);
   const [tmdbTvStatuses, setTmdbTvStatuses] = useState<string[]>([]);
+  const [tmdbMovieReleaseTypes, setTmdbMovieReleaseTypes] = useState<string[]>([]);
   const [cacheTTL, setCacheTTL] = useState<number>(Math.max(catalogTTL, 300));
 
   const [references, setReferences] = useState<TmdbDiscoverReferenceResponse | null>(null);
@@ -1061,6 +1084,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     includeAdult,
     releasedOnly,
     tmdbTvStatuses,
+    tmdbMovieReleaseTypes,
     includeGenres,
     excludeGenres,
     genreJoinMode,
@@ -1327,6 +1351,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     if (typeof fs.includeAdult === 'boolean') setIncludeAdult(fs.includeAdult);
     if (typeof fs.releasedOnly === 'boolean') setReleasedOnly(fs.releasedOnly);
     if (fs.tmdbTvStatuses) setTmdbTvStatuses(fs.tmdbTvStatuses);
+    if (fs.tmdbMovieReleaseTypes) setTmdbMovieReleaseTypes(fs.tmdbMovieReleaseTypes);
     if (fs.selectedPeople) setSelectedPeople(fs.selectedPeople);
     if (fs.peopleJoinMode) setPeopleJoinMode(fs.peopleJoinMode);
     if (fs.withCompanies) setWithCompanies(fs.withCompanies);
@@ -1465,6 +1490,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     if (typeof fs.includeAdult === 'boolean') setIncludeAdult(fs.includeAdult);
     if (typeof fs.releasedOnly === 'boolean') setReleasedOnly(fs.releasedOnly);
     if (fs.tmdbTvStatuses) setTmdbTvStatuses(fs.tmdbTvStatuses);
+    if (fs.tmdbMovieReleaseTypes) setTmdbMovieReleaseTypes(fs.tmdbMovieReleaseTypes);
     if (typeof fs.voteCountMin === 'number') setVoteCountMin(fs.voteCountMin);
     if (fs.voteAverageRange) setVoteAverageRange(fs.voteAverageRange);
     if (fs.runtimeRange) setRuntimeRange(fs.runtimeRange);
@@ -2298,7 +2324,12 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     if (catalogType === 'movie' && releaseRegion) {
       params.region = releaseRegion;
     }
-    if (catalogType === 'movie' && releasedOnly) {
+    if (catalogType === 'movie' && tmdbMovieReleaseTypes.length > 0) {
+      params.with_release_type = TMDB_MOVIE_RELEASE_TYPE_OPTIONS
+        .filter(option => tmdbMovieReleaseTypes.includes(option.value))
+        .map(option => option.value)
+        .join('|');
+    } else if (catalogType === 'movie' && releasedOnly) {
       params.with_release_type = '4|5|6';
       params['release_date.lte'] = getTodayLocalDateString();
     }
@@ -2330,6 +2361,14 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     if (catalogType === 'movie') {
       if (primaryReleaseFrom) params['primary_release_date.gte'] = primaryReleaseFrom;
       if (primaryReleaseTo) params['primary_release_date.lte'] = primaryReleaseTo;
+      if (tmdbMovieReleaseTypes.length > 0) {
+        if (primaryReleaseFrom || primaryReleaseTo) {
+          if (primaryReleaseFrom) params['release_date.gte'] = primaryReleaseFrom;
+          if (primaryReleaseTo) params['release_date.lte'] = primaryReleaseTo;
+        } else {
+          params['release_date.lte'] = getTodayLocalDateString();
+        }
+      }
     } else {
       if (firstAirFrom) params['first_air_date.gte'] = firstAirFrom;
       if (firstAirTo) params['first_air_date.lte'] = firstAirTo;
@@ -2370,6 +2409,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
         includeAdult,
         releasedOnly,
         tmdbTvStatuses,
+        tmdbMovieReleaseTypes,
         selectedPeople,
         peopleJoinMode,
         withCompanies,
@@ -2562,7 +2602,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     try {
       const params = buildDiscoverParams();
       const persistedParams = discoverSource === 'tmdb'
-        ? applyDynamicTmdbDateTokens(params, catalogType, movieDatePreset, seriesDatePreset, airDatePreset, releasedOnly)
+        ? applyDynamicTmdbDateTokens(params, catalogType, movieDatePreset, seriesDatePreset, airDatePreset, releasedOnly, tmdbMovieReleaseTypes.length > 0)
         : params;
       const formState = buildFormState();
   
@@ -3631,6 +3671,44 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
                           type="button"
                           className="text-xs text-muted-foreground hover:text-foreground"
                           onClick={() => { setTmdbTvStatuses([]); setReleasedOnly(false); }}
+                        >
+                          Clear selection
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {catalogType === 'movie' && (
+                    <div className="space-y-2">
+                      <LabelWithTooltip tooltip="Filter movies by how they were released. Select multiple to include movies matching any of the chosen types. Pair this with a release region to ask about that country's releases.">
+                        Release Type
+                      </LabelWithTooltip>
+                      <div className="flex flex-wrap gap-2">
+                        {TMDB_MOVIE_RELEASE_TYPE_OPTIONS.map(option => {
+                          const isSelected = tmdbMovieReleaseTypes.includes(option.value);
+                          return (
+                            <Badge
+                              key={option.value}
+                              variant={isSelected ? 'default' : 'outline'}
+                              className="cursor-pointer select-none"
+                              onClick={() => {
+                                setReleasedOnly(false);
+                                if (isSelected) {
+                                  setTmdbMovieReleaseTypes(prev => prev.filter(v => v !== option.value));
+                                } else {
+                                  setTmdbMovieReleaseTypes(prev => [...prev, option.value]);
+                                }
+                              }}
+                            >
+                              {option.label}
+                            </Badge>
+                          );
+                        })}
+                      </div>
+                      {tmdbMovieReleaseTypes.length > 0 && (
+                        <button
+                          type="button"
+                          className="text-xs text-muted-foreground hover:text-foreground"
+                          onClick={() => { setTmdbMovieReleaseTypes([]); setReleasedOnly(false); }}
                         >
                           Clear selection
                         </button>

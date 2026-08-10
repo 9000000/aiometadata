@@ -39,17 +39,11 @@ export interface ImdbSuggestion {
 }
 
 /**
- * The endpoint keys results by the first character of the query and rejects
- * anything it cannot slot, so the query is normalised the way imdb.com does it.
+ * The endpoint matches the query as typed, including punctuation and non-Latin
+ * scripts, so it is passed through with nothing but whitespace tidied up.
  */
 function normalizeQuery(query: string): string {
-  return query
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/[^a-z0-9 ]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return query.replace(/\s+/g, ' ').trim();
 }
 
 export async function fetchImdbSuggestions(

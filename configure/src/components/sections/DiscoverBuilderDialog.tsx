@@ -164,6 +164,16 @@ const TMDB_TV_STATUS_OPTIONS = [
   { value: '5', label: 'Pilot' },
 ] as const;
 
+const TMDB_TV_TYPE_OPTIONS = [
+  { value: '0', label: 'Documentary' },
+  { value: '1', label: 'News' },
+  { value: '2', label: 'Miniseries' },
+  { value: '3', label: 'Reality' },
+  { value: '4', label: 'Scripted' },
+  { value: '5', label: 'Talk Show' },
+  { value: '6', label: 'Video' },
+] as const;
+
 const TMDB_MOVIE_RELEASE_TYPE_OPTIONS = [
   { value: '1', label: 'Premiere' },
   { value: '2', label: 'Theatrical (limited)' },
@@ -802,6 +812,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
   const [releasedOnly, setReleasedOnly] = useState<boolean>(false);
   const [tmdbTvStatuses, setTmdbTvStatuses] = useState<string[]>([]);
   const [tmdbMovieReleaseTypes, setTmdbMovieReleaseTypes] = useState<string[]>([]);
+  const [tmdbTvTypes, setTmdbTvTypes] = useState<string[]>([]);
   const [cacheTTL, setCacheTTL] = useState<number>(Math.max(catalogTTL, 300));
 
   const [references, setReferences] = useState<TmdbDiscoverReferenceResponse | null>(null);
@@ -1085,6 +1096,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     releasedOnly,
     tmdbTvStatuses,
     tmdbMovieReleaseTypes,
+    tmdbTvTypes,
     includeGenres,
     excludeGenres,
     genreJoinMode,
@@ -1352,6 +1364,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     if (typeof fs.releasedOnly === 'boolean') setReleasedOnly(fs.releasedOnly);
     if (fs.tmdbTvStatuses) setTmdbTvStatuses(fs.tmdbTvStatuses);
     if (fs.tmdbMovieReleaseTypes) setTmdbMovieReleaseTypes(fs.tmdbMovieReleaseTypes);
+    if (fs.tmdbTvTypes) setTmdbTvTypes(fs.tmdbTvTypes);
     if (fs.selectedPeople) setSelectedPeople(fs.selectedPeople);
     if (fs.peopleJoinMode) setPeopleJoinMode(fs.peopleJoinMode);
     if (fs.withCompanies) setWithCompanies(fs.withCompanies);
@@ -1491,6 +1504,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     if (typeof fs.releasedOnly === 'boolean') setReleasedOnly(fs.releasedOnly);
     if (fs.tmdbTvStatuses) setTmdbTvStatuses(fs.tmdbTvStatuses);
     if (fs.tmdbMovieReleaseTypes) setTmdbMovieReleaseTypes(fs.tmdbMovieReleaseTypes);
+    if (fs.tmdbTvTypes) setTmdbTvTypes(fs.tmdbTvTypes);
     if (typeof fs.voteCountMin === 'number') setVoteCountMin(fs.voteCountMin);
     if (fs.voteAverageRange) setVoteAverageRange(fs.voteAverageRange);
     if (fs.runtimeRange) setRuntimeRange(fs.runtimeRange);
@@ -2333,6 +2347,12 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
       params.with_release_type = '4|5|6';
       params['release_date.lte'] = getTodayLocalDateString();
     }
+    if (catalogType === 'series' && tmdbTvTypes.length > 0) {
+      params.with_type = TMDB_TV_TYPE_OPTIONS
+        .filter(option => tmdbTvTypes.includes(option.value))
+        .map(option => option.value)
+        .join('|');
+    }
     if (catalogType === 'series' && tmdbTvStatuses.length > 0) {
       params.with_status = tmdbTvStatuses.join('|');
     } else if (catalogType === 'series' && releasedOnly) {
@@ -2410,6 +2430,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
         releasedOnly,
         tmdbTvStatuses,
         tmdbMovieReleaseTypes,
+        tmdbTvTypes,
         selectedPeople,
         peopleJoinMode,
         withCompanies,
@@ -3639,6 +3660,43 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
                       <Switch checked={includeAdult} onCheckedChange={setIncludeAdult} />
                     </div>
                   </div>
+                  {catalogType === 'series' && (
+                    <div className="space-y-2">
+                      <LabelWithTooltip tooltip="Filter TV shows by what kind of show they are. Select multiple to include shows matching any of the chosen types.">
+                        Show Type
+                      </LabelWithTooltip>
+                      <div className="flex flex-wrap gap-2">
+                        {TMDB_TV_TYPE_OPTIONS.map(option => {
+                          const isSelected = tmdbTvTypes.includes(option.value);
+                          return (
+                            <Badge
+                              key={option.value}
+                              variant={isSelected ? 'default' : 'outline'}
+                              className="cursor-pointer select-none"
+                              onClick={() => {
+                                if (isSelected) {
+                                  setTmdbTvTypes(prev => prev.filter(v => v !== option.value));
+                                } else {
+                                  setTmdbTvTypes(prev => [...prev, option.value]);
+                                }
+                              }}
+                            >
+                              {option.label}
+                            </Badge>
+                          );
+                        })}
+                      </div>
+                      {tmdbTvTypes.length > 0 && (
+                        <button
+                          type="button"
+                          className="text-xs text-muted-foreground hover:text-foreground"
+                          onClick={() => setTmdbTvTypes([])}
+                        >
+                          Clear selection
+                        </button>
+                      )}
+                    </div>
+                  )}
                   {catalogType === 'series' && (
                     <div className="space-y-2">
                       <LabelWithTooltip tooltip="Filter TV shows by their current airing status. Select multiple to include shows matching any of the chosen statuses.">

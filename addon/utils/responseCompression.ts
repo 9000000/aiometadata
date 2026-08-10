@@ -20,11 +20,18 @@ function mountedPath(req: any): string {
   return `${baseUrl}${path}`;
 }
 
+function isEventStream(req: any, res: any): boolean {
+  const contentType = res.getHeader('Content-Type');
+  if (typeof contentType === 'string') return contentType.startsWith(SSE_CONTENT_TYPE);
+
+  const accept = req.headers?.accept;
+  return typeof accept === 'string' && accept.includes(SSE_CONTENT_TYPE);
+}
+
 function shouldCompressResponse(req: any, res: any): boolean {
   if (!isEnabled()) return false;
 
-  const contentType = res.getHeader('Content-Type');
-  if (typeof contentType === 'string' && contentType.startsWith(SSE_CONTENT_TYPE)) return false;
+  if (isEventStream(req, res)) return false;
 
   if (mountedPath(req).startsWith(POSTER_CACHE_ROUTE)) return false;
 

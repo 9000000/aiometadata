@@ -1204,7 +1204,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           </header>
 
           <div className="@container/panes min-h-0 overflow-hidden px-5 py-4">
-          <div className="grid h-full min-h-0 gap-4 @2xl:grid-cols-[20rem_minmax(0,1fr)] @6xl:grid-cols-[20rem_minmax(0,1fr)_minmax(0,1fr)]">
+          <div className="grid h-full min-h-0 gap-4 @2xl:grid-cols-[20rem_minmax(0,1fr)] @6xl:grid-cols-[20rem_minmax(0,1fr)_30rem]">
             <div className="flex min-h-0 flex-col gap-2 overflow-y-auto pr-1">
               <div className="flex gap-2">
                 <Button
@@ -1357,7 +1357,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
             <div className="@container min-h-0 min-w-0 overflow-y-auto">
               {selected && (
-                <div className="sticky top-0 z-10 -mx-1 mb-4 flex items-center gap-1.5 border-b bg-card/95 px-1 py-2 text-sm backdrop-blur">
+                <div className="sticky top-0 z-10 mb-4 flex items-center gap-1.5 border-b bg-card/95 py-2 text-sm backdrop-blur">
                   <button
                     type="button"
                     onClick={() => setSelection({ entryId: selected.id, folderId: null })}
@@ -1451,7 +1451,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   </div>
                 </TabsContent>
 
-                <TabsContent value="preview" className="pt-4">
+                <TabsContent value="preview" className="min-w-0 pt-4">
                   <CollectionPreview
                     entry={selected}
                     target={target}

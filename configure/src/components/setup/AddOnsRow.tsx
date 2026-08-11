@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { Check, Link2, Sparkles, Tv2 } from 'lucide-react';
+import { Check, Link2, Tv2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 function AddOnCard({
@@ -58,17 +58,11 @@ function AddOnCard({
 
 export function AddOnsRow({
   streamingCount,
-  aiCount,
-  canUseAi,
   onOpenStreaming,
-  onOpenAi,
   onOpenImport,
 }: {
   streamingCount: number;
-  aiCount: number;
-  canUseAi: boolean;
   onOpenStreaming: () => void;
-  onOpenAi: () => void;
   onOpenImport: () => void;
 }) {
   return (
@@ -80,22 +74,13 @@ export function AddOnsRow({
         </p>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2">
         <AddOnCard
           Icon={Tv2}
           label="Streaming rows"
           hint="A movies row and a series row for each service you subscribe to."
           count={streamingCount}
           onClick={onOpenStreaming}
-        />
-        <AddOnCard
-          Icon={Sparkles}
-          label="AI catalogs"
-          hint="Describe what you want to watch and get catalogs built from it."
-          count={aiCount}
-          disabled={!canUseAi}
-          disabledHint="Add an OpenRouter or Gemini key in Integrations to use this."
-          onClick={onOpenAi}
         />
         <AddOnCard
           Icon={Link2}

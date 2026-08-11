@@ -84,6 +84,18 @@ export function navigateToSettingsSection(tab: SettingsSectionId): void {
   );
 }
 
+let pendingCollectionBuilder = false;
+
+export function requestCollectionBuilder(): void {
+  pendingCollectionBuilder = true;
+}
+
+export function consumeCollectionBuilderRequest(): boolean {
+  const requested = pendingCollectionBuilder;
+  pendingCollectionBuilder = false;
+  return requested;
+}
+
 export function adjacentSections(id: SettingsSectionId): {
   prev: SettingsSection | null;
   next: SettingsSection | null;

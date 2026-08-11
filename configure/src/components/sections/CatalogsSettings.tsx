@@ -34,6 +34,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { streamingServices, regions } from "@/data/streamings";
+import { consumeCollectionBuilderRequest } from '@/lib/settingsRoute';
 import { allCatalogDefinitions } from '@/data/catalogs';
 import { GenreSelection } from '@/data/genres';
 import { SelectionProvider, useSelection } from '@/contexts/SelectionContext';
@@ -3808,6 +3809,10 @@ function CatalogsSettingsContent({
   const [isTmdbListOpen, setIsTmdbListOpen] = useState(false);
   const [isTmdbDiscoverBuilderOpen, setIsTmdbDiscoverBuilderOpen] = useState(false);
   const [isCollectionBuilderOpen, setIsCollectionBuilderOpen] = useState(false);
+
+  useEffect(() => {
+    if (consumeCollectionBuilderRequest()) setIsCollectionBuilderOpen(true);
+  }, []);
   const [editingDiscoverCatalog, setEditingDiscoverCatalog] = useState<CatalogConfig | null>(null);
   const [customizeTemplate, setCustomizeTemplate] = useState<CustomizeTemplate | null>(null);
   const [isLetterboxdOpen, setIsLetterboxdOpen] = useState(false);

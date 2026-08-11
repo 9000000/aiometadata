@@ -11,12 +11,10 @@ import { buildStreamingServiceCatalogs } from '@/lib/setup/streaming';
 import { listLineupOptions } from '@/lib/setup/lineups';
 import { KEY_META } from '@/lib/setup/keyMeta';
 import { missingKeysFor, requiredKeysFor } from '@/lib/setup/templates';
-import type { CatalogConfig } from '@/contexts/config';
 import type { AnimeSource, ConfigTemplate, ContentChoice, LineupKind, RequiredKeyId, SetupExtras } from '@/lib/setup/types';
 import type { SettingsSectionId } from '@/lib/settingsRoute';
 import { cn } from '@/lib/utils';
 import { AddOnsRow } from './AddOnsRow';
-import { AICatalogDialog } from '@/components/AICatalogDialog';
 import { AppliedNext } from './AppliedNext';
 import { ApplyPreviewDialog } from './ApplyPreviewDialog';
 import { ContentQuestion } from './ContentQuestion';
@@ -31,9 +29,11 @@ export type SetupVariant = 'fullscreen' | 'embedded';
 
 export function SetupPage({
   variant = 'embedded',
+  onApplied,
   onExit,
 }: {
   variant?: SetupVariant;
+  onApplied?: () => void;
   onExit?: (target: SettingsSectionId) => void;
 }) {
   const { config, setConfig, hasBuiltInTmdb, hasBuiltInTvdb, catalogTTL } = useConfig();
@@ -48,9 +48,7 @@ export function SetupPage({
     datePreset: 'last_5_years',
     releasedOnly: false,
   });
-  const [aiCatalogs, setAiCatalogs] = useState<CatalogConfig[]>([]);
   const [streamingOpen, setStreamingOpen] = useState(false);
-  const [aiOpen, setAiOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [imported, setImported] = useState<ConfigTemplate | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -83,9 +81,8 @@ export function SetupPage({
     () => ({
       curatorCatalogs: buildCuratorCatalogs(curatorLists, catalogTTL),
       streamingCatalogs: buildStreamingServiceCatalogs({ ...streaming, catalogTTL }),
-      aiCatalogs,
     }),
-    [curatorLists, streaming, aiCatalogs, catalogTTL]
+    [curatorLists, streaming, catalogTTL]
   );
 
   const selection = useMemo(
@@ -136,6 +133,7 @@ export function SetupPage({
 
       setPreviewOpen(false);
       setApplied(true);
+      onApplied?.();
     } catch (error) {
       console.error('Failed to apply setup:', error);
       toast.error('Could not apply that setup', {
@@ -157,7 +155,6 @@ export function SetupPage({
     imported ? `${imported.name} · ${previewEnabledCount} catalogs` : `${activeLineup.name} · ${activeLineup.enabledCount} catalogs`,
     curatorLists.length ? `${curatorLists.length} curator lists` : null,
     streaming.services.length ? `${streaming.services.length * 2} streaming rows` : null,
-    aiCatalogs.length ? `${aiCatalogs.length} AI catalogs` : null,
   ].filter(Boolean).join(' · ');
 
   const coveredByInstance = requiredKeys.filter(
@@ -276,10 +273,7 @@ export function SetupPage({
 
       <AddOnsRow
         streamingCount={streaming.services.length}
-        aiCount={aiCatalogs.length}
-        canUseAi={!!(config.apiKeys?.openrouter || config.apiKeys?.gemini)}
         onOpenStreaming={() => setStreamingOpen(true)}
-        onOpenAi={() => setAiOpen(true)}
         onOpenImport={() => setImportOpen(true)}
       />
 
@@ -301,12 +295,6 @@ export function SetupPage({
         onOpenChange={setStreamingOpen}
         initial={streaming}
         onConfirm={setStreaming}
-      />
-
-      <AICatalogDialog
-        isOpen={aiOpen}
-        onClose={() => setAiOpen(false)}
-        onCatalogsCreated={created => setAiCatalogs(previous => [...previous, ...created])}
       />
 
       <ApplyPreviewDialog

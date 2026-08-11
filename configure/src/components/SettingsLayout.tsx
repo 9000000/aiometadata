@@ -74,12 +74,15 @@ export function SettingsLayout() {
   const { isMobile } = useBreakpoint();
   const { section, anchor, navigate, focusNonce, refocus } = useSettingsRoute();
   const { config } = useConfig();
-  // Captured once: applying flips the flag, and reacting to it would drop the user mid-flow.
-  const [isFirstRun, setIsFirstRun] = useState(() =>
-    config.catalogSetupComplete === false
-    && !hasExplicitSection(window.location.hash)
-    && !isExistingConfigUrl(window.location.pathname)
-  );
+  const [setupDismissed, setSetupDismissed] = useState(false);
+  // Latched once the user applies, because that flips catalogSetupComplete and would
+  // otherwise unmount the page they are still standing on.
+  const [setupEngaged, setSetupEngaged] = useState(false);
+  const eligibleForSetup =
+    !hasExplicitSection(window.location.hash) && !isExistingConfigUrl(window.location.pathname);
+  // Reads the flag live so a config arriving from sign-in dismisses the takeover.
+  const isFirstRun =
+    !setupDismissed && (setupEngaged || (eligibleForSetup && config.catalogSetupComplete === false));
   const isFirstRender = useRef(true);
   const mainRef = useRef<HTMLElement | null>(null);
   useAnchorFocus(anchor, focusNonce, mainRef);
@@ -166,7 +169,8 @@ export function SettingsLayout() {
           <Suspense fallback={skeleton}>
             <LazySetupPage
               variant="fullscreen"
-              onExit={(target) => { setIsFirstRun(false); navigate(target); }}
+              onApplied={() => setSetupEngaged(true)}
+              onExit={(target) => { setSetupDismissed(true); navigate(target); }}
             />
           </Suspense>
         </SectionErrorBoundary>

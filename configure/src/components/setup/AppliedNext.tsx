@@ -1,10 +1,16 @@
-import { useState } from 'react';
-import { ArrowRight, Check, Download, Layers, Loader2 } from 'lucide-react';
+import { lazy, Suspense, useState } from 'react';
+import { ArrowRight, Check, Download, Layers, Loader2, Sliders, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Callout } from '@/components/settings/Callout';
+import { AICatalogDialog } from '@/components/AICatalogDialog';
+import { useConfig } from '@/contexts/ConfigContext';
+import { navigateToSettingsSection, requestCollectionBuilder } from '@/lib/settingsRoute';
 import { useSave } from '@/contexts/SaveContext';
-import { navigateToSettingsSection } from '@/lib/settingsRoute';
 import { cn } from '@/lib/utils';
+
+const LazyDiscoverBuilder = lazy(() =>
+  import('@/components/sections/DiscoverBuilderDialog').then(m => ({ default: m.DiscoverBuilderDialog }))
+);
 
 type ClientId = 'stremio' | 'aurora' | 'realstreams' | 'nuvio' | 'fusion' | 'other';
 
@@ -26,14 +32,24 @@ export function AppliedNext({
   onEdit: () => void;
   onExit?: () => void;
 }) {
-  const { requestSave, isSaving, savedConfig, openInstall, installUrl, canSave, error } = useSave();
+  const { config } = useConfig();
+  const { requestSave, isSaving, savedConfig, openInstall, installUrl, canSave, error, isDirty } = useSave();
   const [client, setClient] = useState<ClientId | null>(null);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [builderOpen, setBuilderOpen] = useState(false);
 
-  const saved = !!savedConfig;
+
+  // Adding a catalog below makes the config dirty again, so this cannot key off
+  // savedConfig alone or the Save button would disappear after the first save.
+  const saved = !!savedConfig && isDirty === false;
+  const canUseAi = !!(config.apiKeys?.openrouter || config.apiKeys?.gemini);
+
+  const openCollectionBuilder = () => {
+    requestCollectionBuilder();
+    if (onExit) onExit();
+    else navigateToSettingsSection('catalogs');
+  };
   const chosen = CLIENTS.find(entry => entry.id === client);
-
-  // The first-run takeover renders above the router, so a hash change alone cannot leave it.
-  const goToCatalogs = onExit ?? (() => navigateToSettingsSection('catalogs'));
 
   return (
     <div className="mx-auto w-full max-w-2xl space-y-8 px-4 py-12 sm:px-6">
@@ -111,7 +127,7 @@ export function AppliedNext({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={goToCatalogs}
+                  onClick={openCollectionBuilder}
                 >
                   <Layers className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
                   Open the collection builder
@@ -120,6 +136,58 @@ export function AppliedNext({
             )}
           </div>
         )}
+      </div>
+
+      <div className="space-y-3 border-t border-white/[0.06] pt-6">
+        <div className="space-y-1">
+          <p className="text-sm font-medium">Worth coming back for</p>
+          <p className="text-xs text-muted-foreground">
+            Your setup works as it is. These build on it whenever you feel like it.
+          </p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => setAiOpen(true)}
+            disabled={!canUseAi}
+            title={canUseAi ? undefined : 'Needs an OpenRouter or Gemini key in Integrations.'}
+            className={cn(
+              'flex items-start gap-3 rounded-xl border p-4 text-left transition-colors',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+              canUseAi
+                ? 'border-white/[0.08] bg-white/[0.02] hover:border-white/25'
+                : 'cursor-not-allowed border-white/[0.05] opacity-60'
+            )}
+          >
+            <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span>
+              <span className="block text-sm font-medium">AI catalogs</span>
+              <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+                {canUseAi
+                  ? 'Describe what you feel like watching and get a catalog built from it.'
+                  : 'Add an OpenRouter or Gemini key in Integrations to unlock this.'}
+              </span>
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setBuilderOpen(true)}
+            className={cn(
+              'flex items-start gap-3 rounded-xl border border-white/[0.08] bg-white/[0.02] p-4 text-left transition-colors',
+              'hover:border-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary'
+            )}
+          >
+            <Sliders className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span>
+              <span className="block text-sm font-medium">Build your own catalog</span>
+              <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+                Choose the filters yourself: genre, year, rating, network, streaming service.
+              </span>
+            </span>
+          </button>
+        </div>
       </div>
 
       <div className="flex items-center justify-center gap-2">
@@ -133,6 +201,15 @@ export function AppliedNext({
           </Button>
         )}
       </div>
+
+      <AICatalogDialog isOpen={aiOpen} onClose={() => setAiOpen(false)} />
+
+      {builderOpen && (
+        <Suspense fallback={null}>
+          <LazyDiscoverBuilder isOpen onClose={() => setBuilderOpen(false)} />
+        </Suspense>
+      )}
+
     </div>
   );
 }

@@ -4,7 +4,7 @@ import { getLanguages } from "./getLanguages.js";
 import { fetchMDBListItems, parseMDBListItems, fetchMDBListBatchMediaInfo, fetchMDBListUpNext, parseMDBListUpNextItems, usesMdblistExternalItemsEndpoint, supportsMdblistScoreFilters } from "../utils/mdbList.js";
 import { fetchStremThruCatalog, parseStremThruItems } from "../utils/stremthru.js";
 import { fetchTraktWatchlistItems, fetchTraktFavoritesItems, fetchTraktRecommendationsItems, fetchTraktListItems, fetchTraktListItemsById, parseTraktItems, fetchTraktMostFavoritedItems, fetchTraktCalendarShows, fetchTraktSearchItems, getTraktAccessToken, fetchTraktUpNextEpisodes, fetchTraktUnwatchedEpisodes, fetchTraktTrendingItems, fetchTraktPopularItems, fetchTraktAnticipatedItems } from "../utils/traktUtils.js";
-import { fetchSimklTrendingItems, fetchSimklRecipeItems, fetchSimklWatchlistItems, parseSimklItems, getSimklToken, fetchSimklCalendarItems, fetchSimklGenreItems, fetchSimklDvdReleases } from "../utils/simklUtils.js";
+import { fetchSimklTrendingItems, fetchSimklRecipeItems, fetchSimklWatchlistItems, fetchSimklUpNextItems, parseSimklItems, parseSimklUpNextItems, getSimklToken, fetchSimklCalendarItems, fetchSimklGenreItems, fetchSimklDvdReleases } from "../utils/simklUtils.js";
 import { fetchLetterboxdList, parseLetterboxdItems, getLetterboxdGenreIdByName } from "../utils/letterboxdUtils.js";
 import { getFlixPatrolMetas } from "../utils/flixpatrolUtils.js";
 import { fetchResume, parseResumeItems, fetchListItems, parseListItems, fetchPickItems, parsePickItems } from "../utils/publicmetadbUtils.js";
@@ -2797,9 +2797,49 @@ async function getSimklCatalog(
     // For trending, use configured pageSize
     const pageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE || '20')
     const discoverPageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE || '20');
-    
+
+    if (catalogId === 'simkl.upnext' || catalogId === 'simkl.upnext.anime') {
+      const animeOnly = catalogId === 'simkl.upnext.anime';
+      if (type === 'movie') {
+        logger.info(`[Simkl Up Next] Type ${type} requested, returning empty (episodes only)`);
+        return [];
+      }
+
+      const tokenId = (config.apiKeys as any)?.simklTokenId;
+      if (!tokenId) {
+        logger.error(`[Simkl Up Next] No Simkl token ID found`);
+        return [];
+      }
+      const token = await getSimklToken(tokenId);
+      const accessToken = token?.access_token;
+      if (!accessToken) {
+        logger.error(`[Simkl Up Next] Failed to get Simkl access token`);
+        return [];
+      }
+
+      const upNextStart = Date.now();
+      const buckets: Array<'shows' | 'anime'> = animeOnly
+        ? ['anime']
+        : (catalogConfig?.metadata?.includeAnimeInUpNext !== false ? ['shows', 'anime'] : ['shows']);
+      // No TTL override: the shared watching blob is invalidated by the activity
+      // check, and this catalog's short TTL would shrink it for the watchlist too.
+      const allItems = await fetchSimklUpNextItems(accessToken, config, buckets);
+
+      const startIndex = (page - 1) * pageSize;
+      const pageItems = allItems.slice(startIndex, startIndex + pageSize);
+      if (pageItems.length === 0) {
+        logger.info(`[Simkl Up Next] No items at page ${page}`);
+        return [];
+      }
+
+      const useShowPoster = catalogConfig?.metadata?.useShowPosterForUpNext === true;
+      const metas = await parseSimklUpNextItems(pageItems, config, userUUID, useShowPoster);
+      logger.success(`[Simkl Up Next] Processed ${metas.length} items (page ${page}) in ${Date.now() - upNextStart}ms`);
+      return metas;
+    }
+
     let response: any;
-    
+
     if (catalogId.startsWith('simkl.discover.')) {
       const discoverMetadata = catalogConfig?.metadata?.discover || {};
       const rawParams = discoverMetadata?.params || catalogConfig?.metadata?.discoverParams || {};
@@ -2945,10 +2985,11 @@ async function getSimklCatalog(
         }
         
         logger.debug(`[Simkl] Fetching watchlist ${watchlistType}/${status} (all items, local pagination)`);
-        const cacheTTL = catalogConfig?.cacheTTL || (60 * 60); // Default 1 hour if not specified
-        
-        // Fetch all items at once (Simkl doesn't support pagination)
-        const result = await fetchSimklWatchlistItems(accessToken, watchlistType, status, cacheTTL);
+
+        // No TTL override: this blob is shared across every catalog on the same status
+        // and is invalidated by the activity check, so a catalog's own (much shorter)
+        // TTL would expire it early and force a full re-sync instead of a delta.
+        const result = await fetchSimklWatchlistItems(accessToken, watchlistType, status);
         
         // Filter and map items
         let allItems = result.items

@@ -12,12 +12,13 @@ const requestTracker = require('../lib/requestTracker.js');
 const redis = require('../lib/redisClient');
 const logger = consola.withTag('Simkl');
 const idMapper = require('../lib/id-mapper');
+const animeListMapper = require('../lib/anime-list-mapper');
 
 const SIMKL_BASE_URL = 'https://api.simkl.com';
 const SIMKL_CLIENT_ID = process.env.SIMKL_CLIENT_ID || '';
 const SIMKL_TRENDING_TTL = 12 * 60 * 60; // 12 hours
 const SIMKL_WATCHLIST_TTL = 24 * 60 * 60; // Cache in Redis for 24h, relies on activity check to invalidate
-const SIMKL_ACTIVITIES_TTL_DEFAULT = 6 * 60 * 60; // Cache activity check for 6h to prevent spamming on pagination
+const SIMKL_ACTIVITIES_TTL_DEFAULT = 30 * 60; // Simkl asks callers to throttle sync checks to once per 15-30 min
 
 function getSimklActivitiesTtl(): number {
   const parsed = parseInt(process.env.SIMKL_ACTIVITIES_TTL || '', 10);
@@ -360,18 +361,18 @@ async function fetchSimklLastActivities(accessToken: string): Promise<any> {
   const tokenHash = crypto.createHash('sha256').update(accessToken).digest('hex').substring(0, 16);
   const cacheKey = `simkl-api-last-activities:${tokenHash}`;
   
-  // Cache the activity check itself for 6 hours.
-  // This ensures rapid pagination requests use the cached "state of truth" 
-  // instead of hitting the API 5 times in 1 second.
+  // Cached so that rapid pagination requests share one "state of truth"
+  // instead of hitting the API once per page.
   return await cacheWrapGlobal(
     cacheKey,
     async () => {
       const url = `${SIMKL_BASE_URL}/sync/activities`;
+      // GET, not POST: Simkl caps apps at 10 GET/sec but only 1 POST/sec per
+      // client_id, shared across every user on the instance.
       const response: any = await makeAuthenticatedSimklRequest(
         url,
         accessToken,
-        'Simkl fetchLastActivities',
-        'POST'
+        'Simkl fetchLastActivities'
       );
       return response.data;
     },
@@ -406,7 +407,8 @@ async function fetchSimklWatchlistItems(
   try {
     const tokenHash = crypto.createHash('sha256').update(accessToken).digest('hex').substring(0, 16);
     // Redis keys
-    const fullListKey = `simkl-watchlist-full:${tokenHash}:${status}`; // Stores the full object { movies:[], shows:[], anime:[] }
+    // v2 carries next_to_watch_info, so v1 blobs have to be refetched rather than merged into.
+    const fullListKey = `simkl-watchlist-full-v2:${tokenHash}:${status}`; // Stores the full object { movies:[], shows:[], anime:[] }
     const activitiesKey = `simkl-activities:${tokenHash}:${status}`; // Per-status watermark, matching fullListKey granularity
 
     // 1. Get latest activities from Simkl (Cached via fetchSimklLastActivities for 6 hours)
@@ -449,7 +451,7 @@ async function fetchSimklWatchlistItems(
         // Case A: No cache OR items removed -> Full Sync
         logger.debug(`Simkl ${status}: Performing FULL sync (Reason: ${!cachedList ? 'No cache' : 'Items removed'})`);
         
-        const url = `${SIMKL_BASE_URL}/sync/all-items/${status}?extended=full`;
+        const url = `${SIMKL_BASE_URL}/sync/all-items/${status}?extended=full&next_watch_info=yes`;
         const response: any = await makeAuthenticatedSimklRequest(url, accessToken, `Simkl Full Sync ${status}`);
         
         itemsToReturn = {
@@ -465,7 +467,7 @@ async function fetchSimklWatchlistItems(
         const lastSyncDate = cachedActivities?.all || new Date(0).toISOString();
         logger.debug(`Simkl ${status}: Performing INCREMENTAL sync (Since: ${lastSyncDate})`);
 
-        const url = `${SIMKL_BASE_URL}/sync/all-items/${status}?extended=full&date_from=${encodeURIComponent(lastSyncDate)}`;
+        const url = `${SIMKL_BASE_URL}/sync/all-items/${status}?extended=full&next_watch_info=yes&date_from=${encodeURIComponent(lastSyncDate)}`;
         const response: any = await makeAuthenticatedSimklRequest(url, accessToken, `Simkl Incremental Sync ${status}`);
 
         const updates = {
@@ -1453,11 +1455,235 @@ async function fetchSimklDvdReleases(
   }
 }
 
+interface SimklUpNextItem {
+  stremioId: string;
+  season: number;
+  episode: number;
+  episodeTitle?: string;
+  showTitle?: string;
+  lastWatchedAt?: string;
+}
+
+/**
+ * Simkl reports the next episode in the /sync/all-items payload, so unlike Trakt
+ * there is no per-show progress call to make. Anime entries carry no season,
+ * because Simkl files each cour as its own AniDB-style entry numbered from 1.
+ */
+function resolveSimklNextEpisode(item: any): { season: number | null; episode: number; title?: string; date?: string } | null {
+  const info = item?.next_to_watch_info;
+  const episode = Number(info?.episode);
+  if (Number.isInteger(episode) && episode > 0) {
+    const season = Number(info.season);
+    return {
+      season: Number.isInteger(season) ? season : null,
+      episode,
+      title: info.title,
+      date: info.date,
+    };
+  }
+
+  const marker = typeof item?.next_to_watch === 'string'
+    ? item.next_to_watch.match(/^(?:S(\d+))?E(\d+)$/i)
+    : null;
+  if (marker) return { season: marker[1] ? Number(marker[1]) : null, episode: Number(marker[2]) };
+
+  return null;
+}
+
+function normalizeImdbId(value: any): string {
+  const id = String(value);
+  return id.startsWith('tt') ? id : `tt${id}`;
+}
+
+/**
+ * Picks the id form the user's anime provider implies, then the episode numbering
+ * that id form uses. Grouped pages need the AniDB to TVDB offset, so an entry that
+ * cannot be mapped is dropped rather than pinned to a plausible wrong episode.
+ */
+function resolveSimklAnimeTarget(
+  ids: any,
+  episode: number,
+  config: UserConfig
+): { stremioId: string; season: number; episode: number } | null {
+  const provider = (config as any).providers?.anime || 'mal';
+  const grouped = provider === 'tvdb' || provider === 'tmdb' || provider === 'imdb';
+
+  if (!grouped) {
+    if (provider === 'kitsu' && ids.kitsu) return { stremioId: `kitsu:${ids.kitsu}`, season: 1, episode };
+    if (ids.mal) return { stremioId: `mal:${ids.mal}`, season: 1, episode };
+    if (ids.kitsu) return { stremioId: `kitsu:${ids.kitsu}`, season: 1, episode };
+    return null;
+  }
+
+  const mapped = ids.anidb
+    ? animeListMapper.resolveTvdbEpisodeFromAnidbEpisode(Number(ids.anidb), 1, episode)
+    : null;
+  if (!mapped) return null;
+
+  // Simkl often omits tvdb on anime entries, but the mapping carries the id it
+  // just resolved the episode against.
+  let stremioId: string;
+  if (provider === 'tmdb' && ids.tmdb) stremioId = `tmdb:${ids.tmdb}`;
+  else if (provider === 'imdb' && ids.imdb) stremioId = normalizeImdbId(ids.imdb);
+  else stremioId = `tvdb:${ids.tvdb || mapped.tvdbId}`;
+
+  return { stremioId, season: mapped.tvdbSeason, episode: mapped.tvdbEpisode };
+}
+
+function enrichSimklIds(media: any): any {
+  const ids = { ...(media.ids || {}) };
+  const simklId = ids.simkl_id || ids.simkl;
+  if (simklId) {
+    const mapping = idMapper.getMappingBySimklId(simklId);
+    if (mapping) {
+      if (!ids.imdb && mapping.imdb_id) ids.imdb = mapping.imdb_id;
+      if (!ids.tmdb && mapping.themoviedb_id) ids.tmdb = mapping.themoviedb_id;
+      if (!ids.tvdb && mapping.tvdb_id) ids.tvdb = mapping.tvdb_id;
+      if (!ids.mal && mapping.mal_id) ids.mal = mapping.mal_id;
+      if (!ids.kitsu && mapping.kitsu_id) ids.kitsu = mapping.kitsu_id;
+      if (!ids.anidb && mapping.anidb_id) ids.anidb = mapping.anidb_id;
+    }
+  }
+  return ids;
+}
+
+async function fetchSimklUpNextItems(
+  accessToken: string,
+  config: UserConfig,
+  buckets: Array<'shows' | 'anime'> = ['shows']
+): Promise<SimklUpNextItem[]> {
+  const now = Date.now();
+  const upNext: SimklUpNextItem[] = [];
+  let considered = 0;
+  let unmappedAnime = 0;
+
+  for (const bucket of buckets) {
+    const { items } = await fetchSimklWatchlistItems(accessToken, bucket, 'watching');
+    considered += items.length;
+
+    for (const item of items) {
+      const next = resolveSimklNextEpisode(item);
+      if (!next) continue;
+
+      if (next.date) {
+        const airsAt = new Date(next.date).getTime();
+        if (Number.isFinite(airsAt) && airsAt > now) continue;
+      }
+
+      const media = item.anime || item.show || item;
+      const ids = enrichSimklIds(media);
+
+      let target: { stremioId: string; season: number; episode: number } | null = null;
+      if (bucket === 'anime') {
+        target = resolveSimklAnimeTarget(ids, next.episode, config);
+        if (!target) unmappedAnime++;
+      } else if (next.season !== null) {
+        if (ids.imdb) target = { stremioId: normalizeImdbId(ids.imdb), season: next.season, episode: next.episode };
+        else if (ids.tmdb) target = { stremioId: `tmdb:${ids.tmdb}`, season: next.season, episode: next.episode };
+        else if (ids.tvdb) target = { stremioId: `tvdb:${ids.tvdb}`, season: next.season, episode: next.episode };
+      }
+
+      if (!target) {
+        logger.debug(`[Simkl Up Next] Skipping ${media.title || 'Unknown'} (${bucket}), no usable target`);
+        continue;
+      }
+
+      upNext.push({
+        ...target,
+        episodeTitle: next.title,
+        showTitle: media.title,
+        lastWatchedAt: item.last_watched_at,
+      });
+    }
+  }
+
+  upNext.sort((a, b) => {
+    const timeA = a.lastWatchedAt ? new Date(a.lastWatchedAt).getTime() : 0;
+    const timeB = b.lastWatchedAt ? new Date(b.lastWatchedAt).getTime() : 0;
+    if (timeB !== timeA) return timeB - timeA;
+    return (a.showTitle || '').localeCompare(b.showTitle || '');
+  });
+
+  const unmapped = unmappedAnime ? `, ${unmappedAnime} anime unmapped` : '';
+  logger.info(`[Simkl Up Next] ${upNext.length} with an aired next episode (from ${considered} watching${unmapped})`);
+  return upNext;
+}
+
+async function parseSimklUpNextItems(
+  items: SimklUpNextItem[],
+  config: UserConfig,
+  userUUID: string,
+  useShowPoster: boolean = false
+): Promise<any[]> {
+  const metas = await Promise.all(
+    items.map(async (item) => {
+      try {
+        const cacheId = `simkl_upnext_${item.stremioId}_S${item.season}E${item.episode}`;
+
+        const result = await cacheWrapMetaSmart(
+          userUUID,
+          cacheId,
+          async () => {
+            const metaResult = await getMeta('series', config.language, item.stremioId, config, userUUID, true);
+            const meta = metaResult?.meta;
+            if (!meta || !Array.isArray(meta.videos)) return metaResult;
+
+            const nextVideo = meta.videos.find((v: any) => v.season === item.season && v.episode === item.episode);
+            if (!nextVideo) {
+              logger.warn(`[Simkl Up Next] S${item.season}E${item.episode} not found in videos for ${meta.name}`);
+              return metaResult;
+            }
+
+            meta.videos = [nextVideo];
+            meta.behaviorHints = meta.behaviorHints || {};
+            meta.behaviorHints.defaultVideoId = nextVideo.id;
+
+            if (!useShowPoster && nextVideo.thumbnail
+                && nextVideo.thumbnail !== meta.poster
+                && !nextVideo.thumbnail.includes('/missing_thumbnail.png')) {
+              let thumbnailUrl = nextVideo.thumbnail;
+              if (thumbnailUrl.includes('/poster/') && thumbnailUrl.includes('fallback=')) {
+                try {
+                  const fallback = new URL(thumbnailUrl).searchParams.get('fallback');
+                  if (fallback) thumbnailUrl = decodeURIComponent(fallback);
+                } catch {}
+              }
+              if (thumbnailUrl && thumbnailUrl !== meta.poster && !thumbnailUrl.includes('/missing_thumbnail.png')) {
+                meta.poster = thumbnailUrl;
+                meta._rawPosterUrl = null;
+                meta.posterShape = 'landscape';
+              }
+            }
+
+            meta.name = `${meta.name} - S${item.season}E${item.episode}`;
+            meta.id = cacheId;
+            return metaResult;
+          },
+          undefined,
+          { enableErrorCaching: true, maxRetries: 2, config },
+          'series' as any,
+          true,
+          useShowPoster
+        );
+
+        return result?.meta || null;
+      } catch (err: any) {
+        logger.warn(`[Simkl Up Next] Failed to parse ${item.stremioId}: ${err.message}`);
+        return null;
+      }
+    })
+  );
+
+  return metas.filter(Boolean);
+}
+
 export {
   fetchSimklUserStats,
   fetchSimklSearchItems,
   fetchSimklItemDetail,
   fetchSimklWatchlistItems,
+  fetchSimklUpNextItems,
+  parseSimklUpNextItems,
   parseSimklItems,
   makeAuthenticatedSimklRequest,
   getSimklRatings,

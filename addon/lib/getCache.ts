@@ -765,6 +765,10 @@ function getCatalogContentScope(idOnly: string, catalogType: string, config: any
   }
 
   if (idOnly === 'simkl.calendar') return 'mixed';
+  if (idOnly === 'simkl.upnext.anime') return 'anime';
+  // Mixed, not series: the row can carry anime too, so the anime providers have to
+  // reach the config hash or a provider change would serve stale episode numbers.
+  if (idOnly === 'simkl.upnext') return 'mixed';
 
   if (idOnly === 'mdblist.upnext') return 'series';
   if (idOnly === 'mdblist.watchlist') return 'mixed';
@@ -1280,7 +1284,7 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
     };
   }
 
-  if (idOnly.startsWith('simkl.watchlist.')) {
+  if (idOnly.startsWith('simkl.watchlist.') || idOnly.startsWith('simkl.upnext')) {
     catalogConfig.apiKeys = {
       simklTokenId: config.apiKeys?.simklTokenId || ''
     };
@@ -1364,7 +1368,7 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
     cacheLogger.debug(`[Catalog] Using cache TTL for Simkl catalog ${idOnly}: ${cacheTTL}s`);
   }
 
-  if (idOnly.startsWith('simkl.watchlist.')) {
+  if (idOnly.startsWith('simkl.watchlist.') || idOnly.startsWith('simkl.upnext')) {
     const catCfg = config.catalogs?.find((c: any) => c.id === idOnly);
     if (catCfg?.cacheTTL) {
       cacheTTL = catCfg.cacheTTL;

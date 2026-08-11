@@ -33,6 +33,7 @@ const USER_SPECIFIC_PATTERNS = [
   'trakt.unwatched',
   'trakt.history',
   'simkl.watchlist',
+  'simkl.upnext',
   'simkl.watching',
   'simkl.plantowatch',
   'simkl.completed',

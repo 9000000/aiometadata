@@ -914,7 +914,11 @@ const SimklSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogCon
   const isTrending = catalog.id.startsWith('simkl.trending.');
   const isWatchlist = catalog.id.startsWith('simkl.watchlist.');
   const isCalendar = catalog.id.startsWith('simkl.calendar');
+  const isUpNext = catalog.id.startsWith('simkl.upnext');
+  const isCombinedUpNext = catalog.id === 'simkl.upnext';
   const [pageSize, setPageSize] = useState<number>(catalog.metadata?.pageSize || 50);
+  const [useShowPoster, setUseShowPoster] = useState<boolean>(catalog.metadata?.useShowPosterForUpNext || false);
+  const [includeAnime, setIncludeAnime] = useState<boolean>(catalog.metadata?.includeAnimeInUpNext !== false);
   const [hideWatchedTrakt, setHideWatchedTrakt] = useState<string>(catalog.metadata?.hideWatchedTrakt === true ? 'on' : catalog.metadata?.hideWatchedTrakt === false ? 'off' : 'global');
   const [hideWatchedAnilist, setHideWatchedAnilist] = useState<string>(catalog.metadata?.hideWatchedAnilist === true ? 'on' : catalog.metadata?.hideWatchedAnilist === false ? 'off' : 'global');
   const [hideWatchedMdblist, setHideWatchedMdblist] = useState<string>(catalog.metadata?.hideWatchedMdblist === true ? 'on' : catalog.metadata?.hideWatchedMdblist === false ? 'off' : 'global');
@@ -927,7 +931,7 @@ const SimklSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogCon
     }
     return 1;
   });
-  
+
   const minCacheTTL = isTrending ? 3600 : 300;
 
   const handleSave = () => {
@@ -950,6 +954,8 @@ const SimklSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogCon
                 ...(isWatchlist && catalog.metadata?.pageSize && { pageSize: undefined }),
                 // Airing soon days
                 ...(isCalendar && { airingSoonDays: Math.max(1, Math.min(7, airingSoonDays)) }),
+                ...(isUpNext && { useShowPosterForUpNext: useShowPoster }),
+                ...(isCombinedUpNext && { includeAnimeInUpNext: includeAnime }),
                 hideWatchedTrakt: hideTraktValue,
                 hideWatchedAnilist: hideAnilistValue,
                 hideWatchedMdblist: hideMdblistValue,
@@ -1018,6 +1024,31 @@ const SimklSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogCon
                 Number of results to fetch per page from Simkl API for trending catalogs (default: 50). Watchlists use local pagination. 
                 <strong> Must match the value in your SimKL settings.</strong>
               </p>
+            </div>
+          )}
+
+          {isUpNext && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>Use Show Poster</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Display show poster instead of episode thumbnail
+                  </p>
+                </div>
+                <Switch checked={useShowPoster} onCheckedChange={setUseShowPoster} />
+              </div>
+              {isCombinedUpNext && (
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>Include Anime</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Mix anime you are watching into the same row
+                    </p>
+                  </div>
+                  <Switch checked={includeAnime} onCheckedChange={setIncludeAnime} />
+                </div>
+              )}
             </div>
           )}
 

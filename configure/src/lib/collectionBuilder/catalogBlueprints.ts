@@ -51,6 +51,26 @@ const SIMKL_TYPES: Record<string, CatalogConfig['type']> = {
 };
 
 function simklPersonal(catalogId: string): PersonalCatalog | undefined {
+  if (catalogId === 'simkl.upnext') {
+    return {
+      type: 'series',
+      name: 'Simkl Up Next',
+      source: 'simkl',
+      cacheTTL: 300,
+      metadata: { useShowPosterForUpNext: false, includeAnimeInUpNext: true },
+    };
+  }
+
+  if (catalogId === 'simkl.upnext.anime') {
+    return {
+      type: 'anime',
+      name: 'Simkl Anime Up Next',
+      source: 'simkl',
+      cacheTTL: 300,
+      metadata: { useShowPosterForUpNext: false },
+    };
+  }
+
   const match = /^simkl\.watchlist\.(movies|shows|anime)\.([a-z]+)$/.exec(catalogId);
   if (!match) return undefined;
 

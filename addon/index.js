@@ -3949,10 +3949,13 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
     if (mlMeta.includeRated) extraArgs.includeRated = true;
   }
   // Up next catalogs need poster preference and filter settings in cache key
-  if (cleanId === 'trakt.upnext' || cleanId === 'mdblist.upnext') {
+  if (cleanId === 'trakt.upnext' || cleanId === 'mdblist.upnext' || cleanId.startsWith('simkl.upnext')) {
       extraArgs.useShowPoster = typeof catalogConfig?.metadata?.useShowPosterForUpNext === 'boolean'
         ? catalogConfig.metadata.useShowPosterForUpNext
         : false;
+  }
+  if (cleanId === 'simkl.upnext') {
+      extraArgs.includeAnime = catalogConfig?.metadata?.includeAnimeInUpNext !== false;
   }
   if (cleanId === 'mdblist.upnext') {
       if (catalogConfig?.metadata?.hideUnreleased !== undefined) {
@@ -4008,7 +4011,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
     catalogPageSize = parseInt(process.env.MAL_PAGE_SIZE || '25');
   } else if (cleanId === 'anilist.trending' || cleanId.startsWith('anilist.discover')) {
     catalogPageSize = 50;
-  } else if (cleanId.startsWith('simkl.watchlist.') || cleanId.startsWith('simkl.dvd.') || cleanId.startsWith('simkl.trending.') || cleanId.startsWith('simkl.recipe.') || cleanId.startsWith('stremthru.') || cleanId.startsWith('mdblist.') || cleanId.startsWith('custom.') || cleanId.startsWith('trakt.') || cleanId.startsWith('anilist.') || cleanId.startsWith('letterboxd.') || cleanId.startsWith('movielens.') || (cleanId.startsWith('tvdb.') && !cleanId.startsWith('tvdb.collection.'))) {
+  } else if (cleanId.startsWith('simkl.watchlist.') || cleanId.startsWith('simkl.upnext') || cleanId.startsWith('simkl.dvd.') || cleanId.startsWith('simkl.trending.') || cleanId.startsWith('simkl.recipe.') || cleanId.startsWith('stremthru.') || cleanId.startsWith('mdblist.') || cleanId.startsWith('custom.') || cleanId.startsWith('trakt.') || cleanId.startsWith('anilist.') || cleanId.startsWith('letterboxd.') || cleanId.startsWith('movielens.') || (cleanId.startsWith('tvdb.') && !cleanId.startsWith('tvdb.collection.'))) {
     catalogPageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE || '20');
   } else {
     catalogPageSize = 20;
@@ -4025,15 +4028,30 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
   delete cacheExtraArgs.skip;
   if (catalogPage > 1) cacheExtraArgs.page = catalogPage;
 
-  if (cleanId.startsWith('simkl.watchlist.')) {
+  if (cleanId.startsWith('simkl.watchlist.') || cleanId.startsWith('simkl.upnext')) {
     try {
       const { getSimklToken, getSimklActivityFingerprint } = require('./utils/simklUtils');
       const tokenId = config.apiKeys?.simklTokenId;
       if (tokenId) {
         const token = await getSimklToken(tokenId);
         if (token?.access_token) {
-          const parts = cleanId.split('.');
-          const fp = await getSimklActivityFingerprint(token.access_token, parts[2], parts[3]);
+          // Up Next reads whichever buckets it renders, so its key has to move when
+          // any of them does, not just when the shows bucket does.
+          let pairs;
+          if (cleanId === 'simkl.upnext.anime') {
+            pairs = [['anime', 'watching']];
+          } else if (cleanId === 'simkl.upnext') {
+            pairs = extraArgs.includeAnime === false
+              ? [['shows', 'watching']]
+              : [['shows', 'watching'], ['anime', 'watching']];
+          } else {
+            const parts = cleanId.split('.');
+            pairs = [[parts[2], parts[3]]];
+          }
+          const fps = await Promise.all(
+            pairs.map(([t, s]) => getSimklActivityFingerprint(token.access_token, t, s))
+          );
+          const fp = fps.filter(Boolean).join('+');
           if (fp) cacheExtraArgs._simklAct = fp;
         }
       }
@@ -4469,6 +4487,13 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
     if (type === 'series' && stremioId && stremioId.startsWith('pmdb_resume_')) {
       const catalogConfig = fullConfig.catalogs?.find(c => c.id === 'publicmetadb.upnext');
       if (catalogConfig?.metadata?.useShowPosterForUpNext !== undefined) {
+        useShowPoster = catalogConfig.metadata.useShowPosterForUpNext;
+      }
+    }
+    if (type === 'series' && stremioId && stremioId.startsWith('simkl_upnext_')) {
+      const catalogConfig = fullConfig.catalogs?.find(c => c.id.startsWith('simkl.upnext')
+        && c.metadata?.useShowPosterForUpNext !== undefined);
+      if (catalogConfig) {
         useShowPoster = catalogConfig.metadata.useShowPosterForUpNext;
       }
     }

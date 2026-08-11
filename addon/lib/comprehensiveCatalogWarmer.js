@@ -653,7 +653,7 @@ class ComprehensiveCatalogWarmer {
             }
           }
         }
-        if (catalogId === 'trakt.upnext' || catalogId === 'mdblist.upnext' || catalogId === 'publicmetadb.upnext') {
+        if (catalogId === 'trakt.upnext' || catalogId === 'mdblist.upnext' || catalogId === 'publicmetadb.upnext' || catalogId.startsWith('simkl.upnext')) {
           extraArgs.useShowPoster = typeof catalogConfig?.metadata?.useShowPosterForUpNext === 'boolean'
               ? catalogConfig.metadata.useShowPosterForUpNext
               : false;
@@ -662,6 +662,9 @@ class ComprehensiveCatalogWarmer {
           if (catalogConfig?.metadata?.hideUnreleased !== undefined) {
             extraArgs.hideUnreleased = catalogConfig.metadata.hideUnreleased;
           }
+        }
+        if (catalogId === 'simkl.upnext') {
+          extraArgs.includeAnime = catalogConfig?.metadata?.includeAnimeInUpNext !== false;
         }
 
         if (catalogId === 'trakt.calendar') {
@@ -699,15 +702,28 @@ class ComprehensiveCatalogWarmer {
           extraArgs.genre = !extraArgs.genre || extraArgs.genre === 'None' ? '' : extraArgs.genre.toUpperCase();
         }
 
-        if (catalogId.startsWith('simkl.watchlist.')) {
+        if (catalogId.startsWith('simkl.watchlist.') || catalogId.startsWith('simkl.upnext')) {
           try {
             const { getSimklToken, getSimklActivityFingerprint } = require('../utils/simklUtils');
             const tokenId = config.apiKeys?.simklTokenId;
             if (tokenId) {
               const token = await getSimklToken(tokenId);
               if (token?.access_token) {
-                const parts = catalogId.split('.');
-                const fp = await getSimklActivityFingerprint(token.access_token, parts[2], parts[3]);
+                let pairs;
+                if (catalogId === 'simkl.upnext.anime') {
+                  pairs = [['anime', 'watching']];
+                } else if (catalogId === 'simkl.upnext') {
+                  pairs = extraArgs.includeAnime === false
+                    ? [['shows', 'watching']]
+                    : [['shows', 'watching'], ['anime', 'watching']];
+                } else {
+                  const parts = catalogId.split('.');
+                  pairs = [[parts[2], parts[3]]];
+                }
+                const fps = await Promise.all(
+                  pairs.map(([t, st]) => getSimklActivityFingerprint(token.access_token, t, st))
+                );
+                const fp = fps.filter(Boolean).join('+');
                 if (fp) extraArgs._simklAct = fp;
               }
             }
@@ -917,7 +933,7 @@ class ComprehensiveCatalogWarmer {
                 }
               }
             }
-            const skipIds = new Set(['trakt.upnext', 'mdblist.upnext', 'publicmetadb.upnext']);
+            const skipIds = new Set(['trakt.upnext', 'mdblist.upnext', 'publicmetadb.upnext', 'simkl.upnext', 'simkl.upnext.anime']);
             const enabledCatalogs = allCatalogs.filter(c =>
               c.source !== 'merged' && !skipIds.has(c.id) &&
               (c.enabled || mergedChildIds.has(`${c.id}:${c.type}`))

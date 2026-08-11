@@ -194,8 +194,8 @@ cp .env.example .env
 - **Example**: `SIMKL_REDIRECT_URI=https://your-domain.com/api/auth/simkl/callback`
 
 ### `SIMKL_ACTIVITIES_TTL`
-- **Default**: `21600` (6 hours)
-- **Description**: Time-to-live (in seconds) for caching SimKL activity checks. Reduces API spam when paginating.
+- **Default**: `1800` (30 minutes)
+- **Description**: Time-to-live (in seconds) for caching SimKL activity checks. Reduces API spam when paginating. Also caps how long Up Next keeps showing an episode you just watched, and how long a completed item can still appear when Hide Simkl Watched is on. Simkl asks callers not to check more often than every 15 minutes.
 - **Example**: `SIMKL_ACTIVITIES_TTL=3600` (1 hour)
 
 ### `SIMKL_TRENDING_PAGE_SIZE_OPTIONS`

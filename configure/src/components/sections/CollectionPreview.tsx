@@ -272,7 +272,7 @@ function NuvioCollectionStage({
         </div>
 
         {!asRows && entry.folders.length > 0 && (
-          <div className="flex min-w-0 gap-1.5 overflow-x-auto pb-1">
+          <div className="flex min-w-0 gap-1.5 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {entry.showAllTab !== false && (
               <span className="shrink-0 whitespace-nowrap rounded-full bg-white/90 px-2.5 py-0.5 text-xs font-medium text-black">
                 All

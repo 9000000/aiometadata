@@ -1380,6 +1380,14 @@ addon.get("/api/mdblist/user", async (req, res) => {
 });
 
 // Proxy: Get user's lists
+const MDBLIST_LIST_CACHE_TTL = 30 * 60;
+
+/** Keyed per key rather than globally: without a username MDBList returns the caller's own lists. */
+function mdblistCacheKey(parts, apikey) {
+  const fingerprint = crypto.createHash('sha256').update(String(apikey)).digest('hex').slice(0, 16);
+  return `mdblist:${parts.join(':')}:${fingerprint}`;
+}
+
 addon.get("/api/mdblist/lists/user", async (req, res) => {
   try {
     const { apikey, username, sort } = req.query;
@@ -1396,8 +1404,15 @@ addon.get("/api/mdblist/lists/user", async (req, res) => {
       url += `&sort=${sort}`;
     }
     
-    const response = await makeRateLimitedMDBListRequest(url, apikey, 'MDBList Proxy - Get User Lists');
-    res.json(response.data);
+    const payload = await cacheWrapGlobal(
+      mdblistCacheKey(['lists', 'user', username || '~self', sort || 'default'], apikey),
+      async () => {
+        const response = await makeRateLimitedMDBListRequest(url, apikey, 'MDBList Proxy - Get User Lists');
+        return response.data;
+      },
+      MDBLIST_LIST_CACHE_TTL
+    );
+    res.json(payload);
   } catch (error) {
     consola.error("[MDBList Proxy] Error fetching user lists:", error.message);
     const status = error.response?.status || 500;
@@ -1442,18 +1457,22 @@ addon.get("/api/mdblist/lists/:listId/items", async (req, res) => {
     }
 
     const url = `https://api.mdblist.com/lists/${listId}/items?${params.toString()}`;
-    const response = await makeRateLimitedMDBListRequest(url, apikey, `MDBList Proxy - Get List Items ${listId}`);
+    const items = await cacheWrapGlobal(
+      mdblistCacheKey(['list', String(listId), 'items', params.get('limit') || 'all'], apikey),
+      async () => {
+        const response = await makeRateLimitedMDBListRequest(url, apikey, `MDBList Proxy - Get List Items ${listId}`);
+        const payload = response.data || {};
+        return [...(payload.movies || []), ...(payload.shows || [])].map(item => ({
+          id: item.id,
+          title: item.title,
+          mediatype: item.mediatype,
+          poster: item.poster || null,
+        }));
+      },
+      MDBLIST_LIST_CACHE_TTL
+    );
 
-    const payload = response.data || {};
-    const items = [...(payload.movies || []), ...(payload.shows || [])];
-    res.json({
-      items: items.map(item => ({
-        id: item.id,
-        title: item.title,
-        mediatype: item.mediatype,
-        poster: item.poster || null,
-      })),
-    });
+    res.json({ items });
   } catch (error) {
     consola.error("[MDBList Proxy] Error fetching list items:", error.message);
     const status = error.response?.status || 500;

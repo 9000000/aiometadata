@@ -3,9 +3,11 @@ import { apiCache } from '@/utils/apiCache';
 
 export interface CuratorProfile {
   username: string;
+  /** Matched verbatim by buildCuratorCatalogs, so decoration goes in `emoji`. */
   name: string;
   description: string;
   monogram: string;
+  emoji?: string;
 }
 
 export const TRUSTED_CURATORS: CuratorProfile[] = [
@@ -14,6 +16,7 @@ export const TRUSTED_CURATORS: CuratorProfile[] = [
     name: 'Dan Pyjama',
     description: 'Films for pyjama wearers, by a pyjama wearer.',
     monogram: 'DP',
+    emoji: '\u{1F6CC}',
   },
   {
     username: 'tvgeniekodi',

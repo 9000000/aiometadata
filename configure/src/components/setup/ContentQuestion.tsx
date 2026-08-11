@@ -2,7 +2,7 @@ import { Clapperboard, Sparkles, Tv } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Callout } from '@/components/settings/Callout';
 import { animeNotices } from '@/lib/animeNotices';
-import { ANIME_SOURCE_OPTIONS, resolveAnimeProfile } from '@/lib/setup/animeProfiles';
+import { ANIME_QUESTION, ANIME_SOURCE_OPTIONS, resolveAnimeProfile } from '@/lib/setup/animeProfiles';
 import type { AnimeSource, ContentChoice } from '@/lib/setup/types';
 import { cn } from '@/lib/utils';
 
@@ -39,6 +39,7 @@ export function ContentQuestion({
   onAnimeSourceChange: (value: AnimeSource) => void;
 }) {
   const sourceOptions = ANIME_SOURCE_OPTIONS[content];
+  const question = ANIME_QUESTION[content];
   const notices = animeNotices(resolveAnimeProfile(content, animeSource));
 
   return (
@@ -78,7 +79,7 @@ export function ContentQuestion({
         })}
       </div>
 
-      {sourceOptions.length > 0 && (
+      {sourceOptions.length > 0 && question && (
         <motion.div
           initial={{ opacity: 0, y: -4 }}
           animate={{ opacity: 1, y: 0 }}
@@ -86,12 +87,8 @@ export function ContentQuestion({
           className="space-y-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-4"
         >
           <div>
-            <h3 className="text-sm font-medium">When you open an anime, what should you see?</h3>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Neither option changes what the catalog lists. A season is a separate entry there
-              either way. This decides the page you land on, and which ids the episodes carry
-              when a stream addon goes looking for them.
-            </p>
+            <h3 className="text-sm font-medium">{question.title}</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">{question.hint}</p>
           </div>
 
           <div className="grid gap-2 sm:grid-cols-2">

@@ -14,6 +14,7 @@ import {
   type CuratorSort,
 } from '@/lib/setup/curators';
 import { cn } from '@/lib/utils';
+import { SelectAllControl } from '@/components/SelectAllControl';
 import { KeyUnlock } from './KeyUnlock';
 
 const SORT_LABELS: Record<CuratorSort, string> = {
@@ -105,7 +106,10 @@ function CuratorCard({
 
       <div className="flex flex-1 flex-col gap-2 p-4">
         <div className="flex items-baseline justify-between gap-2">
-          <span className="text-sm font-medium">{curator.name}</span>
+          <span className="text-sm font-medium">
+            {curator.emoji && <span aria-hidden="true">{curator.emoji} </span>}
+            {curator.name}
+          </span>
           {lists && (
             <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
               {lists.length} lists
@@ -224,14 +228,30 @@ export function CuratorGallery({
     if (apiKey) void loadAll(apiKey, next);
   };
 
+  const openLists = openCurator ? (listsByCurator[openCurator.username] ?? []) : [];
+  const openInViewSelected = openLists.filter(list => selectedKeys.has(list.selectionKey)).length;
+
+  const commit = (keys: Set<string>) => {
+    onSelectionChange(allLists.filter(list => keys.has(list.selectionKey)));
+  };
+
   const toggle = (list: CuratorList) => {
     const next = new Set(selectedKeys);
     if (next.has(list.selectionKey)) next.delete(list.selectionKey);
     else next.add(list.selectionKey);
-    onSelectionChange(allLists.filter(l => next.has(l.selectionKey)));
+    commit(next);
   };
 
-  const openLists = openCurator ? (listsByCurator[openCurator.username] ?? []) : [];
+  /** Scoped to the curator on screen, so it cannot silently touch another one's picks. */
+  const setAllInView = (selected: boolean) => {
+    const next = new Set(selectedKeys);
+    for (const list of openLists) {
+      if (selected) next.add(list.selectionKey);
+      else next.delete(list.selectionKey);
+    }
+    commit(next);
+  };
+
 
   return (
     <section className="space-y-4">
@@ -278,14 +298,28 @@ export function CuratorGallery({
             transition={{ duration: 0.18 }}
             className="space-y-3"
           >
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button variant="ghost" size="sm" onClick={() => setOpenCurator(null)}>
                 <ArrowLeft className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
                 All curators
               </Button>
               <span className="text-sm text-muted-foreground">
+                {openCurator.emoji && <span aria-hidden="true">{openCurator.emoji} </span>}
                 {openCurator.name} · {openLists.length} lists
               </span>
+              {openLists.length > 0 && (
+                <div className="ml-auto flex items-center gap-2">
+                  <SelectAllControl
+                    totalVisible={openLists.length}
+                    selectedCount={openInViewSelected}
+                    onSelectAll={() => setAllInView(true)}
+                    onDeselectAll={() => setAllInView(false)}
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    {openInViewSelected} of {openLists.length} selected
+                  </span>
+                </div>
+              )}
             </div>
 
             {openLists.length === 0 ? (

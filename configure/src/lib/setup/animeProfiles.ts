@@ -193,21 +193,37 @@ export const ANIME_SOURCE_OPTIONS: Record<ContentChoice, AnimeSourceOption[]> = 
       episodeIds: 'Episodes carry Kitsu ids, so streams come from addons that speak Kitsu.',
     },
   ],
+  // Both of these group seasons, so the choice is about ids rather than layout.
   'anime-first': [
     {
       value: 'tvdb',
-      label: 'One page per series',
-      hint: 'TVDB. Separate season entries in the catalog, but any of them opens the whole run with its seasons grouped.',
+      label: 'Anime-aware addons',
+      hint: 'TVDB metadata, with an anime opening as one page for the whole run.',
       episodeIds: 'Episodes carry Kitsu ids, so streams come from addons that speak Kitsu.',
       recommended: true,
     },
     {
       value: 'imdb',
-      label: 'Match the rest of your library',
-      hint: 'IMDb. Seasons are grouped, the same as any other show you watch.',
+      label: 'The addons you already use',
+      hint: 'TVDB metadata as well, opening on the same grouped page.',
       episodeIds: 'Episodes carry IMDb ids, so any stream addon can find them, not just anime ones.',
     },
   ],
+};
+
+export const ANIME_QUESTION: Record<ContentChoice, { title: string; hint: string } | null> = {
+  'movies-tv': null,
+  'with-anime': {
+    title: 'When you open an anime, what should you see?',
+    hint: 'Neither option changes what the catalog lists. A season is a separate entry there '
+      + 'either way. This decides the page you land on, and which ids the episodes carry when a '
+      + 'stream addon goes looking for them.',
+  },
+  'anime-first': {
+    title: 'Where should anime streams come from?',
+    hint: 'Both options open an anime as one page for the whole run. What differs is the ids the '
+      + 'episodes carry, which is what a stream addon matches on.',
+  },
 };
 
 export function defaultAnimeSource(content: ContentChoice): AnimeSource {
@@ -220,9 +236,11 @@ export function resolveAnimeProfile(content: ContentChoice, source: AnimeSource)
 
   if (source !== 'imdb') return ANIME_FIRST;
 
+  // Metadata stays on TVDB; only the compatibility ids change. IMDb is not an anime
+  // database, so pointing the metadata at it too buys nothing.
   return {
     ...ANIME_FIRST,
-    providers: { ...ANIME_FIRST.providers!, anime: 'imdb', anime_id_provider: 'imdb' },
+    providers: { ...ANIME_FIRST.providers!, anime_id_provider: 'imdb' },
   };
 }
 

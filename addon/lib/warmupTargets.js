@@ -51,6 +51,11 @@ function collectWarmupTargets(metas, config, fallbackType, deps) {
   const cacheThumbnails = posterCacheConfig.isClassEnabled('thumbnail');
   const cacheableFields = new Set(posterCacheConfig.getCacheableFields());
   if (cacheThumbnails) cacheableFields.add('thumbnail');
+  const customArtPatterns = {
+    background: config.customBackgroundUrlPattern,
+    landscapePoster: config.customLandscapeUrlPattern,
+    logo: config.customLogoUrlPattern,
+  };
 
   const targets = [];
   const addThirdParty = (url, imageClass, field) => {
@@ -61,9 +66,9 @@ function collectWarmupTargets(metas, config, fallbackType, deps) {
   };
   // A rendered target without a check key is refetched on every run, so an origin
   // URL it can be looked up by is required rather than optional.
-  const addRendered = (url, checkClass, checkKey) => {
+  const addRendered = (url, imageClass, checkClass, checkKey) => {
     if (!url || !checkKey) return;
-    targets.push({ imageClass: 'poster', url, http: url, checkClass, checkKey });
+    targets.push({ imageClass, url, http: url, checkClass, checkKey });
   };
 
   for (const meta of metas) {
@@ -78,6 +83,7 @@ function collectWarmupTargets(metas, config, fallbackType, deps) {
         if (proxyArtBase && cacheProcessed && origin && !posterCacheConfig.isBypassed(origin)) {
           addRendered(
             buildProxyArtUrl({ base: proxyArtBase, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, ratingKey: proxyApiKey, lang: language }),
+            'poster',
             'processed',
             `rating-poster:${origin}`
           );
@@ -90,6 +96,7 @@ function collectWarmupTargets(metas, config, fallbackType, deps) {
             if (proxyArtBase && cachePosters && !posterCacheConfig.isBypassed(resolved)) {
               addRendered(
                 buildProxyArtUrl({ base: proxyArtBase, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, url: resolved }),
+                'poster',
                 'poster',
                 resolved
               );
@@ -107,6 +114,30 @@ function collectWarmupTargets(metas, config, fallbackType, deps) {
 
     for (const [field, imageClass] of Object.entries(metaFieldClasses)) {
       if (field === 'poster') continue;
+
+      // The served URL, which is what a client will ask for. index.js swaps these
+      // patterns in on the way out, so warming meta[field] fills a key nobody
+      // requests and leaves the one they do request cold.
+      const pattern = customArtPatterns[field];
+      const resolved = pattern ? resolveCustomArtUrl(pattern, ids, type, config) : null;
+      if (resolved) {
+        if (config.usePosterProxy && proxyId) {
+          if (proxyArtBase
+            && posterCacheConfig.isClassEnabled(imageClass)
+            && !posterCacheConfig.isBypassed(resolved)) {
+            addRendered(
+              buildProxyArtUrl({ base: proxyArtBase, imageClass, type: type, id: proxyId, fallback: meta[field], url: resolved }),
+              imageClass,
+              imageClass,
+              resolved
+            );
+          }
+        } else {
+          addThirdParty(resolved, imageClass, field);
+        }
+        continue;
+      }
+
       if (meta[field]) addThirdParty(meta[field], imageClass, field);
     }
 

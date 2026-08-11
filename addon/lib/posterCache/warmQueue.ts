@@ -56,6 +56,8 @@ export interface WarmSummary extends Stats {
   at: number;
   outstanding: number;
   failures: Record<string, number>;
+  /** Absent on summaries written before per class counters existed. */
+  byClass?: Record<string, ClassSummary>;
 }
 
 let lastRun: WarmSummary | null = null;
@@ -92,6 +94,7 @@ function persist(force: boolean): void {
     at: now,
     outstanding: depth() + active,
     failures: Object.fromEntries(failureReasons),
+    byClass: snapshotByClass(),
   };
   lastRun = snapshot;
   const file = summaryFile();
@@ -103,6 +106,71 @@ function persist(force: boolean): void {
 }
 
 const failureReasons = new Map<string, number>();
+
+interface ClassStats {
+  warmed: number;
+  alreadyFresh: number;
+  rendered: number;
+  failed: number;
+  failures: Map<string, number>;
+}
+
+const byClass = new Map<string, ClassStats>();
+
+function classStats(imageClass: string): ClassStats {
+  let entry = byClass.get(imageClass);
+  if (!entry) {
+    entry = { warmed: 0, alreadyFresh: 0, rendered: 0, failed: 0, failures: new Map() };
+    byClass.set(imageClass, entry);
+  }
+  return entry;
+}
+
+export interface ClassSummary {
+  warmed: number;
+  alreadyFresh: number;
+  rendered: number;
+  failed: number;
+  failures: Record<string, number>;
+}
+
+function snapshotByClass(): Record<string, ClassSummary> {
+  const out: Record<string, ClassSummary> = {};
+  for (const [imageClass, entry] of byClass) {
+    out[imageClass] = {
+      warmed: entry.warmed,
+      alreadyFresh: entry.alreadyFresh,
+      rendered: entry.rendered,
+      failed: entry.failed,
+      failures: Object.fromEntries(entry.failures),
+    };
+  }
+  return out;
+}
+
+function describeFailures(failures: Map<string, number>): string {
+  return [...failures]
+    .sort((a, b) => b[1] - a[1])
+    .map(([reason, count]) => `${count} ${reason}`)
+    .join(', ');
+}
+
+/** One line per class that saw work, so a failing upstream is obvious at a glance. */
+function classBreakdown(): string[] {
+  return [...byClass]
+    .filter(([, entry]) => entry.warmed + entry.alreadyFresh + entry.rendered + entry.failed > 0)
+    .sort((a, b) => (b[1].warmed + b[1].rendered) - (a[1].warmed + a[1].rendered))
+    .map(([imageClass, entry]) => {
+      const parts = [
+        `${entry.warmed} fetched`,
+        `${entry.alreadyFresh} already fresh`,
+      ];
+      if (entry.rendered > 0) parts.push(`${entry.rendered} rendered`);
+      parts.push(`${entry.failed} failed`);
+      const reasons = entry.failed > 0 ? ` (${describeFailures(entry.failures)})` : '';
+      return `  ${imageClass}: ${parts.join(', ')}${reasons}`;
+    });
+}
 
 function classifyFailure(error: any): string {
   if (error?.name === 'AbortError' || error?.code === 'ECONNABORTED') return 'timeout';
@@ -193,12 +261,13 @@ function scheduleIdleReport(): void {
     if (done === lastReported) return;
     lastReported = done;
     logger.info(
-      `Image warming idle — ${stats.warmed} fetched, ${stats.skipped} skipped, ` +
-      `${stats.alreadyFresh} already fresh, ${stats.rendered} rendered, ` +
-      `${stats.failed} failed, ${stats.dropped} dropped, ${stats.atCapacity} over capacity` +
-      (failureReasons.size > 0
-        ? ` — failures: ${[...failureReasons].sort((a, b) => b[1] - a[1]).map(([r, n]) => `${n} ${r}`).join(', ')}`
-        : '')
+      [
+        `Image warming idle — ${stats.warmed} fetched, ${stats.skipped} skipped, ` +
+        `${stats.alreadyFresh} already fresh, ${stats.rendered} rendered, ` +
+        `${stats.failed} failed, ${stats.dropped} dropped, ${stats.atCapacity} over capacity` +
+        (failureReasons.size > 0 ? ` — failures: ${describeFailures(failureReasons)}` : ''),
+        ...classBreakdown(),
+      ].join('\n')
     );
   }, IDLE_SETTLE_MS);
   idleTimer.unref?.();
@@ -279,6 +348,7 @@ async function runOne(target: WarmTarget): Promise<void> {
       const response = await fetch(target.http, { method: 'GET', signal: controller.signal });
       await response.arrayBuffer();
       stats.rendered += 1;
+      classStats(target.imageClass).rendered += 1;
     } finally {
       clearTimeout(timer);
     }
@@ -286,8 +356,13 @@ async function runOne(target: WarmTarget): Promise<void> {
   }
 
   const result = await store.getOrFetch(target.imageClass, target.url, (validators) => fetchImage(target.url, { validators }));
-  if (result.status === 'HIT') stats.alreadyFresh += 1;
-  else stats.warmed += 1;
+  if (result.status === 'HIT') {
+    stats.alreadyFresh += 1;
+    classStats(target.imageClass).alreadyFresh += 1;
+  } else {
+    stats.warmed += 1;
+    classStats(target.imageClass).warmed += 1;
+  }
 }
 
 function pump(): void {
@@ -307,6 +382,9 @@ function pump(): void {
         stats.failed += 1;
         const reason = classifyFailure(error);
         failureReasons.set(reason, (failureReasons.get(reason) || 0) + 1);
+        const perClass = classStats(target.imageClass);
+        perClass.failed += 1;
+        perClass.failures.set(reason, (perClass.failures.get(reason) || 0) + 1);
       })
       .finally(() => {
         pending.delete(keyOf(target));
@@ -323,11 +401,12 @@ function pump(): void {
 
 export function getStats(): Stats & {
   depth: number; concurrency: number; lagMs: number;
-  failures: Record<string, number>; lastRun: WarmSummary | null;
+  failures: Record<string, number>; byClass: Record<string, ClassSummary>;
+  lastRun: WarmSummary | null;
 } {
   return {
     ...stats, depth: depth(), concurrency: active, lagMs: observedLag,
-    failures: Object.fromEntries(failureReasons), lastRun,
+    failures: Object.fromEntries(failureReasons), byClass: snapshotByClass(), lastRun,
   };
 }
 
@@ -339,6 +418,7 @@ export function getStats(): Stats & {
 export function resetStats(): void {
   counted.clear();
   failureReasons.clear();
+  byClass.clear();
   capacityWarned = false;
   lastReported = -1;
   for (const key of Object.keys(stats) as (keyof Stats)[]) stats[key] = 0;

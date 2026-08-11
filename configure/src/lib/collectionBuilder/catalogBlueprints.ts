@@ -1,4 +1,5 @@
 import { allCatalogDefinitions } from '@/data/catalogs';
+import { flixpatrolCountries, flixpatrolServices } from '@/data/flixpatrol';
 import type { CatalogConfig } from '@/contexts/config';
 import type { CatalogBlueprint } from '@shared/catalogReconstruction';
 
@@ -102,6 +103,63 @@ function findDefinition(catalogId: string, type: string) {
   return undefined;
 }
 
+const FLIXPATROL_ID = /^flixpatrol\.(.+)\.([a-z]{2}|world)\.(movie|series|all)(?:\.([a-z0-9-]+))?$/;
+const MDBLIST_LIST_ID = /^mdblist\.(\d+)$/;
+
+interface ImportedSource {
+  catalogId: string;
+  type: string;
+  name?: string;
+  baseType?: string;
+}
+
+/**
+ * Ids that describe their own catalog completely, so a file written by another app
+ * still rebuilds without a blueprint. FlixPatrol needs its country slug looked up or
+ * the fetch falls back to a two letter code the upstream does not accept.
+ */
+function reconstructFromId(source: ImportedSource): CatalogConfig | undefined {
+  const flix = FLIXPATROL_ID.exec(source.catalogId);
+  if (flix) {
+    const [, serviceId, countryId, kind, variant] = flix;
+    const service = flixpatrolServices.find(entry => entry.id === serviceId);
+    const country = flixpatrolCountries.find(entry => entry.id === countryId);
+    if (!service || !country) return undefined;
+
+    const label = kind === 'movie' ? 'Movies ' : kind === 'series' ? 'TV Shows ' : '';
+    const derived = `Top 10 ${label}on ${service.name} (${country.name})`;
+    return {
+      id: source.catalogId,
+      type: kind === 'movie' ? 'movie' : kind === 'series' ? 'series' : 'all',
+      name: source.name?.trim() || (variant ? `${derived} ${variant}` : derived),
+      source: 'flixpatrol',
+      enabled: true,
+      showInHome: true,
+      enableRatingPosters: true,
+      metadata: { countrySlug: country.slug },
+    };
+  }
+
+  const list = MDBLIST_LIST_ID.exec(source.catalogId);
+  if (list) {
+    const base = source.baseType || source.type;
+    return {
+      id: source.catalogId,
+      type: base === 'movie' ? 'movie' : 'series',
+      name: source.name?.trim() || `MDBList ${list[1]}`,
+      source: 'mdblist',
+      enabled: true,
+      showInHome: true,
+      sort: 'default',
+      order: 'asc',
+      genreSelection: 'standard',
+      enableRatingPosters: true,
+    };
+  }
+
+  return undefined;
+}
+
 export interface CatalogAdditions {
   /** Catalogs to append, already deduped against the config. */
   added: CatalogConfig[];
@@ -116,11 +174,23 @@ export interface CatalogAdditions {
    * it belongs to is not connected. Accounted for, but not staged.
    */
   needsAccountKeys: Set<string>;
+  /** Existing catalogs to fold into a rebuilt merge, keyed `id:type`. */
+  absorbed: Array<{ key: string; parentId: string }>;
+  /** Merges rebuilt with fewer sources than the author had. */
+  partialMerges: Array<{ name: string; kept: number; dropped: number }>;
 }
 
 export function additionCount(additions: CatalogAdditions): number {
   return additions.added.length + additions.enabled.length;
 }
+
+interface MergeChild {
+  catalogId: string;
+  catalogType: string;
+}
+
+/** A merge needs at least two sources; the app dissolves anything smaller. */
+const MIN_MERGE_SOURCES = 2;
 
 /**
  * Works out what a config is missing for an imported layout: catalogs the file
@@ -129,7 +199,7 @@ export function additionCount(additions: CatalogAdditions): number {
 export function resolveCatalogAdditions(
   existing: CatalogConfig[],
   blueprints: CatalogBlueprint[],
-  unknownSources: Array<{ catalogId: string; type: string }>,
+  unknownSources: ImportedSource[],
   apiKeys: Record<string, any> = {}
 ): CatalogAdditions {
   const byKey = new Map(existing.map(catalog => [`${catalog.id}:${catalog.type}`, catalog]));
@@ -142,7 +212,11 @@ export function resolveCatalogAdditions(
   // Only what the design in front of the user still points at. A file can carry
   // far more than is kept, and deleting a tile has to take its catalog with it.
   const wanted = new Set(unknownSources.map(source => source.catalogId));
-  const usable = blueprints.filter(blueprint => wanted.has(blueprint.id));
+  // Merges are handled below instead: adding the parent verbatim here would claim it
+  // before its children have been rebuilt.
+  const usable = blueprints.filter(
+    blueprint => wanted.has(blueprint.id) && !blueprint.id.startsWith('merged.')
+  );
   const blueprintIds = new Set(usable.map(blueprint => blueprint.id));
 
   for (const blueprint of usable) {
@@ -160,6 +234,9 @@ export function resolveCatalogAdditions(
 
   const needsAccount = new Set<string>();
   const needsAccountKeys = new Set<string>();
+  const absorbed: Array<{ key: string; parentId: string }> = [];
+  const partialMerges: Array<{ name: string; kept: number; dropped: number }> = [];
+  const blueprintById = new Map(blueprints.map(blueprint => [blueprint.id, blueprint]));
 
   const take = (key: string): boolean => {
     if (claimed.has(key)) return false;
@@ -170,7 +247,88 @@ export function resolveCatalogAdditions(
     return false;
   };
 
+  /** Existing catalog, shipped blueprint, self describing id, or built-in. */
+  const resolveChild = (child: MergeChild): CatalogConfig | 'existing' | undefined => {
+    const key = `${child.catalogId}:${child.catalogType}`;
+    if (byKey.has(key)) return 'existing';
+
+    const blueprint = blueprintById.get(child.catalogId);
+    if (blueprint) return { ...blueprint } as CatalogConfig;
+
+    const rebuilt = reconstructFromId({ catalogId: child.catalogId, type: child.catalogType });
+    if (rebuilt) return rebuilt;
+
+    const definition = findDefinition(child.catalogId, child.catalogType);
+    if (!definition) return undefined;
+    return {
+      id: definition.id,
+      type: definition.type,
+      name: definition.name,
+      source: definition.source as CatalogConfig['source'],
+      enabled: true,
+      showInHome: false,
+    };
+  };
+
   for (const source of unknownSources) {
+    // A merge is a composition of other catalogs, so it only comes back if enough of
+    // them do. The id is a hash, so without the parent's blueprint there is nothing
+    // to go on.
+    if (source.catalogId.startsWith('merged.')) {
+      const parent = blueprintById.get(source.catalogId) as any;
+      const children: MergeChild[] = Array.isArray(parent?.metadata?.mergedSources)
+        ? parent.metadata.mergedSources
+        : [];
+      if (children.length < MIN_MERGE_SOURCES) continue;
+
+      const kept: MergeChild[] = [];
+      const staged: CatalogConfig[] = [];
+      let dropped = 0;
+
+      for (const child of children) {
+        const outcome = resolveChild(child);
+        if (!outcome) { dropped += 1; continue; }
+        kept.push({ catalogId: child.catalogId, catalogType: child.catalogType });
+        if (outcome !== 'existing') staged.push(outcome);
+      }
+
+      if (kept.length < MIN_MERGE_SOURCES) continue;
+
+      const parentKey = `${source.catalogId}:${parent.type}`;
+      resolved.add(`${source.catalogId}:${source.type}`);
+      if (!take(parentKey)) continue;
+
+      for (const child of staged) {
+        const childKey = `${child.id}:${child.type}`;
+        if (claimed.has(childKey)) continue;
+        claimed.add(childKey);
+        added.push({ ...child, mergedInto: source.catalogId, showInHome: false });
+      }
+      for (const child of kept) {
+        const childKey = `${child.catalogId}:${child.catalogType}`;
+        if (byKey.has(childKey)) absorbed.push({ key: childKey, parentId: source.catalogId });
+      }
+
+      added.push({
+        ...(parent as CatalogConfig),
+        enabled: true,
+        metadata: {
+          ...(parent.metadata || {}),
+          mergedSources: kept.map(child => ({
+            catalogId: child.catalogId,
+            catalogType: child.catalogType,
+            originalEnabled: true,
+            originalShowInHome: false,
+          })),
+        },
+      });
+
+      if (dropped > 0) {
+        partialMerges.push({ name: parent.name || source.catalogId, kept: kept.length, dropped });
+      }
+      continue;
+    }
+
     // A displayType renames the type in the manifest but not in the config, so a
     // source is matched to its blueprint on the id alone.
     if (blueprintIds.has(source.catalogId)) {
@@ -201,6 +359,13 @@ export function resolveCatalogAdditions(
       continue;
     }
 
+    const rebuilt = reconstructFromId(source);
+    if (rebuilt) {
+      resolved.add(`${source.catalogId}:${source.type}`);
+      if (take(`${rebuilt.id}:${rebuilt.type}`)) added.push(rebuilt);
+      continue;
+    }
+
     // Files written by another app carry no blueprints, but a built-in catalog is
     // defined the same everywhere, so it can still be resolved from its id.
     const definition = findDefinition(source.catalogId, source.type);
@@ -219,7 +384,7 @@ export function resolveCatalogAdditions(
     }
   }
 
-  return { added, enabled, resolved, needsAccount: [...needsAccount], needsAccountKeys };
+  return { added, enabled, resolved, needsAccount: [...needsAccount], needsAccountKeys, absorbed, partialMerges };
 }
 
 /** Applies the additions, leaving every other catalog and the ordering alone. */
@@ -228,9 +393,14 @@ export function applyCatalogAdditions(
   additions: CatalogAdditions
 ): CatalogConfig[] {
   const toEnable = new Set(additions.enabled);
-  const updated = existing.map(catalog =>
-    toEnable.has(`${catalog.id}:${catalog.type}`) ? { ...catalog, enabled: true } : catalog
-  );
+  const toAbsorb = new Map(additions.absorbed.map(entry => [entry.key, entry.parentId]));
+  const updated = existing.map(catalog => {
+    const key = `${catalog.id}:${catalog.type}`;
+    let next = toEnable.has(key) ? { ...catalog, enabled: true } : catalog;
+    const parentId = toAbsorb.get(key);
+    if (parentId) next = { ...next, mergedInto: parentId, showInHome: false };
+    return next;
+  });
   return [...updated, ...additions.added];
 }
 

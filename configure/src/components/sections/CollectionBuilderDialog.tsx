@@ -795,6 +795,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
         resolved: new Set<string>(),
         needsAccount: [],
         needsAccountKeys: new Set<string>(),
+        absorbed: [],
+        partialMerges: [],
       }),
     [importPreview, importUnknown, config.catalogs, config.apiKeys]
   );
@@ -1202,7 +1204,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           </header>
 
           <div className="@container/panes min-h-0 overflow-hidden px-5 py-4">
-          <div className="grid h-full min-h-0 gap-4 @2xl:grid-cols-[20rem_minmax(0,1fr)] @6xl:grid-cols-[20rem_minmax(0,1fr)_24rem]">
+          <div className="grid h-full min-h-0 gap-4 @2xl:grid-cols-[20rem_minmax(0,1fr)] @6xl:grid-cols-[20rem_minmax(0,1fr)_minmax(0,1fr)]">
             <div className="flex min-h-0 flex-col gap-2 overflow-y-auto pr-1">
               <div className="flex gap-2">
                 <Button
@@ -1605,9 +1607,17 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   applying leaves those tiles empty.
                 </p>
               )}
+              {pendingAdditions.partialMerges.map(merge => (
+                <p key={merge.name} className="flex items-start gap-1.5 text-xs text-amber-500">
+                  <AlertTriangle className="mt-px h-4 w-4 shrink-0" />
+                  &ldquo;{merge.name}&rdquo; is rebuilt from {merge.kept} of its sources.{' '}
+                  {merge.dropped} could not be recreated, so that row will be missing them.
+                </p>
+              ))}
               {overBy === 0
                 && pendingCount === 0
                 && unresolvedSources.length === 0
+                && pendingAdditions.partialMerges.length === 0
                 && pendingAdditions.needsAccount.length === 0 && (
                 <p className="text-xs text-muted-foreground">{stageCopy.hint}</p>
               )}

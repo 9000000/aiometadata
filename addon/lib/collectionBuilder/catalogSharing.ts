@@ -73,6 +73,7 @@ const SAFE_METADATA = [
   'airingSoonDays', 'status', 'description', 'itemCount', 'url', 'identifier',
   'isWatchlist', 'isCustomList', 'mediatype', 'username', 'listName', 'author',
   'listId', 'listDescription', 'isPublic', 'listType',
+  'mergeMode', 'mergedSources',
 ];
 
 /** Everything not named here is dropped, `privacy` deliberately among them. */
@@ -85,6 +86,15 @@ export function sanitizeMetadata(
   for (const key of SAFE_METADATA) {
     const value = metadata[key];
     if (value !== undefined) safe[key] = value;
+  }
+
+  if (Array.isArray(safe.mergedSources)) {
+    // originalEnabled and originalShowInHome describe the author's config before the
+    // merge, which means nothing to anyone importing it.
+    safe.mergedSources = safe.mergedSources
+      .filter((entry: any) => entry?.catalogId && !isUserSpecific(String(entry.catalogId)))
+      .map((entry: any) => ({ catalogId: entry.catalogId, catalogType: entry.catalogType }));
+    if (safe.mergedSources.length === 0) delete safe.mergedSources;
   }
 
   return Object.keys(safe).length > 0 ? safe : undefined;

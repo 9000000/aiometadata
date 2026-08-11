@@ -224,7 +224,7 @@ function NuvioCollectionStage({
   );
 
   return (
-    <div className="relative aspect-video w-full overflow-hidden rounded-lg border bg-neutral-950">
+    <div className="relative aspect-video min-h-[19rem] w-full overflow-hidden rounded-lg border bg-neutral-950">
       {base && (
         <img
           key={base}
@@ -272,16 +272,16 @@ function NuvioCollectionStage({
         </div>
 
         {!asRows && entry.folders.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
+          <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1">
             {entry.showAllTab !== false && (
-              <span className="rounded-full bg-white/90 px-2.5 py-0.5 text-xs font-medium text-black">
+              <span className="shrink-0 whitespace-nowrap rounded-full bg-white/90 px-2.5 py-0.5 text-xs font-medium text-black">
                 All
               </span>
             )}
             {entry.folders.map((folder, index) => (
               <span
                 key={folder.id}
-                className={`rounded-full px-2.5 py-0.5 text-xs ${
+                className={`shrink-0 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs ${
                   entry.showAllTab === false && index === 0
                     ? 'bg-white/90 font-medium text-black'
                     : 'bg-white/15 text-white/80'

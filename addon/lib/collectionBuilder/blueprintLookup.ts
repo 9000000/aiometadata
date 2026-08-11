@@ -18,14 +18,15 @@ function manifestKeys(catalog: ShareableCatalog): string[] {
 /**
  * Turns a config's catalogs into the catalogs a collection file can carry, so an
  * importer who does not have them can rebuild them rather than being told to add
- * them by hand. Personal catalogs are left out.
+ * them by hand. Personal catalogs are left out. Catalogs absorbed into a merge are
+ * kept, since rebuilding the merge means rebuilding them too, and the importer only
+ * pulls in the ones a merge asks for.
  */
 export function buildBlueprintLookup(catalogs: ShareableCatalog[] | undefined): BlueprintLookup {
   const lookup: BlueprintLookup = {};
 
   for (const catalog of catalogs || []) {
     if (!catalog?.id || !catalog?.type) continue;
-    if (catalog.mergedInto) continue;
 
     const shareable = buildShareableCatalog(catalog);
     if (!shareable) continue;

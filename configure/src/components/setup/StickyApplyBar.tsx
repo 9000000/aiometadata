@@ -20,7 +20,7 @@ export function StickyApplyBar({
   return (
     <div
       className={cn(
-        '-mx-4 mt-2 border-t border-white/[0.08] bg-background/85 px-4 py-3 backdrop-blur-xl sm:-mx-6 sm:px-6',
+        'mt-2 border-t border-white/[0.08] bg-background/85 py-3 backdrop-blur-xl',
         'md:sticky md:bottom-0 md:z-20',
         className
       )}

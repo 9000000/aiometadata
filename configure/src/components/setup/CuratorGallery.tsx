@@ -254,6 +254,20 @@ export function CuratorGallery({
         )}
       </div>
 
+      {locked && (
+        <div className="space-y-2 rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+          <p className="text-sm">Add an MDBList key to browse and import these.</p>
+          <KeyUnlock
+            keyId="mdblist"
+            value={keyInput}
+            onChange={setKeyInput}
+            onValidated={unlock}
+            submitLabel="Unlock"
+            note="Free up to 1000 calls a day. Your key stays in your own configuration."
+          />
+        </div>
+      )}
+
       <AnimatePresence mode="wait" initial={false}>
         {openCurator ? (
           <motion.div
@@ -345,20 +359,6 @@ export function CuratorGallery({
           </motion.div>
         )}
       </AnimatePresence>
-
-      {locked && (
-        <div className="space-y-2 rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-          <p className="text-sm">Add an MDBList key to browse and import these.</p>
-          <KeyUnlock
-            keyId="mdblist"
-            value={keyInput}
-            onChange={setKeyInput}
-            onValidated={unlock}
-            submitLabel="Unlock"
-            note="Free up to 1000 calls a day. Your key stays in your own configuration."
-          />
-        </div>
-      )}
 
       {failed.length > 0 && (
         <p className="text-xs text-amber-400">

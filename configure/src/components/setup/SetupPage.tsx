@@ -174,8 +174,10 @@ export function SetupPage({
   return (
     <div
       className={cn(
-        'mx-auto w-full space-y-10 px-4 sm:px-6',
-        variant === 'fullscreen' ? 'max-w-5xl py-12' : 'max-w-4xl py-2'
+        'w-full space-y-10',
+        // Embedded sits inside `main`, which is uncapped and unpadded like every
+        // other section; only the takeover needs its own gutters.
+        variant === 'fullscreen' ? 'mx-auto max-w-5xl px-4 py-12 sm:px-6' : 'py-2'
       )}
     >
       <header className="flex flex-wrap items-start justify-between gap-4">
@@ -281,6 +283,7 @@ export function SetupPage({
         summary={summary}
         blockers={missingKeys.map(key => `${KEY_META[key].label} needed`)}
         busy={applying}
+        className={variant === 'fullscreen' ? '-mx-4 px-4 sm:-mx-6 sm:px-6' : undefined}
         onApply={() => setPreviewOpen(true)}
       />
 

@@ -80,8 +80,13 @@ function isBuiltIn(catalog: CatalogConfig): boolean {
  */
 export function deriveManifestCatalog(catalog: CatalogConfig): ManifestCatalog {
   const type = trimmed(catalog.displayType) || catalog.type;
-  const id = catalog.displayType && isBuiltIn(catalog) ? `${catalog.id}_${catalog.type}` : catalog.id;
-  const genres = catalog.genres;
+  const builtIn = isBuiltIn(catalog);
+  const id = catalog.displayType && builtIn ? `${catalog.id}_${catalog.type}` : catalog.id;
+  // createCatalog is the one builder that does not offer "None" off the home row.
+  const offersNone = !catalog.showInHome && !builtIn;
+  const genres = offersNone
+    ? ['None', ...(catalog.genres || []).filter(genre => genre !== 'None')]
+    : catalog.genres;
   return {
     id,
     type,
@@ -90,10 +95,8 @@ export function deriveManifestCatalog(catalog: CatalogConfig): ManifestCatalog {
     source: catalog.source,
     tags: catalog.tags,
     genres,
-    // Mirrors isGenreRequired: genres to offer, and no "None" among them.
-    genreRequired: !catalog.showInHome
-      && (genres?.length ?? 0) > 0
-      && !genres?.some(genre => genre === 'None'),
+    genreRequired: !catalog.showInHome && (offersNone || (genres?.length ?? 0) > 0),
+    genreDefault: offersNone ? 'None' : undefined,
   };
 }
 
@@ -204,43 +207,45 @@ function needsNonGenreExtra(entry: any): boolean {
   return entry.extra.some((item: any) => item?.isRequired && item?.name !== 'genre');
 }
 
-/**
- * getManifest marks genre required on every non-home catalog, so `isRequired` alone
- * over-flags. Offering "None" means unfiltered is valid, and those do serve.
- */
+/** A manifest can name more than one extra "genre", so they read as one field. */
+function genreExtras(entry: any): any[] {
+  if (!Array.isArray(entry?.extra)) return [];
+  return entry.extra.filter((item: any) => item?.name === 'genre');
+}
+
 function isGenreRequired(entry: any): boolean {
-  if (!Array.isArray(entry?.extra)) return false;
-  const genre = entry.extra.find((item: any) => item?.name === 'genre');
-  if (!genre?.isRequired) return false;
-  return !(Array.isArray(genre.options) && genre.options.some((option: any) => option === 'None'));
+  return genreExtras(entry).some((item: any) => item?.isRequired);
 }
 
 /** The genre the manifest says it will use when the request carries none. */
 function genreDefault(entry: any): string | undefined {
-  if (!Array.isArray(entry?.extra)) return undefined;
-  const genre = entry.extra.find((item: any) => item?.name === 'genre');
-  return trimmed(genre?.default) || undefined;
+  for (const item of genreExtras(entry)) {
+    const value = trimmed(item?.default);
+    if (value) return value;
+  }
+  return undefined;
 }
 
 function genreOptions(entry: any): string[] | undefined {
-  if (!Array.isArray(entry?.extra)) return undefined;
-  const genre = entry.extra.find((item: any) => item?.name === 'genre');
-  if (!Array.isArray(genre?.options)) return undefined;
+  const extras = genreExtras(entry);
+  if (extras.length === 0) return undefined;
   // When genre is required, getManifest prepends "None" as the unfiltered choice,
   // so it has to stay. Otherwise it is just noise.
-  const keep = genre.isRequired
-    ? (option: any) => Boolean(trimmed(option))
-    : (option: any) => Boolean(trimmed(option)) && option !== 'None';
+  const required = extras.some((item: any) => item?.isRequired);
 
   // Options can repeat, so dedupe: they become React keys in the genre picker.
   const seen = new Set<string>();
-  const options = genre.options.filter((option: any) => {
-    if (!keep(option)) return false;
-    const key = String(option);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const options: string[] = [];
+  for (const item of extras) {
+    if (!Array.isArray(item?.options)) continue;
+    for (const option of item.options) {
+      const value = trimmed(option);
+      if (!value || (!required && value === 'None')) continue;
+      if (seen.has(value)) continue;
+      seen.add(value);
+      options.push(String(option));
+    }
+  }
   return options.length > 0 ? options : undefined;
 }
 

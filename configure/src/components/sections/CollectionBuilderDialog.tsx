@@ -255,10 +255,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   useEffect(() => {
     if (sourceList.catalogs.length === 0) return;
-    const healed = healSourceNames(
-      realignSourceIds(entries, sourceList.catalogs),
+    const healed = fillMissingGenres(
+      healSourceNames(
+        realignSourceIds(entries, sourceList.catalogs),
+        sourceList.catalogs
+      ),
       sourceList.catalogs
-    );
+    ).entries;
     if (healed === entries) return;
     setEntries(healed);
     // Only carry the baseline along if nothing else had been edited yet,

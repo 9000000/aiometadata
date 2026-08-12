@@ -282,8 +282,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   );
 
   const nuvioResult = useMemo(
-    () => toNuvioCollections(entries, identity, blueprints),
-    [entries, identity, blueprints]
+    () => toNuvioCollections(entries, identity, blueprints, { usePlaceholder }),
+    [entries, identity, blueprints, usePlaceholder]
   );
   const fusionResult = useMemo(
     () => toFusionWidgets(entries, identity, { usePlaceholder, blueprints }),
@@ -1515,8 +1515,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                         </p>
                         <p className="text-xs text-muted-foreground">
                           It rebuilds on every request, so re-importing after saving picks up your edits. Anyone with
-                          the link can read it, same as your manifest URL{target === 'fusion' && usePlaceholder
-                            ? ', and it always carries your real URL rather than the placeholder'
+                          the link can read it, same as your manifest URL{usePlaceholder
+                            ? ', and it always carries your real URL rather than the blanked copy'
                             : ''}.
                         </p>
                       </>
@@ -1527,32 +1527,31 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                     )}
                   </div>
 
-                  {target === 'fusion' && (
-                    <div className="space-y-1.5 rounded-lg border p-3">
-                      <div className="flex items-center gap-2">
-                        <Switch
-                          id="collection-use-placeholder"
-                          checked={usePlaceholder}
-                          onCheckedChange={setUsePlaceholder}
-                        />
-                        <Label htmlFor="collection-use-placeholder" className="text-xs font-medium">
-                          Make a copy for someone else
-                        </Label>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        Your addon link contains your user ID, and this file embeds it on every row. Turn this on to
-                        blank it out before posting the file publicly. Whoever imports it here gets their own link
-                        filled in automatically, so they end up with your layout pointing at their catalogs.
-                      </p>
-                      {usePlaceholder && (
-                        <p className="flex items-start gap-1.5 text-xs text-amber-500">
-                          <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
-                          This copy is for handing out, not for your own use. It has no addon link in it, so
-                          importing it back here is what puts one in.
-                        </p>
-                      )}
+                  <div className="space-y-1.5 rounded-lg border p-3">
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        id="collection-use-placeholder"
+                        checked={usePlaceholder}
+                        onCheckedChange={setUsePlaceholder}
+                      />
+                      <Label htmlFor="collection-use-placeholder" className="text-xs font-medium">
+                        Make a copy for someone else
+                      </Label>
                     </div>
-                  )}
+                    <p className="text-xs text-muted-foreground">
+                      Your addon link contains your user ID, and this file embeds it on every row. Anyone who has it
+                      can read that config. Turn this on to blank it out before posting the file publicly. Whoever
+                      imports it here gets their own link filled in automatically, so they end up with your layout
+                      pointing at their catalogs.
+                    </p>
+                    {usePlaceholder && (
+                      <p className="flex items-start gap-1.5 text-xs text-amber-500">
+                        <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+                        This copy is for handing out, not for your own use. It has no addon link in it, so
+                        importing it back here is what puts one in.
+                      </p>
+                    )}
+                  </div>
 
                   <textarea
                     readOnly

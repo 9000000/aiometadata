@@ -27,7 +27,8 @@ function orNull(value: unknown): string | null {
 function toAddonSource(
   source: SourceDraft,
   identity: AddonIdentity,
-  attach: AttachBlueprint
+  attach: AttachBlueprint,
+  usePlaceholder: boolean
 ): NuvioAddonSource | null {
   const catalogId = trimmed(source.catalogId);
   const type = trimmed(source.type).toLowerCase();
@@ -38,7 +39,9 @@ function toAddonSource(
   const mapped: NuvioAddonSource = {
     provider: 'addon',
     addonId,
-    addonBaseUrl: orNull(identity.addonBaseUrl),
+    // The base URL carries the config's own id, and it is written onto every
+    // source, so a file meant for someone else must not carry it.
+    addonBaseUrl: usePlaceholder ? null : orNull(identity.addonBaseUrl),
     addonName: orNull(identity.addonName),
     type,
     catalogId,
@@ -68,7 +71,8 @@ function toFolder(
   identity: AddonIdentity,
   collectionTitle: string,
   notes: ExportNote[],
-  attach: AttachBlueprint
+  attach: AttachBlueprint,
+  usePlaceholder: boolean
 ): NuvioFolder | null {
   const id = trimmed(folder.id);
   const title = trimmed(folder.title);
@@ -89,7 +93,7 @@ function toFolder(
       sources.push(source.native as NuvioAddonSource);
       continue;
     }
-    const mapped = toAddonSource(source, identity, attach);
+    const mapped = toAddonSource(source, identity, attach, usePlaceholder);
     if (mapped) {
       sources.push(mapped);
       continue;
@@ -137,11 +141,13 @@ function toFolder(
 export function toNuvioCollections(
   entries: BuilderEntry[],
   identity: AddonIdentity,
-  blueprints: BlueprintLookup = {}
+  blueprints: BlueprintLookup = {},
+  options: { usePlaceholder?: boolean } = {}
 ): ExportResult<NuvioCollection[]> {
   const notes: ExportNote[] = [];
   const output: NuvioCollection[] = [];
   const attach = createBlueprintWriter(blueprints);
+  const usePlaceholder = options.usePlaceholder === true;
 
   for (const entry of entries) {
     if (entry.kind === 'classicRow') {
@@ -167,7 +173,7 @@ export function toNuvioCollections(
     }
 
     const folders = entry.folders
-      .map(folder => toFolder(folder, identity, title, notes, attach))
+      .map(folder => toFolder(folder, identity, title, notes, attach, usePlaceholder))
       .filter((folder): folder is NuvioFolder => folder !== null);
 
     output.push({

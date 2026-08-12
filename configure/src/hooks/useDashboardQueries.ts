@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAdmin } from '@/contexts/AdminContext';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 // ============================================================================
 // Types
@@ -32,7 +32,20 @@ const POLLING_INTERVALS = {
 } as const;
 
 // Cap client-side log accumulation so a long-open tab can't grow unbounded.
-const MAX_CLIENT_LOG_ENTRIES = 10000;
+// The server serves the real value; this is the fallback before it arrives.
+const DEFAULT_MAX_CLIENT_LOG_ENTRIES = 10000;
+
+/**
+ * Filters the stream applies server side, against the whole buffer rather than
+ * the tail the browser happens to hold. `level` carries a single label only,
+ * which is what the buffer matches on; a multi-level pick stays local.
+ */
+export interface LogStreamFilters {
+  level?: string;
+  tag?: string;
+  service?: string;
+  search?: string;
+}
 
 // Query keys for cache management
 export const DASHBOARD_QUERY_KEYS = {
@@ -454,19 +467,44 @@ export interface LogsData {
   newestId?: number;
 }
 
-export function useDashboardLogs(options: DashboardQueryOptions & { paused?: boolean } = {}) {
-  const { isAdmin, logout, adminKey } = useAdmin();
+export function useDashboardLogs(
+  options: DashboardQueryOptions & { paused?: boolean; filters?: LogStreamFilters } = {}
+) {
+  const { isAdmin, logout, adminKey, logViewerMaxEntries } = useAdmin();
   const getHeaders = useApiHeaders();
   const isVisible = usePageVisibility();
-  const { activeTab = 'overview', enabled = true, paused = false } = options;
+  const { activeTab = 'overview', enabled = true, paused = false, filters } = options;
+  const maxEntries = logViewerMaxEntries > 0 ? logViewerMaxEntries : DEFAULT_MAX_CLIENT_LOG_ENTRIES;
+
+  // Serialised so the effect re-runs on a real change, not on a new object.
+  const filterQuery = useMemo(() => {
+    const params = new URLSearchParams();
+    for (const key of ['level', 'tag', 'service', 'search'] as const) {
+      const value = (filters?.[key] || '').trim();
+      if (value) params.set(key, value);
+    }
+    return params.toString();
+    // Keyed on the fields, not the object: an inline literal from a caller would
+    // otherwise reconnect the stream on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters?.level, filters?.tag, filters?.service, filters?.search]);
 
   const isActiveTab = activeTab === 'logs';
   const shouldStream = isVisible && isActiveTab && isAdmin && enabled && !paused;
 
   const cursorRef = useRef(0);
   const [accumulated, setAccumulated] = useState<LogsData>({ entries: [], cursor: 0, tags: [], services: [] });
+
   const [isFetching, setIsFetching] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
+
+  // A changed filter is a different question, so the tail collected under the old
+  // one is dropped and the stream replays matching history from the whole buffer.
+  // Declared before the stream effect so the reset lands before the reconnect.
+  useEffect(() => {
+    cursorRef.current = 0;
+    setAccumulated(prev => ({ entries: [], cursor: 0, tags: prev.tags, services: prev.services }));
+  }, [filterQuery]);
 
   // Pure SSE: the stream replays buffered history after our cursor (gapless on
   // connect/reconnect, since the server hands off backfill->live atomically), then
@@ -481,7 +519,9 @@ export function useDashboardLogs(options: DashboardQueryOptions & { paused?: boo
 
     (async () => {
       try {
-        const res = await fetch(`/api/dashboard/logs/stream?afterCursor=${cursorRef.current}`, {
+        const url = `/api/dashboard/logs/stream?afterCursor=${cursorRef.current}`
+          + (filterQuery ? `&${filterQuery}` : '');
+        const res = await fetch(url, {
           headers: getHeaders(),
           signal: controller.signal,
         });
@@ -514,7 +554,7 @@ export function useDashboardLogs(options: DashboardQueryOptions & { paused?: boo
             cursorRef.current = incoming[incoming.length - 1].id;
             setAccumulated((prev) => {
               const combined = [...prev.entries, ...incoming];
-              const entries = combined.length > MAX_CLIENT_LOG_ENTRIES ? combined.slice(-MAX_CLIENT_LOG_ENTRIES) : combined;
+              const entries = combined.length > maxEntries ? combined.slice(-maxEntries) : combined;
               let tags = prev.tags;
               let tagAdds: Set<string> | null = null;
               let services = prev.services;
@@ -546,7 +586,7 @@ export function useDashboardLogs(options: DashboardQueryOptions & { paused?: boo
       controller.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shouldStream, adminKey, getHeaders, retryCount]);
+  }, [shouldStream, adminKey, getHeaders, retryCount, filterQuery, maxEntries]);
 
   const resetLogs = useCallback(() => {
     setAccumulated(prev => ({ entries: [], cursor: prev.cursor, tags: prev.tags, services: prev.services }));

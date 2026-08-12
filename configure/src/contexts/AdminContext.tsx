@@ -7,6 +7,8 @@ export interface AuthSession {
   permissions: string[];
 }
 
+const DEFAULT_LOG_VIEWER_MAX_ENTRIES = 10000;
+
 interface AdminContextType {
   isAdmin: boolean;
   isGuest: boolean;
@@ -20,6 +22,7 @@ interface AdminContextType {
   logout: () => void;
   isLoading: boolean;
   adminKeyConfigured: boolean;  // Indicates if ADMIN_KEY is set on server
+  logViewerMaxEntries: number;  // Most log entries the viewer keeps in the browser
   guestModeEnabled: boolean;    // Indicates if guest mode is available
 }
 
@@ -39,11 +42,12 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [adminKeyConfigured, setAdminKeyConfigured] = useState(true);  // Assume configured until proven otherwise
   const [guestModeEnabled, setGuestModeEnabled] = useState(false);     // Guest mode disabled by default
+  const [logViewerMaxEntries, setLogViewerMaxEntries] = useState(DEFAULT_LOG_VIEWER_MAX_ENTRIES);
   const [session, setSession] = useState<AuthSession | null>(null);
   const [ssoEnabled, setSsoEnabled] = useState(false);
 
   // Fetch dashboard config to determine guest mode availability
-  const fetchDashboardConfig = async (): Promise<{ guestModeEnabled: boolean; adminKeyConfigured: boolean }> => {
+  const fetchDashboardConfig = async (): Promise<{ guestModeEnabled: boolean; adminKeyConfigured: boolean; logViewerMaxEntries: number }> => {
     try {
       const response = await fetch('/api/dashboard/config', {
         method: 'GET',
@@ -56,15 +60,18 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         const data = await response.json();
         return {
           guestModeEnabled: data.guestModeEnabled ?? false,
-          adminKeyConfigured: data.adminKeyConfigured ?? true
+          adminKeyConfigured: data.adminKeyConfigured ?? true,
+          logViewerMaxEntries: Number(data.logViewerMaxEntries) > 0
+            ? Number(data.logViewerMaxEntries)
+            : DEFAULT_LOG_VIEWER_MAX_ENTRIES
         };
       }
       
       // If config endpoint fails, fall back to defaults
-      return { guestModeEnabled: false, adminKeyConfigured: true };
+      return { guestModeEnabled: false, adminKeyConfigured: true, logViewerMaxEntries: DEFAULT_LOG_VIEWER_MAX_ENTRIES };
     } catch (error) {
       console.error('Error fetching dashboard config:', error);
-      return { guestModeEnabled: false, adminKeyConfigured: true };
+      return { guestModeEnabled: false, adminKeyConfigured: true, logViewerMaxEntries: DEFAULT_LOG_VIEWER_MAX_ENTRIES };
     }
   };
 
@@ -126,6 +133,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         const config = await fetchDashboardConfig();
         setGuestModeEnabled(config.guestModeEnabled);
         setAdminKeyConfigured(config.adminKeyConfigured);
+        setLogViewerMaxEntries(config.logViewerMaxEntries);
 
         // A provider session outranks a pasted key, and carries its own
         // permissions, so it is checked before anything is restored.
@@ -313,7 +321,8 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     logout,
     isLoading,
     adminKeyConfigured,
-    guestModeEnabled
+    guestModeEnabled,
+    logViewerMaxEntries
   };
 
   return (

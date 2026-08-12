@@ -14,6 +14,7 @@ import {
   useDashboardOperations,
   useDashboardUsers,
   useDashboardLogs,
+  type LogStreamFilters,
   useDashboardSettings,
   type DashboardTab,
 } from "@/hooks/useDashboardQueries";
@@ -406,6 +407,7 @@ export function Dashboard() {
   const [activeMobileSection, setActiveMobileSection] = useState<DashboardTab | undefined>(undefined);
   const [contentTimeframe, setContentTimeframe] = useState('today');
   const [logsPaused, setLogsPaused] = useState(false);
+  const [logFilters, setLogFilters] = useState<LogStreamFilters>({});
 
   const navigateToTab = (tab: string) => {
     setActiveTab(tab as DashboardTab);
@@ -425,7 +427,7 @@ export function Dashboard() {
   const systemQuery = useDashboardSystem(queryOptions);
   const operationsQuery = useDashboardOperations(queryOptions);
   const usersQuery = useDashboardUsers(queryOptions);
-  const logsQuery = useDashboardLogs({ ...queryOptions, paused: logsPaused });
+  const logsQuery = useDashboardLogs({ ...queryOptions, paused: logsPaused, filters: logFilters });
   const settingsQuery = useDashboardSettings(queryOptions);
 
   // Refetch data when tab changes (only if not already fetching)
@@ -643,6 +645,7 @@ export function Dashboard() {
             paused={logsPaused}
             onPauseToggle={() => setLogsPaused((p) => !p)}
             onClear={logsQuery.resetLogs}
+            onFiltersChange={setLogFilters}
           />
         ),
       },
@@ -879,6 +882,7 @@ export function Dashboard() {
                 paused={logsPaused}
                 onPauseToggle={() => setLogsPaused((p) => !p)}
                 onClear={logsQuery.resetLogs}
+                onFiltersChange={setLogFilters}
               />
             </TabsContent>
 

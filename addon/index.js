@@ -6289,7 +6289,7 @@ addon.get("/api/dashboard/logs", requireDashboardAdmin, (req, res) => {
 });
 
 addon.get("/api/dashboard/logs/stream", requireDashboardAdmin, (req, res) => {
-  const { subscribeToLogs, buildLogFilter, getLogEntries, getBufferStats } = require('./lib/logBuffer.js');
+  const { subscribeToLogs, buildLogFilter, getLogEntries, getBufferStats, getLogQueryMaxEntries } = require('./lib/logBuffer.js');
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache, no-transform',
@@ -6310,7 +6310,7 @@ addon.get("/api/dashboard/logs/stream", requireDashboardAdmin, (req, res) => {
   // Both run synchronously with no await between them, so no entry can be pushed
   // in the gap (single-threaded) — the backfill->live handoff is gapless and
   // non-overlapping, which lets the client rely on the stream alone (no poll).
-  const replay = getLogEntries({ afterCursor, ...filterOpts, limit: 2000 });
+  const replay = getLogEntries({ afterCursor, ...filterOpts, limit: getLogQueryMaxEntries() });
   for (const entry of replay.entries) {
     res.write(`data: ${JSON.stringify(entry)}\n\n`);
   }

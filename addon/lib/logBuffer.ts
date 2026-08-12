@@ -189,16 +189,29 @@ export function buildLogFilter(opts: { level?: string; tag?: string; search?: st
     if (levelNum !== undefined && entry.level !== levelNum) return false;
     if (tag && entry.tag !== tag) return false;
     if (service && (entry.service || 'addon') !== service) return false;
+    // Same fields the viewer's search box matches, so pushing a search down to
+    // the buffer cannot return less than filtering the tail locally would.
     if (searchLower
       && !entry.message.toLowerCase().includes(searchLower)
+      && !(entry.tag && entry.tag.toLowerCase().includes(searchLower))
+      && !(entry.args && entry.args.toLowerCase().includes(searchLower))
       && !(entry.userId && entry.userId.toLowerCase().includes(searchLower))) return false;
     return true;
   };
 }
 
+/**
+ * Ceiling on a single query, which is also what the stream backfills. Read per
+ * call rather than at load so the dashboard setting applies without a restart.
+ */
+export function getLogQueryMaxEntries(): number {
+  const raw = parseInt(process.env.LOG_QUERY_MAX_ENTRIES || '2000', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 2000;
+}
+
 export function getLogEntries(filters: LogQueryFilters = {}): { entries: LogEntry[]; cursor: number; newestId: number } {
   const { afterCursor = 0, level, tag, search, service, limit = 200 } = filters;
-  const effectiveLimit = Math.min(Math.max(1, limit), 1000);
+  const effectiveLimit = Math.min(Math.max(1, limit), getLogQueryMaxEntries());
   const match = buildLogFilter({ level, tag, search, service });
 
   // Walk newest -> oldest. Ids are monotonic in write order, so once we pass the

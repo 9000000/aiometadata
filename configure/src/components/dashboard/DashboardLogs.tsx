@@ -42,7 +42,7 @@ import {
   ChevronRight,
   ChevronDown,
 } from "lucide-react";
-import type { LogsData, LogEntry } from "@/hooks/useDashboardQueries";
+import type { LogsData, LogEntry, LogStreamFilters } from "@/hooks/useDashboardQueries";
 
 interface DashboardLogsProps {
   data: LogsData | undefined;
@@ -50,6 +50,8 @@ interface DashboardLogsProps {
   paused?: boolean;
   onPauseToggle?: () => void;
   onClear?: () => void;
+  /** Lifted so the stream can apply them to the whole buffer, not just the tail. */
+  onFiltersChange?: (filters: LogStreamFilters) => void;
 }
 
 const LEVEL_COLORS: Record<string, string> = {
@@ -85,7 +87,7 @@ function formatEntryForCopy(entry: LogEntry): string {
   return line;
 }
 
-export function DashboardLogs({ data, loading, paused = false, onPauseToggle, onClear }: DashboardLogsProps) {
+export function DashboardLogs({ data, loading, paused = false, onPauseToggle, onClear, onFiltersChange }: DashboardLogsProps) {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [levelFilter, setLevelFilter] = useState<Set<string>>(new Set());
@@ -119,6 +121,18 @@ export function DashboardLogs({ data, loading, paused = false, onPauseToggle, on
       return true;
     });
   }, [data?.entries, levelFilter, tagFilter, serviceFilter, debouncedSearch]);
+
+  // Only a single level can go to the buffer, so a multi-level pick stays local
+  // and the stream stays unfiltered on that axis.
+  useEffect(() => {
+    if (!onFiltersChange) return;
+    onFiltersChange({
+      level: levelFilter.size === 1 ? Array.from(levelFilter)[0] : undefined,
+      tag: tagFilter !== "all" ? tagFilter : undefined,
+      service: serviceFilter !== "all" ? serviceFilter : undefined,
+      search: debouncedSearch || undefined,
+    });
+  }, [levelFilter, tagFilter, serviceFilter, debouncedSearch, onFiltersChange]);
 
   const virtualizer = useVirtualizer({
     count: filteredEntries.length,

@@ -2618,9 +2618,11 @@ class DashboardAPI {
   getConfig() {
     const disableGuestMode = process.env.DISABLE_GUEST_MODE === 'true' || 
                              process.env.DISABLE_GUEST_MODE === '1';
+    const viewerMax = parseInt(process.env.LOG_VIEWER_MAX_ENTRIES || '10000', 10);
     return {
       guestModeEnabled: !disableGuestMode,
-      adminKeyConfigured: !!process.env.ADMIN_KEY
+      adminKeyConfigured: !!process.env.ADMIN_KEY,
+      logViewerMaxEntries: Number.isFinite(viewerMax) && viewerMax > 0 ? viewerMax : 10000
     };
   }
 }

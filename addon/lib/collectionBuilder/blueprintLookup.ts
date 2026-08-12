@@ -1,5 +1,5 @@
 import { buildShareableCatalog, type ShareableCatalog } from './catalogSharing';
-import type { CatalogBlueprint } from './catalogReconstruction';
+import { lookupKey, type CatalogBlueprint } from './catalogReconstruction';
 import type { BlueprintLookup } from './nuvioExport';
 
 /**
@@ -10,8 +10,8 @@ import type { BlueprintLookup } from './nuvioExport';
  */
 function manifestKeys(catalog: ShareableCatalog): string[] {
   const type = String(catalog.displayType || '').trim() || catalog.type;
-  const keys = [`${catalog.id}:${type}`];
-  if (catalog.displayType) keys.push(`${catalog.id}_${catalog.type}:${type}`);
+  const keys = [lookupKey(catalog.id, type)];
+  if (catalog.displayType) keys.push(lookupKey(`${catalog.id}_${catalog.type}`, type));
   return keys;
 }
 

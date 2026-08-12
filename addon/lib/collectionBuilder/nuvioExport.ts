@@ -10,7 +10,7 @@ import type {
   NuvioFolder,
   SourceDraft,
 } from './types';
-import { createBlueprintWriter, isNativeSource, type BlueprintLookup } from './catalogReconstruction';
+import { createBlueprintWriter, isNativeSource, lookupKey, type BlueprintLookup } from './catalogReconstruction';
 
 export type { BlueprintLookup };
 
@@ -47,7 +47,7 @@ function toAddonSource(
     genre: orNull(source.genre),
   };
 
-  return attach(mapped, `${catalogId}:${source.type}`);
+  return attach(mapped, lookupKey(catalogId, source.type));
 }
 
 function toCatalogSource(source: NuvioAddonSource): NuvioCatalogSource {

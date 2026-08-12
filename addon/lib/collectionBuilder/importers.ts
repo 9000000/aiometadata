@@ -161,8 +161,7 @@ function nuvioSource(
     return null;
   }
 
-  const embedded = fromEmbedded(raw);
-  if (embedded) blueprints.push(embedded);
+  blueprints.push(...fromEmbedded(raw));
 
   return {
     catalogId,
@@ -315,8 +314,7 @@ function fusionSource(
     return null;
   }
 
-  const embedded = fromEmbedded(payload);
-  if (embedded) blueprints.push(embedded);
+  blueprints.push(...fromEmbedded(payload));
 
   return {
     catalogId: split.catalogId,

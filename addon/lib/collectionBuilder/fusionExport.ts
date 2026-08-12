@@ -13,7 +13,7 @@ import {
   type SourceDraft,
   type TileShape,
 } from './types';
-import { createBlueprintWriter, isNativeSource, type BlueprintLookup } from './catalogReconstruction';
+import { createBlueprintWriter, isNativeSource, lookupKey, type BlueprintLookup } from './catalogReconstruction';
 
 type AttachBlueprint = ReturnType<typeof createBlueprintWriter>;
 
@@ -145,7 +145,7 @@ function toDataSource(
       catalogId: normalizeCatalogId(composite, catalogType),
       type: catalogType,
       ...(genre ? { genre } : {}),
-    }, `${plainId}:${source.type}`),
+    }, lookupKey(plainId, source.type)),
   };
 }
 

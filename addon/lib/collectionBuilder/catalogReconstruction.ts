@@ -420,32 +420,58 @@ export function nativeLabel(source: SourceDraft): string {
   return kind ? `${provider} ${kind}` : provider || 'NATIVE';
 }
 
-/** Reads back what writeBlueprint put on one of our own addon sources. */
-export function fromEmbedded(raw: unknown): CatalogBlueprint | null {
+function readBlueprint(raw: unknown): CatalogBlueprint | null {
   if (!isRecord(raw)) return null;
-  const carrier = raw[BLUEPRINT_KEY];
-  if (!isRecord(carrier)) return null;
-
-  const blueprint = carrier.catalog;
-  if (!isRecord(blueprint)) return null;
-  if (!trimmed(blueprint.id) || !trimmed(blueprint.type) || !trimmed(blueprint.source)) return null;
+  if (!trimmed(raw.id) || !trimmed(raw.type) || !trimmed(raw.source)) return null;
 
   // Older files still carry these, and rebuilding one gives the importer a dead catalog.
-  if (isUserSpecific(trimmed(blueprint.id)) || isPrivateList(blueprint as any)) return null;
+  if (isUserSpecific(trimmed(raw.id)) || isPrivateList(raw as any)) return null;
 
   return {
-    ...blueprint,
-    name: trimmed(blueprint.name) || trimmed(blueprint.id),
-    enabled: blueprint.enabled !== false,
-    showInHome: Boolean(blueprint.showInHome),
+    ...raw,
+    name: trimmed(raw.name) || trimmed(raw.id),
+    enabled: raw.enabled !== false,
+    showInHome: Boolean(raw.showInHome),
   } as CatalogBlueprint;
+}
+
+/**
+ * Reads back what the writer put on one of our own addon sources: the source's own
+ * catalog, then anything that catalog is composed of.
+ */
+export function fromEmbedded(raw: unknown): CatalogBlueprint[] {
+  if (!isRecord(raw)) return [];
+  const carrier = raw[BLUEPRINT_KEY];
+  if (!isRecord(carrier)) return [];
+
+  const blueprints: CatalogBlueprint[] = [];
+  const parent = readBlueprint(carrier.catalog);
+  if (parent) blueprints.push(parent);
+
+  if (Array.isArray(carrier.requires)) {
+    for (const entry of carrier.requires) {
+      const child = readBlueprint(entry);
+      if (child) blueprints.push(child);
+    }
+  }
+
+  return blueprints;
 }
 
 /** Catalogs to travel with a file, keyed by how a source addresses them. */
 export type BlueprintLookup = Record<string, CatalogBlueprint>;
 
+/**
+ * Exports lowercase a source's type, so a design that has been through a file once
+ * no longer spells a displayType the way the config does. The type is folded here
+ * rather than at each call site so both sides of the lookup agree.
+ */
+export function lookupKey(catalogId: unknown, type: unknown): string {
+  return `${trimmed(catalogId)}:${trimmed(type).toLowerCase()}`;
+}
+
 export function blueprintKey(blueprint: { id: string; type: string }): string {
-  return `${blueprint.id}:${blueprint.type}`;
+  return lookupKey(blueprint.id, blueprint.type);
 }
 
 /**
@@ -460,6 +486,36 @@ export function blueprintKey(blueprint: { id: string; type: string }): string {
 export function createBlueprintWriter(lookup: BlueprintLookup) {
   const written = new Set<string>();
 
+  // The lookup is keyed by how a source addresses a catalog, but a merge names its
+  // parts the way the config does, so they need an index of their own.
+  const byOwnKey = new Map<string, CatalogBlueprint>();
+  for (const blueprint of Object.values(lookup)) {
+    const key = blueprintKey(blueprint);
+    if (!byOwnKey.has(key)) byOwnKey.set(key, blueprint);
+  }
+
+  /**
+   * A merge is only a list of ids, and an id like `simkl.recipe.hiddengems.movies`
+   * says nothing to an importer that does not already have it, so the parts travel
+   * with the parent.
+   */
+  const partsOf = (blueprint: CatalogBlueprint): CatalogBlueprint[] => {
+    const parts = blueprint.metadata?.mergedSources;
+    if (!Array.isArray(parts)) return [];
+
+    const carried: CatalogBlueprint[] = [];
+    for (const part of parts) {
+      if (!isRecord(part)) continue;
+      const child = byOwnKey.get(lookupKey(part.catalogId, part.catalogType));
+      if (!child) continue;
+      const childId = blueprintKey(child);
+      if (written.has(childId)) continue;
+      written.add(childId);
+      carried.push(child);
+    }
+    return carried;
+  };
+
   return function attach<T extends Record<string, any>>(source: T, key: string): T {
     const blueprint = lookup[key];
     if (!blueprint) return source;
@@ -468,7 +524,15 @@ export function createBlueprintWriter(lookup: BlueprintLookup) {
     if (written.has(id)) return source;
     written.add(id);
 
-    return { ...source, [BLUEPRINT_KEY]: { version: BLUEPRINT_VERSION, catalog: blueprint } };
+    const requires = partsOf(blueprint);
+    return {
+      ...source,
+      [BLUEPRINT_KEY]: {
+        version: BLUEPRINT_VERSION,
+        catalog: blueprint,
+        ...(requires.length > 0 && { requires }),
+      },
+    };
   };
 }
 

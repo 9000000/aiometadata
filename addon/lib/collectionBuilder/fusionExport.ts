@@ -202,10 +202,9 @@ function toCollectionItem(
     notes.push({
       entryId: folder.id,
       entryTitle: name,
-      message: `Folder "${name}" has no usable sources and was skipped.`,
-      severity: 'warning',
+      message: `Folder "${name}" has no sources. It is exported anyway, so its artwork survives, and it stays empty until you add one.`,
+      severity: 'info',
     });
-    return null;
   }
 
   const imageURL = trimmed(folder.coverImageUrl);

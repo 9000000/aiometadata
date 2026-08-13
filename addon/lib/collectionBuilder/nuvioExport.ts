@@ -110,10 +110,9 @@ function toFolder(
     notes.push({
       entryId: folder.id,
       entryTitle: title,
-      message: `Folder "${title}" has no usable sources and was skipped.`,
-      severity: 'warning',
+      message: `Folder "${title}" has no sources. It is exported anyway, so its artwork survives, and it stays empty until you add one.`,
+      severity: 'info',
     });
-    return null;
   }
 
   return {

@@ -217,7 +217,7 @@ export function FolderCard({
             onClick={onAddSource}
             className="w-full rounded-md border border-dashed px-2 py-3 text-center text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent/40 hover:text-foreground"
           >
-            No catalogs yet. Both Nuvio and Fusion drop tiles that have none.
+            No catalogs yet. The tile still exports, with its artwork, and comes up empty.
             <span className="mt-0.5 block font-medium">Add one</span>
           </button>
         )}

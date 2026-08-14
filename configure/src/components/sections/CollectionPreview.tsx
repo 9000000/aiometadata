@@ -54,7 +54,7 @@ function gradientFor(title: string): string {
   return `linear-gradient(135deg, hsl(${hash} 45% 28%), hsl(${(hash + 40) % 360} 40% 16%))`;
 }
 
-/** Mirrors the drop rules in nuvioExport.toFolder and fusionExport.toCollectionItem. */
+/** Mirrors what nuvioExport.toFolder and fusionExport.toCollectionItem will accept. */
 function usableSourceCount(folder: FolderDraft, target: Target): number {
   return folder.sources.filter(source => {
     if (isNativeSource(source)) return target === 'nuvio' && Boolean(source.native);
@@ -62,8 +62,9 @@ function usableSourceCount(folder: FolderDraft, target: Target): number {
   }).length;
 }
 
-function folderDropped(folder: FolderDraft, target: Target): boolean {
-  return !folder.title.trim() || usableSourceCount(folder, target) === 0;
+/** Only a missing title drops a folder. A sourceless one exports and comes up empty. */
+function folderDropped(folder: FolderDraft): boolean {
+  return !folder.title.trim();
 }
 
 function TileArt({
@@ -140,7 +141,8 @@ function PreviewTile({
   onEdit: () => void;
 }) {
   const title = folder.title.trim();
-  const dropped = folderDropped(folder, target);
+  const dropped = folderDropped(folder);
+  const empty = !dropped && usableSourceCount(folder, target) === 0;
 
   return (
     <button
@@ -170,6 +172,7 @@ function PreviewTile({
         </span>
       )}
       {dropped && <span className="text-xs text-amber-400">left out of this export</span>}
+      {empty && <span className="text-xs text-muted-foreground">no sources yet, exports empty</span>}
     </button>
   );
 }

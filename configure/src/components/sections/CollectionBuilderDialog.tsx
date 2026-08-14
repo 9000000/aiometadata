@@ -945,15 +945,16 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     [entries]
   );
 
-  const fusionTileLoss = useMemo(() => {
-    const kept = fusionResult.output.widgets.reduce(
+  /** Tiles Fusion still gets, but with nothing in them. A sourceless tile exports. */
+  const fusionEmptyTiles = useMemo(
+    () => fusionResult.output.widgets.reduce(
       (sum, widget) => sum + ('dataSource' in widget && widget.dataSource?.kind === 'collection'
-        ? widget.dataSource.payload.items.length
+        ? widget.dataSource.payload.items.filter(item => item.dataSources.length === 0).length
         : 0),
       0
-    );
-    return Math.max(0, fusionTileTotal - kept);
-  }, [fusionResult, fusionTileTotal]);
+    ),
+    [fusionResult]
+  );
 
   const unsupportedRows = useMemo(() => unsupportedClassicRows(entries), [entries]);
 
@@ -2103,9 +2104,9 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             </DialogTitle>
             <DialogDescription>
               {totalNative} source{totalNative === 1 ? '' : 's'} in this design {totalNative === 1 ? 'is' : 'are'}{' '}
-              fetched by Nuvio itself, and Fusion has no equivalent. {fusionTileLoss > 0
-                ? `${fusionTileLoss} of ${fusionTileTotal} tiles would come out empty.`
-                : 'The tiles using them are left out.'}
+              fetched by Nuvio itself, and Fusion has no equivalent. {fusionEmptyTiles > 0
+                ? `${fusionEmptyTiles} of ${fusionTileTotal} tiles would come out empty.`
+                : 'Those sources are left out of the Fusion export.'}
             </DialogDescription>
           </DialogHeader>
 

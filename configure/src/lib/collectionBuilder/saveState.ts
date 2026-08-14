@@ -19,5 +19,8 @@ export function describeSaveStage(stage: SaveStage): { label: string; hint: stri
   if (stage === 'applied') {
     return { label: 'Applied', hint: 'In your configuration, not yet on the server.' };
   }
-  return { label: 'Saved', hint: 'Applied and stored on the server.' };
+  return {
+    label: 'Saved',
+    hint: 'Applied and stored on the server. Your app still needs to import it again to show the change.',
+  };
 }

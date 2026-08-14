@@ -7,6 +7,7 @@ import {
   Copy,
   Download,
   Folder,
+  Info,
   Layers,
   ListOrdered,
   Link as LinkIcon,
@@ -1490,6 +1491,24 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 </TabsContent>
 
                 <TabsContent value="json" className="space-y-3 pt-4">
+                  <div className="flex items-start gap-2 rounded-lg border border-sky-600/40 bg-sky-500/5 p-3 text-xs">
+                    <Info className="mt-px h-4 w-4 shrink-0 text-sky-400" />
+                    <div className="space-y-1">
+                      <p className="font-medium text-sky-200">
+                        Saving updates your addon, not {target === 'fusion' ? 'Fusion' : 'Nuvio'}
+                      </p>
+                      <p className="text-muted-foreground">
+                        Nothing is pushed to your app. Import the file or the link below again for these edits to
+                        show up there.
+                      </p>
+                      <p className="text-muted-foreground">
+                        {target === 'fusion'
+                          ? "Fusion adds on import rather than matching what it already has, so re-importing everything gives you duplicate widgets. Delete the widgets you changed first, then tick just those in Fusion's import list. They come back at the end, so you may need to reorder them."
+                          : 'Editing a collection you imported keeps its id, so Nuvio updates the one you already have instead of adding a second copy. Building a new collection from scratch mints a new id and arrives alongside the old one.'}
+                      </p>
+                    </div>
+                  </div>
+
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge
                       variant="outline"

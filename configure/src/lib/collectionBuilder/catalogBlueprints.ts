@@ -220,8 +220,19 @@ export function resolveCatalogAdditions(
   existing: CatalogConfig[],
   blueprints: CatalogBlueprint[],
   unknownSources: ImportedSource[],
-  apiKeys: Record<string, any> = {}
+  apiKeys: Record<string, any> = {},
+  /**
+   * Source keys that arrived this session, from an import or a conversion.
+   * Rebuilding a catalog from its id alone is for those: a source already in the
+   * user's saved design has an id just as self describing, and rebuilding that one
+   * resurrects a catalog they deliberately deleted. Null keeps every source
+   * eligible, which is what the import preview wants before anything is committed.
+   */
+  rebuildableKeys: Set<string> | null = null
 ): CatalogAdditions {
+  const mayRebuild = (source: ImportedSource): boolean =>
+    rebuildableKeys === null || rebuildableKeys.has(`${source.catalogId}:${source.type}`);
+
   const byKey = new Map(existing.map(catalog => [`${catalog.id}:${catalog.type}`, catalog]));
 
   const added: CatalogConfig[] = [];
@@ -355,6 +366,8 @@ export function resolveCatalogAdditions(
       resolved.add(`${source.catalogId}:${source.type}`);
       continue;
     }
+
+    if (!mayRebuild(source)) continue;
 
     const personal = findPersonal(source.catalogId);
     if (personal) {

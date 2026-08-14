@@ -163,6 +163,17 @@ function collectIds(entries: BuilderEntry[]): Set<string> {
   return ids;
 }
 
+function collectSourceKeys(entries: BuilderEntry[]): string[] {
+  const keys: string[] = [];
+  for (const entry of entries) {
+    const sources = entry.kind === 'classicRow'
+      ? (entry.source ? [entry.source] : [])
+      : entry.folders.flatMap(folder => folder.sources);
+    for (const source of sources) keys.push(`${source.catalogId}:${source.type}`);
+  }
+  return keys;
+}
+
 /**
  * An exported design carries its ids, and importing one twice would otherwise
  * seat two entries on the same id: deleting either would take both. Only the
@@ -215,6 +226,12 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const [importPreview, setImportPreview] = useState<ImportResult | null>(null);
   const [confirmReplace, setConfirmReplace] = useState(false);
   const [stagedBlueprints, setStagedBlueprints] = useState<CatalogBlueprint[]>([]);
+  /**
+   * Sources this session brought in. Only these may have a catalog rebuilt from
+   * their id, so a source the user already had stops resurrecting a catalog they
+   * deleted from the config.
+   */
+  const [sessionSourceKeys, setSessionSourceKeys] = useState<Set<string>>(new Set());
   const [convertNative, setConvertNative] = useState(false);
   const [overLimitOpen, setOverLimitOpen] = useState(false);
   const [nativeBlockFor, setNativeBlockFor] = useState<'apply' | 'copy' | 'download' | 'link' | null>(null);
@@ -233,6 +250,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setBaseline(JSON.stringify(saved));
     setSelectedId(saved[0]?.id ?? null);
     setStagedBlueprints([]);
+    setSessionSourceKeys(new Set());
     setActiveTab('design');
     setRailQuery('');
     setExpandedIds(new Set(saved[0]?.id ? [saved[0].id] : []));
@@ -824,9 +842,10 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       config.catalogs || [],
       stagedBlueprints,
       unknownSources,
-      config.apiKeys || {}
+      config.apiKeys || {},
+      sessionSourceKeys
     ),
-    [config.catalogs, stagedBlueprints, unknownSources, config.apiKeys]
+    [config.catalogs, stagedBlueprints, unknownSources, config.apiKeys, sessionSourceKeys]
   );
 
   const pendingCount = additionCount(pendingAdditions);
@@ -867,6 +886,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
    */
   const convertNativeSources = useCallback((entryId?: string) => {
     const rebuilt: CatalogBlueprint[] = [];
+    const convertedKeys: string[] = [];
     let converted = 0;
     let kept = 0;
 
@@ -886,6 +906,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               if (result.ok === true) {
                 rebuilt.push(result.blueprint);
                 next = result.source;
+                convertedKeys.push(`${next.catalogId}:${next.type}`);
                 converted += 1;
               } else {
                 kept += 1;
@@ -903,6 +924,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
     if (rebuilt.length > 0) {
       setStagedBlueprints(prev => dedupeBlueprints([...prev, ...rebuilt]));
+      setSessionSourceKeys(prev => new Set([...prev, ...convertedKeys]));
     }
 
     if (converted === 0) {
@@ -1030,6 +1052,10 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setStagedBlueprints(prev => dedupeBlueprints(
       mode === 'replace' ? importPreview.blueprints : [...prev, ...importPreview.blueprints]
     ));
+    setSessionSourceKeys(prev => {
+      const incomingKeys = collectSourceKeys(incoming);
+      return mode === 'replace' ? new Set(incomingKeys) : new Set([...prev, ...incomingKeys]);
+    });
 
     let mergeNote = '';
     setEntries(prev => {

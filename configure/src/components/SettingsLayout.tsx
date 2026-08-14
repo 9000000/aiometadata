@@ -16,6 +16,7 @@ import { SettingsSearch } from '@/components/settings/SettingsSearch';
 import { useConfig } from '@/contexts/ConfigContext';
 import { MobileSaveBar } from '@/components/layout/MobileSaveBar';
 import { SidebarSaveButton } from '@/components/layout/SidebarSaveButton';
+import { SupportLink } from '@/components/layout/SupportLink';
 import {
   SETTINGS_SECTIONS,
   adjacentSections,
@@ -241,6 +242,8 @@ export function SettingsLayout() {
           </button>
         </div>
 
+        <SupportLink className="mt-6 w-full" />
+
         <MobileSaveBar />
       </div>
     );
@@ -285,6 +288,8 @@ export function SettingsLayout() {
           })}
 
           <SidebarSaveButton />
+
+          <SupportLink className="mt-3 w-full" />
         </nav>
       </aside>
 

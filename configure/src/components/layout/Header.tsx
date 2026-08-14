@@ -456,20 +456,6 @@ export function Header() {
               />
             </Suspense>
           ) : null}
-        <button
-          onClick={() => {
-            window.open('https://buymeacoffee.com/cedya', '_blank');
-          }}
-          aria-label="Buy me a coffee"
-          title="Buy me a coffee"
-          className="hidden sm:inline-block"
-        >
-          <img
-            src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png"
-            alt="Buy Me A Coffee"
-            className="h-8 sm:h-10 w-auto hover:opacity-90 transition-opacity"
-          />
-        </button>
         <Button
           onClick={() => {
             const host = `${window.location.protocol}//${window.location.host}`;

@@ -39,6 +39,7 @@ import { allCatalogDefinitions } from '@/data/catalogs';
 import { GenreSelection } from '@/data/genres';
 import { SelectionProvider, useSelection } from '@/contexts/SelectionContext';
 import { BulkActionBar } from '@/components/BulkActionBar';
+import { ScrollToTopButton } from '@/components/ScrollToTopButton';
 import { SelectAllControl } from '@/components/SelectAllControl';
 import { SelectByFieldControl } from '@/components/SelectByFieldControl';
 import { SelectByTagControl } from '@/components/SelectByTagControl';
@@ -5197,6 +5198,8 @@ function CatalogsSettingsContent({
           loadingAction={loadingAction}
         />
       )}
+
+      <ScrollToTopButton hidden={selectionCount > 0} />
 
       {/* Selection Controls */}
       <div className="flex flex-wrap items-center gap-2">

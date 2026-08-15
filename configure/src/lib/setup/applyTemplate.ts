@@ -60,6 +60,14 @@ export function buildSetupCatalogs(selection: SetupSelection, previous: AppConfi
   );
 }
 
+function enabledStreamingServices(catalogs: CatalogConfig[]): string[] {
+  return [...new Set(
+    catalogs
+      .filter(catalog => catalog.source === 'streaming' && catalog.enabled)
+      .map(catalog => catalog.id.replace('streaming.', '').replace(/ .*/, ''))
+  )];
+}
+
 export function applySetup(previous: AppConfig, selection: SetupSelection): AppConfig {
   const { template, content, animeSource, extras } = selection;
   const profile = resolveAnimeProfile(content, animeSource);
@@ -103,6 +111,8 @@ export function applySetup(previous: AppConfig, selection: SetupSelection): AppC
 
   next.catalogSetupComplete = true;
   next.catalogs = buildSetupCatalogs(selection, previous);
+  next.streaming = enabledStreamingServices(next.catalogs);
+  next.showDisabledCatalogs = true;
 
   return next;
 }

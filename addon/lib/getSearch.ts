@@ -81,6 +81,16 @@ function isImdbId(query: string): boolean {
   return imdbIdPattern.test(query.trim());
 }
 
+/**
+ * The age gate at the end of performTvdbSearch drops every result whose certification is
+ * unknown, so the lookup below has to run whenever a rating cap is set, not only when the
+ * rating is also displayed. Every other search provider fills certification unconditionally.
+ */
+function hasAgeRatingCap(config: { ageRating?: unknown }): boolean {
+  const cap = config?.ageRating;
+  return typeof cap === 'string' && cap !== '' && cap.toLowerCase() !== 'none';
+}
+
 const host = (process.env.HOST_NAME as string).startsWith('http')
     ? process.env.HOST_NAME
     : `https://${process.env.HOST_NAME}`;
@@ -145,7 +155,7 @@ async function parseTvdbSearchResult(type: string, extendedRecord: any, language
   let certification: string | null = null;
   let certificationLocal: string | null = null;
   let movieReleaseDates: any = null;
-  if (config.displayAgeRating) {
+  if (config.displayAgeRating || hasAgeRatingCap(config)) {
     try {
       const langParts = language.split('-');
       const userCountry = langParts[1] || langParts[0];

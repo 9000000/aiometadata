@@ -101,7 +101,11 @@ async function syncMovieLensAccount(config: any, opts: { full?: boolean; cooldow
   const result = await movielens.importImdbCsv(credId, csv);
   await setCursor(credId, { ...cursor, lastSyncAt: new Date().toISOString() });
 
-  logger.info(`Synced ${credId}: ${count} sent, ${result.successCount} new, ${result.alreadyRatedCount} already rated`);
+  const rejected = Number.isFinite(result.errorCount) ? `, ${result.errorCount} rejected` : '';
+  logger.info(
+    `Synced ${credId}: sent ${count} ratings, MovieLens reports ${result.successCount} new, ` +
+    `${result.alreadyRatedCount} already rated${rejected}`
+  );
   return { ok: true, sent: count, ...result, perSource };
 }
 

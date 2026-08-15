@@ -101,12 +101,15 @@ export function MovieLensIntegration({ isOpen, onClose }: MovieLensIntegrationPr
       const data = await res.json();
       if (res.ok) {
         const parts = Object.entries(data.perSource || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
-        toast.success(`Imported ${data.successCount || 0} new ratings (${data.alreadyRatedCount || 0} already rated)${parts ? ` — ${parts}` : ''}`);
+        toast.success(
+          `MovieLens took ${data.successCount || 0} new ratings and had ${data.alreadyRatedCount || 0} already`,
+          parts ? { description: `Sent from ${parts}` } : undefined
+        );
       } else if (res.status === 429) {
         const mins = Math.ceil((data.nextAllowedInSeconds || 0) / 60);
-        toast.info(`Synced recently — try again in ~${mins} min`);
+        toast.info(`Synced recently, try again in about ${mins} min`);
       } else if (res.status === 400 && (data.error || '').includes('No MovieLens account')) {
-        toast.error("Save your configuration first — the server only sees your MovieLens connection after you save.");
+        toast.error("Save your configuration first. The server only sees your MovieLens connection after you save.");
       } else {
         toast.error(data.error || "Sync failed");
       }

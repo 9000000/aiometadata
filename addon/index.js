@@ -936,7 +936,7 @@ addon.post("/api/movielens/sync/:userUUID", async (req, res) => {
       }
       return res.status(400).json({ error: `MovieLens sync could not run (${result.reason || 'unknown'}).` });
     }
-    consola.info(`[MovieLens] Sync for ${userUUID}: sent ${result.sent || 0}, ${result.successCount || 0} new`);
+    consola.info(`[MovieLens] Sync for ${userUUID}: sent ${result.sent || 0} ratings, MovieLens reports ${result.successCount || 0} new`);
     res.json(result);
   } catch (error) {
     if (error instanceof movielens.MovieLensAuthError) {

@@ -10,7 +10,13 @@ import type {
   NuvioFolder,
   SourceDraft,
 } from './types';
-import { createBlueprintWriter, isNativeSource, lookupKey, type BlueprintLookup } from './catalogReconstruction';
+import {
+  createBlueprintWriter,
+  isNativeSource,
+  lookupKey,
+  nativeOrigin,
+  type BlueprintLookup,
+} from './catalogReconstruction';
 
 export type { BlueprintLookup };
 
@@ -87,10 +93,14 @@ function toFolder(
   }
 
   const sources: NuvioAddonSource[] = [];
+  let nativeSkipped = 0;
   for (const source of folder.sources) {
-    // Written back exactly as it arrived: Nuvio resolves it, we never see it.
-    if (isNativeSource(source) && source.native) {
-      sources.push(source.native as NuvioAddonSource);
+    if (isNativeSource(source)) {
+      if (nativeOrigin(source) === 'nuvio' && source.native) {
+        sources.push(source.native as NuvioAddonSource);
+        continue;
+      }
+      nativeSkipped += 1;
       continue;
     }
     const mapped = toAddonSource(source, identity, attach, usePlaceholder);
@@ -103,6 +113,15 @@ function toFolder(
       entryTitle: title,
       message: `Source "${trimmed(source.name) || trimmed(source.catalogId) || 'unnamed'}" is missing a catalog id or type and was skipped.`,
       severity: 'warning',
+    });
+  }
+
+  if (nativeSkipped > 0) {
+    notes.push({
+      entryId: folder.id,
+      entryTitle: title,
+      message: `"${title}": ${nativeSkipped} source${nativeSkipped === 1 ? ' is' : 's are'} resolved by Fusion itself. Nuvio has no equivalent, so ${nativeSkipped === 1 ? 'it is' : 'they are'} only in the Fusion export.`,
+      severity: 'info',
     });
   }
 

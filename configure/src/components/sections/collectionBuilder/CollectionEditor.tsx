@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { type ManifestCatalog } from '@/lib/collectionBuilder/manifestSources';
 import { TERMS, type Target } from '@/lib/collectionBuilder/terms';
 import { hasNuvioCollectionSettings, type CollectionDraft, type FolderDraft } from '@shared/types';
+import { isNativeSource } from '@shared/catalogReconstruction';
 
 import { FolderCard } from './FolderCard';
 import { ImageUrlField } from './ImageUrlField';
@@ -51,9 +52,9 @@ export function CollectionEditor({
   onReplaceSource: (folderId: string, index: number) => void;
   tagOptions: TagOption[];
   onAddByTag: (folderId: string, tag: string) => void;
-  /** Sources here that Nuvio resolves itself and this addon could take over. */
+  /** Sources in this collection the app resolves itself and this addon could take over. */
   nativeCount: number;
-  onConvertNative: () => void;
+  onConvertNative: (folderId?: string) => void;
   /** Owned by the dialog, because the rail tree selects folders too. */
   selectedFolderId: string | null;
   onAddFolder: () => void;
@@ -83,6 +84,7 @@ export function CollectionEditor({
   const update = (patch: Partial<CollectionDraft>) => onChange({ ...entry, ...patch });
 
   const activeFolder = entry.folders.find(folder => folder.id === selectedFolderId) ?? null;
+  const folderNativeCount = activeFolder?.sources.filter(isNativeSource).length ?? 0;
 
   return (
     <div className="space-y-4">
@@ -186,13 +188,25 @@ export function CollectionEditor({
         <div className="flex flex-col gap-2 rounded-md border p-3 @2xl:flex-row @2xl:items-center @2xl:justify-between">
           <p className="text-xs text-muted-foreground">
             <span className="font-medium text-foreground">{nativeCount}</span> source
-            {nativeCount === 1 ? '' : 's'} here {nativeCount === 1 ? 'is' : 'are'} fetched by Nuvio straight from
-            TMDB or Trakt. They cost this addon nothing. Routing them through it adds your artwork, ratings and
-            filters, and a catalog to your setup for each.
+            {nativeCount === 1 ? '' : 's'} in this {terms.collection.toLowerCase()}{' '}
+            {nativeCount === 1 ? 'is' : 'are'} fetched by the app straight from TMDB or Trakt. They cost this
+            addon nothing. Routing them through it adds your artwork, ratings and filters, and a catalog to your
+            setup for each.
           </p>
-          <Button variant="outline" size="sm" className="shrink-0" onClick={onConvertNative}>
-            <Replace className="mr-1.5 h-4 w-4" /> Route through AIOMetadata
-          </Button>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            {folderNativeCount > 0 && activeFolder && (
+              <Button variant="outline" size="sm" onClick={() => onConvertNative(activeFolder.id)}>
+                <Replace className="mr-1.5 h-4 w-4" /> Route this {terms.child.toLowerCase()} ({folderNativeCount})
+              </Button>
+            )}
+            <Button
+              variant={folderNativeCount > 0 && activeFolder ? 'ghost' : 'outline'}
+              size="sm"
+              onClick={() => onConvertNative()}
+            >
+              Route all {nativeCount}
+            </Button>
+          </div>
         </div>
       )}
 

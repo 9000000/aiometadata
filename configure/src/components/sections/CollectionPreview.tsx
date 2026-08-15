@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import { isNativeSource } from '@shared/catalogReconstruction';
+import { isNativeSource, nativeOrigin } from '@shared/catalogReconstruction';
 import type {
   BuilderEntry,
   ClassicRowDraft,
@@ -57,7 +57,7 @@ function gradientFor(title: string): string {
 /** Mirrors what nuvioExport.toFolder and fusionExport.toCollectionItem will accept. */
 function usableSourceCount(folder: FolderDraft, target: Target): number {
   return folder.sources.filter(source => {
-    if (isNativeSource(source)) return target === 'nuvio' && Boolean(source.native);
+    if (isNativeSource(source)) return nativeOrigin(source) === target && Boolean(source.native);
     return Boolean((source.catalogId || '').trim()) && Boolean((source.type || '').trim());
   }).length;
 }

@@ -15,10 +15,8 @@ export interface SourceDraft {
   /** The catalog's own type, before a displayType renamed it. Neither target reads it. */
   baseType?: string;
   /**
-   * A source Nuvio resolves against TMDB or Trakt itself (CollectionModels.kt
-   * checks `provider` before looking for an addon). It never reaches this addon,
-   * so it costs nothing to serve and cannot be edited here. Kept verbatim so
-   * importing a collection does not discard it.
+   * A source the client resolves against TMDB or Trakt itself: Nuvio checks
+   * `provider`, Fusion checks `kind`. Kept verbatim, and see nativeOrigin.
    */
   native?: Record<string, any>;
 }
@@ -148,13 +146,20 @@ export interface FusionAddonCatalogSource {
   };
 }
 
+export interface FusionNativeSource {
+  kind: string;
+  payload: Record<string, any>;
+}
+
+export type FusionDataSource = FusionAddonCatalogSource | FusionNativeSource;
+
 export interface FusionCollectionItem {
   id: string;
   title: string;
   hideTitle: boolean;
   imageAspect: FusionAspectRatio;
   imageURL?: string;
-  dataSources: FusionAddonCatalogSource[];
+  dataSources: FusionDataSource[];
 }
 
 export interface FusionCollectionRowWidget {
@@ -181,7 +186,7 @@ export interface FusionRowClassicWidget {
     badges: { providers: boolean; ratings: boolean };
     backgroundImageURL?: string;
   };
-  dataSource: FusionAddonCatalogSource;
+  dataSource: FusionDataSource;
 }
 
 export type FusionWidget = FusionCollectionRowWidget | FusionRowClassicWidget;

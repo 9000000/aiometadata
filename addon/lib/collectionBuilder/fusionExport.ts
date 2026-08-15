@@ -8,12 +8,20 @@ import {
   type FusionAddonCatalogSource,
   type FusionAspectRatio,
   type FusionCollectionItem,
+  type FusionDataSource,
+  type FusionNativeSource,
   type FusionWidget,
   type FusionWidgetsConfig,
   type SourceDraft,
   type TileShape,
 } from './types';
-import { createBlueprintWriter, isNativeSource, lookupKey, type BlueprintLookup } from './catalogReconstruction';
+import {
+  createBlueprintWriter,
+  isNativeSource,
+  lookupKey,
+  nativeOrigin,
+  type BlueprintLookup,
+} from './catalogReconstruction';
 
 type AttachBlueprint = ReturnType<typeof createBlueprintWriter>;
 
@@ -95,6 +103,7 @@ export function unsupportedClassicRows(
   const rows: Array<{ id: string; title: string; type: string }> = [];
   for (const entry of entries) {
     if (entry.kind !== 'classicRow' || !entry.source) continue;
+    if (isNativeSource(entry.source)) continue;
     const plainId = trimmed(entry.source.catalogId);
     const manifestType = trimmed(entry.source.type);
     if (!plainId || !manifestType) continue;
@@ -149,6 +158,20 @@ function toDataSource(
   };
 }
 
+function rowDataSource(
+  source: SourceDraft | null,
+  addonId: string,
+  attach: AttachBlueprint
+): FusionDataSource | null {
+  if (!source) return null;
+  if (isNativeSource(source)) {
+    return nativeOrigin(source) === 'fusion' && source.native
+      ? (source.native as FusionNativeSource)
+      : null;
+  }
+  return toDataSource(source, addonId, attach);
+}
+
 function toCollectionItem(
   folder: FolderDraft,
   addonId: string,
@@ -168,10 +191,14 @@ function toCollectionItem(
     return null;
   }
 
-  const dataSources: FusionAddonCatalogSource[] = [];
+  const dataSources: FusionDataSource[] = [];
   let nativeSkipped = 0;
   for (const source of folder.sources) {
     if (isNativeSource(source)) {
+      if (nativeOrigin(source) === 'fusion' && source.native) {
+        dataSources.push(source.native as FusionNativeSource);
+        continue;
+      }
       nativeSkipped += 1;
       continue;
     }
@@ -221,10 +248,10 @@ function toCollectionItem(
 /** The addons an importer has to have installed for the file to resolve. */
 function requiredAddons(widgets: FusionWidget[]): string[] {
   const addons = new Set<string>();
-  const take = (source: FusionAddonCatalogSource) => {
-    if (source.kind === 'addonCatalog' && source.payload.addonId.startsWith('http')) {
-      addons.add(source.payload.addonId);
-    }
+  const take = (source: FusionDataSource) => {
+    if (source.kind !== 'addonCatalog') return;
+    const addonId = (source as FusionAddonCatalogSource).payload.addonId;
+    if (addonId.startsWith('http')) addons.add(addonId);
   };
 
   for (const widget of widgets) {
@@ -281,12 +308,14 @@ export function toFusionWidgets(
       continue;
     }
 
-    const dataSource = entry.source ? toDataSource(entry.source, addonId, attach) : null;
+    const dataSource = rowDataSource(entry.source, addonId, attach);
     if (!dataSource) {
       notes.push({
         entryId: entry.id,
         entryTitle: title,
-        message: `Row "${title}" has no catalog selected and was skipped.`,
+        message: entry.source && isNativeSource(entry.source)
+          ? `Row "${title}" is served by Nuvio, and Fusion has no equivalent, so it was skipped.`
+          : `Row "${title}" has no catalog selected and was skipped.`,
         severity: 'warning',
       });
       continue;

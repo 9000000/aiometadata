@@ -329,7 +329,6 @@ function traktListBlueprint(raw: Record<string, any>, type: 'movie' | 'series'):
     ...(TRAKT_SORTS.has(sort) && { sort }),
     sortDirection: trimmed(raw.sortHow).toLowerCase() === 'desc' ? 'desc' : 'asc',
     metadata: {
-      // Only public lists resolve without the importing user's own Trakt token.
       privacy: 'public',
       url: `https://trakt.tv/lists/${listId}`,
     },
@@ -382,10 +381,68 @@ export function fromNativeSource(raw: unknown): Reconstruction {
   return { ok: false, reason: `a TMDB ${sourceType || 'unknown'} source, which has no AIOMetadata equivalent` };
 }
 
-/**
- * Keeps a Nuvio-resolved source as it was. Nothing about it is ours to serve, so
- * it carries no catalog: the id exists only to key and label the row.
- */
+const FUSION_NATIVE_KINDS = new Set(['traktList', 'tmdbDiscover', 'traktRecommendations']);
+
+const FUSION_NATIVE_LABELS: Record<string, string> = {
+  traktList: 'TRAKT LIST',
+  traktRecommendations: 'TRAKT RECOMMENDATIONS',
+  tmdbDiscover: 'TMDB DISCOVER',
+};
+
+function fusionTraktListBlueprint(payload: Record<string, any>): Reconstruction {
+  const listId = trimmed(payload.traktId);
+  const username = trimmed(payload.username);
+  const listSlug = trimmed(payload.listSlug);
+
+  const id = listId
+    ? `trakt.list.${listId}`
+    : username && listSlug ? `trakt.${username}.${listSlug}` : '';
+  if (!id) return { ok: false, reason: 'a Trakt list source with no list id, owner or slug' };
+
+  const name = trimmed(payload.listName) || (listId ? `Trakt List ${listId}` : listSlug);
+  return ok({
+    id,
+    type: 'all',
+    name,
+    source: 'trakt',
+    enabled: true,
+    showInHome: false,
+    metadata: {
+      privacy: 'public',
+      url: username && listSlug
+        ? `https://trakt.tv/users/${username}/lists/${listSlug}`
+        : `https://trakt.tv/lists/${listId}`,
+      ...(username && { username }),
+      ...(name && { listName: name }),
+    },
+  });
+}
+
+export function fromFusionNativeSource(raw: unknown): Reconstruction {
+  if (!isRecord(raw)) return { ok: false, reason: 'a source that is not an object' };
+
+  const kind = trimmed(raw.kind);
+  const payload = isRecord(raw.payload) ? raw.payload : {};
+
+  if (kind === 'traktList') return fusionTraktListBlueprint(payload);
+  if (kind === 'traktRecommendations') {
+    return { ok: false, reason: 'a Trakt recommendations source, which belongs to whoever is signed in' };
+  }
+  if (kind === 'tmdbDiscover') {
+    return { ok: false, reason: 'a TMDB discover source, whose filters have no exact AIOMetadata equivalent' };
+  }
+  return { ok: false, reason: `a ${kind || 'unknown'} source, which has no AIOMetadata equivalent` };
+}
+
+export type NativeOrigin = 'nuvio' | 'fusion';
+
+/** Marks an id as belonging to a client-resolved source rather than a catalog. */
+export const NATIVE_ID_PREFIXES: Record<NativeOrigin, string> = {
+  nuvio: 'nuvio:',
+  fusion: 'fusion:',
+};
+
+/** Keeps a client-resolved source as it was: the id only keys and labels the row. */
 export function nativePassthrough(raw: unknown): SourceDraft | null {
   if (!isRecord(raw)) return null;
 
@@ -397,7 +454,7 @@ export function nativePassthrough(raw: unknown): SourceDraft | null {
   const label = [provider.toUpperCase(), kind || null].filter(Boolean).join(' ');
 
   return {
-    catalogId: `${NATIVE_ID_PREFIX}${provider}.${(kind || 'list').toLowerCase()}.${fingerprint(raw)}`,
+    catalogId: `${NATIVE_ID_PREFIXES.nuvio}${provider}.${(kind || 'list').toLowerCase()}.${fingerprint(raw)}`,
     type,
     name: trimmed(raw.title) || label,
     genre: null,
@@ -405,16 +462,64 @@ export function nativePassthrough(raw: unknown): SourceDraft | null {
   };
 }
 
-/** Marks an id as belonging to a client-resolved source rather than a catalog. */
-export const NATIVE_ID_PREFIX = 'nuvio:';
+export function fusionNativePassthrough(raw: unknown): SourceDraft | null {
+  if (!isRecord(raw)) return null;
+
+  const kind = trimmed(raw.kind);
+  if (!FUSION_NATIVE_KINDS.has(kind)) return null;
+
+  const payload = isRecord(raw.payload) ? raw.payload : {};
+  const name = trimmed(payload.listName) || trimmed(payload.title) || trimmed(payload.name);
+
+  return {
+    catalogId: `${NATIVE_ID_PREFIXES.fusion}${kind}.${fingerprint(raw)}`,
+    type: 'all',
+    name: name || FUSION_NATIVE_LABELS[kind] || kind,
+    genre: null,
+    native: { ...raw },
+  };
+}
 
 export function isNativeSource(source: { native?: unknown; catalogId?: string }): boolean {
-  return Boolean(source?.native) || String(source?.catalogId || '').startsWith(NATIVE_ID_PREFIX);
+  return Boolean(source?.native)
+    || Object.values(NATIVE_ID_PREFIXES).some(prefix => String(source?.catalogId || '').startsWith(prefix));
+}
+
+export function nativeOrigin(source: { native?: unknown; catalogId?: string }): NativeOrigin | null {
+  const id = String(source?.catalogId || '');
+  for (const origin of Object.keys(NATIVE_ID_PREFIXES) as NativeOrigin[]) {
+    if (id.startsWith(NATIVE_ID_PREFIXES[origin])) return origin;
+  }
+
+  const native = source?.native;
+  if (!isRecord(native)) return null;
+  if (trimmed(native.provider)) return 'nuvio';
+  if (trimmed(native.kind)) return 'fusion';
+  return null;
+}
+
+export function isStrandedNative(
+  source: { native?: unknown; catalogId?: string },
+  target: NativeOrigin
+): boolean {
+  return isNativeSource(source) && nativeOrigin(source) !== target;
+}
+
+export function fromAnyNativeSource(raw: unknown, origin: NativeOrigin | null): Reconstruction {
+  if (origin === 'fusion') return fromFusionNativeSource(raw);
+  if (origin === 'nuvio') return fromNativeSource(raw);
+  return { ok: false, reason: 'a source with no recognisable client' };
 }
 
 /** How the row describes itself, since there is no catalog to name it. */
 export function nativeLabel(source: SourceDraft): string {
   const raw = source.native || {};
+
+  if (nativeOrigin(source) === 'fusion') {
+    const kind = trimmed(raw.kind);
+    return FUSION_NATIVE_LABELS[kind] || kind.toUpperCase() || 'NATIVE';
+  }
+
   const provider = trimmed(raw.provider).toUpperCase();
   const kind = trimmed(raw.tmdbSourceType).toUpperCase();
   return kind ? `${provider} ${kind}` : provider || 'NATIVE';

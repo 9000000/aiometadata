@@ -25,7 +25,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { getSourceBadgeLabel, getSourceBadgeStyle } from '@/lib/sourceBadges';
 import { catalogKey, type ManifestCatalog } from '@/lib/collectionBuilder/manifestSources';
-import { isNativeSource, nativeLabel } from '@shared/catalogReconstruction';
+import { isNativeSource, nativeLabel, nativeOrigin } from '@shared/catalogReconstruction';
 import type { SourceDraft } from '@shared/types';
 
 export function ReorderArrows({
@@ -170,7 +170,9 @@ export function SourceRow({
         {native ? (
           <>
             <Badge variant="outline" className="text-xs font-semibold">{nativeLabel(source)}</Badge>
-            <span className="text-xs text-muted-foreground">served by Nuvio</span>
+            <span className="text-xs text-muted-foreground">
+              served by {nativeOrigin(source) === 'fusion' ? 'Fusion' : 'Nuvio'}
+            </span>
           </>
         ) : pending ? (
           <span className="text-xs text-emerald-500">added on apply</span>

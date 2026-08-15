@@ -69,8 +69,9 @@ export function buildIdentity(
   };
 }
 
+/** getManifest routes on the id alone, so a retyped catalog is still built-in. */
 function isBuiltIn(catalog: CatalogConfig): boolean {
-  return allCatalogDefinitions.some(def => def.id === catalog.id && def.type === catalog.type);
+  return allCatalogDefinitions.some(def => def.id === catalog.id);
 }
 
 /**
@@ -79,7 +80,10 @@ function isBuiltIn(catalog: CatalogConfig): boolean {
  * original type appended to the id (createCatalog in addon/lib/getManifest.ts).
  */
 export function deriveManifestCatalog(catalog: CatalogConfig): ManifestCatalog {
-  const type = trimmed(catalog.displayType) || catalog.type;
+  // createMalCatalog hardcodes anime and never reads displayType.
+  const type = catalog.id.startsWith('mal.discover.')
+    ? 'anime'
+    : trimmed(catalog.displayType) || catalog.type;
   const builtIn = isBuiltIn(catalog);
   const id = catalog.displayType && builtIn ? `${catalog.id}_${catalog.type}` : catalog.id;
   // createCatalog is the one builder that does not offer "None" off the home row.
@@ -462,7 +466,7 @@ export function findSourceIssues(
         folderId,
         message: isPersonalListId(trimmed(source.catalogId))
           ? `"${label}" belongs to whoever built this file and cannot be rebuilt here. Swap it for your own list, or remove it.`
-          : `"${label}" is not in your manifest. It may have been disabled, merged, or removed.`,
+          : `"${label}" is not in your catalogs. It may have been disabled, merged, or removed.`,
       });
     } else if (match.genreRequired && !trimmed(source.genre)) {
       issues.push({

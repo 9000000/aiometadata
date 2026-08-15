@@ -14,7 +14,7 @@ export interface IssueRow {
 
 export interface BlockingInput {
   target: 'nuvio' | 'fusion';
-  totalNative: number;
+  strandedNative: number;
   overBy: number;
   pendingCount: number;
   headroom: number;
@@ -54,7 +54,7 @@ export function unsupportedRowMessage(type: string, target: 'nuvio' | 'fusion'):
  */
 export function blockingIssues({
   target,
-  totalNative,
+  strandedNative,
   overBy,
   pendingCount,
   headroom,
@@ -96,11 +96,13 @@ export function blockingIssues({
     });
   }
 
-  if (target === 'fusion' && totalNative > 0) {
+  if (strandedNative > 0) {
+    const here = target === 'fusion' ? 'Fusion' : 'Nuvio';
+    const other = target === 'fusion' ? 'Nuvio' : 'Fusion';
     rows.push({
       key: 'block-native',
       severity: 'blocking',
-      message: `Fusion cannot serve ${totalNative} source${totalNative === 1 ? '' : 's'} that Nuvio fetches itself. Route them through AIOMetadata, or build for Nuvio.`,
+      message: `${here} cannot serve ${strandedNative} source${strandedNative === 1 ? '' : 's'} that ${other} fetches itself. Route them through AIOMetadata, or build for ${other}.`,
       entryId: null,
       folderId: null,
     });

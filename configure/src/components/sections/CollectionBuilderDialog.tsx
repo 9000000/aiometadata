@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent } from 'react';
 import { toast } from 'sonner';
 import {
   AlertTriangle,
@@ -116,8 +116,10 @@ import {
 } from '@/lib/collectionBuilder/catalogBlueprints';
 import {
   dedupeBlueprints,
-  fromNativeSource,
+  fromAnyNativeSource,
   isNativeSource,
+  isStrandedNative,
+  nativeOrigin,
   type CatalogBlueprint,
 } from '@shared/catalogReconstruction';
 import type { ShareableCatalog } from '@shared/catalogSharing';
@@ -218,12 +220,17 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const [manifestUrl, setManifestUrl] = useState('');
   const [usePlaceholder, setUsePlaceholder] = useState(false);
   const [sourceList, setSourceList] = useState<CatalogSourceList>({ catalogs: [], origin: 'derived' });
+  /** Bumped when a save lands, since that is when the manifest changes underneath. */
+  const [sourceReloadKey, setSourceReloadKey] = useState(0);
   const [manifestIdentity, setManifestIdentity] = useState<Partial<AddonIdentity>>({});
   const [pickerTarget, setPickerTarget] = useState<{ entryId: string; folderId: string | null; replaceIndex?: number } | null>(null);
   const [copied, setCopied] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState('');
+  const [importUrl, setImportUrl] = useState('');
+  const [importFetching, setImportFetching] = useState(false);
+  const [importUrlError, setImportUrlError] = useState('');
   const [importPreview, setImportPreview] = useState<ImportResult | null>(null);
   const [confirmReplace, setConfirmReplace] = useState(false);
   const [stagedBlueprints, setStagedBlueprints] = useState<CatalogBlueprint[]>([]);
@@ -270,7 +277,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     return () => {
       cancelled = true;
     };
-  }, [isOpen, manifestUrl, config.catalogs]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isOpen, manifestUrl, config.catalogs, sourceReloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (sourceList.catalogs.length === 0) return;
@@ -327,6 +334,14 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const { requestSave, isSaving, isDirty: configDirty, canSave: configCanSave, missingKeys } = useSave();
   const [pendingSave, setPendingSave] = useState(false);
   const appliedSnapshot = useRef<string | null>(null);
+
+  // A save regenerates the manifest, and the picker is built from it, so a
+  // catalog deleted before opening only reads as gone once the save has landed.
+  const wasSaving = useRef(false);
+  useEffect(() => {
+    if (wasSaving.current && !isSaving) setSourceReloadKey(key => key + 1);
+    wasSaving.current = isSaving;
+  }, [isSaving]);
 
   const builderJson = useMemo(() => JSON.stringify(entries), [entries]);
   const savedJson = useMemo(() => JSON.stringify(config.collections || []), [config.collections]);
@@ -720,7 +735,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     // Save is already disabled on these two, but Apply only is not, so they
     // still have to be caught here. The issue list is the advance notice.
     if (rowTypeBlocked()) return false;
-    if (target === 'fusion' && totalNative > 0) {
+    if (strandedNative > 0) {
       setPendingMode(mode);
       setNativeBlockFor('apply');
       return false;
@@ -782,6 +797,60 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const handleImportFile = async (file: File | undefined) => {
     if (!file) return;
     previewImport(await file.text());
+  };
+
+  const loadImportUrl = async (raw?: string) => {
+    const url = (raw ?? importUrl).trim();
+    if (!url || importFetching) return;
+    try {
+      const { protocol } = new URL(url);
+      if (protocol !== 'http:' && protocol !== 'https:') throw new Error('unsupported protocol');
+    } catch {
+      setImportUrlError('That is not a link. It has to start with http:// or https://.');
+      return;
+    }
+
+    const read = async (from: string) => {
+      const response = await fetch(from);
+      const body = await response.text();
+      if (!response.ok) {
+        let message = `The link returned ${response.status}.`;
+        try {
+          message = JSON.parse(body)?.error || message;
+        } catch {
+          /* empty */
+        }
+        throw new Error(message);
+      }
+      return body;
+    };
+
+    setImportFetching(true);
+    setImportUrlError('');
+    try {
+      let body: string;
+      try {
+        body = await read(url);
+      } catch (error) {
+        if (!(error instanceof TypeError)) throw error;
+        body = await read(`/api/proxy-manifest?url=${encodeURIComponent(url)}`);
+      }
+      previewImport(body);
+    } catch (error) {
+      setImportPreview(null);
+      setImportText('');
+      setImportUrlError(error instanceof Error ? error.message : 'Could not read that link.');
+    } finally {
+      setImportFetching(false);
+    }
+  };
+
+  const handleImportPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const pasted = event.clipboardData.getData('text').trim();
+    if (!/^https?:\/\/\S+$/i.test(pasted)) return;
+    event.preventDefault();
+    setImportUrl(pasted);
+    void loadImportUrl(pasted);
   };
 
   const importCounts = useMemo(
@@ -880,12 +949,15 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     return sources.filter(isNativeSource).length;
   }, []);
 
-  /**
-   * Takes over client-resolved sources. Scoped to one collection by default so
-   * the cost is taken on only where it buys something, and to everything when a
-   * target cannot serve them at all.
-   */
-  const convertNativeSources = useCallback((entryId?: string) => {
+  const countStranded = useCallback((entry: BuilderEntry) => {
+    const sources = entry.kind === 'classicRow'
+      ? (entry.source ? [entry.source] : [])
+      : entry.folders.flatMap(folder => folder.sources);
+    return sources.filter(source => isStrandedNative(source, target)).length;
+  }, [target]);
+
+  /** Takes over client-resolved sources, in the narrowest scope the caller names. */
+  const convertNativeSources = useCallback((entryId?: string, folderId?: string) => {
     const rebuilt: CatalogBlueprint[] = [];
     const convertedKeys: string[] = [];
     let converted = 0;
@@ -893,17 +965,32 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
     setEntries(prev => prev.map(entry => {
       if (entryId !== undefined && entry.id !== entryId) return entry;
-      if (entry.kind !== 'collection') return entry;
+
+      if (entry.kind === 'classicRow') {
+        if (folderId !== undefined) return entry;
+        const source = entry.source;
+        if (!source || !isNativeSource(source) || !source.native) return entry;
+        const result = fromAnyNativeSource(source.native, nativeOrigin(source));
+        if (result.ok !== true) {
+          kept += 1;
+          return entry;
+        }
+        rebuilt.push(result.blueprint);
+        convertedKeys.push(`${result.source.catalogId}:${result.source.type}`);
+        converted += 1;
+        return { ...entry, source: result.source };
+      }
 
       return {
         ...entry,
         folders: entry.folders.map(folder => {
+          if (folderId !== undefined && folder.id !== folderId) return folder;
           const seen = new Set<string>();
           const sources: SourceDraft[] = [];
           for (const source of folder.sources) {
             let next = source;
             if (isNativeSource(source) && source.native) {
-              const result = fromNativeSource(source.native);
+              const result = fromAnyNativeSource(source.native, nativeOrigin(source));
               if (result.ok === true) {
                 rebuilt.push(result.blueprint);
                 next = result.source;
@@ -935,27 +1022,32 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     toast.success(
       `${converted} source${converted === 1 ? '' : 's'} routed through AIOMetadata`,
       kept > 0
-        ? { description: `${kept} had no equivalent here and stay with Nuvio.` }
+        ? { description: `${kept} had no equivalent here and stay with the app.` }
         : undefined
     );
   }, []);
 
   /** How much of the design the selected target would drop, for the warning. */
-  const fusionTileTotal = useMemo(
+  const tileTotal = useMemo(
     () => entries.reduce((sum, entry) => sum + (entry.kind === 'collection' ? entry.folders.length : 0), 0),
     [entries]
   );
 
-  /** Tiles Fusion still gets, but with nothing in them. A sourceless tile exports. */
-  const fusionEmptyTiles = useMemo(
-    () => fusionResult.output.widgets.reduce(
+  /** Tiles the target still gets, but with nothing in them. A sourceless tile exports. */
+  const emptyTiles = useMemo(() => {
+    if (target === 'nuvio') {
+      return nuvioResult.output.reduce(
+        (sum, collection) => sum + collection.folders.filter(folder => folder.sources.length === 0).length,
+        0
+      );
+    }
+    return fusionResult.output.widgets.reduce(
       (sum, widget) => sum + ('dataSource' in widget && widget.dataSource?.kind === 'collection'
         ? widget.dataSource.payload.items.filter(item => item.dataSources.length === 0).length
         : 0),
       0
-    ),
-    [fusionResult]
-  );
+    );
+  }, [target, nuvioResult, fusionResult]);
 
   const unsupportedRows = useMemo(() => unsupportedClassicRows(entries), [entries]);
 
@@ -964,17 +1056,27 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     [unsupportedRows, target]
   );
 
+  const strandedNative = useMemo(
+    () => entries.reduce((sum, entry) => sum + countStranded(entry), 0),
+    [entries, countStranded]
+  );
+
   const totalNative = useMemo(
     () => entries.reduce((sum, entry) => sum + countNative(entry), 0),
     [entries, countNative]
   );
 
-  const entryIsNative = useCallback((entry: BuilderEntry) => {
+  const strandedTarget = useMemo(() => (target === 'fusion'
+    ? { here: 'Fusion', other: 'Nuvio', otherId: 'nuvio' as Target }
+    : { here: 'Nuvio', other: 'Fusion', otherId: 'fusion' as Target }
+  ), [target]);
+
+  const entryIsStranded = useCallback((entry: BuilderEntry) => {
     const sources = entry.kind === 'classicRow'
       ? (entry.source ? [entry.source] : [])
       : entry.folders.flatMap(folder => folder.sources);
-    return sources.length > 0 && sources.every(isNativeSource);
-  }, []);
+    return sources.length > 0 && sources.every(source => isStrandedNative(source, target));
+  }, [target]);
 
   /** Sources the design points at that nothing in the config or the file can serve. */
   const unresolvedSources = useMemo(
@@ -1000,16 +1102,16 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const headroom = Math.max(0, catalogLimit - enabledCatalogCount);
   const overBy = Math.max(0, pendingCount - headroom);
 
-  // Below overBy and totalNative on purpose: blockingIssues reads both, and a
+  // Below overBy and strandedNative on purpose: blockingIssues reads both, and a
   // const is in its temporal dead zone until its own line runs.
   const missingKeyNames = useMemo(() => missingKeys.map(key => key.name), [missingKeys]);
 
   const blocking = useMemo(
     () => blockingIssues({
-      target, totalNative, overBy, pendingCount, headroom,
+      target, strandedNative, overBy, pendingCount, headroom,
       missingKeys: missingKeyNames, unsupportedRows,
     }),
-    [target, totalNative, overBy, pendingCount, headroom, missingKeyNames, unsupportedRows]
+    [target, strandedNative, overBy, pendingCount, headroom, missingKeyNames, unsupportedRows]
   );
 
   const problems = useMemo(
@@ -1108,7 +1210,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   const handleCopyUrl = async () => {
     if (rowTypeBlocked()) return;
-    if (target === 'fusion' && totalNative > 0) {
+    if (strandedNative > 0) {
       setNativeBlockFor('link');
       return;
     }
@@ -1120,7 +1222,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   const handleCopy = async () => {
     if (rowTypeBlocked()) return;
-    if (target === 'fusion' && totalNative > 0) {
+    if (strandedNative > 0) {
       setNativeBlockFor('copy');
       return;
     }
@@ -1132,7 +1234,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   const handleDownload = () => {
     if (rowTypeBlocked()) return;
-    if (target === 'fusion' && totalNative > 0) {
+    if (strandedNative > 0) {
       setNativeBlockFor('download');
       return;
     }
@@ -1313,7 +1415,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       const index = entries.findIndex(item => item.id === entry.id);
                       const excluded: 'nuvio' | 'fusion' | null =
                         target === 'nuvio' && entry.kind === 'classicRow' ? 'fusion'
-                        : target === 'fusion' && entryIsNative(entry) ? 'nuvio'
+                        : entryIsStranded(entry) ? (target === 'fusion' ? 'nuvio' : 'fusion')
                         : null;
                       const folderCount = entry.kind === 'collection' ? entry.folders.length : 0;
                       const expanded = forceExpand || expandedIds.has(entry.id);
@@ -1330,7 +1432,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                             icon={entry.kind === 'collection' ? Layers : entry.numbered ? ListOrdered : Rows3}
                             accent={entry.kind === 'collection' ? 'text-cyan-400' : 'text-violet-400'}
                             severity={excluded ? undefined : worstByEntry.get(entry.id)}
-                            allNative={entryIsNative(entry)}
+                            allNative={entryIsStranded(entry)}
                             excluded={excluded}
                             isActive={selection.entryId === entry.id && selection.folderId === null}
                             isAncestor={selection.entryId === entry.id && selection.folderId !== null}
@@ -1362,7 +1464,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                               icon={Folder}
                               accent="text-muted-foreground"
                               severity={worstByFolder.get(folder.id)}
-                              allNative={folder.sources.length > 0 && folder.sources.every(isNativeSource)}
+                              allNative={folder.sources.length > 0
+                                && folder.sources.every(source => isStrandedNative(source, target))}
                               isActive={selection.folderId === folder.id}
                               canMoveUp={folderIndex > 0}
                               canMoveDown={folderIndex < folderCount - 1}
@@ -1453,7 +1556,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       tagOptions={tagOptions}
                       onAddByTag={(folderId, tag) => addSourcesByTag(selected.id, folderId, tag)}
                       nativeCount={countNative(selected)}
-                      onConvertNative={() => convertNativeSources(selected.id)}
+                      onConvertNative={folderId => convertNativeSources(selected.id, folderId)}
                       selectedFolderId={selection.folderId}
                       onAddFolder={() => addFolderIn(selected.id)}
                       onRemoveFolder={() => {
@@ -1670,13 +1773,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 <p className="text-xs text-muted-foreground">{stageCopy.hint}</p>
               )}
             </div>
-            {target === 'fusion' && totalNative > 0 && (
+            {totalNative > 0 && (
               <Button
                 variant="outline"
-                className="h-9 border-amber-600/60 text-amber-200 hover:bg-amber-900/40"
+                className={`h-9 ${strandedNative > 0 ? 'border-amber-600/60 text-amber-200 hover:bg-amber-900/40' : ''}`}
                 onClick={() => convertNativeSources()}
               >
-                <Replace className="mr-1.5 h-4 w-4" /> Route all through AIOMetadata
+                <Replace className="mr-1.5 h-4 w-4" /> Route all {totalNative} through AIOMetadata
               </Button>
             )}
             {overBy > 0 && (
@@ -1706,15 +1809,38 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
         </DialogContent>
       </Dialog>
 
-      <Dialog open={importOpen} onOpenChange={open => { if (!open) { setImportOpen(false); setImportText(''); setImportPreview(null); setConfirmReplace(false); } }}>
+      <Dialog open={importOpen} onOpenChange={open => { if (!open) { setImportOpen(false); setImportText(''); setImportUrl(''); setImportUrlError(''); setImportPreview(null); setConfirmReplace(false); } }}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Import collections</DialogTitle>
             <DialogDescription>
-              Paste or upload a Nuvio collections file, a Fusion widgets file, or a previous export from here.
-              The format is detected for you.
+              Link, paste or upload a Nuvio collections file, a Fusion widgets file, or a previous export from
+              here. The format is detected for you.
             </DialogDescription>
           </DialogHeader>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              value={importUrl}
+              onChange={event => { setImportUrl(event.target.value); setImportUrlError(''); }}
+              onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void loadImportUrl(); } }}
+              placeholder="https://example.com/collections.json"
+              className="h-9 min-w-[16rem] flex-1 font-mono text-xs"
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              className="shrink-0"
+              disabled={!importUrl.trim() || importFetching}
+              onClick={() => { void loadImportUrl(); }}
+            >
+              <LinkIcon className="mr-1.5 h-4 w-4" /> {importFetching ? 'Loading…' : 'Load link'}
+            </Button>
+          </div>
+
+          {importUrlError && (
+            <p className="-mt-2 text-xs text-amber-500">{importUrlError}</p>
+          )}
 
           <div className="flex items-center gap-2">
             <input
@@ -1733,6 +1859,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           <textarea
             value={importText}
             onChange={event => previewImport(event.target.value)}
+            onPaste={handleImportPaste}
             placeholder='[{"id":"...","title":"My Collection","folders":[...]}]'
             className="h-48 w-full resize-none rounded-md border bg-muted p-3 font-mono text-xs focus:outline-none"
           />
@@ -1779,10 +1906,10 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <Label htmlFor="convert-native" className="text-xs font-medium">
-                        Route Nuvio's own sources through AIOMetadata
+                        Route the app's own sources through AIOMetadata
                       </Label>
                       <p className="mt-0.5 text-xs text-muted-foreground">
-                        {importPreview.nativeCount} of this file's sources are fetched by Nuvio straight from
+                        {importPreview.nativeCount} of this file's sources are fetched by the app straight from
                         TMDB or Trakt. Left alone they work as they are and cost nothing. Turning this on gives
                         them your artwork, ratings and filters, at{' '}
                         {importPreview.convertibleCount} catalog
@@ -1798,7 +1925,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   {convertNative && importPreview.convertibleCount < importPreview.nativeCount && (
                     <p className="text-xs text-muted-foreground">
                       {importPreview.nativeCount - importPreview.convertibleCount} of them have no equivalent
-                      here and stay with Nuvio.
+                      here and stay with the app.
                     </p>
                   )}
                 </div>
@@ -2119,29 +2246,30 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-amber-500" /> Fusion cannot serve most of this
+              <AlertTriangle className="h-4 w-4 text-amber-500" /> {strandedTarget.here} cannot serve most of this
             </DialogTitle>
             <DialogDescription>
-              {totalNative} source{totalNative === 1 ? '' : 's'} in this design {totalNative === 1 ? 'is' : 'are'}{' '}
-              fetched by Nuvio itself, and Fusion has no equivalent. {fusionEmptyTiles > 0
-                ? `${fusionEmptyTiles} of ${fusionTileTotal} tiles would come out empty.`
-                : 'Those sources are left out of the Fusion export.'}
+              {strandedNative} source{strandedNative === 1 ? '' : 's'} in this design{' '}
+              {strandedNative === 1 ? 'is' : 'are'} fetched by {strandedTarget.other} itself, and{' '}
+              {strandedTarget.here} has no equivalent. {emptyTiles > 0
+                ? `${emptyTiles} of ${tileTotal} tiles would come out empty.`
+                : `Those sources are left out of the ${strandedTarget.here} export.`}
             </DialogDescription>
           </DialogHeader>
 
           <p className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">
             {nativeBlockFor === 'apply'
-              ? 'The design is fine for Nuvio, so you can apply it and build for Nuvio instead. Applying also publishes your hosted widgets URL, which would hand out the same empty export.'
-              : 'Switching to Nuvio gives you the complete export. Routing the sources through AIOMetadata keeps them on both targets, at one catalog each.'}
+              ? `The design is fine for ${strandedTarget.other}, so you can apply it and build for ${strandedTarget.other} instead. Applying also publishes your hosted widgets URL, which would hand out the same empty export.`
+              : `Switching to ${strandedTarget.other} gives you the complete export. Routing the sources through AIOMetadata keeps them on both targets, at one catalog each.`}
           </p>
 
           <div className="flex flex-wrap justify-end gap-2 border-t pt-3">
             <Button variant="ghost" onClick={() => setNativeBlockFor(null)}>Cancel</Button>
             <Button
               variant="outline"
-              onClick={() => { setTarget('nuvio'); setNativeBlockFor(null); }}
+              onClick={() => { setTarget(strandedTarget.otherId); setNativeBlockFor(null); }}
             >
-              <Tv className="mr-1.5 h-4 w-4" /> Build for Nuvio
+              <Tv className="mr-1.5 h-4 w-4" /> Build for {strandedTarget.other}
             </Button>
             <Button onClick={() => { convertNativeSources(); setNativeBlockFor(null); }}>
               <Replace className="mr-1.5 h-4 w-4" /> Route through AIOMetadata

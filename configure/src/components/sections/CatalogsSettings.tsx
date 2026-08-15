@@ -61,7 +61,7 @@ import {
   showBulkActionError
 } from '@/utils/toastHelpers';
 import { toast } from 'sonner';
-import { buildExportPayload, exportToJson, parseImportJson, fetchAndParseUrl, mergeCatalogs, ImportResult } from '@/lib/catalogShare';
+import { buildExportPayload, exportToJson, parseImportJson, fetchAndParseUrl, mergeCatalogs, reconcileTagRegistry, ImportResult } from '@/lib/catalogShare';
 
 interface CustomizeTemplate {
   source: 'tmdb' | 'tvdb' | 'anilist' | 'simkl' | 'mal';
@@ -4582,7 +4582,8 @@ function CatalogsSettingsContent({
         config.catalogs,
         includeUserSpecific,
         excludeDisabled,
-        builtOnly
+        builtOnly,
+        config.tags
       );
       setExportJson(exportToJson(payload));
       setExportStats({ exported: exportedCount, skipped: skippedCount, skippedReasons });
@@ -4598,7 +4599,8 @@ function CatalogsSettingsContent({
         config.catalogs,
         includeUser ?? includeUserSpecific,
         excludeDisabledOverride ?? excludeDisabled,
-        builtOnlyOverride ?? builtOnly
+        builtOnlyOverride ?? builtOnly,
+        config.tags
       );
       setExportJson(exportToJson(payload));
       setExportStats({ exported: exportedCount, skipped: skippedCount, skippedReasons });
@@ -4638,8 +4640,18 @@ function CatalogsSettingsContent({
   const handleImportConfirm = () => {
     if (!importPreview) return;
     try {
-      const newCatalogs = mergeCatalogs(config.catalogs, importPreview.payload.catalogs, importMode);
-      setConfig(prev => ({ ...prev, catalogs: reconcileMergedReferences(newCatalogs) }));
+      setConfig(prev => {
+        const { tags, catalogs: incoming } = reconcileTagRegistry(
+          prev.tags ?? [],
+          importPreview.payload.catalogs,
+          importPreview.payload.tags
+        );
+        return {
+          ...prev,
+          tags,
+          catalogs: reconcileMergedReferences(mergeCatalogs(prev.catalogs, incoming, importMode)),
+        };
+      });
       toast.success(`Imported ${importPreview.catalogCount} catalogs`, {
         description: importMode === 'replace'
           ? 'Matching catalogs replaced, new catalogs added'
@@ -5780,6 +5792,12 @@ function CatalogsSettingsContent({
                     Sources: {Object.entries(importPreview.sourceBreakdown)
                       .map(([source, count]) => `${source.toUpperCase()} (${count})`)
                       .join(', ')}
+                  </p>
+                )}
+                {importPreview.tagNames.length > 0 && (
+                  <p className="mt-1">
+                    Tags: {importPreview.tagNames.slice(0, 8).join(', ')}
+                    {importPreview.tagNames.length > 8 && ` and ${importPreview.tagNames.length - 8} more`}
                   </p>
                 )}
                 <p className="text-muted-foreground/60 mt-1">

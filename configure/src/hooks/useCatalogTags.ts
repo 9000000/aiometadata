@@ -5,6 +5,8 @@ import { nextTagColor } from '@/lib/tagColors';
 
 const catalogKey = (c: CatalogConfig) => `${c.id}-${c.type}`;
 
+const sameTag = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
 export function useCatalogTags() {
   const { config, setConfig } = useConfig();
 
@@ -34,13 +36,13 @@ export function useCatalogTags() {
     if (!clean || clean.length > MAX_TAG_NAME_LENGTH || clean === oldName) return;
     setConfig(prev => {
       const registry = prev.tags ?? [];
-      if (registry.some(t => t.name !== oldName && t.name.toLowerCase() === clean.toLowerCase())) return prev;
+      if (registry.some(t => !sameTag(t.name, oldName) && sameTag(t.name, clean))) return prev;
       return {
         ...prev,
-        tags: registry.map(t => (t.name === oldName ? { ...t, name: clean } : t)),
+        tags: registry.map(t => (sameTag(t.name, oldName) ? { ...t, name: clean } : t)),
         catalogs: prev.catalogs.map(c =>
-          c.tags?.includes(oldName)
-            ? { ...c, tags: c.tags.map(t => (t === oldName ? clean : t)) }
+          c.tags?.some(t => sameTag(t, oldName))
+            ? { ...c, tags: c.tags.map(t => (sameTag(t, oldName) ? clean : t)) }
             : c
         ),
       };
@@ -50,16 +52,16 @@ export function useCatalogTags() {
   const recolorTag = useCallback((name: string, color: TagColorKey) => {
     setConfig(prev => ({
       ...prev,
-      tags: (prev.tags ?? []).map(t => (t.name === name ? { ...t, color } : t)),
+      tags: (prev.tags ?? []).map(t => (sameTag(t.name, name) ? { ...t, color } : t)),
     }));
   }, [setConfig]);
 
   const deleteTag = useCallback((name: string) => {
     setConfig(prev => ({
       ...prev,
-      tags: (prev.tags ?? []).filter(t => t.name !== name),
+      tags: (prev.tags ?? []).filter(t => !sameTag(t.name, name)),
       catalogs: prev.catalogs.map(c =>
-        c.tags?.includes(name) ? { ...c, tags: c.tags.filter(t => t !== name) } : c
+        c.tags?.some(t => sameTag(t, name)) ? { ...c, tags: c.tags.filter(t => !sameTag(t, name)) } : c
       ),
     }));
   }, [setConfig]);
@@ -80,7 +82,7 @@ export function useCatalogTags() {
         catalogs: prev.catalogs.map(c => {
           if (!keys.has(catalogKey(c))) return c;
           const current = c.tags ?? [];
-          return current.includes(canonical) ? c : { ...c, tags: [...current, canonical] };
+          return current.some(t => sameTag(t, canonical)) ? c : { ...c, tags: [...current, canonical] };
         }),
       };
     });
@@ -90,8 +92,8 @@ export function useCatalogTags() {
     setConfig(prev => ({
       ...prev,
       catalogs: prev.catalogs.map(c => {
-        if (!keys.has(catalogKey(c)) || !c.tags?.includes(name)) return c;
-        return { ...c, tags: c.tags.filter(t => t !== name) };
+        if (!keys.has(catalogKey(c)) || !c.tags?.some(t => sameTag(t, name))) return c;
+        return { ...c, tags: c.tags.filter(t => !sameTag(t, name)) };
       }),
     }));
   }, [setConfig]);

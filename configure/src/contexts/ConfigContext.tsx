@@ -4,6 +4,7 @@ import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from
 import { allCatalogDefinitions, allSearchProviders } from "@/data/catalogs";
 import { LoadingScreen } from "@/components/LoadingScreen"; 
 import { hasAnyWatchTrackingEnabled } from '@/lib/watchTracking';
+import { reconcileTagRegistry } from '@/lib/catalogShare';
 
 interface AuthState {
   authenticated: boolean;
@@ -327,6 +328,7 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
       }
       // Hydrate search.engineEnabled
       const hydratedEngineEnabled = { ...initialConfig.search.engineEnabled, ...(preloadedConfig.search?.engineEnabled || {}) };
+      const hydratedTags = reconcileTagRegistry(preloadedConfig.tags ?? [], hydratedCatalogs);
       return {
         ...initialConfig,
         ...preloadedConfig,
@@ -376,7 +378,8 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
         },
         mal: { ...initialConfig.mal, ...preloadedConfig.mal },
         tmdb: { ...initialConfig.tmdb, ...preloadedConfig.tmdb },
-        catalogs: hydratedCatalogs,
+        tags: hydratedTags.tags,
+        catalogs: hydratedTags.catalogs,
       };
     }
     return initialConfig;

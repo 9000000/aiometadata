@@ -37,7 +37,7 @@ interface SelectableItem {
 type QuickAddStep = 'input' | 'selection' | 'loading';
 
 export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
-  const { config, setConfig, catalogTTL } = useConfig();
+  const { config, setConfig, catalogTTL, hasBuiltInMdblist } = useConfig();
   
   // State
   const [url, setUrl] = useState('');
@@ -169,7 +169,7 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
     if (!parsedUrl || parsedUrl.service !== 'mdblist') return;
     
     const apiKey = config.apiKeys.mdblist;
-    if (!apiKey) {
+    if (!apiKey && !hasBuiltInMdblist) {
       setError('MDBList API key required. Please configure it in the MDBList Integration settings.');
       return;
     }
@@ -181,7 +181,7 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
       if (parsedUrl.type === 'single-list' && parsedUrl.username && parsedUrl.listSlug) {
         // Single list - add directly
         const response = await fetch(
-          `/api/mdblist/lists/${encodeURIComponent(parsedUrl.username)}/${encodeURIComponent(parsedUrl.listSlug)}?apikey=${apiKey}`
+          `/api/mdblist/lists/${encodeURIComponent(parsedUrl.username)}/${encodeURIComponent(parsedUrl.listSlug)}${apiKey ? `?apikey=${apiKey}` : ''}`
         );
 
         if (!response.ok) {
@@ -240,7 +240,7 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
       } else if (parsedUrl.type === 'user-profile' && parsedUrl.username) {
         // User profile - fetch lists and show selection
         const response = await fetch(
-          `/api/mdblist/lists/user?apikey=${apiKey}&username=${encodeURIComponent(parsedUrl.username)}`
+          `/api/mdblist/lists/user?username=${encodeURIComponent(parsedUrl.username)}${apiKey ? `&apikey=${apiKey}` : ''}`
         );
         
         if (!response.ok) {

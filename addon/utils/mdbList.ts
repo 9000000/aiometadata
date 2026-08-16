@@ -866,7 +866,7 @@ async function convertGenreToSlug(genre: string, apiKey?: string): Promise<strin
   }
 
   if (!genreTitleToSlugMap || genreTitleToSlugMap.size === 0) {
-    const key = apiKey || process.env.MDBLIST_API_KEY || '';
+    const key = apiKey || process.env.MDBLIST_API_KEY || process.env.BUILT_IN_MDBLIST_API_KEY || '';
     if (key) {
       await fetchMDBListGenres(key, false);
       await fetchMDBListGenres(key, true);

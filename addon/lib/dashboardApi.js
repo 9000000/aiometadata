@@ -661,7 +661,7 @@ class DashboardAPI {
         {
           name: "MDBList",
           // Show nothing if not set
-          keyStatus: process.env.MDBLIST_API_KEY 
+          keyStatus: (process.env.MDBLIST_API_KEY || process.env.BUILT_IN_MDBLIST_API_KEY)
             ? "Built-in key set" 
             : null,
           requiresKey: false,
@@ -674,7 +674,7 @@ class DashboardAPI {
         {
           name: "Gemini",
           // Show nothing if not set
-          keyStatus: process.env.GEMINI_API_KEY 
+          keyStatus: (process.env.GEMINI_API_KEY || process.env.BUILT_IN_GEMINI_API_KEY) 
             ? "Built-in key set" 
             : null,
           requiresKey: false,

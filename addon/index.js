@@ -544,6 +544,8 @@ const respond = function (req, res, data, opts) {
       addonVersion: ADDON_VERSION,
       hasBuiltInTvdb: !!getSetting('BUILT_IN_TVDB_API_KEY'),
       hasBuiltInTmdb: !!getSetting('BUILT_IN_TMDB_API_KEY'),
+      hasBuiltInMdblist: !!getSetting('BUILT_IN_MDBLIST_API_KEY'),
+      hasBuiltInGemini: !!getSetting('BUILT_IN_GEMINI_API_KEY'),
       catalogTTL: parseInt(getSetting('CATALOG_TTL') || String(24 * 60 * 60), 10),
       maxCatalogs: parseInt(getSetting('MAX_CATALOGS') || '', 10) || null,
       collectionImportCatalogCap: parseInt(getSetting('COLLECTION_IMPORT_CATALOG_CAP') || '', 10) || 300,
@@ -1383,6 +1385,12 @@ addon.get("/api/mdblist/user", async (req, res) => {
 const MDBLIST_LIST_CACHE_TTL = 30 * 60;
 
 /** Keyed per key rather than globally: without a username MDBList returns the caller's own lists. */
+/** The instance key stands in when the caller sends none, same as the catalog paths. */
+function resolveMdblistKey(supplied) {
+  const value = String(supplied || '').trim();
+  return value || process.env.MDBLIST_API_KEY || process.env.BUILT_IN_MDBLIST_API_KEY || '';
+}
+
 function mdblistCacheKey(parts, apikey) {
   const fingerprint = crypto.createHash('sha256').update(String(apikey)).digest('hex').slice(0, 16);
   return `mdblist:${parts.join(':')}:${fingerprint}`;
@@ -1390,7 +1398,8 @@ function mdblistCacheKey(parts, apikey) {
 
 addon.get("/api/mdblist/lists/user", async (req, res) => {
   try {
-    const { apikey, username, sort } = req.query;
+    const { username, sort } = req.query;
+    const apikey = resolveMdblistKey(req.query.apikey);
     
     if (!apikey) {
       return res.status(400).json({ error: "apikey is required" });
@@ -1423,7 +1432,7 @@ addon.get("/api/mdblist/lists/user", async (req, res) => {
 // Proxy: Get top lists
 addon.get("/api/mdblist/lists/top", async (req, res) => {
   try {
-    const { apikey } = req.query;
+    const apikey = resolveMdblistKey(req.query.apikey);
     
     if (!apikey) {
       return res.status(400).json({ error: "apikey is required" });
@@ -1444,7 +1453,8 @@ addon.get("/api/mdblist/lists/top", async (req, res) => {
 addon.get("/api/mdblist/lists/:listId/items", async (req, res) => {
   try {
     const { listId } = req.params;
-    const { apikey, limit } = req.query;
+    const { limit } = req.query;
+    const apikey = resolveMdblistKey(req.query.apikey);
 
     if (!apikey) {
       return res.status(400).json({ error: "apikey is required" });
@@ -1484,7 +1494,7 @@ addon.get("/api/mdblist/lists/:listId/items", async (req, res) => {
 addon.get("/api/mdblist/lists/:username/:listname", async (req, res) => {
   try {
     const { username, listname } = req.params;
-    const { apikey } = req.query;
+    const apikey = resolveMdblistKey(req.query.apikey);
     
     if (!apikey) {
       return res.status(400).json({ error: "apikey is required" });
@@ -2104,7 +2114,7 @@ addon.post("/api/ai/create-catalog", async (req, res) => {
     const config = access.config;
 
     const openrouterKey = config.apiKeys?.openrouter || clientOpenrouterKey;
-    const geminiKey = config.apiKeys?.gemini || clientGeminiKey;
+    const geminiKey = config.apiKeys?.gemini || clientGeminiKey || process.env.BUILT_IN_GEMINI_API_KEY;
     if (!openrouterKey && !geminiKey) {
       return res.status(400).json({ error: 'No AI API key configured. Add an OpenRouter or Gemini key in your settings.' });
     }
@@ -2512,7 +2522,7 @@ addon.get("/api/mal/discover/preview", async (req, res) => {
 addon.get("/api/mdblist/discover/preview", async (req, res) => {
   try {
     const params = { ...req.query };
-    const apiKey = params.apikey || process.env.MDBLIST_API_KEY || '';
+    const apiKey = params.apikey || process.env.MDBLIST_API_KEY || process.env.BUILT_IN_MDBLIST_API_KEY || '';
     const mediaType = params.mediaType === 'show' ? 'show' : 'movie';
     delete params.apikey;
     delete params.userUUID;

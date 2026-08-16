@@ -38,7 +38,7 @@ function ConfigurationSectionFallback() {
 }
 
 export function ConfigurationManager() {
-  const { config, setConfig, auth, setAuth, hasBuiltInTvdb, hasBuiltInTmdb, isLoading: contextLoading, manifestChangedSinceInstall, markManifestInstalled } = useConfig();
+  const { config, setConfig, auth, setAuth, hasBuiltInTvdb, hasBuiltInTmdb, hasBuiltInGemini, isLoading: contextLoading, manifestChangedSinceInstall, markManifestInstalled } = useConfig();
   const { requestSave, isSaving, error, savedConfig, canSave, missingKeys, openInstall } = useSave();
   const [selectedTag, setSelectedTag] = useState("");
   const [requireAddonPassword, setRequireAddonPassword] = useState(false);
@@ -49,10 +49,10 @@ export function ConfigurationManager() {
   const [isLoadingLoad, setIsLoadingLoad] = useState(false);
   const [isUUIDTrusted, setIsUUIDTrusted] = useState<boolean | null>(null);
 
-  const caps = { hasBuiltInTmdb, hasBuiltInTvdb };
+  const caps = { hasBuiltInTmdb, hasBuiltInTvdb, hasBuiltInGemini };
   const statuses = useMemo(
     () => keyStatuses(config, caps),
-    [config, hasBuiltInTmdb, hasBuiltInTvdb] // eslint-disable-line react-hooks/exhaustive-deps
+    [config, hasBuiltInTmdb, hasBuiltInTvdb, hasBuiltInGemini] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   const identity: SavedConfig | null = savedConfig

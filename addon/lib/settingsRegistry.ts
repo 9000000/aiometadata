@@ -132,6 +132,26 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: '',
     sensitive: true,
   },
+  {
+    key: 'BUILT_IN_MDBLIST_API_KEY',
+    envVar: 'BUILT_IN_MDBLIST_API_KEY',
+    label: 'Built-in MDBList Key',
+    description: 'Server-side MDBList key used as fallback. Billed per call past the free tier, so not for a public instance',
+    category: 'API Keys',
+    type: 'string',
+    default: '',
+    sensitive: true,
+  },
+  {
+    key: 'BUILT_IN_GEMINI_API_KEY',
+    envVar: 'BUILT_IN_GEMINI_API_KEY',
+    label: 'Built-in Gemini Key',
+    description: 'Server-side Gemini key used as fallback. Billed per query, so not for a public instance',
+    category: 'API Keys',
+    type: 'string',
+    default: '',
+    sensitive: true,
+  },
 
   // --- OAuth (env-only) ---
   {

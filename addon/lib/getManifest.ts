@@ -1420,7 +1420,7 @@ async function getManifest(config: any, opts: { tag?: string } = {}): Promise<an
         id: 'gemini.search',
         type: 'other',
         provider: 'gemini.search',
-        enabled: engineEnabled['gemini.search'] !== false && config.search?.ai_enabled === true && (!!config.apiKeys?.gemini || !!config.apiKeys?.openrouter),
+        enabled: engineEnabled['gemini.search'] !== false && config.search?.ai_enabled === true && (!!config.apiKeys?.gemini || !!config.apiKeys?.openrouter || !!process.env.BUILT_IN_GEMINI_API_KEY),
         suffix: 'AI Search'
       }
     ];

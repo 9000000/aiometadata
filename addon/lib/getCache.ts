@@ -1271,7 +1271,7 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
   const isMDBListWatchlistOrUpNext = idOnly.startsWith('mdblist.watchlist') || idOnly === 'mdblist.upnext' || idOnly.startsWith('mdblist.recommended.');
   if (isMDBListCatalog && isMDBListWatchlistOrUpNext) {
     catalogConfig.apiKeys = {
-      mdblist: config.apiKeys?.mdblist || process.env.MDBLIST_API_KEY || ''
+      mdblist: config.apiKeys?.mdblist || process.env.MDBLIST_API_KEY || process.env.BUILT_IN_MDBLIST_API_KEY || ''
     };
   }
 

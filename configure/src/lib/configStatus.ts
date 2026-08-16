@@ -14,6 +14,7 @@ export type ApiKeyId =
 export interface ConfigCaps {
   hasBuiltInTmdb: boolean;
   hasBuiltInTvdb: boolean;
+  hasBuiltInGemini?: boolean;
 }
 
 export interface KeyStatus {
@@ -112,7 +113,7 @@ export function isKeyConfigured(config: ConfigLike, id: ApiKeyId, caps: ConfigCa
     // the requirement either.
     return aiProvider(config) === 'openrouter'
       ? !!apiKeys.openrouter?.trim()
-      : !!apiKeys.gemini?.trim();
+      : !!apiKeys.gemini?.trim() || !!caps.hasBuiltInGemini;
   }
   const hasUserKey = !!apiKeys[id]?.trim();
   if (id === 'tmdb') return hasUserKey || caps.hasBuiltInTmdb;

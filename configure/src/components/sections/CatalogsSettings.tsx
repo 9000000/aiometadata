@@ -3836,7 +3836,7 @@ function CatalogsSettingsContent({
   tagFilters: string[];
   setTagFilters: React.Dispatch<React.SetStateAction<string[]>>;
 }) {
-  const { config, setConfig, hasBuiltInTvdb } = useConfig();
+  const { config, setConfig, hasBuiltInTvdb, hasBuiltInGemini } = useConfig();
   const {
     selectAll,
     deselectAll,
@@ -4917,7 +4917,7 @@ function CatalogsSettingsContent({
               <Layers className="h-4 w-4 mr-2" />
               Collections
             </Button>
-            {(config.apiKeys?.openrouter || config.apiKeys?.gemini) && (
+            {(config.apiKeys?.openrouter || config.apiKeys?.gemini || hasBuiltInGemini) && (
               <Button onClick={() => setIsAICatalogOpen(true)} size="sm" variant="outline">
                 <Sparkles className="h-4 w-4 mr-2" />
                 AI Catalog

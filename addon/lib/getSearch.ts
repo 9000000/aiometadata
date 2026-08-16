@@ -1433,7 +1433,7 @@ async function performAiSearch(query: string, language: string, config: any): Pr
         : aiModel.replace(/:online$/, '');
       suggestions = await performOpenRouterSearch(openrouterKey, query, 'mixed', language, effectiveModel);
     } else {
-      const geminiKey = config.apiKeys?.gemini;
+      const geminiKey = config.apiKeys?.gemini || process.env.BUILT_IN_GEMINI_API_KEY;
       suggestions = await performGeminiSearch(geminiKey, query, 'mixed', language, aiModel, aiWebSearch);
     }
 

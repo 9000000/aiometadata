@@ -78,6 +78,7 @@ export function SaveProvider({ children }: { children: ReactNode }) {
     setAuth,
     hasBuiltInTmdb,
     hasBuiltInTvdb,
+    hasBuiltInGemini,
     isLoading: contextLoading,
     manifestChangedSinceInstall,
     markManifestInstalled,
@@ -99,10 +100,10 @@ export function SaveProvider({ children }: { children: ReactNode }) {
   const [isInstallOpen, setIsInstallOpen] = useState(false);
   const [installUrl, setInstallUrl] = useState("");
 
-  const caps = { hasBuiltInTmdb, hasBuiltInTvdb };
+  const caps = { hasBuiltInTmdb, hasBuiltInTvdb, hasBuiltInGemini };
   const missingKeys = useMemo(
     () => (contextLoading ? [] : missingRequiredKeys(config, caps)),
-    [config, hasBuiltInTmdb, hasBuiltInTvdb, contextLoading] // eslint-disable-line react-hooks/exhaustive-deps
+    [config, hasBuiltInTmdb, hasBuiltInTvdb, hasBuiltInGemini, contextLoading] // eslint-disable-line react-hooks/exhaustive-deps
   );
   const canSave = !contextLoading && missingKeys.length === 0;
 

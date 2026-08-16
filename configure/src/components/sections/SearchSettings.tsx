@@ -163,11 +163,11 @@ function SortableEngineRow(props: EngineRowProps) {
 }
 
 export function SearchSettings() {
-  const { config, setConfig, hasBuiltInTvdb, traktSearchEnabled, simklSearchEnabled } = useConfig();
+  const { config, setConfig, hasBuiltInTvdb, hasBuiltInGemini, traktSearchEnabled, simklSearchEnabled } = useConfig();
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editType, setEditType] = useState('');
-  const hasGeminiKey = !!config.apiKeys?.gemini;
+  const hasGeminiKey = !!config.apiKeys?.gemini || hasBuiltInGemini;
   const hasOpenRouterKey = !!config.apiKeys?.openrouter;
   const hasAnyAiKey = hasGeminiKey || hasOpenRouterKey;
   const { models: openRouterModels, loading: openRouterModelsLoading } = useOpenRouterModels(config.apiKeys?.openrouter);

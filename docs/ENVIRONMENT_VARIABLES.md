@@ -130,15 +130,32 @@ cp .env.example .env
 
 ## API Keys
 
-> **Some of these are handed to every visitor.** `/api/config` serves
-> `TMDB_API_KEY`, `TVDB_API_KEY`, `FANART_API_KEY`, `RPDB_API_KEY`,
-> `MDBLIST_API_KEY` and `GEMINI_API_KEY` in full, so the configure page can
-> prefill them. It is an open path even when `AUTH_REQUIRE_SIGNIN=true`, because
-> the page loads before anyone has signed in, so a login does not protect them.
+There are two kinds. Server-side keys stay on the server. The rest are published
+to every visitor, so which one you reach for depends on who uses the instance.
+
+### Server-side keys (start here)
+
+#### `BUILT_IN_TMDB_API_KEY`, `BUILT_IN_TVDB_API_KEY`, `BUILT_IN_FANART_API_KEY`, `BUILT_IN_RPDB_API_KEY`
+- **Optional**: Yes
+- **Description**: Used for any user who has not supplied their own key. They are never sent to the browser: `/api/config` publishes only `hasBuiltInTmdb` and `hasBuiltInTvdb`, so the UI can hide the field without seeing the key. This is the way to fund an instance other people use.
+- **Note**: Every request from every user is billed to these keys, so mind the provider's rate limits.
+
+#### `BUILT_IN_MDBLIST_API_KEY`, `BUILT_IN_GEMINI_API_KEY`
+- **Optional**: Yes
+- **Description**: The same fallback for MDBList catalogs and AI search, and equally private. A user's own key still wins, then the published `MDBLIST_API_KEY` / `GEMINI_API_KEY`, then these.
+- **Warning**: Unlike the four above, these bill you per call. MDBList charges past 1000 calls a day and Gemini charges per query, and every user of the instance spends them. Set them on a private instance only. On a public one, leave them blank and let users who want MDBList catalogs or AI search bring their own key.
+
+### Keys published to the browser
+
+> **These are handed to every visitor.** `/api/config` serves `TMDB_API_KEY`,
+> `TVDB_API_KEY`, `FANART_API_KEY`, `RPDB_API_KEY`, `MDBLIST_API_KEY` and
+> `GEMINI_API_KEY` in full, so the configure page can prefill them. It is an open
+> path even when `AUTH_REQUIRE_SIGNIN=true`, because the page loads before anyone
+> has signed in, so a login does not protect them.
 >
-> Set those only on an instance whose users you would hand your keys to. On a
-> public instance, leave them blank and let each user bring their own, or use the
-> `BUILT_IN_*` keys below, which stay on the server.
+> Set them only on an instance whose users you would hand your keys to. On a
+> shared instance, leave them blank, use the `BUILT_IN_*` keys above, and let each
+> user bring their own.
 >
 > `TRAKT_CLIENT_ID` and `SIMKL_CLIENT_ID` are also in that payload, and that is
 > fine: an OAuth client id is public by design and already visible in the
@@ -147,85 +164,80 @@ cp .env.example .env
 > so a copied id lets someone else's traffic count against your app's rate limit.
 > `TRAKT_CLIENT_SECRET` and `SIMKL_CLIENT_SECRET` are what must stay private.
 
-### `BUILT_IN_TMDB_API_KEY`, `BUILT_IN_TVDB_API_KEY`, `BUILT_IN_FANART_API_KEY`, `BUILT_IN_RPDB_API_KEY`
-- **Optional**: Yes
-- **Description**: Server-side keys used for any user who has not supplied their own. They are never sent to the browser: `/api/config` publishes only `hasBuiltInTmdb` and `hasBuiltInTvdb` so the UI can hide the field. This is the safe way to fund a public instance.
-- **Note**: Every request from every user is billed to these keys, so mind the provider's rate limits.
-
-### `TMDB_API_KEY`
+#### `TMDB_API_KEY`
 - **Required**: Yes
 - **Description**: The Movie Database (TMDB) API key
 - **Legacy**: `TMDB_API` is also supported for backwards compatibility
 - **Get it**: https://www.themoviedb.org/settings/api
 
-### `TVDB_API_KEY`
+#### `TVDB_API_KEY`
 - **Required**: No
 - **Description**: TheTVDB API key (v4)
 - **Get it**: https://thetvdb.com/dashboard/account/apikeys
 
-### `FANART_API_KEY`
+#### `FANART_API_KEY`
 - **Optional**: Yes
 - **Description**: Fanart.tv API key for high-quality artwork
 - **Get it**: https://fanart.tv/get-an-api-key/
 
-### `RPDB_API_KEY`
+#### `RPDB_API_KEY`
 - **Optional**: Yes
 - **Description**: RPDB (Rating Poster Database) API key
 - **Get it**: https://ratingposterdb.com/
 
 
-### `MDBLIST_API_KEY`
+#### `MDBLIST_API_KEY`
 - **Optional**: Yes
 - **Description**: MDBList API key for custom lists
 - **Get it**: https://mdblist.com/
 
-### `TRAKT_CLIENT_ID`
+#### `TRAKT_CLIENT_ID`
 - **Required for Trakt integration**: Yes
 - **Description**: Trakt API client ID for enabling Trakt account integration (watchlists, custom lists, etc.)
 - **Get it**: https://trakt.tv/oauth/applications
 
-### `TRAKT_CLIENT_SECRET`
+#### `TRAKT_CLIENT_SECRET`
 - **Required for Trakt integration**: Yes
 - **Description**: Trakt API client secret for enabling Trakt account integration
 - **Get it**: https://trakt.tv/oauth/applications
 
-### `TRAKT_REDIRECT_URI`
+#### `TRAKT_REDIRECT_URI`
 - **Required for Trakt integration**: Yes
 - **Description**: Redirect URI for Trakt OAuth. Must match the value set in your Trakt app settings.
 - **Example**: `TRAKT_REDIRECT_URI=https://your-domain.com/api/auth/trakt/callback`
 
-### `TRAKT_OAUTH_STATE_TTL_MS`
+#### `TRAKT_OAUTH_STATE_TTL_MS`
 - **Required**: No
 - **Default**: `600000` (10 minutes)
 - **Description**: Lifetime in milliseconds of the HMAC-signed Trakt OAuth state. The state is verified with `TRAKT_CLIENT_SECRET`, so authorize and callback requests can be handled by different replicas without shared state storage.
 - **Security note**: The stateless state provides integrity and expiration but is replayable until it expires. Trakt authorization codes remain one-time at the provider; strict one-time state consumption requires shared storage or browser-session binding.
 
-### `SIMKL_CLIENT_ID`
+#### `SIMKL_CLIENT_ID`
 - **Required for SimKL integration**: Yes
 - **Description**: SimKL API client ID for enabling SimKL account integration (watchlists, trending catalogs, etc.)
 - **Get it**: https://simkl.com/oauth/applications
 
-### `SIMKL_CLIENT_SECRET`
+#### `SIMKL_CLIENT_SECRET`
 - **Required for SimKL integration**: Yes
 - **Description**: SimKL API client secret for enabling SimKL account integration
 - **Get it**: https://simkl.com/oauth/applications
 
-### `SIMKL_REDIRECT_URI`
+#### `SIMKL_REDIRECT_URI`
 - **Required for SimKL integration**: No (optional)
 - **Description**: Redirect URI for SimKL OAuth. If not set, defaults to `${HOST_NAME}/api/auth/simkl/callback`. Must match the value set in your SimKL app settings if explicitly set.
 - **Example**: `SIMKL_REDIRECT_URI=https://your-domain.com/api/auth/simkl/callback`
 
-### `SIMKL_ACTIVITIES_TTL`
+#### `SIMKL_ACTIVITIES_TTL`
 - **Default**: `1800` (30 minutes)
 - **Description**: Time-to-live (in seconds) for caching SimKL activity checks. Reduces API spam when paginating. Also caps how long Up Next keeps showing an episode you just watched, and how long a completed item can still appear when Hide Simkl Watched is on. Simkl asks callers not to check more often than every 15 minutes.
 - **Example**: `SIMKL_ACTIVITIES_TTL=3600` (1 hour)
 
-### `SIMKL_TRENDING_PAGE_SIZE_OPTIONS`
+#### `SIMKL_TRENDING_PAGE_SIZE_OPTIONS`
 - **Default**: `50,100`
 - **Description**: Comma-separated list of page size options (1-500) shown in the UI for SimKL trending catalogs. Use this to limit choices on public instances and prevent API overload.
 - **Example**: `SIMKL_TRENDING_PAGE_SIZE_OPTIONS=50,100,200` (allow 50, 100, 200)
 
-### `GEMINI_API_KEY`
+#### `GEMINI_API_KEY`
 - **Optional**: Yes
 - **Description**: Google Gemini API key for AI search features
 - **Get it**: https://makersuite.google.com/app/apikey

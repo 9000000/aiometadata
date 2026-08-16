@@ -756,7 +756,7 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
 
     // Handle MDBList Discover catalogs (dynamic filter-based)
     if (id.startsWith('mdblist.discover.')) {
-      const apiKey = config.apiKeys?.mdblist || process.env.MDBLIST_API_KEY || '';
+      const apiKey = config.apiKeys?.mdblist || process.env.MDBLIST_API_KEY || process.env.BUILT_IN_MDBLIST_API_KEY || '';
       if (!apiKey) {
         logger.warn('[MDBList Discover] Missing API key');
         return [];
@@ -801,7 +801,7 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
       const upNextStart = Date.now();
       logger.info(`[MDBList Up Next] Starting catalog fetch (page: ${page})`);
       
-      const apiKey = config.apiKeys?.mdblist || process.env.MDBLIST_API_KEY || '';
+      const apiKey = config.apiKeys?.mdblist || process.env.MDBLIST_API_KEY || process.env.BUILT_IN_MDBLIST_API_KEY || '';
       if (!apiKey) {
         logger.warn('[MDBList Up Next] Missing API key');
         return [];
@@ -850,11 +850,11 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
       const filterScoreMax = catalogConfig?.filter_score_max;
 
       const { convertGenreToSlug, fetchMDBListExternalItems } = await import('../utils/mdbList.js');
-      const genreSlug = await convertGenreToSlug(genre, config.apiKeys?.mdblist || process.env.MDBLIST_API_KEY || '');
+      const genreSlug = await convertGenreToSlug(genre, config.apiKeys?.mdblist || process.env.MDBLIST_API_KEY || process.env.BUILT_IN_MDBLIST_API_KEY || '');
 
       const response = await fetchMDBListExternalItems(
         catalogConfig.sourceUrl,
-        config.apiKeys?.mdblist || process.env.MDBLIST_API_KEY || '',
+        config.apiKeys?.mdblist || process.env.MDBLIST_API_KEY || process.env.BUILT_IN_MDBLIST_API_KEY || '',
         language,
         page,
         sort,
@@ -878,7 +878,7 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
     
     // Convert genre title to slug format for MDBList API (using the mapping from API)
     const { convertGenreToSlug } = await import('../utils/mdbList');
-    const genreSlug = await convertGenreToSlug(genre, config.apiKeys?.mdblist || process.env.MDBLIST_API_KEY || '');
+    const genreSlug = await convertGenreToSlug(genre, config.apiKeys?.mdblist || process.env.MDBLIST_API_KEY || process.env.BUILT_IN_MDBLIST_API_KEY || '');
     if (genreSlug !== genre) {
       logger.debug(`Converted genre "${genre}" to slug "${genreSlug}"`);
     }
@@ -911,7 +911,7 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
     const scoreFiltersAllowed = supportsMdblistScoreFilters(catalogConfig);
     const response = await fetchMDBListItems(
       listId,
-      config.apiKeys?.mdblist || process.env.MDBLIST_API_KEY || '',
+      config.apiKeys?.mdblist || process.env.MDBLIST_API_KEY || process.env.BUILT_IN_MDBLIST_API_KEY || '',
       language,
       page,
       sort,

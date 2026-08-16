@@ -32,7 +32,7 @@ export function AppliedNext({
   onEdit: () => void;
   onExit?: () => void;
 }) {
-  const { config } = useConfig();
+  const { config, hasBuiltInGemini } = useConfig();
   const { requestSave, isSaving, savedConfig, openInstall, installUrl, canSave, error, isDirty } = useSave();
   const [client, setClient] = useState<ClientId | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
@@ -42,7 +42,7 @@ export function AppliedNext({
   // Adding a catalog below makes the config dirty again, so this cannot key off
   // savedConfig alone or the Save button would disappear after the first save.
   const saved = !!savedConfig && isDirty === false;
-  const canUseAi = !!(config.apiKeys?.openrouter || config.apiKeys?.gemini);
+  const canUseAi = !!(config.apiKeys?.openrouter || config.apiKeys?.gemini || hasBuiltInGemini);
 
   const openCollectionBuilder = () => {
     requestCollectionBuilder();

@@ -365,7 +365,9 @@ const MDBListSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogC
   const [hideWatchedSimkl, setHideWatchedSimkl] = useState<string>(catalog.metadata?.hideWatchedSimkl === true ? 'on' : catalog.metadata?.hideWatchedSimkl === false ? 'off' : 'global');
   const [hideUnreleasedDigital, setHideUnreleasedDigital] = useState<string>(catalog.metadata?.hideUnreleasedDigital === true ? 'on' : catalog.metadata?.hideUnreleasedDigital === false ? 'off' : 'global');
   const isUpNext = catalog.id === 'mdblist.upnext';
+  const isWatchlist = catalog.id.startsWith('mdblist.watchlist');
   const isDiscover = catalog.id.startsWith('mdblist.discover.');
+  const minCacheTTL = (isUpNext || isWatchlist) ? 0 : 300;
   const showSortOptions = !isUpNext && !isDiscover;
   const showScoreFilters = supportsMdblistScoreFilters(catalog);
 
@@ -384,7 +386,7 @@ const MDBListSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogC
             ...c,
             sort,
             order,
-            cacheTTL: Math.max(cacheTTL, 300),
+            cacheTTL: Math.max(cacheTTL, minCacheTTL),
             genreSelection,
             enableRatingPosters,
             filter_score_min: filterScoreMin,
@@ -530,19 +532,28 @@ const MDBListSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogC
                 <input
                   type="number"
                   value={cacheTTL}
-                  onChange={(e) => setCacheTTL(parseInt(e.target.value) || catalogTTL)}
-                  min="300"
+                  onChange={(e) => {
+                    const parsed = parseInt(e.target.value);
+                    setCacheTTL(Number.isNaN(parsed) ? catalogTTL : parsed);
+                  }}
+                  min={minCacheTTL}
                   max="604800"
-                  step="3600"
+                  step={minCacheTTL === 0 ? 60 : 3600}
                   className="flex-1 px-3 py-2 border border-input bg-background rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
                   placeholder={catalogTTL.toString()}
                 />
                 <span className="text-sm text-muted-foreground whitespace-nowrap">
-                  ({Math.floor(cacheTTL / 3600)}h {Math.floor((cacheTTL % 3600) / 60)}m)
+                  {cacheTTL === 0
+                    ? '(no cache)'
+                    : cacheTTL < 60
+                      ? `(${cacheTTL}s)`
+                      : `(${Math.floor(cacheTTL / 3600)}h ${Math.floor((cacheTTL % 3600) / 60)}m)`}
                 </span>
               </div>
               <p className="text-xs text-muted-foreground">
-                How long to cache this list before refreshing. Range: 5 minutes to 7 days.
+                {minCacheTTL === 0
+                  ? 'How long to cache this list before refreshing. Up to 7 days, or 0 to disable caching so every load hits MDBList.'
+                  : 'How long to cache this list before refreshing. Range: 5 minutes to 7 days.'}
               </p>
             </div>
           )}

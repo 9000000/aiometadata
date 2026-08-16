@@ -1323,6 +1323,7 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
   const configHash = hashConfig(catalogConfigString);
 
   let cacheTTL = CATALOG_TTL();
+  let cachingDisabled = false;
 
   if (isAuthCatalog) {
     cacheTTL = 0;
@@ -1340,9 +1341,12 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
 
   if (idOnly.startsWith('mdblist.')) {
     const catCfg = config.catalogs?.find((c: any) => c.id === idOnly);
-    if (catCfg?.cacheTTL) {
+    if (Number.isFinite(catCfg?.cacheTTL) && catCfg.cacheTTL >= 0) {
       cacheTTL = catCfg.cacheTTL;
-      cacheLogger.debug(`[Catalog] Using custom cache TTL for MDBList catalog ${idOnly}: ${cacheTTL}s`);
+      cachingDisabled = cacheTTL === 0;
+      cacheLogger.debug(cachingDisabled
+        ? `[Catalog] Caching disabled for MDBList catalog ${idOnly}`
+        : `[Catalog] Using custom cache TTL for MDBList catalog ${idOnly}: ${cacheTTL}s`);
     }
   }
 
@@ -1468,9 +1472,11 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
       cacheLogger.debug(`[Catalog] HIT detail (${idOnly}) [sig:${catalogSig}] catalogConfig:${catalogConfigString} catalogKey:${catalogKey}`);
     },
   };
-  const result = await cacheWrap(key, async () => {
-    return normalizeReleaseAvailabilityInPayload(await method());
-  }, cacheTTL, options);
+  const result = cachingDisabled
+    ? normalizeReleaseAvailabilityInPayload(await method())
+    : await cacheWrap(key, async () => {
+        return normalizeReleaseAvailabilityInPayload(await method());
+      }, cacheTTL, options);
   normalizeReleaseAvailabilityInPayload(result);
 
   if (result?.metas?.length) {

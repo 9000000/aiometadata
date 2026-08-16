@@ -5,8 +5,31 @@ const mdbList: any = require('../utils/mdbList');
 const traktUtils: any = require('../utils/traktUtils');
 const simklUtils: any = require('../utils/simklUtils');
 const consola: any = require('consola');
+const crypto: any = require('crypto');
 
 const logger = consola.withTag('movielens-sync');
+
+/**
+ * Bumped when a fix means older cursors have holes in them. The next sync on an
+ * older cursor runs full, then resumes incrementally.
+ */
+const CURSOR_VERSION = 2;
+
+/**
+ * Identifies what a source contributed, so we only make MovieLens swallow an
+ * import when something actually moved. A source that threw or was skipped
+ * reports null, and its previous print carries forward rather than a degraded
+ * pull looking like a change and costing an import in both directions.
+ */
+/** Every source must hand back a full snapshot for its print to compare across runs. */
+function fingerprint(ratings: any[]): string {
+  const pairs = ratings.map((r: any) => `${r.imdb}:${r.rating}`).sort();
+  return crypto.createHash('sha1').update(pairs.join('|')).digest('hex');
+}
+
+function stablePrints(prints: Record<string, string>): string {
+  return Object.keys(prints).sort().map((k) => `${k}=${prints[k]}`).join(',');
+}
 
 async function getCursor(credId: string): Promise<any> {
   const row = await database.getOAuthToken(credId);
@@ -22,12 +45,17 @@ async function setCursor(credId: string, cursor: any): Promise<void> {
   );
 }
 
-async function gatherRatings(config: any, since?: string): Promise<{ merged: any[]; perSource: Record<string, number> }> {
+async function gatherRatings(
+  config: any,
+  since?: string,
+): Promise<{ merged: any[]; perSource: Record<string, number>; prints: Record<string, string | null> }> {
   const lists: any[][] = [];
   const perSource: Record<string, number> = {};
+  const prints: Record<string, string | null> = {};
 
   const traktTokenId = config?.apiKeys?.traktTokenId;
   if (traktTokenId) {
+    prints.trakt = null;
     try {
       const tok = await database.getOAuthToken(traktTokenId);
       if (tok?.access_token) {
@@ -41,6 +69,7 @@ async function gatherRatings(config: any, since?: string): Promise<{ merged: any
           const norm = imp.fromMovieRatingItems(await traktUtils.getTraktRatings(tok.access_token));
           lists.push(norm);
           perSource.trakt = norm.length;
+          prints.trakt = fingerprint(norm);
         } else {
           perSource.trakt = 0;
         }
@@ -50,30 +79,34 @@ async function gatherRatings(config: any, since?: string): Promise<{ merged: any
 
   const simklTokenId = config?.apiKeys?.simklTokenId;
   if (simklTokenId) {
+    prints.simkl = null;
     try {
       const tok = await simklUtils.getSimklToken(simklTokenId);
       if (tok?.access_token) {
         const [movies, anime] = await Promise.all([
-          simklUtils.getSimklRatings(tok.access_token, 'movies', since),
-          simklUtils.getSimklRatings(tok.access_token, 'anime', since),
+          simklUtils.getSimklRatings(tok.access_token, 'movies'),
+          simklUtils.getSimklRatings(tok.access_token, 'anime'),
         ]);
         const norm = [...imp.fromSimklRatings(movies), ...imp.fromSimklRatings(anime)];
         lists.push(norm);
         perSource.simkl = norm.length;
+        prints.simkl = norm.length ? fingerprint(norm) : null;
       }
     } catch (e: any) { logger.warn(`Simkl ratings fetch failed: ${e.message}`); }
   }
 
   const mdblistKey = config?.apiKeys?.mdblist;
   if (mdblistKey) {
+    prints.mdblist = null;
     try {
-      const norm = imp.fromMovieRatingItems(await mdbList.getRatingsFromMDBList(mdblistKey, since));
+      const norm = imp.fromMovieRatingItems(await mdbList.getRatingsFromMDBList(mdblistKey));
       lists.push(norm);
       perSource.mdblist = norm.length;
+      prints.mdblist = fingerprint(norm);
     } catch (e: any) { logger.warn(`MDBList ratings fetch failed: ${e.message}`); }
   }
 
-  return { merged: imp.mergeRatings(...lists), perSource };
+  return { merged: imp.mergeRatings(...lists), perSource, prints };
 }
 
 async function syncMovieLensAccount(config: any, opts: { full?: boolean; cooldownSeconds?: number } = {}): Promise<any> {
@@ -89,17 +122,38 @@ async function syncMovieLensAccount(config: any, opts: { full?: boolean; cooldow
     }
   }
 
-  const since = opts.full ? undefined : cursor.lastSyncAt;
+  const stale = cursor.version !== CURSOR_VERSION;
+  const since = (opts.full || stale) ? undefined : cursor.lastSyncAt;
+  if (stale && cursor.lastSyncAt) {
+    logger.info(`Cursor for ${credId} predates version ${CURSOR_VERSION}, running a full pull`);
+  }
 
-  const { merged, perSource } = await gatherRatings(config, since);
-  if (!merged.length) {
-    if (!opts.full) await setCursor(credId, { ...cursor, lastSyncAt: new Date().toISOString() });
+  const { merged, perSource, prints } = await gatherRatings(config, since);
+
+  const previous = cursor.ratingsPrints || {};
+  const current: Record<string, string> = {};
+  for (const [source, print] of Object.entries(prints)) {
+    const resolved = print ?? previous[source];
+    if (resolved) current[source] = resolved;
+  }
+  const failed = Object.keys(prints).filter((s) => prints[s] === null && previous[s]);
+  if (failed.length) {
+    logger.warn(`Carrying forward the last known state for ${failed.join(', ')} on ${credId}`);
+  }
+
+  const unchanged = !opts.full && stablePrints(current) === stablePrints(previous);
+  const nextCursor = {
+    ...cursor, version: CURSOR_VERSION, ratingsPrints: current, lastSyncAt: new Date().toISOString(),
+  };
+
+  if (!merged.length || unchanged) {
+    await setCursor(credId, nextCursor);
     return { ok: true, imported: 0, perSource, note: 'no new ratings' };
   }
 
   const { csv, count } = imp.normalizedToImdbCsv(merged);
   const result = await movielens.importImdbCsv(credId, csv);
-  await setCursor(credId, { ...cursor, lastSyncAt: new Date().toISOString() });
+  await setCursor(credId, nextCursor);
 
   const rejected = Number.isFinite(result.errorCount) ? `, ${result.errorCount} rejected` : '';
   logger.info(

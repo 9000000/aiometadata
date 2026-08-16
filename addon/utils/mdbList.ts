@@ -448,36 +448,39 @@ async function fetchMDBListItems(listId: string, apiKey: string, language: strin
 
 
 /**
- * Fetches the user's personal movie ratings from MDBList's `/sync/ratings` (beta).
- * Paginates on the body's `pagination.has_more`. Returns the raw `movies[]` items
+ * Fetches the user's personal movie ratings from MDBList's `/sync/ratings`.
+ * Always a full snapshot: the endpoint's `since` filters on when the rating was
+ * given, so ratings imported from Trakt keep their original date and never come
+ * back. One request covers a thousand ratings, so there is little to save anyway.
+ * Returns the raw `movies[]` items
  * (shape: { rated_at, rating, movie: { title, year, ids: { imdb } } }).
  * @param {string} apiKey - MDBList API key
- * @param {string} [since] - ISO timestamp; only ratings updated after it (incremental sync)
  */
-async function getRatingsFromMDBList(apiKey: string, since?: string): Promise<any[]> {
+async function getRatingsFromMDBList(apiKey: string): Promise<any[]> {
   if (!apiKey) {
     logger.warn("Missing API key for getRatingsFromMDBList");
     return [];
   }
-  const pageSize = parseInt(process.env.MDBLIST_RATINGS_PAGE_SIZE || '1000', 10);
+  const pageSize = Math.min(parseInt(process.env.MDBLIST_RATINGS_PAGE_SIZE || '1000', 10), 1000);
   const maxPages = parseInt(process.env.MDBLIST_RATINGS_MAX_PAGES || '100', 10);
   const movies: any[] = [];
-  let offset = 0;
+  let cursor: string | null = null;
 
   for (let page = 0; page < maxPages; page++) {
-    let url = `https://api.mdblist.com/sync/ratings?apikey=${apiKey}&offset=${offset}&limit=${pageSize}`;
-    if (since) url += `&since=${encodeURIComponent(since)}`;
+    let url = `https://api.mdblist.com/sync/ratings?apikey=${apiKey}&limit=${pageSize}`;
+    if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
 
     const response: any = await makeRateLimitedRequest(
       () => httpGet(url, { dispatcher: mdblistDispatcher }),
       apiKey,
-      `MDBList getRatingsFromMDBList (offset: ${offset})`
+      `MDBList getRatingsFromMDBList (page ${page + 1})`
     );
 
     const data = response?.data || {};
     if (Array.isArray(data.movies)) movies.push(...data.movies);
-    if (!data.pagination?.has_more) break;
-    offset += pageSize;
+    const next = data.pagination?.next_cursor || null;
+    if (!next || next === cursor) break;
+    cursor = next;
   }
 
   return movies;

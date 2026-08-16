@@ -2,6 +2,63 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.13.0](https://github.com/cedya77/aiometadata/compare/v2.12.0...v2.13.0) (2026-08-16)
+
+
+### Features
+
+* **anime:** fall back to the anidb bridge when kitsu-imdb has no entry ([1f9a059](https://github.com/cedya77/aiometadata/commit/1f9a0595120aa5766ffd4ab5a3c92531d729729d))
+* **catalogs:** add a back to top button ([bc78e94](https://github.com/cedya77/aiometadata/commit/bc78e946fe4d2e2e7179594a821180043874b3cf))
+* **collections:** carry Fusion's own Trakt list sources ([ba84f88](https://github.com/cedya77/aiometadata/commit/ba84f88826de4ae388edefa05e1921fb0f28f2d1))
+* **config:** add built-in MDBList and Gemini keys ([c5be0db](https://github.com/cedya77/aiometadata/commit/c5be0db1add0d5cf983ea3b325653db829eef3c5))
+* **config:** import a configuration from a link ([f37de15](https://github.com/cedya77/aiometadata/commit/f37de156f8028c7059d11ba91e7c3c588b6d3425))
+* **dashboard:** add LOG_QUERY_MAX_ENTRIES and LOG_VIEWER_MAX_ENTRIES settings ([440856b](https://github.com/cedya77/aiometadata/commit/440856bbdd8d9201b4e883be9dca6c5e8d8c3df9))
+* **discover:** filter movies by TMDB release type ([15fd9f1](https://github.com/cedya77/aiometadata/commit/15fd9f19dac6093c9cf5c5c63868e8c4d3a59be0)), closes [#642](https://github.com/cedya77/aiometadata/issues/642)
+* **discover:** filter series by TMDB show type ([513c5f5](https://github.com/cedya77/aiometadata/commit/513c5f585f21ec5ed39f4114f20131adead2e7ae)), closes [#636](https://github.com/cedya77/aiometadata/issues/636)
+* **mdblist:** drop the cache TTL floor on watchlist and up next ([64983bb](https://github.com/cedya77/aiometadata/commit/64983bb63cf397b11542106f732a1cca82e948a4))
+* **setup:** rebuild the presets tab as a guided setup surface ([513a03a](https://github.com/cedya77/aiometadata/commit/513a03af17e139bcb77ede8b93462a00cb43a594))
+* **simkl:** add Up Next catalogs ([f3b68de](https://github.com/cedya77/aiometadata/commit/f3b68ded4ff53d850ed179bd3316fc59e81d6edd))
+* **warmup:** break the image warm summary down by image class ([b27f88c](https://github.com/cedya77/aiometadata/commit/b27f88c2235d4f6a68d7fe972dd6975c21e25543))
+
+
+### Bug Fixes
+
+* **anime:** repair the kitsu to imdb mapping ([1f9a059](https://github.com/cedya77/aiometadata/commit/1f9a0595120aa5766ffd4ab5a3c92531d729729d))
+* **cache:** give a background rebuild a cost ceiling ([dd17ee0](https://github.com/cedya77/aiometadata/commit/dd17ee09a98522acd023dc90604ac52c0ab7822b))
+* **cache:** let a refresh update an entry but never recreate it ([b2b457f](https://github.com/cedya77/aiometadata/commit/b2b457f282d2faaf62a1aa3f7cec1c8094644d0b))
+* **cache:** stop refreshing entries the classifier shortened ([8f33a45](https://github.com/cedya77/aiometadata/commit/8f33a452ed0fc2d350b05441b0e9636c156c9ad1))
+* **catalogs:** keep paging a filtered catalog past an empty page ([39d2ca2](https://github.com/cedya77/aiometadata/commit/39d2ca2454e1fa1408723b708a3b3a3ec80e6408))
+* **catalogs:** keep tags when importing catalogs ([391207d](https://github.com/cedya77/aiometadata/commit/391207d7fe4b746edc1d7d2ab408fca1aa5d32ef))
+* **catalogs:** match tag names without regard to case ([391207d](https://github.com/cedya77/aiometadata/commit/391207d7fe4b746edc1d7d2ab408fca1aa5d32ef))
+* **catalogs:** warn when deleting a catalog a collection uses ([99c520d](https://github.com/cedya77/aiometadata/commit/99c520d7dd87703e4145cbc1233345e8dd06d643))
+* **collections:** carry a merge's parts so it rebuilds on import ([415867c](https://github.com/cedya77/aiometadata/commit/415867c1305489dedca61c5b165db03b47284edf))
+* **collections:** import a collection from a link ([ba84f88](https://github.com/cedya77/aiometadata/commit/ba84f88826de4ae388edefa05e1921fb0f28f2d1))
+* **collections:** keep a folder that has no sources yet ([939a008](https://github.com/cedya77/aiometadata/commit/939a008bba5d7dd02557ce1d8ba036abded3b546))
+* **collections:** let a Nuvio export drop the config id too ([22bc897](https://github.com/cedya77/aiometadata/commit/22bc89741d804a0d59beafd66fcc3dcbcea4537e))
+* **collections:** match a retyped or MAL discover catalog to its manifest entry ([ba84f88](https://github.com/cedya77/aiometadata/commit/ba84f88826de4ae388edefa05e1921fb0f28f2d1))
+* **collections:** rebuild merged, MDBList and FlixPatrol catalogs on import ([728dd8f](https://github.com/cedya77/aiometadata/commit/728dd8f641c3b4b41fc8da6f85dd872383bb07f3))
+* **collections:** reload the catalog list once a save lands ([ba84f88](https://github.com/cedya77/aiometadata/commit/ba84f88826de4ae388edefa05e1921fb0f28f2d1))
+* **collections:** route native sources one folder at a time ([ba84f88](https://github.com/cedya77/aiometadata/commit/ba84f88826de4ae388edefa05e1921fb0f28f2d1))
+* **collections:** say that saving does not reach the app ([168dd15](https://github.com/cedya77/aiometadata/commit/168dd15da39c6f0d4f258f26870f195ccfedcee6))
+* **collections:** stop rebuilding a catalog that was deleted ([85a6082](https://github.com/cedya77/aiometadata/commit/85a6082431963b428897b5d95f29f35d9669824a))
+* **collections:** stop saying an empty folder is dropped ([edf4f8e](https://github.com/cedya77/aiometadata/commit/edf4f8e2457a3080ffd630c555d45e73cae63a8b))
+* **dashboard:** filter logs in the buffer, not in the browser ([440856b](https://github.com/cedya77/aiometadata/commit/440856bbdd8d9201b4e883be9dca6c5e8d8c3df9))
+* **manifest:** emit one genre extra per catalog ([3916d0b](https://github.com/cedya77/aiometadata/commit/3916d0bb1b3ad3a7e77d4d3fbed93729c55a26c6))
+* **manifest:** type the translation and catalog-type lookups, drop dead locals ([3916d0b](https://github.com/cedya77/aiometadata/commit/3916d0bb1b3ad3a7e77d4d3fbed93729c55a26c6))
+* **movielens:** say which sync numbers come from MovieLens ([15a819f](https://github.com/cedya77/aiometadata/commit/15a819f4c42586f661d86c80355d8dbe676afddf))
+* **movielens:** stop missing imported MDBList ratings ([b4eff78](https://github.com/cedya77/aiometadata/commit/b4eff785fa65429da4d605cd6bbbc27bc61613d9))
+* **search:** drop adult results the IMDb path let through ([bf309e9](https://github.com/cedya77/aiometadata/commit/bf309e90afa1b6b2564feecdf71906d98e49330f))
+* **search:** resolve TVDB certification when an age cap is set ([95f9f49](https://github.com/cedya77/aiometadata/commit/95f9f49896d8efba81e554602a7817fcbaa4c17c))
+* **search:** resolve TVDB certification when an age cap is set ([adc7001](https://github.com/cedya77/aiometadata/commit/adc700180e88015a99c0aadb7dd87bf2842a7f74))
+* **search:** stop stripping non-Latin IMDb suggestion queries ([10e2eed](https://github.com/cedya77/aiometadata/commit/10e2eedde3a0ac6493d3ac917ad65c759f6eae87))
+* **server:** decide compression by the route express delivers ([350234a](https://github.com/cedya77/aiometadata/commit/350234aeae30dc4fc8eaa47f5a71dd928ab97188))
+* **simkl:** fetch sync/activities with GET ([f3b68de](https://github.com/cedya77/aiometadata/commit/f3b68ded4ff53d850ed179bd3316fc59e81d6edd))
+* **simkl:** keep catalog TTLs off the shared watching blob ([f3b68de](https://github.com/cedya77/aiometadata/commit/f3b68ded4ff53d850ed179bd3316fc59e81d6edd))
+* **simkl:** lower the activity check default to 30 minutes ([f3b68de](https://github.com/cedya77/aiometadata/commit/f3b68ded4ff53d850ed179bd3316fc59e81d6edd))
+* **ui:** make the support link a native button in the settings nav ([5ea6a5f](https://github.com/cedya77/aiometadata/commit/5ea6a5f4dc2fa9d3361fb73cb19d88d968228005))
+* **warming:** keep forced warms from shifting the schedule ([b41b329](https://github.com/cedya77/aiometadata/commit/b41b329bccd8aa450b683af5903be955e6a70329))
+* **warmup:** warm the custom art URLs clients actually request ([0d8ceaf](https://github.com/cedya77/aiometadata/commit/0d8ceafcf99ea3250b78ee9fa5e7b90d44bde97b))
+
 ## [2.12.0](https://github.com/cedya77/aiometadata/compare/v2.11.0...v2.12.0) (2026-08-07)
 
 

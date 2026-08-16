@@ -1933,6 +1933,9 @@ class DashboardAPI {
           description: description,
           nextRun: catalogStats.enabled ? (catalogStats.nextRun ? this.getTimeUntil(new Date(catalogStats.nextRun)) : "Scheduled") : "Disabled",
           action: taskAction,
+          secondaryAction: (catalogStats.enabled && !catalogStats.isRunning)
+            ? { action: "warm-images", label: "Images", title: "Warm images only, leaving the catalog schedule where it is" }
+            : null,
           category: "warming",
           warmingDetail: {
             isRunning: catalogStats.isRunning,

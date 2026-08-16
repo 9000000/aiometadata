@@ -71,6 +71,7 @@ let warmupStats = {
   totalCatalogs: 0,
   catalogsWarmed: 0,
   totalPages: 0,
+  pagesFromCache: 0,
   totalItems: 0,
   duration: null,
   errors: []
@@ -89,6 +90,7 @@ class ComprehensiveCatalogWarmer {
       totalCatalogs: 0,
       catalogsWarmed: 0,
       totalPages: 0,
+      pagesFromCache: 0,
       totalItems: 0,
       duration: null,
       errors: []
@@ -229,15 +231,28 @@ class ComprehensiveCatalogWarmer {
     }
   }
 
-  async markWarmed(uuid, runStartedAt = null) {
+  /**
+   * True when the run put something into cache rather than reading it all back.
+   * A run that filled nothing left every TTL where it was, so moving the schedule
+   * would strand those keys past their expiry.
+   */
+  filledCache(uuid = null) {
+    const scope = uuid ? this.stats.uuidStats[uuid] : this.stats;
+    if (!scope) return true;
+    const pages = scope.totalPages || 0;
+    return pages === 0 || (scope.pagesFromCache || 0) < pages;
+  }
+
+  async markWarmed(uuid, runStartedAt = null, stampSchedule = true) {
     try {
       const lastWarmupKey = `catalog-warmup:last-run:${uuid}`;
       const statsKey = `catalog-warmup:stats:${uuid}`;
       const recordedStart = typeof runStartedAt === 'number' ? runStartedAt : Date.now();
-      
-      // Save timestamp for this specific UUID
-      await redis.set(lastWarmupKey, recordedStart.toString());
-      
+
+      if (stampSchedule) {
+        await redis.set(lastWarmupKey, recordedStart.toString());
+      }
+
       // Save stats for this UUID
       await redis.set(statsKey, JSON.stringify({
         catalogsWarmed: this.stats.uuidStats[uuid]?.catalogsWarmed || 0,
@@ -247,7 +262,12 @@ class ComprehensiveCatalogWarmer {
         duration: this.stats.uuidStats[uuid]?.duration || null,
         errors: this.stats.uuidStats[uuid]?.errors || []
       }));
-      
+
+      if (!stampSchedule) {
+        this.log('info', `UUID ${uuid} filled nothing, leaving its warmup schedule where it was`);
+        return;
+      }
+
       const nextRunTime = recordedStart + (this.config.intervalHours * 60 * 60 * 1000);
       this.stats.nextRun = new Date(nextRunTime).toISOString();
       this.log('debug', `Marked warmup complete for UUID ${uuid}, next run: ${this.formatNextRunTime(nextRunTime)}`);
@@ -798,7 +818,15 @@ class ComprehensiveCatalogWarmer {
               useShowPoster: !!extraArgs.useShowPoster,
             });
           }
-          }, { enableErrorCaching: false, maxRetries: 1, config });
+          }, {
+            enableErrorCaching: false,
+            maxRetries: 1,
+            config,
+            onHit: () => {
+              this.stats.pagesFromCache++;
+              if (this.stats.uuidStats[uuid]) this.stats.uuidStats[uuid].pagesFromCache++;
+            },
+          });
 
           const rawMetaCount = result?.metas?.length || 0;
 
@@ -870,7 +898,9 @@ class ComprehensiveCatalogWarmer {
     return { pages: pagesWarmed, items: totalItems };
   }
 
-  async runWarmup(force = false) {
+  async runWarmup(force = false, options = {}) {
+    const { imagesOnly = false } = options;
+
     if (this.isRunning) {
       this.log('warn', 'Warmup already running, skipping');
       return false;
@@ -894,6 +924,8 @@ class ComprehensiveCatalogWarmer {
       if (!shouldRun) {
         return false;
       }
+    } else if (imagesOnly) {
+      this.log('info', 'Image warm requested - catalogs are read back from cache and the schedule is left alone');
     } else {
       this.log('info', 'Force restart requested - bypassing interval check');
     }
@@ -946,6 +978,7 @@ class ComprehensiveCatalogWarmer {
               totalCatalogs: enabledCatalogs.length,
               catalogsWarmed: 0,
               totalPages: 0,
+              pagesFromCache: 0,
               totalItems: 0,
               duration: null,
               errors: []
@@ -1019,7 +1052,8 @@ class ComprehensiveCatalogWarmer {
           this.stats.uuidStats[uuid].duration = `${Math.floor(uuidDuration / 60000)}m ${Math.floor((uuidDuration % 60000) / 1000)}s`;
 
           if (!uuidWarmingInterrupted) {
-            await this.markWarmed(uuid, uuidStartTime);
+            const stampSchedule = !imagesOnly && (!force || this.filledCache(uuid));
+            await this.markWarmed(uuid, uuidStartTime, stampSchedule);
             this.log('success', `UUID ${uuid} complete: ${this.stats.uuidStats[uuid].catalogsWarmed}/${this.stats.uuidStats[uuid].totalCatalogs} catalogs, ${this.stats.uuidStats[uuid].totalPages} pages, ${this.stats.uuidStats[uuid].totalItems} items in ${this.stats.uuidStats[uuid].duration}`);
           } else {
             this.log('warn', `UUID ${uuid} interrupted: ${this.stats.uuidStats[uuid].catalogsWarmed}/${this.stats.uuidStats[uuid].totalCatalogs} catalogs warmed before stop`);
@@ -1037,19 +1071,26 @@ class ComprehensiveCatalogWarmer {
       this.stats.lastRun = new Date(startTime).toISOString();
 
       const stoppedEarly = this.shouldStop;
-      this.log('success', `Warmup ${stoppedEarly ? 'stopped' : 'complete'}! Processed ${this.config.uuids.length} UUID(s), warmed ${this.stats.catalogsWarmed}/${this.stats.totalCatalogs} catalogs, ${this.stats.totalPages} pages, ${this.stats.totalItems} items in ${this.stats.duration}`);
+      const cachedPages = this.stats.pagesFromCache ? ` (${this.stats.pagesFromCache} already cached)` : '';
+      this.log('success', `Warmup ${stoppedEarly ? 'stopped' : 'complete'}! Processed ${this.config.uuids.length} UUID(s), warmed ${this.stats.catalogsWarmed}/${this.stats.totalCatalogs} catalogs, ${this.stats.totalPages} pages${cachedPages}, ${this.stats.totalItems} items in ${this.stats.duration}`);
 
       const imageStats = imageWarmQueue.getStats();
       if (imageStats.depth > 0) {
         this.log('info', `Image warming: ${imageStats.depth} queued, ${imageStats.warmed} warmed, ${imageStats.skipped} already cached`);
       }
       
-      // Update nextRun time after successful warmup (for both scheduled and forced runs)
+      // A forced run that filled nothing must not move the schedule, or the keys it
+      // skipped expire mid-interval with no run left to refetch them.
+      if (imagesOnly || (force && !this.filledCache())) {
+        this.log('info', `Schedule unchanged, still due ${this.stats.nextRun ? this.formatNextRunTime(new Date(this.stats.nextRun).getTime()) : 'on the next check'}`);
+        return true;
+      }
+
       const intervalMs = this.config.intervalHours * 60 * 60 * 1000;
       const nextRunTime = startTime + intervalMs;
       this.stats.nextRun = new Date(nextRunTime).toISOString();
       this.log('info', `Next warmup scheduled for ${this.formatNextRunTime(nextRunTime)}`);
-      
+
       return true;
     } catch (error) {
       this.log('error', `Warmup failed: ${error.message}`);
@@ -1293,6 +1334,10 @@ function forceRestartWarmup() {
   return warmer.runWarmup(true);
 }
 
+function forceWarmImages() {
+  return warmer.runWarmup(true, { imagesOnly: true });
+}
+
 function stopComprehensiveWarming() {
   return warmer.stopWarming();
 }
@@ -1301,5 +1346,6 @@ module.exports = {
   startComprehensiveCatalogWarming,
   getWarmupStats,
   forceRestartWarmup,
+  forceWarmImages,
   stopComprehensiveWarming
 };

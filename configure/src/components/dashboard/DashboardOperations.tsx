@@ -1357,6 +1357,18 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
                     >
                       {task.status}
                     </Badge>
+                    {task.secondaryAction && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        title={task.secondaryAction.title}
+                        onClick={() => handleMaintenanceTask(task.id, task.secondaryAction.action)}
+                        disabled={task.status === "error" || executingTasks.has(task.id)}
+                      >
+                        <Image className="h-4 w-4 mr-1" />
+                        {task.secondaryAction.label}
+                      </Button>
+                    )}
                     {task.action && (
                       <Button
                         size="sm"
@@ -1428,6 +1440,18 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
                       <span>Last: {task.lastRun}</span>
                       <span>Next: {task.nextRun}</span>
                     </div>
+                    {task.secondaryAction && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        title={task.secondaryAction.title}
+                        onClick={() => handleMaintenanceTask(task.id, task.secondaryAction.action)}
+                        disabled={task.status === "error" || executingTasks.has(task.id)}
+                        className="h-7 text-xs mr-2"
+                      >
+                        <Image className="h-3 w-3" />
+                      </Button>
+                    )}
                     {task.action && (
                       <Button
                         size="sm"

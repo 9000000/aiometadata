@@ -97,6 +97,17 @@ node addon/server.js
 | `HOST_NAME` | Public URL of your addon (e.g., http://your_domain:3232) | Yes |
 | `PORT` | Server port (default: 3232) | No |
 
+> **Running this for other people?** `TMDB_API_KEY`, `TVDB_API_KEY`, `FANART_API_KEY`,
+> `RPDB_API_KEY`, `MDBLIST_API_KEY` and `GEMINI_API_KEY` are served to every visitor
+> by `/api/config` so the configure page can prefill them, and that path stays open
+> even with `AUTH_REQUIRE_SIGNIN=true`. (`TRAKT_CLIENT_ID` and `SIMKL_CLIENT_ID` are
+> in there too, which is fine: OAuth client ids are public by design and their
+> secrets are not published.)
+> Use `BUILT_IN_TMDB_API_KEY`, `BUILT_IN_TVDB_API_KEY`, `BUILT_IN_FANART_API_KEY`
+> and `BUILT_IN_RPDB_API_KEY` instead: they cover users who bring no key of their
+> own and are never sent to the browser. See
+> [Environment Variables](ENVIRONMENT_VARIABLES.md#api-keys).
+
 ## Getting API Keys
 
 ### TMDB API

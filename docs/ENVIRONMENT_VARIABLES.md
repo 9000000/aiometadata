@@ -130,6 +130,28 @@ cp .env.example .env
 
 ## API Keys
 
+> **Some of these are handed to every visitor.** `/api/config` serves
+> `TMDB_API_KEY`, `TVDB_API_KEY`, `FANART_API_KEY`, `RPDB_API_KEY`,
+> `MDBLIST_API_KEY` and `GEMINI_API_KEY` in full, so the configure page can
+> prefill them. It is an open path even when `AUTH_REQUIRE_SIGNIN=true`, because
+> the page loads before anyone has signed in, so a login does not protect them.
+>
+> Set those only on an instance whose users you would hand your keys to. On a
+> public instance, leave them blank and let each user bring their own, or use the
+> `BUILT_IN_*` keys below, which stay on the server.
+>
+> `TRAKT_CLIENT_ID` and `SIMKL_CLIENT_ID` are also in that payload, and that is
+> fine: an OAuth client id is public by design and already visible in the
+> authorization URL the browser opens. Their secrets are never published. The one
+> thing to know is that both APIs accept a client id alone for public endpoints,
+> so a copied id lets someone else's traffic count against your app's rate limit.
+> `TRAKT_CLIENT_SECRET` and `SIMKL_CLIENT_SECRET` are what must stay private.
+
+### `BUILT_IN_TMDB_API_KEY`, `BUILT_IN_TVDB_API_KEY`, `BUILT_IN_FANART_API_KEY`, `BUILT_IN_RPDB_API_KEY`
+- **Optional**: Yes
+- **Description**: Server-side keys used for any user who has not supplied their own. They are never sent to the browser: `/api/config` publishes only `hasBuiltInTmdb` and `hasBuiltInTvdb` so the UI can hide the field. This is the safe way to fund a public instance.
+- **Note**: Every request from every user is billed to these keys, so mind the provider's rate limits.
+
 ### `TMDB_API_KEY`
 - **Required**: Yes
 - **Description**: The Movie Database (TMDB) API key

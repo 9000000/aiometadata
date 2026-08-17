@@ -1,14 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useConfig } from '@/contexts/ConfigContext';
+import type { CatalogConfig } from '@/contexts/config';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter, DialogClose } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogClose } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { AlertCircle, ChevronLeft, ChevronRight, Loader2, Search, Trash2 } from 'lucide-react';
+import { AlertCircle, ChevronLeft, ChevronRight, LayoutGrid, Link as LinkIcon, Loader2, Search, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { createTvdbListCatalogs, TvdbListPreview } from '@/utils/catalogUtils';
 
@@ -37,9 +36,50 @@ function listContents(list: { movieCount?: number; seriesCount?: number }): stri
   return parts.join(' · ');
 }
 
+function SavedLists({
+  catalogs,
+  onRemove,
+}: {
+  catalogs: CatalogConfig[];
+  onRemove: (id: string, type: string) => void;
+}) {
+  if (!catalogs.length) {
+    return <p className="text-xs text-muted-foreground">Nothing added yet</p>;
+  }
+  return (
+    <div className="space-y-2">
+      {catalogs.map(catalog => (
+        <div
+          key={`${catalog.id}:${catalog.type}`}
+          className="flex items-center justify-between gap-2 rounded-lg border bg-muted/30 p-2.5"
+        >
+          <div className="min-w-0 flex-1">
+            <div className="break-words text-sm font-medium">{catalog.name}</div>
+            <div className="text-xs text-muted-foreground">
+              {catalog.type === 'all' ? 'Movies and series' : catalog.type === 'movie' ? 'Movies' : 'Series'}
+              {catalog.metadata?.itemCount ? ` \u00b7 ${catalog.metadata.itemCount} items` : ''}
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0"
+            onClick={() => onRemove(catalog.id, catalog.type)}
+            aria-label={`Remove ${catalog.name}`}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function TVDBListIntegration({ isOpen, onClose }: TVDBListIntegrationProps) {
   const { config, setConfig, catalogTTL, auth } = useConfig();
 
+  const [mode, setMode] = useState<'browse' | 'slug'>('browse');
+  const [showDetail, setShowDetail] = useState(false);
   const [listInput, setListInput] = useState('');
   const [preview, setPreview] = useState<TvdbListPreview | null>(null);
   const [isResolving, setIsResolving] = useState(false);
@@ -118,6 +158,7 @@ export function TVDBListIntegration({ isOpen, onClose }: TVDBListIntegrationProp
       if (!res.ok) throw new Error(data.error || 'Could not resolve that list');
       setPreview(data);
       setSplitMode('all');
+      setShowDetail(true);
     } catch (error: any) {
       toast.error('Could not load that list', { description: error.message });
     } finally {
@@ -153,6 +194,7 @@ export function TVDBListIntegration({ isOpen, onClose }: TVDBListIntegrationProp
     });
 
     setPreview(null);
+    setShowDetail(false);
     setListInput('');
   }, [preview, splitMode, cacheTTL, config.catalogs, config.displayTypeOverrides, setConfig]);
 
@@ -166,249 +208,255 @@ export function TVDBListIntegration({ isOpen, onClose }: TVDBListIntegrationProp
 
   const isMixed = !!preview && preview.movieCount > 0 && preview.seriesCount > 0;
 
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <div className="flex items-center gap-3">
+      <DialogContent className="@container grid h-[100dvh] max-h-[100dvh] w-screen max-w-none grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden rounded-none p-0 sm:h-[92vh] sm:max-h-[92vh] sm:w-[min(96vw,100rem)] sm:rounded-2xl sm:p-0">
+        <header className="flex min-h-0 flex-col gap-3 border-b px-5 py-4">
+          <div className="flex flex-wrap items-center gap-3">
             <img src="/tvdb_icon.png" alt="TheTVDB" className="h-6 w-6 object-contain" />
-            <DialogTitle>TheTVDB Lists</DialogTitle>
+            <DialogTitle className="text-lg font-semibold">TheTVDB Lists</DialogTitle>
+            <DialogDescription className="sr-only">
+              Add a TheTVDB list as its own catalog, by slug or by picking one from the site
+            </DialogDescription>
           </div>
-          <DialogDescription>
-            Add a TheTVDB list as its own catalog, by slug or by picking one from the site
-          </DialogDescription>
-        </DialogHeader>
 
-        <div className="space-y-6 py-2">
-          <Tabs defaultValue="slug" className="w-full">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="slug">By slug or link</TabsTrigger>
-              <TabsTrigger value="browse">Browse lists</TabsTrigger>
-            </TabsList>
+          <div className="flex flex-col gap-2 @2xl:flex-row @2xl:items-center">
+            <div className="flex gap-1 rounded-lg border p-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => setMode('browse')}
+                className={`flex h-8 items-center gap-1.5 rounded-md px-3 text-sm transition-colors ${
+                  mode === 'browse' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-accent/50'
+                }`}
+              >
+                <LayoutGrid className="h-4 w-4" /> Browse
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('slug')}
+                className={`flex h-8 items-center gap-1.5 rounded-md px-3 text-sm transition-colors ${
+                  mode === 'slug' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-accent/50'
+                }`}
+              >
+                <LinkIcon className="h-4 w-4" /> By slug or link
+              </button>
+            </div>
 
-            <TabsContent value="slug" className="space-y-4 pt-4">
-              <div className="space-y-2">
-                <Label htmlFor="tvdb-list-input">List slug, id or URL</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="tvdb-list-input"
-                    placeholder="star-wars"
-                    value={listInput}
-                    onChange={(e) => setListInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') resolveList(listInput); }}
-                    disabled={isResolving}
-                  />
-                  <Button onClick={() => resolveList(listInput)} disabled={!listInput.trim() || isResolving}>
-                    {isResolving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Look up'}
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground break-all">
-                  Accepts a slug (star-wars), a numeric list id, or a full https://thetvdb.com/lists/star-wars link.
-                </p>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="browse" className="space-y-4 pt-4">
-              <div className="flex gap-2">
+            {mode === 'browse' ? (
+              <div className="flex flex-1 gap-2">
                 <Input
                   placeholder="Search lists by name"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
                   disabled={isBrowsing}
+                  className="h-9"
                 />
-                <Button variant="secondary" onClick={handleSearch} disabled={isBrowsing}>
+                <Button variant="secondary" size="sm" className="h-9" onClick={handleSearch} disabled={isBrowsing}>
                   {isBrowsing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
                 </Button>
               </div>
-
-              <div className="min-h-[26rem] max-h-[26rem] overflow-y-auto pr-1">
-                {isBrowsing && !browseResults.length ? (
-                  <div className="flex items-center justify-center h-96 text-muted-foreground">
-                    <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading lists
-                  </div>
-                ) : browseResults.length ? (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                    {browseResults.map(list => {
-                      const selected = preview?.id === list.id;
-                      return (
-                        <button
-                          key={list.id}
-                          type="button"
-                          onClick={() => resolveList(list.slug || String(list.id))}
-                          title={list.overview || list.name}
-                          className={`group flex flex-col text-left rounded-lg border overflow-hidden transition-colors ${
-                            selected ? 'border-primary ring-1 ring-primary' : 'hover:border-muted-foreground/40'
-                          }`}
-                        >
-                          <div className="relative aspect-[2/3] bg-muted">
-                            {list.image ? (
-                              <img
-                                src={list.image}
-                                alt=""
-                                loading="lazy"
-                                className="absolute inset-0 h-full w-full object-cover"
-                              />
-                            ) : (
-                              <div className="absolute inset-0 flex items-center justify-center p-2 text-center text-xs text-muted-foreground">
-                                {list.name}
-                              </div>
-                            )}
-                            {list.isOfficial && (
-                              <Badge variant="secondary" className="absolute top-1 left-1 text-[10px] px-1.5 py-0">
-                                Official
-                              </Badge>
-                            )}
-                          </div>
-                          <div className="p-2 space-y-0.5">
-                            <div className="text-sm font-medium leading-tight line-clamp-2">{list.name}</div>
-                            <div className="text-[11px] text-muted-foreground">{listContents(list) || 'Empty'}</div>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground py-6 text-center">No lists to show</p>
-                )}
+            ) : (
+              <div className="flex flex-1 gap-2">
+                <Input
+                  placeholder="star-wars, 4, or https://thetvdb.com/lists/star-wars"
+                  value={listInput}
+                  onChange={(e) => setListInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') resolveList(listInput); }}
+                  disabled={isResolving}
+                  className="h-9"
+                />
+                <Button size="sm" className="h-9" onClick={() => resolveList(listInput)} disabled={!listInput.trim() || isResolving}>
+                  {isResolving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Look up'}
+                </Button>
               </div>
+            )}
+          </div>
+        </header>
 
-              {!isSearchResults && (
-                <div className="flex items-center justify-between">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => loadBrowsePage(Math.max(0, browsePage - 1))}
-                    disabled={browsePage === 0 || isBrowsing}
-                  >
-                    <ChevronLeft className="h-4 w-4 mr-1" /> Previous
-                  </Button>
-                  <span className="text-xs text-muted-foreground">Page {browsePage + 1}</span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => loadBrowsePage(browsePage + 1)}
-                    disabled={isBrowsing || browseResults.length === 0}
-                  >
-                    Next <ChevronRight className="h-4 w-4 ml-1" />
-                  </Button>
+        <div className="@container/panes min-h-0 overflow-hidden">
+          <div className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)] @4xl:grid-cols-[minmax(0,1fr)_24rem]">
+            <div className={`min-h-0 overflow-y-auto px-5 py-4 ${showDetail ? 'hidden @4xl:block' : ''}`}>
+              {mode === 'slug' ? (
+                <div className="flex h-full items-center justify-center text-center">
+                  <div className="max-w-md space-y-2 text-sm text-muted-foreground">
+                    <LinkIcon className="mx-auto h-8 w-8 opacity-40" />
+                    <p>Paste a list slug, its numeric id, or a full thetvdb.com/lists link above.</p>
+                    <p className="text-xs">Look it up and it opens ready to add.</p>
+                  </div>
                 </div>
+              ) : isBrowsing && !browseResults.length ? (
+                <div className="flex h-full items-center justify-center text-muted-foreground">
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading lists
+                </div>
+              ) : browseResults.length ? (
+                <div className="grid grid-cols-2 gap-3 @md:grid-cols-3 @2xl:grid-cols-4 @5xl:grid-cols-5 @7xl:grid-cols-6">
+                  {browseResults.map(list => {
+                    const selected = preview?.id === list.id;
+                    return (
+                      <button
+                        key={list.id}
+                        type="button"
+                        onClick={() => resolveList(list.slug || String(list.id))}
+                        title={list.overview || list.name}
+                        className={`group flex flex-col overflow-hidden rounded-lg border text-left transition-colors ${
+                          selected ? 'border-primary ring-1 ring-primary' : 'hover:border-muted-foreground/40'
+                        }`}
+                      >
+                        <div className="relative aspect-[2/3] bg-muted">
+                          {list.image ? (
+                            <img src={list.image} alt="" loading="lazy" className="absolute inset-0 h-full w-full object-cover" />
+                          ) : (
+                            <div className="absolute inset-0 flex items-center justify-center p-2 text-center text-xs text-muted-foreground">
+                              {list.name}
+                            </div>
+                          )}
+                          {list.isOfficial && (
+                            <Badge variant="secondary" className="absolute left-1 top-1 px-1.5 py-0 text-[10px]">Official</Badge>
+                          )}
+                        </div>
+                        <div className="space-y-0.5 p-2">
+                          <div className="line-clamp-2 text-sm font-medium leading-tight">{list.name}</div>
+                          <div className="text-[11px] text-muted-foreground">{listContents(list) || 'Empty'}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="py-6 text-center text-sm text-muted-foreground">No lists to show</p>
               )}
-            </TabsContent>
-          </Tabs>
 
-          {preview && (
-            <Card>
-              <CardContent className="flex flex-col sm:flex-row gap-5 pt-6">
-                {preview.image && (
-                  <img
-                    src={preview.image}
-                    alt=""
-                    className="w-32 shrink-0 self-start rounded border object-cover"
-                  />
-                )}
-                <div className="min-w-0 flex-1 space-y-4">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-lg font-semibold break-words">{preview.name}</h3>
-                    {preview.isOfficial && <Badge variant="secondary">Official</Badge>}
-                  </div>
-                  <p className="text-sm text-muted-foreground">
-                    {listContents(preview) || 'Empty'}
-                  </p>
+              <div className="mt-6 border-t pt-4 @4xl:hidden">
+                <div className="pb-2 text-sm font-medium">
+                  Your lists {tvdbListCatalogs.length > 0 && (
+                    <span className="text-muted-foreground">({tvdbListCatalogs.length})</span>
+                  )}
                 </div>
-                {preview.overview && (
-                  <p className="text-sm text-muted-foreground line-clamp-4">{preview.overview}</p>
-                )}
+                <SavedLists catalogs={tvdbListCatalogs} onRemove={handleRemove} />
+              </div>
+            </div>
 
-                {isMixed ? (
-                  <div className="space-y-2">
-                    <Label htmlFor="tvdb-list-mode">Catalog layout</Label>
-                    <Select value={splitMode} onValueChange={(v) => setSplitMode(v as 'all' | 'split')}>
-                      <SelectTrigger id="tvdb-list-mode">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">One row with movies and series together</SelectItem>
-                        <SelectItem value="split">Separate movie and series rows</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                ) : (
-                  <div className="flex items-start gap-2 p-3 bg-muted/40 border rounded-lg">
-                    <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
-                    <p className="text-xs text-muted-foreground">
-                      This list holds only {preview.movieCount > 0 ? 'movies' : 'series'}, so it becomes a single catalog.
-                    </p>
-                  </div>
-                )}
+            <aside className={`min-h-0 flex-col @4xl:flex @4xl:border-l ${showDetail ? 'flex' : 'hidden'}`}>
+              <button
+                type="button"
+                onClick={() => setShowDetail(false)}
+                className="flex items-center gap-1.5 border-b px-5 py-3 text-sm text-muted-foreground @4xl:hidden"
+              >
+                <ChevronLeft className="h-4 w-4" /> Back to lists
+              </button>
 
-                <div className="flex flex-col sm:flex-row sm:items-end gap-3">
-                  <div className="space-y-2 flex-1">
-                    <Label htmlFor="tvdb-list-ttl">Cache TTL (seconds)</Label>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        id="tvdb-list-ttl"
-                        type="number"
-                        min={0}
-                        step={3600}
-                        value={cacheTTL}
-                        onChange={(e) => setCacheTTL(parseInt(e.target.value) || catalogTTL)}
-                      />
-                      <span className="text-sm text-muted-foreground whitespace-nowrap">
-                        ({Math.floor(cacheTTL / 3600)}h {Math.floor((cacheTTL % 3600) / 60)}m)
-                      </span>
+              {preview ? (
+                <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+                  <div className="flex gap-4">
+                    {preview.image && (
+                      <img src={preview.image} alt="" className="w-24 shrink-0 self-start rounded border object-cover" />
+                    )}
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="break-words text-base font-semibold">{preview.name}</h3>
+                        {preview.isOfficial && <Badge variant="secondary">Official</Badge>}
+                      </div>
+                      <p className="text-sm text-muted-foreground">{listContents(preview) || 'Empty'}</p>
                     </div>
                   </div>
-                  <Button className="sm:w-44" onClick={handleAdd}>
-                    Add to catalogs
-                  </Button>
-                </div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
 
-          {tvdbListCatalogs.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Your TheTVDB lists</CardTitle>
-                <CardDescription>{tvdbListCatalogs.length} added</CardDescription>
-              </CardHeader>
-              <CardContent className="grid gap-2 sm:grid-cols-2">
-                {tvdbListCatalogs.map(catalog => (
-                  <div
-                    key={`${catalog.id}:${catalog.type}`}
-                    className="flex items-center justify-between gap-2 p-3 border rounded-lg bg-muted/30"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="font-medium break-words">{catalog.name}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {catalog.type === 'all' ? 'Movies and series' : catalog.type === 'movie' ? 'Movies' : 'Series'}
-                        {catalog.metadata?.itemCount ? ` · ${catalog.metadata.itemCount} items` : ''}
+                  {preview.overview && (
+                    <p className="mt-3 line-clamp-5 text-sm text-muted-foreground">{preview.overview}</p>
+                  )}
+
+                  <div className="mt-4 space-y-4">
+                    {isMixed ? (
+                      <div className="space-y-2">
+                        <Label htmlFor="tvdb-list-mode">Catalog layout</Label>
+                        <Select value={splitMode} onValueChange={(v) => setSplitMode(v as 'all' | 'split')}>
+                          <SelectTrigger id="tvdb-list-mode">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">One row, movies and series together</SelectItem>
+                            <SelectItem value="split">Separate movie and series rows</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    ) : (
+                      <div className="flex items-start gap-2 rounded-lg border bg-muted/40 p-3">
+                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                        <p className="text-xs text-muted-foreground">
+                          This list holds only {preview.movieCount > 0 ? 'movies' : 'series'}, so it becomes a single catalog.
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <Label htmlFor="tvdb-list-ttl">Cache TTL (seconds)</Label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          id="tvdb-list-ttl"
+                          type="number"
+                          min={0}
+                          step={3600}
+                          value={cacheTTL}
+                          onChange={(e) => setCacheTTL(parseInt(e.target.value) || catalogTTL)}
+                        />
+                        <span className="whitespace-nowrap text-sm text-muted-foreground">
+                          ({Math.floor(cacheTTL / 3600)}h {Math.floor((cacheTTL % 3600) / 60)}m)
+                        </span>
                       </div>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="shrink-0"
-                      onClick={() => handleRemove(catalog.id, catalog.type)}
-                      aria-label={`Remove ${catalog.name}`}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+
+                    <Button className="w-full" onClick={handleAdd}>Add to catalogs</Button>
                   </div>
-                ))}
-              </CardContent>
-            </Card>
-          )}
+                </div>
+              ) : (
+                <div className="flex flex-1 items-center justify-center px-5 py-8 text-center text-sm text-muted-foreground">
+                  Pick a list to see what it holds
+                </div>
+              )}
+
+              <div className="mt-auto hidden min-h-0 border-t @4xl:block">
+                <div className="px-5 py-3 text-sm font-medium">
+                  Your lists {tvdbListCatalogs.length > 0 && (
+                    <span className="text-muted-foreground">({tvdbListCatalogs.length})</span>
+                  )}
+                </div>
+                <div className="max-h-56 overflow-y-auto px-5 pb-4">
+                  <SavedLists catalogs={tvdbListCatalogs} onRemove={handleRemove} />
+                </div>
+              </div>
+            </aside>
+          </div>
         </div>
 
-        <DialogFooter>
+        <footer className="flex items-center justify-between gap-3 border-t px-5 py-3">
+          {mode === 'browse' && !isSearchResults ? (
+            <div className={`items-center gap-2 ${showDetail ? 'hidden @4xl:flex' : 'flex'}`}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => loadBrowsePage(Math.max(0, browsePage - 1))}
+                disabled={browsePage === 0 || isBrowsing}
+              >
+                <ChevronLeft className="mr-1 h-4 w-4" /> Previous
+              </Button>
+              <span className="text-xs text-muted-foreground">Page {browsePage + 1}</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => loadBrowsePage(browsePage + 1)}
+                disabled={isBrowsing || browseResults.length === 0}
+              >
+                Next <ChevronRight className="ml-1 h-4 w-4" />
+              </Button>
+            </div>
+          ) : (
+            <span />
+          )}
           <DialogClose asChild>
             <Button variant="outline">Close</Button>
           </DialogClose>
-        </DialogFooter>
+        </footer>
       </DialogContent>
     </Dialog>
   );

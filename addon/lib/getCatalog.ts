@@ -660,12 +660,6 @@ async function getTvdbCollectionsCatalog(type: string, id: string, page: number,
   return [];
 }
 
-/**
- * Serves a single TheTVDB list as its own catalog. Ids look like
- * `tvdb.list.<listId>` for a mixed row, or `tvdb.list.<listId>.movies` /
- * `.series` when the list was split on add. Entries keep the order the list
- * author gave them.
- */
 async function getTvdbListCatalog(type: string, id: string, page: number, language: string, config: UserConfig, userUUID: string, includeVideos: boolean = false): Promise<any[]> {
   const match = id.match(/^tvdb\.list\.(\d+)(?:\.(movies|series))?$/);
   if (!match) {
@@ -1728,6 +1722,18 @@ function sanitizeTmdbDiscoverParams(
     delete sanitized['first_air_date.lte'];
     delete sanitized.first_air_date_year;
     delete sanitized.with_type;
+
+    if (sanitized.with_release_type) {
+      // Only release_date follows with_release_type; primary_release_date ignores it.
+      if (typeof sanitized.sort_by === 'string' && sanitized.sort_by.startsWith('primary_release_date.')) {
+        sanitized.sort_by = sanitized.sort_by.replace('primary_release_date.', 'release_date.');
+      }
+      // With no region the type matches a release in any country.
+      if (!sanitized.region) {
+        const country = String(language || '').split('-')[1];
+        if (country) sanitized.region = country.toUpperCase();
+      }
+    }
   } else {
     delete sanitized['primary_release_date.gte'];
     delete sanitized['primary_release_date.lte'];

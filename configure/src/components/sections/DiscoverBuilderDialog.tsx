@@ -1037,6 +1037,14 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     [references]
   );
 
+  const defaultRegionFromLanguage = useMemo(() => {
+    const code = (config.language || 'en-US').split('-')[1]?.toUpperCase();
+    if (!code) return '';
+    const known = (references?.countries || []).some(c => c.iso_3166_1?.toUpperCase() === code)
+      || (references?.watchRegions || []).some(r => r.iso_3166_1?.toUpperCase() === code);
+    return known ? code : '';
+  }, [config.language, references]);
+
   const certificationOptions = useMemo(() => {
     if (!references || !certificationCountry) return [];
     const values = references.certifications?.[certificationCountry] || [];
@@ -2335,8 +2343,13 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
       params.with_watch_monetization_types = 'flatrate|free|ads|rent|buy';
     }
 
-    if (catalogType === 'movie' && releaseRegion) {
-      params.region = releaseRegion;
+    const usesReleaseType = catalogType === 'movie' && (tmdbMovieReleaseTypes.length > 0 || releasedOnly);
+    // With no region the type matches a release in any country.
+    const effectiveReleaseRegion = catalogType === 'movie'
+      ? (releaseRegion || (usesReleaseType ? (watchRegion || defaultRegionFromLanguage) : ''))
+      : '';
+    if (effectiveReleaseRegion) {
+      params.region = effectiveReleaseRegion;
     }
     if (catalogType === 'movie' && tmdbMovieReleaseTypes.length > 0) {
       params.with_release_type = TMDB_MOVIE_RELEASE_TYPE_OPTIONS
@@ -2346,6 +2359,10 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     } else if (catalogType === 'movie' && releasedOnly) {
       params.with_release_type = '4|5|6';
       params['release_date.lte'] = getTodayLocalDateString();
+    }
+    // Only release_date follows with_release_type; primary_release_date ignores it.
+    if (usesReleaseType && typeof params.sort_by === 'string' && params.sort_by.startsWith('primary_release_date.')) {
+      params.sort_by = params.sort_by.replace('primary_release_date.', 'release_date.');
     }
     if (catalogType === 'series' && tmdbTvTypes.length > 0) {
       params.with_type = TMDB_TV_TYPE_OPTIONS

@@ -326,16 +326,14 @@ export interface TvdbListPreview {
 
 export interface TvdbListCatalogOptions {
   list: TvdbListPreview;
-  /** 'all' keeps the list as one mixed row, 'split' makes a movie row and a series row. */
   mode?: 'all' | 'split';
   cacheTTL?: number;
   displayTypeOverrides?: { movie?: string; series?: string };
 }
 
 /**
- * Creates one or two catalogs for a TheTVDB list. A list holding only movies or
- * only series always collapses to a single catalog of that type, whatever the
- * mode asks for.
+ * Creates one or two catalogs for a TheTVDB list. A single-type list always
+ * collapses to one catalog, whatever the mode asks for.
  */
 export function createTvdbListCatalogs(options: TvdbListCatalogOptions): CatalogConfig[] {
   const { list, mode = 'all', cacheTTL, displayTypeOverrides } = options;

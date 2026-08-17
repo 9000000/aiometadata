@@ -2100,13 +2100,7 @@ function normalizeTvdbListRecord(record) {
   };
 }
 
-/**
- * Fills in what a list's base record leaves out. `/lists` never sets `image`,
- * and the search index never sets the slug, so both browse and search would
- * otherwise render art-less cards. The extended record carries both, plus the
- * entity split, and it is the same globally cached key the collections catalog
- * already fetches.
- */
+// Base list records carry no image, and search results carry no slug.
 async function enrichTvdbListRecords(records, config) {
   const enriched = new Array(records.length);
   const queue = records.map((record, index) => ({ record, index }));
@@ -2225,10 +2219,7 @@ addon.get("/api/tvdb/lists/resolve", async (req, res) => {
     const preview = await cacheWrapGlobal(
       `tvdb:lists:resolve:v3:${candidate.toLowerCase()}`,
       async () => {
-        // A slug can be all digits and still not be an id: list 1 carries the
-        // slug "1001". Every path that feeds this route (a pasted URL, a browse
-        // card, a search card) hands over a slug, so the slug lookup wins and a
-        // bare number only falls back to being an id when no slug matches it.
+        // A slug can be all digits and still not be an id: list 1 has the slug "1001".
         const base = await tvdbApi.getCollectionBySlug(candidate, tvdbConfig);
         const listId = base?.id
           ? String(base.id)

@@ -1320,10 +1320,6 @@ async function getCollectionDetails(collectionId: string, config: UserConfig): P
   });
 }
 
-/**
- * Resolves a list by its slug, the `url` field TheTVDB puts on every list record
- * and the last path segment of a thetvdb.com/lists/ link.
- */
 async function getCollectionBySlug(slug: string, config: UserConfig): Promise<TvdbCollection | null> {
   return cacheWrapTvdbApi(`collection-slug:${slug}`, async () => {
     const token = await getAuthToken(config.apiKeys?.tvdb, config.userUUID);

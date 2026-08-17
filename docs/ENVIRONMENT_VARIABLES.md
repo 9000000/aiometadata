@@ -819,6 +819,11 @@ Art the addon **passes through without storing** is decided by a chain of its ow
 - **Description**: Also cache episode thumbnails. By far the most numerous class — one long-running series can contribute hundreds of images — so expect disk usage to grow quickly.
 - **Example**: `POSTER_CACHE_THUMBNAILS=true`
 
+### `POSTER_CACHE_CAST`
+- **Default**: `false`
+- **Description**: Also cache cast/actor headshots. Served through the poster cache instead of the origin so they are cached locally like the rest of the artwork.
+- **Example**: `POSTER_CACHE_CAST=true`
+
 ### `POSTER_CACHE_PROCESSED_IMAGES`
 - **Default**: `true` (when `ENABLE_BUILTIN_POSTER_CACHE` is on)
 - **Description**: Caches the images the addon renders itself — rating-overlaid posters from the `/poster` route (active when **Proxy Rating & Custom Art** is on) plus the `/api/image/blur` and `/api/image/banner-to-background` transforms. Enabled by default with the cache; without it those requests re-render on every view. Total volume is still bounded by `POSTER_CACHE_MAX_SIZE`.

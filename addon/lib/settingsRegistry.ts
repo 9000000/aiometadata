@@ -1532,6 +1532,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: false,
   },
   {
+    key: 'POSTER_CACHE_CAST',
+    envVar: 'POSTER_CACHE_CAST',
+    label: 'Cache Cast Photos',
+    description: 'Also cache cast/actor headshots. Served through the poster cache instead of the origin so they are cached locally like the rest of the artwork.',
+    category: 'Features',
+    type: 'boolean',
+    default: false,
+  },
+  {
     key: 'POSTER_CACHE_PROCESSED_IMAGES',
     envVar: 'POSTER_CACHE_PROCESSED_IMAGES',
     label: 'Cache Processed Images',
@@ -2536,7 +2545,7 @@ export const CONDITIONAL_RULES: ConditionalRule[] = [
     disable: {
       keys: [
         'POSTER_CACHE_BACKGROUNDS', 'POSTER_CACHE_LANDSCAPE_POSTERS',
-        'POSTER_CACHE_LOGOS', 'POSTER_CACHE_THUMBNAILS',
+        'POSTER_CACHE_LOGOS', 'POSTER_CACHE_THUMBNAILS', 'POSTER_CACHE_CAST',
         'POSTER_CACHE_PROCESSED_IMAGES', 'POSTER_CACHE_MAX_SIZE',
         'POSTER_CACHE_TTL_DAYS',
         'POSTER_CACHE_INFER_TTL',

@@ -573,6 +573,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     description: 'Import your Letterboxd lists and watchlists as catalogs via StremThru',
     keywords: ['letterboxd', 'list', 'watchlist'],
   },
+  {
+    id: 'catalogs.tvdbLists', section: 'catalogs', anchor: null,
+    label: 'TheTVDB Lists',
+    description: 'Add a TheTVDB list as its own catalog, by slug or by picking one from the site',
+    keywords: ['tvdb', 'thetvdb', 'list', 'slug', 'collection'],
+  },
   // Composed, not verbatim: this is a coarse section-level entry with no single
   // control behind it, so there is no one sentence in the UI to quote.
   {

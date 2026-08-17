@@ -388,6 +388,34 @@ function createTVDBDiscoverCatalog(userCatalog: any, genres: string[] = [], show
   }
 }
 
+function createTVDBListCatalog(userCatalog: any, showPrefix: boolean = false, prefixName: string = "AIOMetadata"): any {
+  try {
+    logger.debug(`Creating TVDB List catalog: ${userCatalog.id} (${userCatalog.type})`);
+
+    const catalogType = userCatalog.displayType || userCatalog.type;
+    const extra: any[] = [];
+    if (!userCatalog.showInHome) {
+      extra.push({ name: "genre", options: ['None'], isRequired: true });
+    }
+    extra.push({ name: "skip" });
+
+    const catalog = {
+      id: userCatalog.id,
+      type: catalogType,
+      name: `${showPrefix ? `${prefixName} - ` : ""}${userCatalog.name}`,
+      pageSize: parseInt(process.env.CATALOG_LIST_ITEMS_SIZE as string) || 20,
+      extra,
+      showInHome: userCatalog.showInHome
+    };
+
+    logger.debug(`TVDB List catalog created successfully: ${catalog.id}`);
+    return catalog;
+  } catch (error: any) {
+    logger.error(`Error creating TVDB List catalog ${userCatalog.id}:`, error.message);
+    return null;
+  }
+}
+
 async function createLetterboxdCatalog(userCatalog: any, showPrefix: boolean = false, prefixName: string = "AIOMetadata"): Promise<any> {
   try {
     logger.debug(`Creating Letterboxd catalog: ${userCatalog.id} (${userCatalog.type})`);
@@ -986,6 +1014,9 @@ async function getManifest(config: any, opts: { tag?: string } = {}): Promise<an
       if (userCatalog.id.startsWith('tvdb.discover.')) {
         return true;
       }
+      if (userCatalog.id.startsWith('tvdb.list.')) {
+        return true;
+      }
       if (userCatalog.id.startsWith('mal.discover.')) {
         return true;
       }
@@ -1078,6 +1109,12 @@ async function getManifest(config: any, opts: { tag?: string } = {}): Promise<an
           logger.debug(`Processing TVDB Discover catalog: ${userCatalog.id}`);
           const result = createTVDBDiscoverCatalog(userCatalog, genres_tvdb_all_names, showPrefix, prefixName);
           logger.debug(`TVDB Discover catalog result:`, result ? 'success' : 'failed');
+          return result;
+      }
+      if (userCatalog.id.startsWith('tvdb.list.')) {
+          logger.debug(`Processing TVDB List catalog: ${userCatalog.id}`);
+          const result = createTVDBListCatalog(userCatalog, showPrefix, prefixName);
+          logger.debug(`TVDB List catalog result:`, result ? 'success' : 'failed');
           return result;
       }
       if (userCatalog.id.startsWith('stremthru.')) {

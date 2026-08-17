@@ -308,6 +308,88 @@ export function createLetterboxdCatalog(options: LetterboxdCatalogOptions): Cata
 }
 
 // ============================================================================
+// TheTVDB List Catalog Creation
+// ============================================================================
+
+export interface TvdbListPreview {
+  id: number;
+  name: string;
+  overview?: string;
+  slug?: string;
+  image?: string;
+  isOfficial?: boolean;
+  url?: string;
+  movieCount: number;
+  seriesCount: number;
+  itemCount: number;
+}
+
+export interface TvdbListCatalogOptions {
+  list: TvdbListPreview;
+  /** 'all' keeps the list as one mixed row, 'split' makes a movie row and a series row. */
+  mode?: 'all' | 'split';
+  cacheTTL?: number;
+  displayTypeOverrides?: { movie?: string; series?: string };
+}
+
+/**
+ * Creates one or two catalogs for a TheTVDB list. A list holding only movies or
+ * only series always collapses to a single catalog of that type, whatever the
+ * mode asks for.
+ */
+export function createTvdbListCatalogs(options: TvdbListCatalogOptions): CatalogConfig[] {
+  const { list, mode = 'all', cacheTTL, displayTypeOverrides } = options;
+
+  const listId = String(list.id);
+  const listUrl = list.url || `https://thetvdb.com/lists/${list.slug || listId}`;
+  const baseMetadata = {
+    listId,
+    listName: list.name,
+    ...(list.overview ? { description: list.overview } : {}),
+    ...(list.slug ? { slug: list.slug } : {}),
+    url: listUrl,
+  };
+
+  const build = (
+    id: string,
+    type: 'movie' | 'series' | 'all',
+    name: string,
+    itemCount: number
+  ): CatalogConfig => ({
+    id,
+    type,
+    name,
+    enabled: true,
+    showInHome: true,
+    source: 'tvdb',
+    enableRatingPosters: true,
+    ...(cacheTTL ? { cacheTTL } : {}),
+    ...(getDisplayTypeOverride(type, displayTypeOverrides)
+      ? { displayType: getDisplayTypeOverride(type, displayTypeOverrides) }
+      : {}),
+    metadata: { ...baseMetadata, itemCount },
+  });
+
+  const hasMovies = list.movieCount > 0;
+  const hasSeries = list.seriesCount > 0;
+
+  if (!hasMovies && !hasSeries) return [];
+  if (!hasSeries) {
+    return [build(`tvdb.list.${listId}`, 'movie', list.name, list.movieCount)];
+  }
+  if (!hasMovies) {
+    return [build(`tvdb.list.${listId}`, 'series', list.name, list.seriesCount)];
+  }
+  if (mode === 'split') {
+    return [
+      build(`tvdb.list.${listId}.movies`, 'movie', `${list.name} (Movies)`, list.movieCount),
+      build(`tvdb.list.${listId}.series`, 'series', `${list.name} (Series)`, list.seriesCount),
+    ];
+  }
+  return [build(`tvdb.list.${listId}`, 'all', list.name, list.itemCount)];
+}
+
+// ============================================================================
 // Custom Manifest Catalog Creation
 // ============================================================================
 

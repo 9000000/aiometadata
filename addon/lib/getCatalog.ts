@@ -53,6 +53,11 @@ async function getCatalog(type: string, language: string, page: number, id: stri
       const tvdbDiscoverResults = await getTvdbDiscoverCatalog(type, id, genre, page, language, config, userUUID, includeVideos);
       return { metas: tvdbDiscoverResults };
     }
+    if (id.startsWith('tvdb.list.')) {
+      logger.debug(`Routing to TVDB list catalog handler for id: ${id}`);
+      const tvdbListResults = await getTvdbListCatalog(type, id, page, language, config, userUUID, includeVideos);
+      return { metas: tvdbListResults };
+    }
     if (id.startsWith('tvdb.') && !id.startsWith('tvdb.collection.')) {
       logger.debug(`Routing to TVDB catalog handler for id: ${id}`);
       const tvdbResults = await getTvdbCatalog(type, id, genre, page, language, config, id === 'tvdb.trending', includeVideos);
@@ -653,6 +658,64 @@ async function getTvdbCollectionsCatalog(type: string, id: string, page: number,
     return metas.filter(Boolean);
   }
   return [];
+}
+
+/**
+ * Serves a single TheTVDB list as its own catalog. Ids look like
+ * `tvdb.list.<listId>` for a mixed row, or `tvdb.list.<listId>.movies` /
+ * `.series` when the list was split on add. Entries keep the order the list
+ * author gave them.
+ */
+async function getTvdbListCatalog(type: string, id: string, page: number, language: string, config: UserConfig, userUUID: string, includeVideos: boolean = false): Promise<any[]> {
+  const match = id.match(/^tvdb\.list\.(\d+)(?:\.(movies|series))?$/);
+  if (!match) {
+    logger.warn(`[TVDB List] Unrecognized catalog id ${id}`);
+    return [];
+  }
+  const listId = match[1];
+  const suffix = match[2];
+
+  const catalogConfig = config.catalogs?.find(c => c.id === id && c.type === type)
+    || config.catalogs?.find(c => c.id === id);
+  const configuredType = suffix
+    ? (suffix === 'movies' ? 'movie' : 'series')
+    : (catalogConfig?.type || type);
+
+  const details = await tvdb.getCollectionDetails(listId, config);
+  const entities = Array.isArray(details?.entities) ? [...details.entities] : [];
+  if (!entities.length) {
+    logger.info(`[TVDB List] List ${listId} has no entries`);
+    return [];
+  }
+  entities.sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
+
+  const wantsMovies = configuredType === 'movie' || configuredType === 'all';
+  const wantsSeries = configuredType === 'series' || configuredType === 'all';
+  const selected = entities.filter((e: any) => (e.movieId && wantsMovies) || (e.seriesId && wantsSeries));
+
+  const pageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE || '20');
+  const listPage = typeof page === 'number' ? page : parseInt(String(page), 10) || 1;
+  const startIndex = Math.max(0, (listPage - 1) * pageSize);
+  const pageEntities = selected.slice(startIndex, startIndex + pageSize);
+  if (!pageEntities.length) return [];
+
+  const metas = await Promise.all(pageEntities.map(async (entity: any) => {
+    const entityType = entity.movieId ? 'movie' : 'series';
+    const stremioId = `tvdb:${entity.movieId || entity.seriesId}`;
+    try {
+      const result = await cacheWrapMetaSmart(userUUID, stremioId, async () => {
+        return await getMeta(entityType, language, stremioId, config, userUUID, includeVideos);
+      }, undefined, { enableErrorCaching: true, maxRetries: 2, config }, entityType as any, includeVideos);
+      return result?.meta || null;
+    } catch (error: any) {
+      logger.warn(`[TVDB List] Failed to get meta for ${stremioId}: ${error.message}`);
+      return null;
+    }
+  }));
+
+  const validMetas = metas.filter(meta => meta !== null);
+  logger.success(`[TVDB List] Processed ${validMetas.length} items for ${id} (page ${listPage})`);
+  return validMetas;
 }
 
 async function getTvdbDiscoverCatalog(

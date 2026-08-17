@@ -6,6 +6,7 @@ import { SimklIntegration } from './SimklIntegration';
 import { MovieLensIntegration } from './MovieLensIntegration';
 import { PublicMetaDBIntegration } from './PublicMetaDBIntegration';
 import { TMDBIntegration } from './TMDBIntegration';
+import { TVDBListIntegration } from './TVDBListIntegration';
 import { DiscoverBuilderDialog } from './DiscoverBuilderDialog';
 import { CollectionBuilderDialog } from './CollectionBuilderDialog';
 import { LetterboxdIntegration } from './LetterboxdIntegration';
@@ -3452,6 +3453,7 @@ const SortableCatalogItem = React.memo(({ catalog, onEditDiscover, onCustomize, 
             (catalog.source === 'letterboxd' && (catalog as any).metadata?.url) ||
             (catalog.source === 'trakt' && ((catalog as any).metadata?.url || catalog.id.startsWith('trakt.list.') || (catalog.id.startsWith('trakt.') && (catalog as any).metadata?.author))) ||
             (catalog.source === 'tmdb' && catalog.id.startsWith('tmdb.list.') && ((catalog as any).metadata?.url || (catalog as any).metadata?.listId)) ||
+            (catalog.source === 'tvdb' && catalog.id.startsWith('tvdb.list.') && ((catalog as any).metadata?.url || (catalog as any).metadata?.slug)) ||
             (catalog.source === 'anilist' && catalog.id.startsWith('anilist.') && ((catalog as any).metadata?.url || ((catalog as any).metadata?.username && (catalog as any).metadata?.listName)))) && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -3504,6 +3506,13 @@ const SortableCatalogItem = React.memo(({ catalog, onEditDiscover, onCustomize, 
                           listUrl = `https://www.themoviedb.org/list/${listId}`;
                         }
                       }
+                    } else if (catalog.source === 'tvdb' && catalog.id.startsWith('tvdb.list.')) {
+                      listUrl = (catalog as any).metadata?.url || null;
+
+                      if (!listUrl) {
+                        const slug = (catalog as any).metadata?.slug || (catalog as any).metadata?.listId || catalog.id.replace('tvdb.list.', '').split('.')[0];
+                        listUrl = `https://thetvdb.com/lists/${slug}`;
+                      }
                     } else if (catalog.source === 'anilist' && catalog.id.startsWith('anilist.')) {
                       listUrl = (catalog as any).metadata?.url || null;
                       
@@ -3533,12 +3542,12 @@ const SortableCatalogItem = React.memo(({ catalog, onEditDiscover, onCustomize, 
                       window.open(listUrl, '_blank', 'noopener,noreferrer');
                     }
                   }}
-                  aria-label={`View on ${catalog.source === 'mdblist' ? 'MDBList' : catalog.source === 'letterboxd' ? 'Letterboxd' : catalog.source === 'trakt' ? 'Trakt' : catalog.source === 'tmdb' ? 'TMDB' : 'AniList'}`}
+                  aria-label={`View on ${catalog.source === 'mdblist' ? 'MDBList' : catalog.source === 'letterboxd' ? 'Letterboxd' : catalog.source === 'trakt' ? 'Trakt' : catalog.source === 'tmdb' ? 'TMDB' : catalog.source === 'tvdb' ? 'TheTVDB' : 'AniList'}`}
                 >
                   <ExternalLink className="h-5 w-5 text-blue-500" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>View on {catalog.source === 'mdblist' ? 'MDBList' : catalog.source === 'letterboxd' ? 'Letterboxd' : catalog.source === 'trakt' ? 'Trakt' : catalog.source === 'tmdb' ? 'TMDB' : 'AniList'}</TooltipContent>
+              <TooltipContent>View on {catalog.source === 'mdblist' ? 'MDBList' : catalog.source === 'letterboxd' ? 'Letterboxd' : catalog.source === 'trakt' ? 'Trakt' : catalog.source === 'tmdb' ? 'TMDB' : catalog.source === 'tvdb' ? 'TheTVDB' : 'AniList'}</TooltipContent>
             </Tooltip>
           )}
 
@@ -3876,6 +3885,7 @@ function CatalogsSettingsContent({
   const [editingDiscoverCatalog, setEditingDiscoverCatalog] = useState<CatalogConfig | null>(null);
   const [customizeTemplate, setCustomizeTemplate] = useState<CustomizeTemplate | null>(null);
   const [isLetterboxdOpen, setIsLetterboxdOpen] = useState(false);
+  const [isTvdbListOpen, setIsTvdbListOpen] = useState(false);
   const [isAniListOpen, setIsAniListOpen] = useState(false);
   const [isMalOpen, setIsMalOpen] = useState(false);
   const [isCustomManifestOpen, setIsCustomManifestOpen] = useState(false);
@@ -5061,6 +5071,21 @@ function CatalogsSettingsContent({
 
                 <Tooltip>
                   <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setIsTvdbListOpen(true)}
+                      aria-label="TheTVDB Lists"
+                      className="h-9 w-9"
+                    >
+                      <img src="/tvdb_icon.png" alt="TheTVDB" className="h-5 w-5 object-contain" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>TheTVDB Lists</TooltipContent>
+                </Tooltip>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
                     <Button 
                       variant="ghost" 
                       size="icon" 
@@ -5192,6 +5217,10 @@ function CatalogsSettingsContent({
           <LetterboxdIntegration
             isOpen={isLetterboxdOpen}
             onClose={() => setIsLetterboxdOpen(false)}
+          />
+          <TVDBListIntegration
+            isOpen={isTvdbListOpen}
+            onClose={() => setIsTvdbListOpen(false)}
           />
           <AniListIntegration
             isOpen={isAniListOpen}
@@ -5362,6 +5391,10 @@ function CatalogsSettingsContent({
       <LetterboxdIntegration
         isOpen={isLetterboxdOpen}
         onClose={() => setIsLetterboxdOpen(false)}
+      />
+      <TVDBListIntegration
+        isOpen={isTvdbListOpen}
+        onClose={() => setIsTvdbListOpen(false)}
       />
       <CustomManifestIntegration
         isOpen={isCustomManifestOpen}

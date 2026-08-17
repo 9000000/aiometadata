@@ -520,6 +520,7 @@ class ComprehensiveCatalogWarmer {
         catalogId.startsWith('publicmetadb.') ||
         catalogId.startsWith('tmdb.discover') ||
         catalogId.startsWith('tvdb.discover') ||
+        catalogId.startsWith('tvdb.list.') ||
         catalogId.startsWith('mal.discover')  ||
         catalogId.startsWith('anilist.discover') ||
         catalogId === 'tmdb.top' ||

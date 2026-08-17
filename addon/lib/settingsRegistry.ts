@@ -683,6 +683,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: 20,
   },
   {
+    key: 'TVDB_LIST_ENRICH_CONCURRENCY',
+    envVar: 'TVDB_LIST_ENRICH_CONCURRENCY',
+    label: 'TheTVDB List Enrich Concurrency',
+    description: 'How many TheTVDB lists are looked up at once when browsing or searching them in the catalog picker. Their base records carry no artwork or item counts, so each one needs a second call. Raise it for a faster first page, lower it to be gentler on the TVDB API.',
+    category: 'Features',
+    type: 'number',
+    default: 10,
+  },
+  {
     key: 'CATALOG_FILTER_FILL_MAX_PAGES',
     envVar: 'CATALOG_FILTER_FILL_MAX_PAGES',
     label: 'Catalog Filter Fill Max Pages',

@@ -1320,6 +1320,25 @@ async function getCollectionDetails(collectionId: string, config: UserConfig): P
   });
 }
 
+/**
+ * Resolves a list by its slug, the `url` field TheTVDB puts on every list record
+ * and the last path segment of a thetvdb.com/lists/ link.
+ */
+async function getCollectionBySlug(slug: string, config: UserConfig): Promise<TvdbCollection | null> {
+  return cacheWrapTvdbApi(`collection-slug:${slug}`, async () => {
+    const token = await getAuthToken(config.apiKeys?.tvdb, config.userUUID);
+    if (!token) return null;
+    try {
+      const url = `${TVDB_API_URL}/lists/slug/${encodeURIComponent(slug)}`;
+      const response = await tvdbHttpRequest(url, { headers: { 'Authorization': `Bearer ${token}` } });
+      return (response.data as any)?.data || null;
+    } catch (error) {
+      logger.error(`Error fetching TVDB list for slug ${slug}:`, (error as Error).message);
+      return null;
+    }
+  });
+}
+
 async function getCollectionTranslations(collectionId: string, language: string, config: UserConfig): Promise<TvdbCollectionTranslation | null> {
   return cacheWrapTvdbApi(`collection-translations:${collectionId}:${language}`, async () => {
     const token = await getAuthToken(config.apiKeys?.tvdb, config.userUUID);
@@ -1373,6 +1392,7 @@ export {
   getMovieLogo,
   getCollectionsList,
   getCollectionDetails,
+  getCollectionBySlug,
   getCollectionTranslations,
   getMemoryStats,
 };
@@ -1417,6 +1437,7 @@ module.exports = {
   getMovieLogo,
   getCollectionsList,
   getCollectionDetails,
+  getCollectionBySlug,
   getCollectionTranslations,
   getMemoryStats,
   __privateTvdbCacheNormalizers,

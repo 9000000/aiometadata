@@ -74,6 +74,8 @@ export interface CatalogConfig {
     hideUnreleasedDigital?: boolean;
     identifier?: string;
     url?: string;
+    // TheTVDB list slug, the last path segment of a thetvdb.com/lists link
+    slug?: string;
     // TMDB-specific metadata
     listId?: string;
     listDescription?: string;

@@ -4,7 +4,7 @@
  */
 
 export interface ParsedUrl {
-  service: 'mdblist' | 'trakt' | 'letterboxd' | 'manifest' | 'unknown';
+  service: 'mdblist' | 'trakt' | 'letterboxd' | 'tvdb' | 'manifest' | 'unknown';
   type: 'single-list' | 'user-profile' | 'watchlist' | 'manifest';
   username?: string;
   listSlug?: string;
@@ -33,6 +33,10 @@ const URL_PATTERNS = {
     singleList: /^https?:\/\/(?:www\.)?letterboxd\.com\/([^\/]+)\/list\/([^\/]+)\/?$/,
     // https://letterboxd.com/{username}/watchlist
     watchlist: /^https?:\/\/(?:www\.)?letterboxd\.com\/([^\/]+)\/watchlist\/?$/,
+  },
+  tvdb: {
+    // https://thetvdb.com/lists/{slug}
+    singleList: /^https?:\/\/(?:www\.)?thetvdb\.com\/lists\/([^\/]+)\/?$/,
   },
   manifest: {
     // Any URL ending with /manifest.json
@@ -119,6 +123,17 @@ export function parseQuickAddUrl(url: string): ParsedUrl {
       type: 'watchlist',
       username: letterboxdWatchlistMatch[1],
       url: trimmedUrl,
+    };
+  }
+
+  // Check TheTVDB pattern - strip query params like ?tab=lists
+  const tvdbSingleMatch = stripQueryParams(trimmedUrl).match(URL_PATTERNS.tvdb.singleList);
+  if (tvdbSingleMatch) {
+    return {
+      service: 'tvdb',
+      type: 'single-list',
+      listSlug: decodeURIComponent(tvdbSingleMatch[1]),
+      url: stripQueryParams(trimmedUrl),
     };
   }
 

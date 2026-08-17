@@ -2078,6 +2078,192 @@ addon.get("/api/tvdb/discover/search/:entity", async (req, res) => {
   }
 });
 
+const TVDB_ARTWORK_BASE = 'https://artworks.thetvdb.com';
+
+function tvdbListImageUrl(image) {
+  if (!image || typeof image !== 'string') return '';
+  return image.startsWith('http') ? image : `${TVDB_ARTWORK_BASE}${image.startsWith('/') ? '' : '/'}${image}`;
+}
+
+function normalizeTvdbListRecord(record) {
+  const id = Number(String(record?.tvdb_id ?? record?.id ?? '').replace(/[^0-9]/g, ''));
+  if (!Number.isFinite(id) || id <= 0) return null;
+  const slug = record?.url || record?.slug || '';
+  return {
+    id,
+    name: record?.name || `List ${id}`,
+    overview: record?.overview || record?.overviews?.eng || '',
+    slug,
+    image: tvdbListImageUrl(record?.image || record?.image_url),
+    isOfficial: !!record?.isOfficial,
+    url: `https://thetvdb.com/lists/${slug || id}`
+  };
+}
+
+/**
+ * Fills in what a list's base record leaves out. `/lists` never sets `image`,
+ * and the search index never sets the slug, so both browse and search would
+ * otherwise render art-less cards. The extended record carries both, plus the
+ * entity split, and it is the same globally cached key the collections catalog
+ * already fetches.
+ */
+async function enrichTvdbListRecords(records, config) {
+  const enriched = new Array(records.length);
+  const queue = records.map((record, index) => ({ record, index }));
+  const concurrency = Math.min(
+    parseInt(process.env.TVDB_LIST_ENRICH_CONCURRENCY || '10', 10),
+    queue.length
+  );
+
+  const worker = async () => {
+    while (queue.length) {
+      const { record, index } = queue.shift();
+      let details = null;
+      try {
+        details = await tvdbApi.getCollectionDetails(String(record.id), config);
+      } catch (error) {
+        consola.debug(`[TVDB Lists] Could not enrich list ${record.id}: ${error.message}`);
+      }
+      const entities = Array.isArray(details?.entities) ? details.entities : [];
+      const movieCount = entities.filter(e => e?.movieId).length;
+      const seriesCount = entities.filter(e => e?.seriesId).length;
+      enriched[index] = {
+        ...record,
+        ...(details?.image ? { image: tvdbListImageUrl(details.image) } : {}),
+        ...(details?.url ? { slug: details.url, url: `https://thetvdb.com/lists/${details.url}` } : {}),
+        movieCount,
+        seriesCount,
+        itemCount: movieCount + seriesCount,
+      };
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.max(1, concurrency) }, worker));
+  return enriched.filter(Boolean);
+}
+
+async function buildTvdbListConfig(req, res) {
+  const tvdbApiKey = await resolveTvdbDiscoverApiKey(req);
+  if (!tvdbApiKey) {
+    res.status(400).json({ error: "TVDB API key is required (config.apiKeys.tvdb, TVDB_API_KEY, or BUILT_IN_TVDB_API_KEY)" });
+    return null;
+  }
+  const userUUID = typeof req.query.userUUID === 'string' && req.query.userUUID.trim()
+    ? req.query.userUUID.trim()
+    : undefined;
+  return { apiKeys: { tvdb: tvdbApiKey }, ...(userUUID ? { userUUID } : {}) };
+}
+
+// Proxy: browse TheTVDB lists, one page at a time
+addon.get("/api/tvdb/lists", async (req, res) => {
+  try {
+    const tvdbConfig = await buildTvdbListConfig(req, res);
+    if (!tvdbConfig) return;
+
+    const page = Math.max(0, parseInt(req.query.page, 10) || 0);
+    const results = await cacheWrapGlobal(
+      `tvdb:lists:browse:v2:${page}`,
+      async () => {
+        const records = await tvdbApi.getCollectionsList(tvdbConfig, page);
+        const normalized = (Array.isArray(records) ? records : []).map(normalizeTvdbListRecord).filter(Boolean);
+        return enrichTvdbListRecords(normalized, tvdbConfig);
+      },
+      6 * 60 * 60
+    );
+
+    return res.json({ page, results });
+  } catch (error) {
+    consola.error("[TVDB Lists] Error browsing lists:", error.message);
+    const status = error.response?.status || 500;
+    return res.status(status).json({ error: error.message || "Failed to browse TVDB lists" });
+  }
+});
+
+// Proxy: search TheTVDB lists by name
+addon.get("/api/tvdb/lists/search", async (req, res) => {
+  try {
+    const query = typeof req.query.query === 'string' ? req.query.query.trim() : '';
+    if (!query) {
+      return res.status(400).json({ error: "query is required" });
+    }
+
+    const tvdbConfig = await buildTvdbListConfig(req, res);
+    if (!tvdbConfig) return;
+
+    const results = await cacheWrapGlobal(
+      `tvdb:lists:search:v2:${query.toLowerCase()}`,
+      async () => {
+        const records = await tvdbApi.searchCollections(query, tvdbConfig);
+        const normalized = (Array.isArray(records) ? records : []).map(normalizeTvdbListRecord).filter(Boolean).slice(0, 40);
+        return enrichTvdbListRecords(normalized, tvdbConfig);
+      },
+      60 * 60
+    );
+
+    return res.json({ query, results });
+  } catch (error) {
+    consola.error("[TVDB Lists] Error searching lists:", error.message);
+    const status = error.response?.status || 500;
+    return res.status(status).json({ error: error.message || "Failed to search TVDB lists" });
+  }
+});
+
+// Proxy: resolve a list id, slug or thetvdb.com URL into a previewable record
+addon.get("/api/tvdb/lists/resolve", async (req, res) => {
+  try {
+    const raw = typeof req.query.input === 'string' ? req.query.input.trim() : '';
+    if (!raw) {
+      return res.status(400).json({ error: "input is required" });
+    }
+
+    const tvdbConfig = await buildTvdbListConfig(req, res);
+    if (!tvdbConfig) return;
+
+    const urlMatch = raw.match(/thetvdb\.com\/lists\/([^/?#]+)/i);
+    const candidate = urlMatch ? decodeURIComponent(urlMatch[1]) : raw;
+
+    const preview = await cacheWrapGlobal(
+      `tvdb:lists:resolve:v3:${candidate.toLowerCase()}`,
+      async () => {
+        // A slug can be all digits and still not be an id: list 1 carries the
+        // slug "1001". Every path that feeds this route (a pasted URL, a browse
+        // card, a search card) hands over a slug, so the slug lookup wins and a
+        // bare number only falls back to being an id when no slug matches it.
+        const base = await tvdbApi.getCollectionBySlug(candidate, tvdbConfig);
+        const listId = base?.id
+          ? String(base.id)
+          : (/^\d+$/.test(candidate) ? candidate : null);
+        if (!listId) return null;
+
+        const details = await tvdbApi.getCollectionDetails(listId, tvdbConfig);
+        if (!details?.id) return null;
+
+        const entities = Array.isArray(details.entities) ? details.entities : [];
+        const movieCount = entities.filter(e => e?.movieId).length;
+        const seriesCount = entities.filter(e => e?.seriesId).length;
+
+        return {
+          ...normalizeTvdbListRecord({ ...base, ...details }),
+          movieCount,
+          seriesCount,
+          itemCount: movieCount + seriesCount
+        };
+      },
+      6 * 60 * 60
+    );
+
+    if (!preview) {
+      return res.status(404).json({ error: "No TheTVDB list matched that id or slug" });
+    }
+
+    return res.json(preview);
+  } catch (error) {
+    consola.error("[TVDB Lists] Error resolving list:", error.message);
+    const status = error.response?.status || 500;
+    return res.status(status).json({ error: error.message || "Failed to resolve TVDB list" });
+  }
+});
+
 // AI-powered catalog creation
 const aiCatalogRateLimit = new Map();
 addon.post("/api/ai/create-catalog", async (req, res) => {

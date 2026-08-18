@@ -3732,6 +3732,36 @@ addon.post("/api/managers/credentials", async (req, res) => {
   }
 });
 
+// GET /api/aiomanager/status - Ask an instance whether it serves the Hydra API
+addon.get("/api/aiomanager/status", async (req, res) => {
+  const instanceUrl = typeof req.query.instanceUrl === 'string' ? req.query.instanceUrl.trim() : '';
+  if (!instanceUrl) {
+    return res.status(400).json({ error: "instanceUrl is required" });
+  }
+  let parsed;
+  try {
+    parsed = new URL(instanceUrl);
+  } catch {
+    return res.status(400).json({ error: "instanceUrl must be a valid URL" });
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return res.status(400).json({ error: "instanceUrl must be a http(s) URL" });
+  }
+
+  try {
+    const { httpGet } = require('./utils/httpClient');
+    const response = await httpGet(`${instanceUrl.replace(/\/+$/, '')}/hydra/status`, { timeout: 10000 });
+    // Releases without Hydra answer the SPA catch-all, so HTML means unsupported.
+    if (typeof response.data === 'string' || !response.data?.capabilities) {
+      return res.json({ supported: false });
+    }
+    return res.json({ supported: true, ...response.data });
+  } catch (error) {
+    consola.debug(`[AIOManager Proxy] Status probe failed for ${instanceUrl}: ${error.message}`);
+    return res.json({ supported: false });
+  }
+});
+
 // POST /api/aiomanager/reinstall - Proxy "Sync to AIOManager" to the user's instance (Hydra API)
 addon.post("/api/aiomanager/reinstall", async (req, res) => {
   try {

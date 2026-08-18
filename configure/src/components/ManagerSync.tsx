@@ -29,6 +29,7 @@ interface ManagerDef {
   keyHint: string;
   description: string;
   publicInstances?: { name: string; url: string }[];
+  statusEndpoint?: string;
 }
 
 const MANAGERS: ManagerDef[] = [
@@ -37,14 +38,18 @@ const MANAGERS: ManagerDef[] = [
     name: 'AIOManager',
     endpoint: '/api/aiomanager/reinstall',
     urlPlaceholder: 'https://aio.example.com',
-    keyHint: 'Your AIOManager user UUID (settings → API access)',
+    keyHint: 'Your AIOManager account API key (settings → API access)',
     description: 'Installs or updates this addon in your AIOManager account and propagates it to all your connected platforms.',
     publicInstances: [
+      { name: "Kuu's (beta)", url: 'https://aiomanager-beta.stremio.ru' },
+      { name: "Yeb's (beta)", url: 'https://aiomanager-beta.fortheweak.cloud' },
+      { name: "Ibby's", url: 'https://aiomanager.ibbylabs.dev' },
       { name: 'Elfhosted', url: 'https://aiomanager.elfhosted.com' },
       { name: "Midnight's", url: 'https://aiomanagerfortheweebs.midnightignite.me' },
       { name: "Yeb's", url: 'https://aiomanager.fortheweak.cloud' },
       { name: "Kuu's", url: 'https://aiomanager.stremio.ru' },
     ],
+    statusEndpoint: '/api/aiomanager/status',
   },
 ];
 
@@ -65,6 +70,8 @@ export function ManagerSync({ manifestUrl, onSynced }: ManagerSyncProps) {
   const [apiKey, setApiKey] = useState('');
   const [remember, setRemember] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [support, setSupport] = useState<'unknown' | 'checking' | 'yes' | 'no'>('unknown');
+  const [instanceSupport, setInstanceSupport] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (activeManager) {
@@ -76,6 +83,42 @@ export function ManagerSync({ manifestUrl, onSynced }: ManagerSyncProps) {
       setApiKey(saved?.apiKey || '');
     }
   }, [activeManager, config.managers]);
+
+  useEffect(() => {
+    const endpoint = activeManager?.statusEndpoint;
+    const listed = activeManager?.publicInstances;
+    if (!endpoint || !listed?.length) return;
+    let cancelled = false;
+    Promise.all(listed.map(async instance => {
+      try {
+        const response = await fetch(`${endpoint}?instanceUrl=${encodeURIComponent(instance.url)}`);
+        const data = await response.json();
+        return [instance.url, !!data?.supported] as const;
+      } catch {
+        return [instance.url, false] as const;
+      }
+    })).then(pairs => { if (!cancelled) setInstanceSupport(Object.fromEntries(pairs)); });
+    return () => { cancelled = true; };
+  }, [activeManager]);
+
+  const probeUrl = (selectedInstance === CUSTOM_INSTANCE ? instanceUrl : selectedInstance).trim().replace(/\/+$/, '');
+
+  useEffect(() => {
+    const endpoint = activeManager?.statusEndpoint;
+    if (!activeManager || !endpoint || !probeUrl) {
+      setSupport('unknown');
+      return;
+    }
+    let cancelled = false;
+    setSupport('checking');
+    const timer = setTimeout(() => {
+      fetch(`${endpoint}?instanceUrl=${encodeURIComponent(probeUrl)}`)
+        .then(response => response.json())
+        .then(data => { if (!cancelled) setSupport(data?.supported ? 'yes' : 'no'); })
+        .catch(() => { if (!cancelled) setSupport('unknown'); });
+    }, 400);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [activeManager, probeUrl]);
 
   const handleSync = async () => {
     if (!activeManager) return;
@@ -166,11 +209,15 @@ export function ManagerSync({ manifestUrl, onSynced }: ManagerSyncProps) {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {activeManager.publicInstances.map((instance) => (
-                      <SelectItem key={instance.url} value={instance.url}>
-                        {instance.name} <span className="text-muted-foreground">({instance.url.replace('https://', '')})</span>
-                      </SelectItem>
-                    ))}
+                    {activeManager.publicInstances.map((instance) => {
+                      const unsupported = instanceSupport[instance.url] === false;
+                      return (
+                        <SelectItem key={instance.url} value={instance.url} disabled={unsupported}>
+                          {instance.name} <span className="text-muted-foreground">({instance.url.replace('https://', '')})</span>
+                          {unsupported && <span className="text-muted-foreground"> · no Hydra API</span>}
+                        </SelectItem>
+                      );
+                    })}
                     <SelectItem value={CUSTOM_INSTANCE}>Custom URL…</SelectItem>
                   </SelectContent>
                 </Select>
@@ -194,6 +241,15 @@ export function ManagerSync({ manifestUrl, onSynced }: ManagerSyncProps) {
                 onChange={(e) => setApiKey(e.target.value)}
               />
             </div>
+            {support === 'no' && (
+              <p className="text-xs text-amber-500">
+                This instance does not serve the Hydra API, so it cannot accept a sync. It needs a
+                newer {activeManager?.name} release.
+              </p>
+            )}
+            {support === 'yes' && (
+              <p className="text-xs text-emerald-500">Hydra API available on this instance.</p>
+            )}
             <div className="flex items-center justify-between">
               <Label htmlFor="manager-remember" className="text-sm text-muted-foreground">
                 Remember credentials in my configuration
@@ -207,7 +263,7 @@ export function ManagerSync({ manifestUrl, onSynced }: ManagerSyncProps) {
             <Button
               className="w-full"
               onClick={handleSync}
-              disabled={isSyncing}
+              disabled={isSyncing || support === 'checking' || support === 'no'}
             >
               {isSyncing ? (
                 <>

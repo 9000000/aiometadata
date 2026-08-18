@@ -1556,7 +1556,7 @@ addon.get("/api/mdblist/lists/:username/:listname", async (req, res) => {
 addon.get("/api/mdblist/lists/:listId", async (req, res) => {
   try {
     const { listId } = req.params;
-    const { apikey } = req.query;
+    const apikey = resolveMdblistKey(req.query.apikey);
     
     if (!apikey) {
       return res.status(400).json({ error: "apikey is required" });

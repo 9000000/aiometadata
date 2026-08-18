@@ -767,11 +767,12 @@ function LabelWithTooltip({
 }
 
 export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customizeTemplate }: DiscoverBuilderDialogProps) {
-  const { config, setConfig, catalogTTL, auth } = useConfig();
+  const { config, setConfig, catalogTTL, auth, hasBuiltInMdblist } = useConfig();
   const tmdbApiKey = config.apiKeys?.tmdb?.trim() || '';
   const tvdbApiKey = config.apiKeys?.tvdb?.trim() || '';
   const mdblistApiKey = config.apiKeys?.mdblist?.trim() || '';
-  const hasMdblistApiKey = mdblistApiKey.length > 0;
+  // Discover queries are not account-scoped, so the instance key covers them.
+  const hasMdblistApiKey = mdblistApiKey.length > 0 || hasBuiltInMdblist;
   const [simklClientId, setSimklClientId] = useState<string>("");
   
   useEffect(() => {

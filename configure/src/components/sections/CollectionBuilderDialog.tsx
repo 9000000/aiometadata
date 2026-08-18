@@ -43,6 +43,7 @@ import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useConfig } from '@/contexts/ConfigContext';
+import type { CatalogConfig } from '@/contexts/config';
 import { useSave } from '@/contexts/SaveContext';
 import { getSourceBadgeStyle } from '@/lib/sourceBadges';
 

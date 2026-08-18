@@ -1429,6 +1429,43 @@ addon.get("/api/mdblist/lists/user", async (req, res) => {
   }
 });
 
+// Proxy: Search public lists by name, ordered by popularity
+addon.get("/api/mdblist/lists/search", async (req, res) => {
+  try {
+    const query = typeof req.query.query === 'string' ? req.query.query.trim() : '';
+    if (!query) {
+      return res.status(400).json({ error: "query is required" });
+    }
+
+    const apikey = resolveMdblistKey(req.query.apikey);
+    if (!apikey) {
+      return res.status(400).json({ error: "apikey is required" });
+    }
+
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 40, 1), 100);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const url = `https://api.mdblist.com/lists/search?apikey=${apikey}&query=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}`;
+
+    const payload = await cacheWrapGlobal(
+      mdblistCacheKey(['lists', 'search', query.toLowerCase(), String(limit), String(offset)], apikey),
+      async () => {
+        const response = await makeRateLimitedMDBListRequest(url, apikey, 'MDBList Proxy - Search Lists');
+        return {
+          results: Array.isArray(response.data) ? response.data : [],
+          hasMore: String(response.headers?.['x-has-more'] ?? '').toLowerCase() === 'true',
+          totalItems: parseInt(response.headers?.['x-total-items'], 10) || 0,
+        };
+      },
+      MDBLIST_LIST_CACHE_TTL
+    );
+    res.json(payload);
+  } catch (error) {
+    consola.error("[MDBList Proxy] Error searching lists:", error.message);
+    const status = error.response?.status || 500;
+    res.status(status).json({ error: error.message || "Failed to search lists" });
+  }
+});
+
 // Proxy: Get top lists
 addon.get("/api/mdblist/lists/top", async (req, res) => {
   try {
@@ -2125,6 +2162,9 @@ async function enrichTvdbListRecords(records, config) {
         ...record,
         ...(details?.image ? { image: tvdbListImageUrl(details.image) } : {}),
         ...(details?.url ? { slug: details.url, url: `https://thetvdb.com/lists/${details.url}` } : {}),
+        ...(details?.overview && !record.overview ? { overview: details.overview } : {}),
+        // Search results omit isOfficial entirely, so it only ever arrives here.
+        isOfficial: typeof details?.isOfficial === 'boolean' ? details.isOfficial : !!record.isOfficial,
         movieCount,
         seriesCount,
         itemCount: movieCount + seriesCount,
@@ -2185,11 +2225,16 @@ addon.get("/api/tvdb/lists/search", async (req, res) => {
     if (!tvdbConfig) return;
 
     const results = await cacheWrapGlobal(
-      `tvdb:lists:search:v2:${query.toLowerCase()}`,
+      `tvdb:lists:search:v3:${query.toLowerCase()}`,
       async () => {
         const records = await tvdbApi.searchCollections(query, tvdbConfig);
         const normalized = (Array.isArray(records) ? records : []).map(normalizeTvdbListRecord).filter(Boolean).slice(0, 40);
-        return enrichTvdbListRecords(normalized, tvdbConfig);
+        const enriched = await enrichTvdbListRecords(normalized, tvdbConfig);
+        // thetvdb.com only surfaces official lists, so match that ranking rather
+        // than the search index order, which buries them among unpublished ones.
+        return enriched.sort((a, b) =>
+          (Number(b.isOfficial) - Number(a.isOfficial)) || (b.itemCount - a.itemCount)
+        );
       },
       60 * 60
     );

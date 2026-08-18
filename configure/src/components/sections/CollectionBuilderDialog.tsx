@@ -75,6 +75,7 @@ import {
   findUnknownSources,
   healSourceNames,
   loadCatalogSources,
+  deriveManifestCatalog,
   realignSourceIds,
   sourceFromCatalog,
   stripManifestSuffix,
@@ -659,6 +660,16 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       return;
     }
     onClose();
+  };
+
+  const handleCreateSources = (created: CatalogConfig[]) => {
+    if (created.length === 0) return;
+    setConfig(prev => {
+      const known = new Set(prev.catalogs.map(catalog => `${catalog.id}:${catalog.type}`));
+      const fresh = created.filter(catalog => !known.has(`${catalog.id}:${catalog.type}`));
+      return fresh.length > 0 ? { ...prev, catalogs: [...prev.catalogs, ...fresh] } : prev;
+    });
+    handlePick(created.map(deriveManifestCatalog));
   };
 
   const handlePick = (picked: ManifestCatalog[]) => {
@@ -2319,6 +2330,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
         existingKeys={pickerExistingKeys}
         tagOptions={tagOptions}
         onConfirm={handlePick}
+        onCreate={handleCreateSources}
         onClose={() => setPickerTarget(null)}
       />
     </>

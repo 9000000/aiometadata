@@ -604,6 +604,20 @@ export async function find(params: any, config: UserConfig) {
   return makeTmdbRequest(`/find/${params.id}`, getApiKey(config), { external_source: params.external_source }, 'GET', null, config);
 }
 
+export async function collectionInfo(params: any, config: UserConfig) {
+  const { id, ...queryParams } = params;
+  const normalizedQueryParams = normalizeTmdbCacheQueryParams(queryParams);
+  const cacheKey = `tmdb:collection:detail:${id}${getTmdbQueryCacheSuffix(normalizedQueryParams)}`;
+  return cacheWrapGlobal(cacheKey, () =>
+    makeTmdbRequest(`/collection/${id}`, getApiKey(config), normalizedQueryParams, 'GET', null, config),
+    24 * 60 * 60
+  );
+}
+
+export async function searchCollection(params: any, config: UserConfig) {
+  return makeTmdbRequest('/search/collection', getApiKey(config), params, 'GET', null, config);
+}
+
 export async function discoverMovie(params: any, config: UserConfig) {
   return makeTmdbRequest('/discover/movie', getApiKey(config), params, 'GET', null, config);
 }
@@ -1079,6 +1093,8 @@ module.exports = {
   primaryTranslations,
   discoverMovie,
   discoverTv,
+  collectionInfo,
+  searchCollection,
   seasonInfo,
   trending,
   genreMovieList,

@@ -1147,6 +1147,82 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
     }
   }
 
+  // Handle TMDB Collection catalogs (tmdb.collection.{collectionId})
+  if (id.startsWith('tmdb.collection.')) {
+    logger.info(`Fetching TMDB collection catalog: ${id}, Page: ${page}`);
+
+    const collectionId = id.split('.')[2];
+    if (!collectionId) {
+      logger.error(`[TMDB Collection] Invalid collection id format: ${id}`);
+      return [];
+    }
+
+    const catalogConfig = config.catalogs?.find(c => c.id === id && c.type === type)
+      || config.catalogs?.find(c => c.id === id);
+    const collectionMeta = catalogConfig?.metadata || {};
+
+    try {
+      const collection = await moviedb.collectionInfo({ id: collectionId, language }, config);
+      let parts = Array.isArray(collection?.parts) ? [...collection.parts] : [];
+      if (!parts.length) {
+        logger.info(`[TMDB Collection] Collection ${collectionId} has no parts`);
+        return [];
+      }
+
+      if (config.sfw || !config.includeAdult) {
+        parts = parts.filter((part: any) => !part?.adult);
+      }
+      if (collectionMeta.hideUnreleased) {
+        const today = new Date().toISOString().slice(0, 10);
+        parts = parts.filter((part: any) => part?.release_date && part.release_date <= today);
+      }
+
+      if (genre && genre.toLowerCase() !== 'none') {
+        const genreList = await getGenreList('tmdb', language, 'movie', config);
+        const genreObj = genreList.find(g => g.name === genre);
+        if (genreObj) {
+          parts = parts.filter((part: any) => Array.isArray(part?.genre_ids) && part.genre_ids.includes(genreObj.id));
+        } else {
+          logger.warn(`[TMDB Collection] Genre "${genre}" not found`);
+        }
+        if (!parts.length) return [];
+      }
+
+      // TMDB returns parts in no particular order: the Bond collection starts at 1973.
+      const undatedLast = collectionMeta.sortDirection === 'desc' ? '' : '9999-99-99';
+      parts.sort((a: any, b: any) => {
+        const left = a?.release_date || undatedLast;
+        const right = b?.release_date || undatedLast;
+        return collectionMeta.sortDirection === 'desc' ? right.localeCompare(left) : left.localeCompare(right);
+      });
+
+      const pageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE as string) || 20;
+      const pageNum = typeof page === 'number' ? page : parseInt(String(page), 10) || 1;
+      const pageParts = parts.slice((pageNum - 1) * pageSize, (pageNum - 1) * pageSize + pageSize);
+      if (!pageParts.length) return [];
+
+      const metas = await mapWithLimit(pageParts, async (part: any) => {
+        const stremioId = `tmdb:${part.id}`;
+        try {
+          const result = await cacheWrapMetaSmart(userUUID, stremioId, async () => {
+            return await getMeta('movie', language, stremioId, config, userUUID, includeVideos);
+          }, undefined, { enableErrorCaching: true, maxRetries: 2, config }, 'movie' as any, includeVideos);
+          return result?.meta || null;
+        } catch (error: any) {
+          logger.warn(`[TMDB Collection] Failed to get meta for ${stremioId}: ${error.message}`);
+          return null;
+        }
+      });
+
+      const validMetas = metas.filter((meta: any) => meta !== null);
+      logger.success(`[TMDB Collection] Processed ${validMetas.length} items for ${id} (page ${pageNum})`);
+      return validMetas;
+    } catch (error: any) {
+      logger.error(`[TMDB Collection] Error fetching collection ${collectionId}: ${error.message}`);
+      return [];
+    }
+  }
+
   // Handle TMDB List catalogs (tmdb.list.{listId} or tmdb.list.{listId}.movies/series)
   if (id.startsWith('tmdb.list.')) {
     logger.info(`Fetching TMDB list catalog: ${id}, Type: ${type}, Page: ${page}, Genre: ${genre}`);

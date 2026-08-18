@@ -388,6 +388,55 @@ export function createTvdbListCatalogs(options: TvdbListCatalogOptions): Catalog
 }
 
 // ============================================================================
+// TMDB Collection Catalog Creation
+// ============================================================================
+
+export interface TmdbCollectionPreview {
+  id: number;
+  name: string;
+  overview?: string;
+  poster?: string;
+  backdrop?: string;
+  url?: string;
+  itemCount?: number;
+}
+
+export interface TmdbCollectionCatalogOptions {
+  collection: TmdbCollectionPreview;
+  sortDirection?: 'asc' | 'desc';
+  hideUnreleased?: boolean;
+  cacheTTL?: number;
+  displayTypeOverrides?: { movie?: string; series?: string };
+}
+
+/** Creates a movie catalog for a TMDB collection. Collections never hold series. */
+export function createTmdbCollectionCatalog(options: TmdbCollectionCatalogOptions): CatalogConfig {
+  const { collection, sortDirection = 'asc', hideUnreleased = false, cacheTTL, displayTypeOverrides } = options;
+  const displayType = getDisplayTypeOverride('movie', displayTypeOverrides);
+
+  return {
+    id: `tmdb.collection.${collection.id}`,
+    type: 'movie',
+    name: collection.name,
+    enabled: true,
+    showInHome: true,
+    source: 'tmdb',
+    enableRatingPosters: true,
+    ...(cacheTTL ? { cacheTTL } : {}),
+    ...(displayType && { displayType }),
+    metadata: {
+      listId: String(collection.id),
+      listName: collection.name,
+      ...(collection.overview ? { description: collection.overview } : {}),
+      ...(collection.itemCount !== undefined ? { itemCount: collection.itemCount } : {}),
+      sortDirection,
+      ...(hideUnreleased ? { hideUnreleased: true } : {}),
+      url: collection.url || `https://www.themoviedb.org/collection/${collection.id}`,
+    },
+  };
+}
+
+// ============================================================================
 // Custom Manifest Catalog Creation
 // ============================================================================
 

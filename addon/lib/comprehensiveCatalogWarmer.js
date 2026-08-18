@@ -519,6 +519,7 @@ class ComprehensiveCatalogWarmer {
         catalogId.startsWith('movielens.') ||
         catalogId.startsWith('publicmetadb.') ||
         catalogId.startsWith('tmdb.discover') ||
+        catalogId.startsWith('tmdb.collection.') ||
         catalogId.startsWith('tvdb.discover') ||
         catalogId.startsWith('tvdb.list.') ||
         catalogId.startsWith('mal.discover')  ||

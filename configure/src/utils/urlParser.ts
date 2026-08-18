@@ -4,7 +4,7 @@
  */
 
 export interface ParsedUrl {
-  service: 'mdblist' | 'trakt' | 'letterboxd' | 'tvdb' | 'manifest' | 'unknown';
+  service: 'mdblist' | 'trakt' | 'letterboxd' | 'tvdb' | 'tmdb' | 'manifest' | 'unknown';
   type: 'single-list' | 'user-profile' | 'watchlist' | 'manifest';
   username?: string;
   listSlug?: string;
@@ -37,6 +37,10 @@ const URL_PATTERNS = {
   tvdb: {
     // https://thetvdb.com/lists/{slug}
     singleList: /^https?:\/\/(?:www\.)?thetvdb\.com\/lists\/([^\/]+)\/?$/,
+  },
+  tmdb: {
+    // https://www.themoviedb.org/collection/{id}-{slug}
+    collection: /^https?:\/\/(?:www\.)?themoviedb\.org\/collection\/(\d+)(?:-[^\/]*)?\/?$/,
   },
   manifest: {
     // Any URL ending with /manifest.json
@@ -133,6 +137,17 @@ export function parseQuickAddUrl(url: string): ParsedUrl {
       service: 'tvdb',
       type: 'single-list',
       listSlug: decodeURIComponent(tvdbSingleMatch[1]),
+      url: stripQueryParams(trimmedUrl),
+    };
+  }
+
+  // Check TMDB collection pattern - strip query params like ?language=en
+  const tmdbCollectionMatch = stripQueryParams(trimmedUrl).match(URL_PATTERNS.tmdb.collection);
+  if (tmdbCollectionMatch) {
+    return {
+      service: 'tmdb',
+      type: 'single-list',
+      listSlug: tmdbCollectionMatch[1],
       url: stripQueryParams(trimmedUrl),
     };
   }

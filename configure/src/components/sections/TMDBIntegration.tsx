@@ -6,7 +6,10 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ExternalLink, Trash2, Plus, Loader2, AlertCircle, LogIn, LogOut, CheckCircle } from 'lucide-react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
+import { createTmdbCollectionCatalog, TmdbCollectionPreview } from '@/utils/catalogUtils';
+import { ExternalLink, Trash2, Plus, Loader2, AlertCircle, LogIn, LogOut, CheckCircle, Search } from 'lucide-react';
 import { toast } from "sonner";
 import { apiCache } from '@/utils/apiCache';
 
@@ -26,13 +29,19 @@ const getDisplayTypeOverride = (
 };
 
 export function TMDBIntegration({ isOpen, onClose }: TMDBIntegrationProps) {
-  const { config, setConfig, sessionId, setSessionId, auth } = useConfig();
+  const { config, setConfig, sessionId, setSessionId, auth, catalogTTL } = useConfig();
   const [customListUrl, setCustomListUrl] = useState("");
   const [customListType, setCustomListType] = useState<'all' | 'split'>('all');
   const [listPreview, setListPreview] = useState<any>(null);
   const [listPreviewPending, setListPreviewPending] = useState(false);
   const [tmdbAuthLoading, setTmdbAuthLoading] = useState(false);
   const [tmdbAuthError, setTmdbAuthError] = useState('');
+  const [collectionQuery, setCollectionQuery] = useState('');
+  const [collectionResults, setCollectionResults] = useState<TmdbCollectionPreview[]>([]);
+  const [isSearchingCollections, setIsSearchingCollections] = useState(false);
+  const [collectionPreview, setCollectionPreview] = useState<TmdbCollectionPreview | null>(null);
+  const [collectionSort, setCollectionSort] = useState<'asc' | 'desc'>('asc');
+  const [collectionHideUnreleased, setCollectionHideUnreleased] = useState(false);
 
   const tmdbApiKey = config.apiKeys?.tmdb;
   const isValid = !!tmdbApiKey;
@@ -390,6 +399,84 @@ export function TMDBIntegration({ isOpen, onClose }: TMDBIntegrationProps) {
     setListPreview(null);
   };
 
+  const tmdbCollectionCatalogs = config.catalogs.filter(c => c.id.startsWith('tmdb.collection.'));
+
+  const collectionQueryParams = (extra: Record<string, string>) => {
+    const params = new URLSearchParams({ ...extra, language: config.language || 'en-US' });
+    if (tmdbApiKey) params.set('apikey', tmdbApiKey);
+    if (auth?.userUUID) params.set('userUUID', auth.userUUID);
+    return params.toString();
+  };
+
+  const resolveCollection = async (input: string) => {
+    try {
+      const res = await fetch(`/api/tmdb/collections/resolve?${collectionQueryParams({ input })}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not load that collection');
+      setCollectionPreview(data);
+      setCollectionSort('asc');
+      setCollectionHideUnreleased(false);
+    } catch (error: any) {
+      toast.error('Could not load that collection', { description: error.message });
+    }
+  };
+
+  const handleCollectionSearch = async () => {
+    const raw = collectionQuery.trim();
+    if (!raw) return;
+
+    setIsSearchingCollections(true);
+    try {
+      const looksLikeId = /^\d+$/.test(raw) || /themoviedb\.org\/collection\//i.test(raw);
+      if (looksLikeId) {
+        setCollectionResults([]);
+        await resolveCollection(raw);
+        return;
+      }
+
+      const res = await fetch(`/api/tmdb/collections/search?${collectionQueryParams({ query: raw })}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Search failed');
+      setCollectionResults(data.results || []);
+      setCollectionPreview(null);
+      if (!data.results?.length) {
+        toast.info('No collections matched that search');
+      }
+    } catch (error: any) {
+      toast.error('Search failed', { description: error.message });
+    } finally {
+      setIsSearchingCollections(false);
+    }
+  };
+
+  const handleAddCollection = () => {
+    if (!collectionPreview) return;
+
+    const newCatalog = createTmdbCollectionCatalog({
+      collection: collectionPreview,
+      sortDirection: collectionSort,
+      hideUnreleased: collectionHideUnreleased,
+      cacheTTL: catalogTTL,
+      displayTypeOverrides: config.displayTypeOverrides,
+    });
+
+    if (config.catalogs.some(c => c.id === newCatalog.id)) {
+      toast.error('Collection already added', {
+        description: 'This TMDB collection is already in your catalogs'
+      });
+      return;
+    }
+
+    setConfig(prev => ({ ...prev, catalogs: [...prev.catalogs, newCatalog] }));
+    toast.success('Collection added', {
+      description: `${collectionPreview.name} with ${collectionPreview.itemCount} movies has been added`
+    });
+
+    setCollectionPreview(null);
+    setCollectionResults([]);
+    setCollectionQuery('');
+  };
+
   const handleRemoveList = (catalogId: string) => {
     const catalog = config.catalogs.find(c => c.id === catalogId);
     setConfig(prev => ({
@@ -495,10 +582,10 @@ export function TMDBIntegration({ isOpen, onClose }: TMDBIntegrationProps) {
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
+      <DialogContent className="@container grid h-[100dvh] max-h-[100dvh] w-screen max-w-none grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden rounded-none p-0 sm:h-[92vh] sm:max-h-[92vh] sm:w-[min(96vw,90rem)] sm:rounded-2xl sm:p-0">
+        <DialogHeader className="space-y-1 border-b px-5 py-4 text-left">
           <DialogTitle className="flex items-center gap-2">
-            TMDB Lists Integration
+            TMDB Integration
             <a
               href="https://www.themoviedb.org/list"
               target="_blank"
@@ -509,13 +596,13 @@ export function TMDBIntegration({ isOpen, onClose }: TMDBIntegrationProps) {
             </a>
           </DialogTitle>
           <DialogDescription>
-            Import and manage custom lists from The Movie Database (TMDB)
+            Import lists and collections from The Movie Database (TMDB)
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6">
+        <div className="min-h-0 overflow-hidden">
           {!isValid && (
-            <div className="flex items-start gap-2 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
+            <div className="m-5 flex items-start gap-2 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
               <AlertCircle className="h-5 w-5 text-yellow-500 shrink-0 mt-0.5" />
               <div className="space-y-1">
                 <p className="text-sm font-medium">TMDB API Key Required</p>
@@ -527,7 +614,15 @@ export function TMDBIntegration({ isOpen, onClose }: TMDBIntegrationProps) {
           )}
 
           {isValid && (
-            <>
+            <Tabs defaultValue="lists" className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-0">
+              <TabsList className="mx-5 mt-4 grid grid-cols-3">
+                <TabsTrigger value="lists">Lists</TabsTrigger>
+                <TabsTrigger value="collections">Collections</TabsTrigger>
+                <TabsTrigger value="account">Account</TabsTrigger>
+              </TabsList>
+
+              <div className="min-h-0 overflow-y-auto px-5 py-4">
+              <TabsContent value="account" className="mt-0 space-y-6">
               {/* TMDB Authentication */}
               <Card>
                 <CardHeader>
@@ -725,6 +820,9 @@ export function TMDBIntegration({ isOpen, onClose }: TMDBIntegrationProps) {
                 </Card>
               )}
 
+              </TabsContent>
+
+              <TabsContent value="lists" className="mt-0 space-y-6">
               {/* Add Custom List */}
               <Card>
                 <CardHeader>
@@ -855,11 +953,152 @@ export function TMDBIntegration({ isOpen, onClose }: TMDBIntegrationProps) {
                   </CardContent>
                 </Card>
               )}
-            </>
+              </TabsContent>
+
+              <TabsContent value="collections" className="mt-0 space-y-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Add a Collection</CardTitle>
+                    <CardDescription>
+                      Search TMDB collections, or paste a collection id or themoviedb.org link
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="The Avengers, 86311, or a themoviedb.org/collection link"
+                        value={collectionQuery}
+                        onChange={(e) => setCollectionQuery(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleCollectionSearch(); }}
+                        disabled={isSearchingCollections}
+                      />
+                      <Button onClick={handleCollectionSearch} disabled={!collectionQuery.trim() || isSearchingCollections}>
+                        {isSearchingCollections ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                      </Button>
+                    </div>
+
+                    {collectionPreview && (
+                      <div className="flex flex-col gap-4 rounded-lg border p-4 sm:flex-row">
+                        {collectionPreview.poster && (
+                          <img src={collectionPreview.poster} alt="" className="w-24 shrink-0 self-start rounded border object-cover" />
+                        )}
+                        <div className="min-w-0 flex-1 space-y-4">
+                          <div className="space-y-1">
+                            <h3 className="break-words font-semibold">{collectionPreview.name}</h3>
+                            <p className="text-sm text-muted-foreground">
+                              {collectionPreview.itemCount} movies
+                            </p>
+                            {collectionPreview.overview && (
+                              <p className="line-clamp-3 text-sm text-muted-foreground">{collectionPreview.overview}</p>
+                            )}
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label htmlFor="tmdb-collection-sort">Order</Label>
+                            <Select value={collectionSort} onValueChange={(v) => setCollectionSort(v as 'asc' | 'desc')}>
+                              <SelectTrigger id="tmdb-collection-sort">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="asc">Oldest release first</SelectItem>
+                                <SelectItem value="desc">Newest release first</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-3">
+                            <Label htmlFor="tmdb-collection-unreleased" className="text-sm font-normal">
+                              Hide unreleased entries
+                            </Label>
+                            <Switch
+                              id="tmdb-collection-unreleased"
+                              checked={collectionHideUnreleased}
+                              onCheckedChange={setCollectionHideUnreleased}
+                            />
+                          </div>
+
+                          <Button className="w-full" onClick={handleAddCollection}>
+                            <Plus className="mr-2 h-4 w-4" /> Add to catalogs
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    {collectionResults.length > 0 && (
+                      <div className="grid grid-cols-3 gap-3 @2xl:grid-cols-6 @5xl:grid-cols-8">
+                        {collectionResults.map((collection) => {
+                          const selected = collectionPreview?.id === collection.id;
+                          return (
+                            <button
+                              key={collection.id}
+                              type="button"
+                              onClick={() => resolveCollection(String(collection.id))}
+                              title={collection.overview || collection.name}
+                              className={`group flex flex-col overflow-hidden rounded-lg border text-left transition-colors ${
+                                selected ? 'border-primary ring-1 ring-primary' : 'hover:border-muted-foreground/40'
+                              }`}
+                            >
+                              <div className="relative aspect-[2/3] bg-muted">
+                                {collection.poster ? (
+                                  <img src={collection.poster} alt="" loading="lazy" className="absolute inset-0 h-full w-full object-cover" />
+                                ) : (
+                                  <div className="absolute inset-0 flex items-center justify-center p-2 text-center text-xs text-muted-foreground">
+                                    {collection.name}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="p-2">
+                                <div className="line-clamp-2 text-xs font-medium leading-tight">{collection.name}</div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                  </CardContent>
+                </Card>
+
+                {tmdbCollectionCatalogs.length > 0 && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Your TMDB Collections</CardTitle>
+                      <CardDescription>
+                        {tmdbCollectionCatalogs.length} collection{tmdbCollectionCatalogs.length !== 1 ? 's' : ''} added
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-2">
+                      {tmdbCollectionCatalogs.map((catalog) => (
+                        <div
+                          key={catalog.id}
+                          className="flex items-center justify-between gap-2 rounded-lg border bg-muted/30 p-3"
+                        >
+                          <div className="min-w-0 flex-1 space-y-0.5">
+                            <span className="break-words font-medium">{catalog.name}</span>
+                            <p className="text-xs text-muted-foreground">
+                              {catalog.metadata?.itemCount ? `${catalog.metadata.itemCount} movies` : 'Movies'}
+                              {catalog.metadata?.sortDirection === 'desc' ? ' • newest first' : ''}
+                            </p>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleRemoveList(catalog.id)}
+                            className="shrink-0"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ))}
+                    </CardContent>
+                  </Card>
+                )}
+              </TabsContent>
+              </div>
+            </Tabs>
           )}
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="border-t px-5 py-3 sm:justify-end">
           <Button onClick={onClose} variant="outline">
             Close
           </Button>

@@ -3453,6 +3453,7 @@ const SortableCatalogItem = React.memo(({ catalog, onEditDiscover, onCustomize, 
             (catalog.source === 'letterboxd' && (catalog as any).metadata?.url) ||
             (catalog.source === 'trakt' && ((catalog as any).metadata?.url || catalog.id.startsWith('trakt.list.') || (catalog.id.startsWith('trakt.') && (catalog as any).metadata?.author))) ||
             (catalog.source === 'tmdb' && catalog.id.startsWith('tmdb.list.') && ((catalog as any).metadata?.url || (catalog as any).metadata?.listId)) ||
+            (catalog.source === 'tmdb' && catalog.id.startsWith('tmdb.collection.')) ||
             (catalog.source === 'tvdb' && catalog.id.startsWith('tvdb.list.') && ((catalog as any).metadata?.url || (catalog as any).metadata?.slug)) ||
             (catalog.source === 'anilist' && catalog.id.startsWith('anilist.') && ((catalog as any).metadata?.url || ((catalog as any).metadata?.username && (catalog as any).metadata?.listName)))) && (
             <Tooltip>
@@ -3492,6 +3493,9 @@ const SortableCatalogItem = React.memo(({ catalog, onEditDiscover, onCustomize, 
                           listUrl = `https://trakt.tv/users/${username}/lists/${listSlug}`;
                         }
                       }
+                    } else if (catalog.source === 'tmdb' && catalog.id.startsWith('tmdb.collection.')) {
+                      listUrl = (catalog as any).metadata?.url
+                        || `https://www.themoviedb.org/collection/${catalog.id.replace('tmdb.collection.', '')}`;
                     } else if (catalog.source === 'tmdb' && catalog.id.startsWith('tmdb.list.')) {
                       listUrl = (catalog as any).metadata?.url || null;
                       

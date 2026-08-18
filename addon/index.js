@@ -2255,6 +2255,91 @@ addon.get("/api/tvdb/lists/resolve", async (req, res) => {
   }
 });
 
+function normalizeTmdbCollection(record) {
+  const id = Number(record?.id);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  return {
+    id,
+    name: record?.name || `Collection ${id}`,
+    overview: record?.overview || '',
+    poster: record?.poster_path ? `https://image.tmdb.org/t/p/w342${record.poster_path}` : '',
+    backdrop: record?.backdrop_path ? `https://image.tmdb.org/t/p/w780${record.backdrop_path}` : '',
+    url: `https://www.themoviedb.org/collection/${id}`
+  };
+}
+
+// Proxy: search TMDB collections by name
+addon.get("/api/tmdb/collections/search", async (req, res) => {
+  try {
+    const query = typeof req.query.query === 'string' ? req.query.query.trim() : '';
+    if (!query) {
+      return res.status(400).json({ error: "query is required" });
+    }
+    const apikey = await resolveTmdbDiscoverApiKey(req);
+    if (!apikey) {
+      return res.status(400).json({ error: "TMDB API key is required" });
+    }
+
+    const language = typeof req.query.language === 'string' && req.query.language.trim()
+      ? req.query.language.trim()
+      : 'en-US';
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+
+    const data = await moviedb.searchCollection({ query, page, language }, { apiKeys: { tmdb: apikey } });
+    const results = (data?.results || []).map(normalizeTmdbCollection).filter(Boolean);
+
+    return res.json({ query, page, totalPages: data?.total_pages || 1, totalResults: data?.total_results || 0, results });
+  } catch (error) {
+    consola.error("[TMDB Collections] Error searching:", error.message);
+    const status = error.response?.status || 500;
+    return res.status(status).json({ error: error.message || "Failed to search TMDB collections" });
+  }
+});
+
+// Proxy: resolve a collection id or themoviedb.org/collection URL into a previewable record
+addon.get("/api/tmdb/collections/resolve", async (req, res) => {
+  try {
+    const raw = typeof req.query.input === 'string' ? req.query.input.trim() : '';
+    if (!raw) {
+      return res.status(400).json({ error: "input is required" });
+    }
+    const apikey = await resolveTmdbDiscoverApiKey(req);
+    if (!apikey) {
+      return res.status(400).json({ error: "TMDB API key is required" });
+    }
+
+    const urlMatch = raw.match(/themoviedb\.org\/collection\/(\d+)/i);
+    const collectionId = urlMatch ? urlMatch[1] : (/^\d+/.test(raw) ? raw.match(/^\d+/)[0] : null);
+    if (!collectionId) {
+      return res.status(400).json({ error: "Enter a collection id or a themoviedb.org/collection link" });
+    }
+
+    const language = typeof req.query.language === 'string' && req.query.language.trim()
+      ? req.query.language.trim()
+      : 'en-US';
+
+    const collection = await moviedb.collectionInfo({ id: collectionId, language }, { apiKeys: { tmdb: apikey } });
+    if (!collection?.id) {
+      return res.status(404).json({ error: "No TMDB collection matched that id" });
+    }
+
+    const parts = Array.isArray(collection.parts) ? collection.parts : [];
+    const dated = parts.filter(p => p?.release_date).map(p => p.release_date).sort();
+
+    return res.json({
+      ...normalizeTmdbCollection(collection),
+      itemCount: parts.length,
+      undatedCount: parts.length - dated.length,
+      firstRelease: dated[0] || null,
+      lastRelease: dated[dated.length - 1] || null
+    });
+  } catch (error) {
+    consola.error("[TMDB Collections] Error resolving:", error.message);
+    const status = error.response?.status || 500;
+    return res.status(status).json({ error: error.message || "Failed to resolve TMDB collection" });
+  }
+});
+
 // AI-powered catalog creation
 const aiCatalogRateLimit = new Map();
 addon.post("/api/ai/create-catalog", async (req, res) => {

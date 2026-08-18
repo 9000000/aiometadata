@@ -91,8 +91,8 @@ export function BulkActionBar({
   // Determine which actions are applicable
   const hasDisabledCatalogs = selectedCatalogs.some(c => !c.enabled);
   const hasEnabledCatalogs = selectedCatalogs.some(c => c.enabled);
-  const hasNotInHome = selectedCatalogs.some(c => !c.showInHome);
-  const hasInHome = selectedCatalogs.some(c => c.showInHome);
+  const hasNotInHome = selectedCatalogs.some(c => c.enabled && !c.showInHome);
+  const hasInHome = selectedCatalogs.some(c => c.enabled && c.showInHome);
   const hasRemovableCatalogs = selectedCatalogs.some(c => c.source !== 'merged');
   const hasRatingPostersDisabled = selectedCatalogs.some(c => c.enableRatingPosters === false);
   const hasRatingPostersEnabled = selectedCatalogs.some(c => c.enableRatingPosters !== false);

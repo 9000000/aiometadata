@@ -124,7 +124,7 @@ export function SetupPage({
         if (disabledKeys.size > 0) {
           next.catalogs = next.catalogs.map(catalog =>
             disabledKeys.has(`${catalog.id}:${catalog.type}`)
-              ? { ...catalog, enabled: false, showInHome: false }
+              ? { ...catalog, enabled: false }
               : catalog
           );
         }

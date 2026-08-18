@@ -2432,10 +2432,7 @@ const MergedCatalogCard = ({
   };
 
   const handleToggleEnabled = () => {
-    updateCatalog(c => {
-      const isNowEnabled = !c.enabled;
-      return { ...c, enabled: isNowEnabled, showInHome: isNowEnabled ? c.showInHome : false };
-    });
+    updateCatalog(c => ({ ...c, enabled: !c.enabled }));
   };
 
   const handleToggleShowInHome = () => {
@@ -2658,7 +2655,7 @@ const MergedCatalogCard = ({
                   <Home className={`h-5 w-5 ${catalog.showInHome && catalog.enabled ? 'text-blue-400' : 'text-muted-foreground'}`} />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{catalog.showInHome ? 'Remove from Home' : 'Show on Home'}</TooltipContent>
+              <TooltipContent>{catalog.showInHome && catalog.enabled ? 'Remove from Home' : 'Show on Home'}</TooltipContent>
             </Tooltip>
             {hasRatingPosters && (
               <Tooltip>
@@ -4322,8 +4319,7 @@ function CatalogsSettingsContent({
             const shouldDisable = catalogsToDisable.some(
               cat => `${cat.id}-${cat.type}` === catalogKey
             );
-            // When disabling, also set showInHome to false
-            return shouldDisable ? { ...c, enabled: false, showInHome: false } : c;
+            return shouldDisable ? { ...c, enabled: false } : c;
           })
         }));
       }

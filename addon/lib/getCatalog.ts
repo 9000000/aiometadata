@@ -943,6 +943,7 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
     // Handle different watchlist catalog IDs
     let listId: string;
     let unified: boolean | undefined;
+    let mediaTypeFilter: string | undefined;
     
     if (id === 'mdblist.watchlist') {
       // Unified watchlist
@@ -953,8 +954,11 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
       listId = 'watchlist';
       unified = false;
     } else if (id.startsWith('mdblist.recommended.')) {
-      listId = `recommended/${id.split('.')[2]}`;
+      const parts = id.split('.');
+      listId = `recommended/${parts[2]}`;
       unified = true;
+      if (parts[3] === 'movies') mediaTypeFilter = 'movie';
+      else if (parts[3] === 'series') mediaTypeFilter = 'show';
     } else {
       // Regular MDBList catalog
       listId = id.split(".")[1];
@@ -978,7 +982,8 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
       type,
       catalogConfig?.cacheTTL,
       scoreFiltersAllowed ? catalogConfig?.filter_score_min : undefined,
-      scoreFiltersAllowed ? catalogConfig?.filter_score_max : undefined
+      scoreFiltersAllowed ? catalogConfig?.filter_score_max : undefined,
+      mediaTypeFilter
     );
     
     // Smart pagination handling

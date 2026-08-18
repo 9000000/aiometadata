@@ -16,6 +16,12 @@ const MDBLIST_RECOMMENDED_SECTIONS = [
   { section: 'similar', label: 'Popular Among Similar Users', description: 'Highly rated by people with similar taste to yours' },
   { section: 'rising', label: 'Rising', description: 'Global rising items' },
 ] as const;
+
+const MDBLIST_RECOMMENDED_VARIANTS = [
+  { suffix: '', type: 'all', label: 'All' },
+  { suffix: '.movies', type: 'movie', label: 'Movies' },
+  { suffix: '.series', type: 'series', label: 'Series' },
+] as const;
 import { toast } from "sonner";
 import { apiCache } from '@/utils/apiCache';
 import { getGenresBySelection, GenreSelection } from '@/data/genres';
@@ -808,22 +814,26 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
     }
   };
 
-  const isRecommendedCatalogAdded = (section: string) =>
-    config.catalogs.some(c => c.id === `mdblist.recommended.${section}`);
+  const isRecommendedCatalogAdded = (section: string, suffix: string = '') =>
+    config.catalogs.some(c => c.id === `mdblist.recommended.${section}${suffix}`);
 
-  const toggleRecommendedCatalog = (section: string, label: string) => {
-    const catalogId = `mdblist.recommended.${section}`;
-    if (isRecommendedCatalogAdded(section)) {
+  const toggleRecommendedCatalog = (
+    section: string,
+    label: string,
+    variant: typeof MDBLIST_RECOMMENDED_VARIANTS[number] = MDBLIST_RECOMMENDED_VARIANTS[0]
+  ) => {
+    const catalogId = `mdblist.recommended.${section}${variant.suffix}`;
+    if (isRecommendedCatalogAdded(section, variant.suffix)) {
       setConfig(prev => ({
         ...prev,
         catalogs: prev.catalogs.filter(c => c.id !== catalogId),
       }));
-      toast.success(`Removed "${label}" catalog`);
+      toast.success(`Removed "${label}" ${variant.label.toLowerCase()} catalog`);
     } else {
       const newCatalog: CatalogConfig = {
         id: catalogId,
-        type: 'all',
-        name: label,
+        type: variant.type,
+        name: variant.suffix ? `${label} (${variant.label})` : label,
         enabled: true,
         showInHome: true,
         source: 'mdblist',
@@ -835,7 +845,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
         ...prev,
         catalogs: [...prev.catalogs, newCatalog],
       }));
-      toast.success(`Added "${label}" catalog`);
+      toast.success(`Added "${label}" ${variant.label.toLowerCase()} catalog`);
     }
   };
 
@@ -1595,34 +1605,33 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
               <CardContent>
                 <div className="space-y-2">
                   {MDBLIST_RECOMMENDED_SECTIONS.map(({ section, label, description }) => {
-                    const added = isRecommendedCatalogAdded(section);
+                    const anyAdded = MDBLIST_RECOMMENDED_VARIANTS.some(v => isRecommendedCatalogAdded(section, v.suffix));
                     return (
-                      <div key={section} className="flex items-center justify-between gap-3 p-3 border rounded-lg bg-muted/30">
+                      <div key={section} className="flex flex-wrap items-center justify-between gap-3 p-3 border rounded-lg bg-muted/30">
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="font-medium truncate">{label}</span>
-                            {added && <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />}
+                            {anyAdded && <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />}
                           </div>
                           <p className="text-xs text-muted-foreground truncate">{description}</p>
                         </div>
-                        <Button
-                          variant={added ? "destructive" : "outline"}
-                          size="sm"
-                          onClick={() => toggleRecommendedCatalog(section, label)}
-                          className="shrink-0"
-                        >
-                          {added ? (
-                            <>
-                              <Trash2 className="h-4 w-4 mr-1" />
-                              Remove
-                            </>
-                          ) : (
-                            <>
-                              <Plus className="h-4 w-4 mr-1" />
-                              Add Catalog
-                            </>
-                          )}
-                        </Button>
+                        <div className="flex shrink-0 gap-1.5">
+                          {MDBLIST_RECOMMENDED_VARIANTS.map((variant) => {
+                            const added = isRecommendedCatalogAdded(section, variant.suffix);
+                            return (
+                              <Button
+                                key={variant.label}
+                                variant={added ? "destructive" : "outline"}
+                                size="sm"
+                                onClick={() => toggleRecommendedCatalog(section, label, variant)}
+                                title={added ? `Remove the ${variant.label.toLowerCase()} catalog` : `Add a ${variant.label.toLowerCase()} catalog`}
+                              >
+                                {added ? <Trash2 className="h-4 w-4 mr-1" /> : <Plus className="h-4 w-4 mr-1" />}
+                                {variant.label}
+                              </Button>
+                            );
+                          })}
+                        </div>
                       </div>
                     );
                   })}

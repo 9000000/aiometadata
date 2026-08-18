@@ -39,12 +39,12 @@ function generateArrayOfYears(maxYears: number): string[] {
 }
 
 function setOrderLanguage(language: string, languagesArray: any[]): string[] {
-  const languageObj = languagesArray.find((lang: any) => lang.iso_639_1 === language);
-  const fromIndex = languagesArray.indexOf(languageObj);
-  const element = languagesArray.splice(fromIndex, 1)[0];
-  languagesArray = languagesArray.sort((a: any, b: any) => (a.name > b.name ? 1 : -1));
-  languagesArray.splice(0, 0, element);
-  return [...new Set(languagesArray.map((el: any) => el.name))];
+  // Copy before sorting: the array comes straight out of the global cache.
+  const sorted = [...languagesArray].sort((a: any, b: any) => (a.name > b.name ? 1 : -1));
+  const base = String(language || '').split('-')[0];
+  const index = sorted.findIndex((lang: any) => lang.iso_639_1 === base);
+  if (index > 0) sorted.unshift(sorted.splice(index, 1)[0]);
+  return [...new Set(sorted.map((el: any) => el.name))];
 }
 
 function loadTranslations(language: string): Record<string, string> {
@@ -874,7 +874,7 @@ async function getManifest(config: any, opts: { tag?: string } = {}): Promise<an
   }
 
   fetchPromises.push(
-    cacheWrapGlobal(`languages:${language}`, () => getLanguages(config), 60 * 60)
+    cacheWrapGlobal('languages:v2', () => getLanguages(config), 60 * 60)
   );
 
   const genreStart = Date.now();

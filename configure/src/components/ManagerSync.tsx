@@ -38,7 +38,7 @@ const MANAGERS: ManagerDef[] = [
     name: 'AIOManager',
     endpoint: '/api/aiomanager/reinstall',
     urlPlaceholder: 'https://aio.example.com',
-    keyHint: 'Your AIOManager account API key (settings → API access)',
+    keyHint: 'Accounts > Connections > API key',
     description: 'Installs or updates this addon in your AIOManager account and propagates it to all your connected platforms.',
     publicInstances: [
       { name: "Kuu's (beta)", url: 'https://aiomanager-beta.stremio.ru' },

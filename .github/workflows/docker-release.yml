@@ -1,19 +1,18 @@
 name: Docker - Build and Push Release Image
 
 on:
-  release:
-    types: [published]
-  push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
-      - 'v[0-9]+.[0-9]+.[0-9]+.[0-9]+'
+  workflow_call:
+    inputs:
+      version:
+        description: 'Release version to build, without the leading v.'
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version to tag the image with (e.g. 2.13.0). Leave empty to use the latest release tag.'
+        description: 'Release version to build, e.g. 2.13.0. Leave empty for the newest release.'
         required: false
         type: string
-        default: ''
 
 env:
   REGISTRY: ghcr.io
@@ -29,31 +28,33 @@ jobs:
     steps:
       - name: Resolve version
         id: version
+        env:
+          REQUESTED: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
-          elif [ "${{ github.event_name }}" = "release" ]; then
-            VERSION="${{ github.event.release.tag_name }}"
-          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/}"
-          else
-            VERSION="$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name)"
-          fi
+          set -euo pipefail
+          NEWEST="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName 2>/dev/null || true)"
+          VERSION="${REQUESTED:-$NEWEST}"
           VERSION="${VERSION#v}"
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-            echo "error: could not resolve a semver version (got '$VERSION')" >&2
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$VERSION' is not a release version (X.Y.Z)"
             exit 1
           fi
-          MAJOR="${VERSION%%.*}"
-          MINOR="$(echo "$VERSION" | cut -d. -f2)"
-          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "MAJOR=$MAJOR" >> "$GITHUB_OUTPUT"
-          echo "MINOR=$MINOR" >> "$GITHUB_OUTPUT"
+          # latest must never move backwards when an older version is rebuilt by hand.
+          IS_LATEST=false
+          [ "$VERSION" = "${NEWEST#v}" ] && IS_LATEST=true
+          {
+            echo "version=$VERSION"
+            echo "major=${VERSION%%.*}"
+            echo "minor=$(echo "$VERSION" | cut -d. -f2)"
+            echo "is_latest=$IS_LATEST"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Checkout repository
+      # The tag, not the branch: a dispatch runs from dev, whose HEAD is not the release.
+      - name: Checkout the release tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name || github.ref }}
+          ref: v${{ steps.version.outputs.version }}
 
       - name: Set up QEMU for multi-arch builds
         uses: docker/setup-qemu-action@v3
@@ -74,10 +75,10 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ steps.version.outputs.VERSION }}
-            type=raw,value=${{ steps.version.outputs.MAJOR }}.${{ steps.version.outputs.MINOR }}
-            type=raw,value=${{ steps.version.outputs.MAJOR }}
-            type=raw,value=latest
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=${{ steps.version.outputs.major }}.${{ steps.version.outputs.minor }}
+            type=raw,value=${{ steps.version.outputs.major }}
+            type=raw,value=latest,enable=${{ steps.version.outputs.is_latest }}
 
       - name: Build and push multi-platform image
         uses: docker/build-push-action@v5

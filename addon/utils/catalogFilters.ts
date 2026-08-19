@@ -1,4 +1,5 @@
 import consola from 'consola';
+import { allowsUnrated, hasAgeRatingCap, passesAgeRating } from './ageRating';
 const logger = consola.withTag('CatalogFilters');
 
 function isHideWatchedExcluded(cleanId: string): boolean {
@@ -15,46 +16,16 @@ const UNRELEASED_STATUSES = new Set([
   'not yet aired', 'upcoming', 'not_yet_released', 'planned', 'unreleased', 'tba',
 ]);
 
-const movieRatingHierarchy = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
-const tvRatingHierarchy = ['TV-Y', 'TV-Y7', 'TV-G', 'TV-PG', 'TV-14', 'TV-MA'];
-const movieToTvMap: Record<string, string> = {
-  'G': 'TV-G',
-  'PG': 'TV-PG',
-  'PG-13': 'TV-14',
-  'R': 'TV-MA',
-  'NC-17': 'TV-MA'
-};
-
 function applyAgeRatingFilter(metas: any[], type: string, config: any): any[] {
-  if (!config.ageRating || config.ageRating.toLowerCase() === 'none') {
+  if (!hasAgeRatingCap(config)) {
     return metas;
   }
 
-  const isTvRating = type === 'series';
-  const finalUserRating = isTvRating ? (movieToTvMap[config.ageRating] || config.ageRating) : config.ageRating;
-  const ratingHierarchy = isTvRating ? tvRatingHierarchy : movieRatingHierarchy;
-  const userRatingIndex = ratingHierarchy.indexOf(finalUserRating);
-
-  if (userRatingIndex === -1) return metas;
-
-  const isUserRatingRestrictive = finalUserRating === 'PG-13' ||
-    (movieRatingHierarchy.indexOf(finalUserRating) !== -1 &&
-      movieRatingHierarchy.indexOf(finalUserRating) <= movieRatingHierarchy.indexOf('PG-13')) ||
-    (tvRatingHierarchy.indexOf(finalUserRating) !== -1 &&
-      tvRatingHierarchy.indexOf(finalUserRating) <= tvRatingHierarchy.indexOf('TV-14'));
-
+  const allowUnrated = allowsUnrated(config);
   const before = metas.length;
   const filtered = metas.filter(meta => {
     const cert = meta.app_extras?.certification || meta.certification || null;
-
-    if (!cert || cert === '' || cert.toLowerCase() === 'nr') {
-      return !isUserRatingRestrictive;
-    }
-
-    const resultRatingIndex = ratingHierarchy.indexOf(cert);
-    if (resultRatingIndex === -1) return true;
-
-    return resultRatingIndex <= userRatingIndex;
+    return passesAgeRating(cert, type, config.ageRating, allowUnrated);
   });
 
   if (before !== filtered.length) {
@@ -80,7 +51,7 @@ const WATCHED_FILTERS: [string, string][] = [
 function catalogFiltersActive({ config, catalogConfig, cleanId }: Omit<CatalogFilterOptions, 'type'>): boolean {
   const isSearch = ['search', 'people_search', 'gemini.search'].includes(cleanId);
 
-  if (!isSearch && config.ageRating && String(config.ageRating).toLowerCase() !== 'none') return true;
+  if (!isSearch && hasAgeRatingCap(config)) return true;
 
   const catalogHideDigital = catalogConfig?.metadata?.hideUnreleasedDigital;
   const hideUnreleasedDigital = isSearch

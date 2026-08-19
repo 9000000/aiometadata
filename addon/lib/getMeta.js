@@ -3147,7 +3147,8 @@ async function buildAnimeResponse(stremioId, malData, language, characterData, e
         }
       }
     }
-    if(malData.rating && config.displayAgeRating){
+    const malCertification = Utils.malRatingToCertification(malData.rating);
+    if(malData.rating && !malCertification && config.displayAgeRating){
       const ageRatingLink = {
         name: malData.rating,
         category: 'Genres',
@@ -3193,7 +3194,8 @@ async function buildAnimeResponse(stremioId, malData, language, characterData, e
         cast: Utils.parseCast(tmdbLikeCredits, undefined, 'mal'),
         director: [],
         writers: [],
-        watchProviders: watchProviders
+        watchProviders: watchProviders,
+        ...(malCertification ? { certification: malCertification, certificationLocal: malData.rating } : {})
       }
     };
 

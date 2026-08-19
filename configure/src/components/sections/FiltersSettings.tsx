@@ -22,6 +22,10 @@ export function FiltersSettings() {
     setConfig(prev => ({ ...prev, ageRating: value }));
   };
 
+  const handleAllowUnratedChange = (checked: boolean) => {
+    setConfig(prev => ({ ...prev, allowUnratedContent: checked }));
+  };
+
   const handleSfwChange = (checked: boolean) => {
     setConfig(prev => ({ ...prev, sfw: checked }));
   };
@@ -72,6 +76,7 @@ export function FiltersSettings() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            <div className="flex flex-col space-y-4">
               <Select value={config.ageRating} onValueChange={handleAgeRatingChange}>
                 <SelectTrigger className="w-full" data-setting="age-rating" aria-label="Maximum content rating">
                   <SelectValue placeholder="Select a rating" />
@@ -80,6 +85,24 @@ export function FiltersSettings() {
                   {ageRatingOptions.map(opt => <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>)}
                 </SelectContent>
               </Select>
+              {config.ageRating && config.ageRating !== 'None' && (
+                <div className="space-y-2">
+                  <div className="flex items-center space-x-2">
+                    <Switch
+                      id="allow-unrated-content"
+                      data-setting="allow-unrated-content"
+                      checked={config.allowUnratedContent !== false}
+                      onCheckedChange={handleAllowUnratedChange}
+                    />
+                    <Label htmlFor="allow-unrated-content">Show Unrated Titles</Label>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Most catalog rows carry no rating at all, so turning this off leaves them nearly empty.
+                    Turn it off only if you would rather hide anything whose rating cannot be confirmed.
+                  </p>
+                </div>
+              )}
+            </div>
           </CardContent>
         </Card>
 

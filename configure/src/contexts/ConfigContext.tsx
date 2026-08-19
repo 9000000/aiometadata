@@ -165,6 +165,7 @@ const initialConfig: AppConfig = {
   enableRatingPostersForLibrary: true, // Default to enabled - keep Rating Posters for library items
   showRateMeButton: false, // Default to disabled - user must enable to show rate button
   ageRating: 'None',
+  allowUnratedContent: true,
   searchEnabled: true,
   sessionId: "",
   catalogSetupComplete: false,

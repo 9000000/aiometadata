@@ -56,6 +56,7 @@ export interface UserConfig {
   sfw?: boolean;
   includeAdult?: boolean;
   ageRating?: string;
+  allowUnratedContent?: boolean;
   hideUnreleasedDigital?: boolean;
   hideUnreleasedDigitalSearch?: boolean;
   hideUnreleasedShows?: boolean;

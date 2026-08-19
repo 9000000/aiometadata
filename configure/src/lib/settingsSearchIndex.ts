@@ -164,6 +164,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ['18+', 'certification', 'pg', 'age', 'mature', 'parental'],
   },
   {
+    id: 'filters.allowUnratedContent', section: 'filters', anchor: 'allow-unrated-content',
+    label: 'Show Unrated Titles',
+    description: 'Keep titles with no confirmed rating when a maximum content rating is set.',
+    keywords: ['unrated', 'nr', 'not rated', 'certification', 'age', 'parental'],
+  },
+  {
     id: 'filters.sfw', section: 'filters', anchor: 'sfw-mode',
     label: 'Safe for Work (SFW) Mode',
     description: 'Enable to show only safe for work anime content. This will filter out adult content, some ecchi content, and other mature themes.',

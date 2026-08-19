@@ -15,6 +15,7 @@ const { getImdbRating } = require('../lib/getImdbRating');
 const consola = require('consola');
 const { cacheWrapMetaSmart, cacheWrapGlobal } = require('../lib/getCache');
 const { getReleaseAvailability } = require('./releaseAvailability');
+const { malRatingToCertification } = require('./ageRating');
 const wikiMappings = require('../lib/wiki-mapper.js');
 function CATALOG_TTL() { return parseInt(process.env.CATALOG_TTL || 1 * 24 * 60 * 60, 10); }
 const buildInfo = require('../lib/buildInfo');
@@ -2118,6 +2119,7 @@ async function parseAnimeCatalogMeta(anime, config, language, descriptionFallbac
     releaseInfo: anime.year,
     imdbRating: imdbRating,
     runtime: parseRunTime(anime.duration),
+    certification: malRatingToCertification(anime.rating),
     isAnime: true,
     trailers: trailers,
     released: anime.aired?.from ? new Date(anime.aired.from) : undefined,
@@ -2478,6 +2480,7 @@ async function parseAnimeCatalogMetaBatch(animes, config, language, includeVideo
         releaseInfo: malReleaseInfo,
         runtime: parseRunTime(anime.duration),
         imdbRating: imdbRating,
+        certification: malRatingToCertification(anime.rating),
         released: anime.aired?.from ? new Date(anime.aired.from) : undefined,
         status: anime.status,
         trailers: trailers
@@ -3451,6 +3454,7 @@ module.exports = {
   getAnimeBg,
   parseAnimeCatalogMeta,
   parseAnimeCatalogMetaBatch,
+  malRatingToCertification,
   parseTvdbTrailers,
   parseAnimeRelationsLink,
   parseAnimeGenreLink,

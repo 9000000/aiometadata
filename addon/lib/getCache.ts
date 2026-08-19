@@ -3,6 +3,7 @@ const { loadConfigFromDatabase }: any = require('./configApi');
 const consola: any = require('consola');
 const crypto: any = require('crypto');
 const { isMetricsDisabled }: any = require('./metricsConfig');
+const { allowsUnrated, hasAgeRatingCap }: any = require('../utils/ageRating');
 const {
   decodeCachePayload,
   encodeCachePayload,
@@ -1265,6 +1266,7 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
     sfw: config.sfw || false,
     includeAdult: config.includeAdult || false,
     ageRating: config.ageRating || null,
+    ...(hasAgeRatingCap(config) ? { allowUnratedContent: allowsUnrated(config) } : {}),
     showMetaProviderAttribution: config.showMetaProviderAttribution || false,
   };
 
@@ -1541,6 +1543,7 @@ async function cacheWrapSearch(userUUID: string, searchKey: string, method: () =
     sfw: config.sfw || false,
     includeAdult: config.includeAdult || false,
     ageRating: config.ageRating || null,
+    ...(hasAgeRatingCap(config) ? { allowUnratedContent: allowsUnrated(config) } : {}),
     metaProviders: config.providers || {},
     artProviders: config.artProviders || {},
     blurThumbs: config.blurThumbs || false,
@@ -2285,7 +2288,8 @@ function cacheWrapJikanApi(key: string, method: () => Promise<any>, customTTL: n
     return classifyResult(result, error, cacheKey);
   };
 
-  return cacheWrapGlobal(`jikan-api:${subkey}`, method, ttl, {
+  // v2 carries the anime rating, which the pre-v2 payloads dropped on the way in.
+  return cacheWrapGlobal(`jikan-api:v2:${subkey}`, method, ttl, {
     resultClassifier: jikanResultClassifier,
     ...options,
     upstream: true,
@@ -2333,6 +2337,7 @@ async function cacheWrapStaticCatalog(userUUID: string, catalogKey: string, meth
     sfw: config.sfw || false,
     includeAdult: config.includeAdult || false,
     ageRating: config.ageRating || null,
+    ...(hasAgeRatingCap(config) ? { allowUnratedContent: allowsUnrated(config) } : {}),
     showPrefix: config.showPrefix || false,
     showMetaProviderAttribution: config.showMetaProviderAttribution || false,
     displayAgeRating: config.displayAgeRating || false,

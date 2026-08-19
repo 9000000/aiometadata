@@ -1188,7 +1188,7 @@ const MOVIELENS_SORT_OPTIONS = [
 ];
 
 const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogConfig, isOpen: boolean, onClose: () => void }) => {
-  const { setConfig, catalogTTL } = useConfig();
+  const { setConfig, catalogTTL, config } = useConfig();
   const [cacheTTL, setCacheTTL] = useState<number>(catalog.cacheTTL || catalogTTL);
   const isWatchlist = catalog.id === 'movielens.watchlist' || catalog.id.startsWith('movielens.list.');
   const savedSort = catalog.metadata?.sortBy;
@@ -1201,11 +1201,21 @@ const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catalo
   const [maxYear, setMaxYear] = useState<string>(catalog.metadata?.maxYear ? String(catalog.metadata.maxYear) : '');
   const [includeRated, setIncludeRated] = useState<boolean>(catalog.metadata?.includeRated === true);
   const [maxDaysAgo, setMaxDaysAgo] = useState<string>(catalog.metadata?.maxDaysAgo ? String(catalog.metadata.maxDaysAgo) : '');
+  const [hideWatchedTrakt, setHideWatchedTrakt] = useState<string>(catalog.metadata?.hideWatchedTrakt === true ? 'on' : catalog.metadata?.hideWatchedTrakt === false ? 'off' : 'global');
+  const [hideWatchedAnilist, setHideWatchedAnilist] = useState<string>(catalog.metadata?.hideWatchedAnilist === true ? 'on' : catalog.metadata?.hideWatchedAnilist === false ? 'off' : 'global');
+  const [hideWatchedMdblist, setHideWatchedMdblist] = useState<string>(catalog.metadata?.hideWatchedMdblist === true ? 'on' : catalog.metadata?.hideWatchedMdblist === false ? 'off' : 'global');
+  const [hideWatchedSimkl, setHideWatchedSimkl] = useState<string>(catalog.metadata?.hideWatchedSimkl === true ? 'on' : catalog.metadata?.hideWatchedSimkl === false ? 'off' : 'global');
+  const [hideUnreleasedDigital, setHideUnreleasedDigital] = useState<string>(catalog.metadata?.hideUnreleasedDigital === true ? 'on' : catalog.metadata?.hideUnreleasedDigital === false ? 'off' : 'global');
 
   const handleSave = () => {
     const minYearNum = parseInt(minYear, 10);
     const maxYearNum = parseInt(maxYear, 10);
     const maxDaysAgoNum = parseInt(maxDaysAgo, 10);
+    const hideTraktValue = hideWatchedTrakt === 'on' ? true : hideWatchedTrakt === 'off' ? false : undefined;
+    const hideAnilistValue = hideWatchedAnilist === 'on' ? true : hideWatchedAnilist === 'off' ? false : undefined;
+    const hideMdblistValue = hideWatchedMdblist === 'on' ? true : hideWatchedMdblist === 'off' ? false : undefined;
+    const hideSimklValue = hideWatchedSimkl === 'on' ? true : hideWatchedSimkl === 'off' ? false : undefined;
+    const hideUnreleasedDigitalValue = hideUnreleasedDigital === 'on' ? true : hideUnreleasedDigital === 'off' ? false : undefined;
     setConfig(prev => ({
       ...prev,
       catalogs: prev.catalogs.map(c =>
@@ -1224,6 +1234,11 @@ const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catalo
                   includeRated: includeRated ? true : undefined,
                   maxDaysAgo: Number.isFinite(maxDaysAgoNum) && maxDaysAgoNum > 0 ? maxDaysAgoNum : undefined,
                 }),
+                hideWatchedTrakt: hideTraktValue,
+                hideWatchedAnilist: hideAnilistValue,
+                hideWatchedMdblist: hideMdblistValue,
+                hideWatchedSimkl: hideSimklValue,
+                hideUnreleasedDigital: hideUnreleasedDigitalValue,
               },
             }
           : c
@@ -1314,6 +1329,79 @@ const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catalo
             <p className="text-xs text-muted-foreground">
               Minimum 5 minutes ({Math.floor(cacheTTL / 3600)}h {Math.floor((cacheTTL % 3600) / 60)}m)
             </p>
+          </div>
+          {config.apiKeys?.traktTokenId && (
+            <div className="space-y-2">
+              <Label>Hide Trakt Watched</Label>
+              <Select value={hideWatchedTrakt} onValueChange={setHideWatchedTrakt}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="global">Use Global Setting</SelectItem>
+                  <SelectItem value="on">Always On</SelectItem>
+                  <SelectItem value="off">Always Off</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          {config.apiKeys?.anilistTokenId && (
+            <div className="space-y-2">
+              <Label>Hide AniList Watched</Label>
+              <Select value={hideWatchedAnilist} onValueChange={setHideWatchedAnilist}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="global">Use Global Setting</SelectItem>
+                  <SelectItem value="on">Always On</SelectItem>
+                  <SelectItem value="off">Always Off</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          {config.apiKeys?.mdblist && (
+            <div className="space-y-2">
+              <Label>Hide MDBList Watched</Label>
+              <Select value={hideWatchedMdblist} onValueChange={setHideWatchedMdblist}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="global">Use Global Setting</SelectItem>
+                  <SelectItem value="on">Always On</SelectItem>
+                  <SelectItem value="off">Always Off</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          {config.apiKeys?.simklTokenId && (
+            <div className="space-y-2">
+              <Label>Hide Simkl Watched</Label>
+              <Select value={hideWatchedSimkl} onValueChange={setHideWatchedSimkl}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="global">Use Global Setting</SelectItem>
+                  <SelectItem value="on">Always On</SelectItem>
+                  <SelectItem value="off">Always Off</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          <div className="space-y-2">
+            <Label>Hide Unreleased Movies</Label>
+            <Select value={hideUnreleasedDigital} onValueChange={setHideUnreleasedDigital}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="global">Use Global Setting</SelectItem>
+                <SelectItem value="on">Always On</SelectItem>
+                <SelectItem value="off">Always Off</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </div>
         <div className="flex justify-end gap-2">

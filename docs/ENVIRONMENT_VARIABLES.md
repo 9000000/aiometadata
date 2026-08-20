@@ -218,12 +218,27 @@ to every visitor, so which one you reach for depends on who uses the instance.
 - **Get it**: https://simkl.com/oauth/applications
 
 #### `SIMKL_CLIENT_SECRET`
-- **Required for SimKL integration**: Yes
+- **Required for SimKL integration**: Only for the OAuth flow (not needed when `SIMKL_AUTH_MODE=pin`)
 - **Description**: SimKL API client secret for enabling SimKL account integration
 - **Get it**: https://simkl.com/oauth/applications
 
+#### `SIMKL_AUTH_MODE`
+- **Required**: No
+- **Default**: `pin` when `SIMKL_CLIENT_SECRET` is unset, otherwise `oauth`
+- **Values**: `oauth`, `pin`, `both`
+- **Description**: Which SimKL connection flow(s) the configure page offers.
+  - `oauth` - the browser-redirect flow. Needs `SIMKL_CLIENT_SECRET` plus a publicly reachable `HOST_NAME`/`SIMKL_REDIRECT_URI` registered with SimKL.
+  - `pin` - the PIN (device) flow. The server asks SimKL for a short code, the user enters it at https://simkl.com/pin, and the server polls until SimKL hands back an access token. Needs only `SIMKL_CLIENT_ID`: no client secret and no inbound callback, so it works on instances that are not reachable from the internet.
+  - `both` - offers each flow side by side.
+- **Example**: `SIMKL_AUTH_MODE=pin`
+
+#### `DEVICE_AUTH_POLL_RATE_LIMIT_PER_MIN`
+- **Required**: No
+- **Default**: `240`
+- **Description**: Instance-wide cap on PIN authorization status polls per minute on `/api/auth/simkl/pin/status`. Only applies when Redis is available.
+
 #### `SIMKL_REDIRECT_URI`
-- **Required for SimKL integration**: No (optional)
+- **Required for SimKL integration**: No (optional, and unused when `SIMKL_AUTH_MODE=pin`)
 - **Description**: Redirect URI for SimKL OAuth. If not set, defaults to `${HOST_NAME}/api/auth/simkl/callback`. Must match the value set in your SimKL app settings if explicitly set.
 - **Example**: `SIMKL_REDIRECT_URI=https://your-domain.com/api/auth/simkl/callback`
 

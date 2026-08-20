@@ -10,6 +10,20 @@ export interface SimklTokens {
   // Note: Simkl access tokens never expire, no refresh_token
 }
 
+export interface SimklPinRequest {
+  device_code: string;
+  user_code: string;
+  verification_url: string;
+  expires_in: number;
+  interval: number;
+}
+
+export type SimklPinPoll =
+  | { status: 'authorized'; access_token: string }
+  | { status: 'pending' }
+  | { status: 'slow_down' }
+  | { status: 'expired' };
+
 export interface SimklUser {
   username: string;
   name?: string;
@@ -21,10 +35,81 @@ export class SimklClient {
   private clientSecret: string;
   private redirectUri: string;
 
-  constructor(clientId: string, clientSecret: string, redirectUri: string) {
+  // PIN flow needs only a client id, so these two stay empty there.
+  constructor(clientId: string, clientSecret: string = '', redirectUri: string = '') {
     this.clientId = clientId;
     this.clientSecret = clientSecret;
     this.redirectUri = redirectUri;
+  }
+
+  /**
+   * Start the PIN (device) flow. No client secret, no callback URL.
+   */
+  async requestPin(): Promise<SimklPinRequest> {
+    const params = new URLSearchParams({ client_id: this.clientId });
+    const response = await httpGet(`${SIMKL_API_BASE}/oauth/pin?${params.toString()}`);
+    const data = response.data;
+
+    if (!data || data.result !== 'OK' || !data.user_code) {
+      logger.error('Unexpected Simkl PIN response:', JSON.stringify(data));
+      throw new Error('Simkl did not return a PIN');
+    }
+
+    return {
+      device_code: String(data.device_code || ''),
+      user_code: String(data.user_code),
+      verification_url: String(data.verification_url || data.verification_uri || 'https://simkl.com/pin'),
+      expires_in: Number(data.expires_in) || 900,
+      interval: Number(data.interval) || 5,
+    };
+  }
+
+  /**
+   * Poll a pending PIN. Simkl returns result "OK" with an access token once the
+   * user has entered the code, and "KO" with either "Authorization pending" or
+   * "Slow down" while it is still waiting.
+   */
+  async pollPin(userCode: string): Promise<SimklPinPoll> {
+    const params = new URLSearchParams({ client_id: this.clientId });
+
+    let data: any;
+    try {
+      const response = await httpGet(
+        `${SIMKL_API_BASE}/oauth/pin/${encodeURIComponent(userCode)}?${params.toString()}`
+      );
+      data = response.data;
+    } catch (error: any) {
+      const status = error?.response?.status;
+
+      // A rejected client id is a configuration problem, not a user who hasn't
+      // typed the code yet. Let it surface instead of polling forever.
+      if (status === 401 || status === 403) {
+        logger.error(`Simkl rejected the client credentials (HTTP ${status})`);
+        throw error;
+      }
+
+      if (status === 429) {
+        return { status: 'slow_down' };
+      }
+
+      // Anything else is treated as transient, the next tick retries.
+      logger.debug(`Simkl PIN poll failed, treating as pending: ${error?.message}`);
+      return { status: 'pending' };
+    }
+
+    if (data && data.result === 'OK' && data.access_token) {
+      return { status: 'authorized', access_token: String(data.access_token) };
+    }
+
+    const message = typeof data?.message === 'string' ? data.message.toLowerCase() : '';
+    if (message.includes('expired') || message.includes('invalid')) {
+      return { status: 'expired' };
+    }
+    if (message.includes('slow down')) {
+      return { status: 'slow_down' };
+    }
+
+    return { status: 'pending' };
   }
 
   /**

@@ -64,6 +64,14 @@ const {
 const { renderOAuthPage } = require('./lib/oauthPage');
 const { hasAnyWatchTrackingEnabled } = require('./lib/watchTracking');
 const { SimklClient } = require('./lib/simkl');
+const {
+  createSessionId,
+  deleteDeviceAuthSession,
+  getDeviceAuthSession,
+  registerPoll,
+  saveDeviceAuthSession,
+  widenPollInterval,
+} = require('./lib/deviceAuthSessions');
 const jikan = require('./lib/mal');
 const buildInfo = require('./lib/buildInfo');
 const { clientDistDir, clientIndexPath, publicDir } = require('./lib/runtimePaths');
@@ -80,6 +88,21 @@ const TRAKT_OAUTH_STATE_TTL_MS = parseInt(process.env.TRAKT_OAUTH_STATE_TTL_MS |
 const usedAnilistCodes = new Set();
 const ANILIST_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const SIMKL_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+// Which Simkl flows this instance offers. PIN needs only a client id, so it is
+// the default when no secret is set.
+function resolveSimklAuthMode() {
+  const configured = String(getSetting('SIMKL_AUTH_MODE') || '').trim().toLowerCase();
+  if (configured === 'pin' || configured === 'oauth' || configured === 'both') {
+    return configured;
+  }
+  return getSetting('SIMKL_CLIENT_SECRET') ? 'oauth' : 'pin';
+}
+
+function simklPinEnabled() {
+  const mode = resolveSimklAuthMode();
+  return mode === 'pin' || mode === 'both';
+}
 
 const usedMalCodes = new Set();
 const MAL_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -158,6 +181,9 @@ addon.use(
     '/api/auth/trakt/callback',
     '/api/auth/simkl/authorize',
     '/api/auth/simkl/callback',
+    '/api/auth/simkl/pin',
+    '/api/auth/simkl/pin/status',
+    '/api/auth/simkl/pin/cancel',
     '/api/auth/movielens/connect',
   ],
   noStoreOAuthHeaders
@@ -186,6 +212,50 @@ async function testKeysRateLimitMiddleware(req, res, next) {
     }
   } catch (error) {
     consola.warn('[Rate Limit] /api/test-keys limiter failed, allowing request:', error.message);
+  }
+
+  next();
+}
+
+const REDIS_LIMITER_TIMEOUT_MS = 500;
+
+function DEVICE_AUTH_POLL_RATE_LIMIT_PER_MIN() {
+  const parsed = parseInt(getSetting('DEVICE_AUTH_POLL_RATE_LIMIT_PER_MIN'), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 240;
+}
+
+// Own bucket: a pending code polls every few seconds and would eat the much
+// tighter /api/test-keys budget.
+async function deviceAuthPollRateLimitMiddleware(req, res, next) {
+  if (!redis) {
+    return next();
+  }
+
+  try {
+    const minuteBucket = Math.floor(Date.now() / 60000);
+    const rateKey = `rate-limit:device-auth-poll:${minuteBucket}`;
+
+    // Bounded: with no Redis listening, ioredis holds a command for the better
+    // part of a minute, and these routes are polled every few seconds. A count
+    // we can't read in time means the request is allowed through.
+    const currentCount = await Promise.race([
+      redis.incr(rateKey),
+      new Promise(resolve => setTimeout(() => resolve(null), REDIS_LIMITER_TIMEOUT_MS).unref()),
+    ]);
+
+    if (currentCount === null) {
+      return next();
+    }
+
+    if (currentCount === 1) {
+      redis.expire(rateKey, 70).catch(() => undefined);
+    }
+
+    if (currentCount > DEVICE_AUTH_POLL_RATE_LIMIT_PER_MIN()) {
+      return res.status(429).json({ error: 'Too many authorization status requests. Please try again shortly.' });
+    }
+  } catch (error) {
+    consola.warn('[Rate Limit] Device auth poll limiter failed, allowing request:', error.message);
   }
 
   next();
@@ -505,6 +575,7 @@ const respond = function (req, res, data, opts?) {
       gemini: getSetting('GEMINI_API_KEY'),
       trakt: getSetting('TRAKT_CLIENT_ID'),
       simkl: getSetting('SIMKL_CLIENT_ID'),
+      simklAuthMode: resolveSimklAuthMode(),
       customDescriptionBlurb: getSetting('CUSTOM_DESCRIPTION_BLURB'),
       addonVersion: ADDON_VERSION,
       hasBuiltInTvdb: !!getSetting('BUILT_IN_TVDB_API_KEY'),
@@ -932,6 +1003,54 @@ addon.post("/api/movielens/lists/:userUUID", async (req, res) => {
   }
 });
 
+// Saves a new Simkl access token and returns the token ID the user pastes into
+// their config. Used by both the OAuth callback and the PIN flow.
+async function persistSimklToken(user, accessToken) {
+  // Check if this Simkl user already has a token in the database
+  const existingTokens = await database.getOAuthTokensByProvider('simkl');
+  const existingToken = existingTokens.find(t => t.user_id.toLowerCase() === user.username.toLowerCase());
+
+  let tokenId;
+  let saved;
+
+  if (existingToken) {
+    // Update existing token
+    tokenId = existingToken.id;
+    consola.info(`[Simkl OAuth] Updating existing token - tokenId: ${tokenId}, user: ${user.username}`);
+
+    // Simkl tokens don't expire, so we don't have expires_at
+    saved = await database.updateOAuthToken(tokenId, accessToken, '', 0);
+  } else {
+    // Create new token
+    tokenId = crypto.randomUUID();
+    consola.info(`[Simkl OAuth] Creating new token - tokenId: ${tokenId}, user: ${user.username}`);
+
+    saved = await database.saveOAuthToken(tokenId, 'simkl', user.username, accessToken, '', 0, '');
+  }
+
+  if (!saved) {
+    return null;
+  }
+
+  try {
+    const userSimklTokens = existingTokens.filter(t => t.user_id.toLowerCase() === user.username.toLowerCase());
+    const oldTokenIds = userSimklTokens.map(t => t.id).filter(id => id !== tokenId);
+    if (oldTokenIds.length > 0) {
+      const affectedUsers = await database.getUsersByOAuthTokenIds('simklTokenId', oldTokenIds);
+      for (const dbUser of affectedUsers) {
+        dbUser.config.apiKeys.simklTokenId = tokenId;
+        await database.saveUserConfig(dbUser.id, dbUser.password_hash, dbUser.config);
+        configCache.del(dbUser.id);
+        consola.info(`[Simkl OAuth] Updated user ${dbUser.id} config to use new token ${tokenId}`);
+      }
+    }
+  } catch (configError) {
+    consola.warn(`[Simkl OAuth] Warning: Could not auto-update user configs - ${configError.message}`);
+  }
+
+  return tokenId;
+}
+
 // --- Simkl OAuth Routes ---
 addon.get("/api/auth/simkl/authorize", async (req, res) => {
   try {
@@ -1003,42 +1122,9 @@ addon.get("/api/auth/simkl/callback", async (req, res) => {
     // Get user info
     const user = await simklClient.getMe(tokens.access_token);
     
-    // Check if this Simkl user already has a token in the database
-    const existingTokens = await database.getOAuthTokensByProvider('simkl');
-    const existingToken = existingTokens.find(t => t.user_id.toLowerCase() === user.username.toLowerCase());
+    const tokenId = await persistSimklToken(user, tokens.access_token);
     
-    let tokenId;
-    let saved;
-    
-    if (existingToken) {
-      // Update existing token
-      tokenId = existingToken.id;
-      consola.info(`[Simkl OAuth] Updating existing token - tokenId: ${tokenId}, user: ${user.username}`);
-      
-      // Simkl tokens don't expire, so we don't have expires_at
-      saved = await database.updateOAuthToken(
-        tokenId,
-        tokens.access_token,
-        '', 
-        0 
-      );
-    } else {
-      // Create new token
-      tokenId = crypto.randomUUID();
-      consola.info(`[Simkl OAuth] Creating new token - tokenId: ${tokenId}, user: ${user.username}`);
-      
-      saved = await database.saveOAuthToken(
-        tokenId,
-        'simkl',
-        user.username,
-        tokens.access_token,
-        '', 
-        0, 
-        '' 
-      );
-    }
-    
-    if (!saved) {
+    if (!tokenId) {
       return res.status(500).send(renderOAuthPage({
         provider: 'simkl',
         status: 'error',
@@ -1046,22 +1132,6 @@ addon.get("/api/auth/simkl/callback", async (req, res) => {
         message: 'Simkl authorized the connection, but this server could not store the token. Please try again.',
         retryHref: '/api/auth/simkl/authorize',
       }));
-    }
-    
-    try {
-      const userSimklTokens = existingTokens.filter(t => t.user_id.toLowerCase() === user.username.toLowerCase());
-      const oldTokenIds = userSimklTokens.map(t => t.id).filter(id => id !== tokenId);
-      if (oldTokenIds.length > 0) {
-        const affectedUsers = await database.getUsersByOAuthTokenIds('simklTokenId', oldTokenIds);
-        for (const dbUser of affectedUsers) {
-          dbUser.config.apiKeys.simklTokenId = tokenId;
-          await database.saveUserConfig(dbUser.id, dbUser.password_hash, dbUser.config);
-          configCache.del(dbUser.id);
-          consola.info(`[Simkl OAuth] Updated user ${dbUser.id} config to use new token ${tokenId}`);
-        }
-      }
-    } catch (configError) {
-      consola.warn(`[Simkl OAuth] Warning: Could not auto-update user configs - ${configError.message}`);
     }
 
     res.send(renderOAuthPage({
@@ -1128,6 +1198,127 @@ addon.post("/api/auth/trakt/disconnect", async (req, res) => {
     consola.error("[Trakt] Disconnect error:", error);
     res.status(500).json({ error: "Failed to disconnect Trakt" });
   }
+});
+
+// Drops a pending session so a cancelled code doesn't linger until it expires.
+// Knowing the session id is the only thing needed, same as polling it.
+async function handleDeviceAuthCancel(req, res, provider) {
+  try {
+    const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId : '';
+    const session = await getDeviceAuthSession(sessionId, provider);
+    if (session) {
+      await deleteDeviceAuthSession(sessionId);
+    }
+    res.json({ cancelled: !!session });
+  } catch (error) {
+    consola.error(`[${provider}] Failed to cancel the authorization session:`, error);
+    res.status(500).json({ error: "Failed to cancel the authorization" });
+  }
+}
+
+// --- Simkl PIN (device) Routes ---
+// No client secret and no reachable callback URL needed, so these work on
+// private instances where the OAuth flow can't.
+addon.post("/api/auth/simkl/pin", deviceAuthPollRateLimitMiddleware, async (req, res) => {
+  try {
+    if (!simklPinEnabled()) {
+      return res.status(404).json({ error: "Simkl PIN authentication is not enabled on this instance." });
+    }
+
+    const clientId = getSetting('SIMKL_CLIENT_ID');
+    if (!clientId) {
+      return res.status(500).json({ error: "Simkl is not configured. Please set the SIMKL_CLIENT_ID environment variable." });
+    }
+
+    const simklClient = new SimklClient(clientId);
+    const pin = await simklClient.requestPin();
+
+    const sessionId = createSessionId();
+    const expiresAt = Date.now() + pin.expires_in * 1000;
+    await saveDeviceAuthSession(sessionId, {
+      provider: 'simkl',
+      userCode: pin.user_code,
+      expiresAt,
+      pollIntervalMs: pin.interval * 1000,
+      lastPolledAt: 0,
+    });
+
+    res.json({
+      sessionId,
+      userCode: pin.user_code,
+      verificationUrl: pin.verification_url,
+      interval: pin.interval,
+      expiresIn: pin.expires_in,
+    });
+  } catch (error) {
+    consola.error("[Simkl PIN] Failed to request a PIN:", error);
+    res.status(500).json({ error: "Failed to request a Simkl PIN" });
+  }
+});
+
+addon.get("/api/auth/simkl/pin/status", deviceAuthPollRateLimitMiddleware, async (req, res) => {
+  try {
+    if (!simklPinEnabled()) {
+      return res.status(404).json({ error: "Simkl PIN authentication is not enabled on this instance." });
+    }
+
+    const clientId = getSetting('SIMKL_CLIENT_ID');
+    if (!clientId) {
+      return res.status(500).json({ error: "Simkl is not configured. Please set the SIMKL_CLIENT_ID environment variable." });
+    }
+
+    const sessionIdParam = Array.isArray(req.query.sessionId) ? req.query.sessionId[0] : req.query.sessionId;
+    const sessionId = typeof sessionIdParam === 'string' ? sessionIdParam : '';
+
+    // The session id stays in the browser that started the flow, so guessing the
+    // short user code isn't enough to claim the token.
+    const session = await getDeviceAuthSession(sessionId, 'simkl');
+    if (!session) {
+      return res.status(404).json({ status: 'expired' });
+    }
+
+    // Simkl asks callers to respect the interval it handed out, so polls that
+    // arrive early are answered without bothering it.
+    if (!await registerPoll(sessionId, session)) {
+      return res.json({ status: 'pending' });
+    }
+
+    const simklClient = new SimklClient(clientId);
+    const poll = await simklClient.pollPin(session.userCode);
+
+    if (poll.status === 'pending') {
+      return res.json({ status: 'pending' });
+    }
+
+    if (poll.status === 'slow_down') {
+      await widenPollInterval(sessionId, session);
+      return res.json({ status: 'slow_down' });
+    }
+
+    if (poll.status === 'expired') {
+      await deleteDeviceAuthSession(sessionId);
+      return res.json({ status: 'expired' });
+    }
+
+    const user = await simklClient.getMe(poll.access_token);
+    const tokenId = await persistSimklToken(user, poll.access_token);
+
+    await deleteDeviceAuthSession(sessionId);
+
+    if (!tokenId) {
+      return res.status(500).json({ error: "Simkl authorized the connection, but this server could not store the token." });
+    }
+
+    consola.info(`[Simkl PIN] Connected user ${user.username} - tokenId: ${tokenId}`);
+    res.json({ status: 'authorized', tokenId, username: user.username });
+  } catch (error) {
+    consola.error("[Simkl PIN] Status check failed:", error);
+    res.status(500).json({ error: "Failed to check the Simkl PIN status" });
+  }
+});
+
+addon.post("/api/auth/simkl/pin/cancel", async (req, res) => {
+  await handleDeviceAuthCancel(req, res, 'simkl');
 });
 
 addon.post("/api/auth/simkl/disconnect", async (req, res) => {

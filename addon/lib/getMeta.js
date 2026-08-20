@@ -2058,7 +2058,17 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
     url: `stremio:///search?search=${w}`
   }));
   
-  const { trailers } = Utils.parseTvdbTrailers(movieData.trailers, translatedName);
+  const { trailers: allTrailers } = Utils.parseTvdbTrailers(movieData.trailers, translatedName);
+
+  // Priority: User's language -> English -> All trailers
+  // TVDB tags most trailers with a three-letter code and some with two, so a
+  // single equality misses the user's own language: 'por' never equals 'pt'.
+  const wantedLangs = new Set([langCode3, String(language || '').split('-')[0]].filter(Boolean));
+  const userLangTrailers = allTrailers.filter(trailer => wantedLangs.has(trailer.lang));
+  const englishTrailers = allTrailers.filter(trailer => trailer.lang === 'eng' || trailer.lang === 'en');
+  const trailers = userLangTrailers.length > 0 ? userLangTrailers : (englishTrailers.length > 0 ? englishTrailers : allTrailers);
+  // Stremio plays from trailerStreams, so both fields carry the same ids.
+  const trailerStreams = Utils.toTrailerStreams(trailers);
 
   if(!logoUrl && imdbId && await imdb.metahubImageExists(imdbId, 'logo')){
     logoUrl =  imdb.getLogoFromImdb(imdbId);
@@ -2121,6 +2131,7 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
     landscapePoster: landscapePosterUrl,
     logo: processLogo(logoUrl),
     trailers: trailers,
+    trailerStreams: trailerStreams,
     behaviorHints: {
       defaultVideoId: kitsuId && idProvider === 'kitsu' ? `kitsu:${kitsuId}` : imdbId ? imdbId : stremioId,
       hasScheduledVideos: false
@@ -2326,7 +2337,17 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
     url: `stremio:///search?search=${w}`
   }));
 
-  const { trailers } = Utils.parseTvdbTrailers(tvdbShow.trailers, translatedName);
+  const { trailers: allTrailers } = Utils.parseTvdbTrailers(tvdbShow.trailers, translatedName);
+
+  // Priority: User's language -> English -> All trailers
+  // TVDB tags most trailers with a three-letter code and some with two, so a
+  // single equality misses the user's own language: 'por' never equals 'pt'.
+  const wantedLangs = new Set([langCode3, String(language || '').split('-')[0]].filter(Boolean));
+  const userLangTrailers = allTrailers.filter(trailer => wantedLangs.has(trailer.lang));
+  const englishTrailers = allTrailers.filter(trailer => trailer.lang === 'eng' || trailer.lang === 'en');
+  const trailers = userLangTrailers.length > 0 ? userLangTrailers : (englishTrailers.length > 0 ? englishTrailers : allTrailers);
+  // Stremio plays from trailerStreams, so both fields carry the same ids.
+  const trailerStreams = Utils.toTrailerStreams(trailers);
 
 
 
@@ -2571,6 +2592,7 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
     logo: logoUrl,
     videos: videos,
     trailers: trailers,
+    trailerStreams: trailerStreams,
 
     links: links,
     behaviorHints: { defaultVideoId: null, hasScheduledVideos: true },

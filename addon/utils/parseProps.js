@@ -2521,7 +2521,7 @@ function getYouTubeIdFromUrl(url) {
  * Parses the trailers array from the TVDB API into Stremio-compatible formats.
  * @param {Array} tvdbTrailers - The `trailers` array from the TVDB API response.
  * @param {string} defaultTitle - A fallback title to use for the trailer.
- * @returns {{trailers: Array, trailerStreams: Array}} An object containing both formats.
+ * @returns {{trailers: Array}} The parsed trailers.
  */
 function parseTvdbTrailers(tvdbTrailers, defaultTitle = 'Official Trailer') {
   const trailers = [];
@@ -2531,22 +2531,33 @@ function parseTvdbTrailers(tvdbTrailers, defaultTitle = 'Official Trailer') {
   }
 
   for (const trailer of tvdbTrailers) {
-    if (trailer.url && trailer.url.includes('youtube.com') || trailer.url.includes('youtu.be')) {
-      const ytId = getYouTubeIdFromUrl(trailer.url);
+    if (!trailer?.url) continue;
+    if (!(trailer.url.includes('youtube.com') || trailer.url.includes('youtu.be'))) continue;
 
-      if (ytId) {
-        const title = trailer.name || defaultTitle;
+    const ytId = getYouTubeIdFromUrl(trailer.url);
+    if (!ytId) continue;
 
-        trailers.push({
-          source: ytId,
-          type: 'Trailer',
-          name: defaultTitle
-        });
-      }
-    }
+    trailers.push({
+      source: ytId,
+      type: 'Trailer',
+      name: trailer.name || defaultTitle,
+      lang: trailer.language
+    });
   }
 
   return { trailers };
+}
+
+/**
+ * Maps parsed trailers to the trailerStreams shape.
+ * @param {Array} trailers - Trailers in `{source, name}` form.
+ * @returns {Array} The same ids as `{title, ytId}`.
+ */
+function toTrailerStreams(trailers) {
+  if (!Array.isArray(trailers)) return [];
+  return trailers
+    .filter((trailer) => trailer?.source)
+    .map((trailer) => ({ title: trailer.name || 'Trailer', ytId: trailer.source }));
 }
 
 // In-flight request cache for TMDB movie images to deduplicate concurrent requests
@@ -3452,6 +3463,7 @@ module.exports = {
   parseAnimeCatalogMeta,
   parseAnimeCatalogMetaBatch,
   parseTvdbTrailers,
+  toTrailerStreams,
   parseAnimeRelationsLink,
   parseAnimeGenreLink,
   getAnimePoster,

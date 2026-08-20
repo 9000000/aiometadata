@@ -3,7 +3,7 @@ import { getMeta } from "../lib/getMeta.js";
 import { cacheWrapMetaSmart, cacheWrapGlobal } from "../lib/getCache.js";
 import { UserConfig } from "../types/index.js";
 import * as Utils from "./parseProps.js";
-import { progress } from "framer-motion";
+
 const consola = require('consola');
 const { Agent } = require('undici');
 const crypto = require('crypto');

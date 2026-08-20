@@ -1,0 +1,105 @@
+20:51:28.960 [INFO] (Request-Tracker) [Request Tracker] Corrupted key cleanup completed
+20:51:34.045 [INFO] (Database) Migrated accounts schema: added groups_json
+20:51:34.288 [INFO] (Database) Migrated accounts schema: added blocked
+20:51:34.288 [INFO] (Database) Initialized postgres database
+20:51:34.647 [INFO] (Settings) Loaded 0 settings from database
+20:51:35.356 [INFO] (Cache Migration) Migration already completed (Redis flag exists), skipping.
+20:51:35.357 [WARN] (Cache Migration) Redis check failed: ENOENT: no such file or directory, open '/app/addon/data/.migration-completed'
+20:51:35.558 [INFO] (Cache Migration) Cleared ETag: anime-list-etag
+20:51:35.769 [INFO] (Cache Migration) Cleared ETag: kitsu-to-imdb-etag
+20:51:35.969 [INFO] (Cache Migration) Cleared ETag: anime-list-xml-etag
+20:51:36.179 [INFO] (Cache Migration) Cleared ETag: wiki-mapper-series-etag
+20:51:36.393 [INFO] (Cache Migration) Cleared ETag: wiki-mapper-movies-etag
+20:51:36.676 [ERROR] (Cache Migration) CRITICAL: Failed to create migration flag file: ENOENT: no such file or directory, open '/app/addon/data/.migration-completed'
+20:51:36.677 [ERROR] (Cache Migration) Migration may run again on next restart!
+20:51:36.677 [INFO] (Cache Migration) Migration completed. Deleted 0 cache files and cleared 5 ETags.
+20:51:36.677 [INFO] (Cache Migration) No old cache files found.
+20:51:36.924 [INFO] (Epoch-Cleanup) Cache epoch match (1). No cleanup needed.
+20:51:36.955 [INFO] (Wiki Mapper) Downloading: https://raw.githubusercontent.com/0xConstant1/Wikidata-Fetcher/refs/heads/main/data/tv_mappings.csv
+20:51:36.957 [INFO] (Wiki Mapper) Downloading: https://raw.githubusercontent.com/0xConstant1/Wikidata-Fetcher/refs/heads/main/data/movie_mappings.csv
+20:51:37.029 [WARN] (ID-Mapper) [ID Mapper] [Trakt-Anime-Movies] ETag matched, but local cache was unreadable. Forcing re-download.
+20:51:37.996 [INFO] (AnimeListMapper) Downloading anime-list XML...
+20:51:38.022 [WARN] (ID-Mapper) [ID Mapper] [animeApi] ETag matched, but local cache was unreadable. Forcing re-download.
+20:51:39.241 [INFO] (Wiki Mapper) Loaded 56442 valid mappings, skipped 0 invalid entries
+20:51:41.070 [INFO] (Wiki Mapper) Loaded 275546 valid mappings, skipped 0 invalid entries
+20:51:41.309 [INFO] (Wiki Mapper) Scheduled periodic updates every 24 hours.
+20:51:41.309 [INFO] (Wiki Mapper) Initialization complete
+20:51:41.430 [START] (IMDB Ratings) Initializing IMDb ratings...
+20:51:42.437 [INFO] (ID-Mapper) Successfully loaded and indexed 30644 anime mappings.
+20:51:42.437 [INFO] (ID-Mapper) [animeApi] Backfilled 2363 entries: mal +23, anilist +1747, kitsu +25, anidb +29, simkl +18, tmdb +524, tvdb +148, imdb +442; merged 505 split entries, added 109 new (50 conflicting matches and 509 contested ids skipped).
+20:51:42.998 [INFO] (AnimeListMapper) Successfully loaded and indexed 10731 anime mappings.
+20:51:42.999 [INFO] (AnimeListMapper) TVDB mappings: 4366, TMDB mappings: 4229, IMDB mappings: 1715
+20:51:43.860 [INFO] (AnimeListMapper) Maintenance task tracked: anime-list update completed in 5003ms
+20:51:43.860 [INFO] (AnimeListMapper) Scheduled periodic updates every 24 hours.
+20:51:43.884 [SUCCESS] (TMDB-Networks) Loaded 5564 TMDB TV networks from 2026-08-20.
+20:51:43.886 [INFO] (Cache-Cleanup) Checking cache schema version...
+20:51:44.113 [INFO] (IMDB Ratings) Remote file unchanged (ETag match). Using Redis cache.
+20:51:44.113 [SUCCESS] (IMDB Ratings) 999,096 ratings available in Redis.
+20:51:44.113 [INFO] (IMDB Ratings) Scheduled periodic IMDb ratings updates every 24 hours.
+20:51:44.130 [SUCCESS] (FlixPatrol) Loaded FlixPatrol availability index (119 regions)
+20:51:45.386 [WARN] (TMDB-Keywords) Failed to read TMDB keyword cache: TMDB keyword cache read timed out after 1500ms
+20:51:45.387 [INFO] (TMDB-Keywords) Fetching TMDB keyword export 2026-08-20
+20:51:47.312 [WARN] (TMDB-Keywords) Failed to write TMDB keyword cache: TMDB keyword cache write timed out after 1500ms
+20:51:47.661 [SUCCESS] (TMDB-Keywords) Loaded 93467 TMDB keywords from 2026-08-20.
+20:51:48.925 [SUCCESS] (Cache-Cleanup) Cache is already clean. No action needed.
+20:51:48.926 [INFO] [Server Startup] Waiting for initial cache warming to complete...
+20:51:48.926 [INFO] (API-Cache-Warming) [API Cache Warming] Warming API content...
+20:51:48.927 [INFO] (MAL Warmer) Starting MAL background catalog warming (mode: essential)...
+20:51:48.927 [INFO] (MAL Warmer) Warmup scheduled to check every 6 hours
+20:51:48.928 [INFO] (Catalog-Warmer) Comprehensive catalog warming disabled - CACHE_WARMUP_UUIDS not set
+20:51:48.929 [SUCCESS] (Cache-Cleanup-Scheduler) Starting cache cleanup scheduler (every 6 hours)
+20:51:48.929 [INFO] (Cache-Cleanup-Scheduler) Next scheduled cleanup: 2026-08-20T19:51:48.929Z
+20:51:48.929 [INFO] [API Cache Warming] Initializing API cache warming (interval: 720 minutes)
+20:51:48.929 [INFO] (API-Cache-Warming) [API Cache Warming] Scheduling periodic warming every 720 minutes
+20:51:48.929 [INFO] [Cache Warming] Scheduling popular content warming (interval: 24h, check every 15min)
+20:51:51.058 [WARN] (API-Cache-Warming) [API Cache Warming] BUILT_IN_TMDB_API_KEY not set, skipping popular content warming
+20:51:51.306 [ERROR] (Global-Cache) Method failed for cache key global:tmdb:genre:movie:en-US:
+    Error: TMDB API key not found in config or environment.
+        at getApiKey (/app/dist/server/lib/getTmdb.js:418:15)
+        at upstream (/app/dist/server/lib/getTmdb.js:571:119)
+        at cacheWrapGlobalInternal (/app/dist/server/lib/getCache.js:650:34)
+        at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+        at async singleFlight (/app/dist/server/lib/getCache.js:116:24)
+        at async cacheWrapGlobal.upstream (/app/dist/server/lib/getGenreList.js:14:33)
+        at async cacheWrapGlobalInternal (/app/dist/server/lib/getCache.js:650:28)
+        at async singleFlight (/app/dist/server/lib/getCache.js:116:24)
+        at async warmEssentialContent (/app/dist/server/lib/cacheWarmer.js:57:9)
+        at async startServerWithCacheWarming (/app/dist/server/index.js:6969:13)
+20:51:51.310 [WARN] (Global-Cache) Caching EMPTY_RESULT result for global:genre:tmdb:en-US:movie for 60s
+20:51:51.969 [ERROR] (Global-Cache) Method failed for cache key global:tmdb:genre:tv:en-US:
+    Error: TMDB API key not found in config or environment.
+        at getApiKey (/app/dist/server/lib/getTmdb.js:418:15)
+        at upstream (/app/dist/server/lib/getTmdb.js:576:113)
+        at cacheWrapGlobalInternal (/app/dist/server/lib/getCache.js:650:34)
+        at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+        at async singleFlight (/app/dist/server/lib/getCache.js:116:24)
+        at async cacheWrapGlobal.upstream (/app/dist/server/lib/getGenreList.js:18:33)
+        at async cacheWrapGlobalInternal (/app/dist/server/lib/getCache.js:650:28)
+        at async singleFlight (/app/dist/server/lib/getCache.js:116:24)
+        at async warmEssentialContent (/app/dist/server/lib/cacheWarmer.js:63:9)
+        at async startServerWithCacheWarming (/app/dist/server/index.js:6969:13)
+20:51:51.972 [WARN] (Global-Cache) Caching EMPTY_RESULT result for global:genre:tmdb:en-US:series for 60s
+20:51:52.384 [ERROR] (TVDB) TVDB API Key is not configured.
+20:51:52.384 [WARN] (Global-Cache) Caching EMPTY_RESULT result for global:genre:tvdb:en-US:series for 60s
+20:51:53.541 [ERROR] (TVDB) TVDB API Key is not configured.
+20:51:53.542 [WARN] (Global-Cache) Caching EMPTY_RESULT result for global:tvdb-api:collections-list:0 for 60s
+20:51:53.970 [SUCCESS] (API-Cache-Warming) [API Cache Warming] Maintenance task tracked: API cache warming completed in 4833ms
+20:51:53.972 [SUCCESS] (API-Cache-Warming) [API Cache Warming] API content warming completed
+20:51:53.972 [SUCCESS] [Server Startup] Initial cache warming completed successfully
+20:51:53.973 [SUCCESS] [Server Startup] Server ready to accept requests
+20:52:18.932 [INFO] (Cache-Cleanup-Scheduler) Starting scheduled cache cleanup...
+20:52:19.142 [INFO] (MAL Warmer) MAL catalogs warmed 4min ago, skipping (next in 356min)
+20:52:19.145 [INFO] (MAL Warmer) Skipping initial warmup - recently warmed
+20:52:19.981 [SUCCESS] (Cache-Cleanup-Scheduler) Expired cache cleanup completed. Cleared 5 expiring keys. 241 keys remain.
+20:52:19.982 [INFO] (Cache-Cleanup-Scheduler) Next scheduled cleanup: 2026-08-20T19:52:19.982Z
+21:01:25.998 [ERROR] (MAL) [MAL Discover] Error fetching discover: Request failed with status code 504
+21:01:25.999 [ERROR] [MAL Discover Preview] Error: Request failed with status code 504
+21:01:32.915 [INFO] (Request-Tracker) [Request Tracker] Getting recent activity...
+21:01:33.367 [INFO] (Request-Tracker) [Request Tracker] Found 0 activities in Redis
+21:01:33.368 [INFO] (Request-Tracker) [Request Tracker] Returning 0 parsed activities
+21:02:05.164 [INFO] (Request-Tracker) [Request Tracker] Getting recent activity...
+21:02:05.589 [INFO] (Request-Tracker) [Request Tracker] Found 0 activities in Redis
+21:02:05.589 [INFO] (Request-Tracker) [Request Tracker] Returning 0 parsed activities
+21:02:16.618 [INFO] (Request-Tracker) [Request Tracker] Getting recent activity...
+21:02:16.823 [INFO] (Request-Tracker) [Request Tracker] Found 0 activities in Redis
+21:02:16.824 [INFO] (Request-Tracker) [Request Tracker] Returning 0 parsed activities

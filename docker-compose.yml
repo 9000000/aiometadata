@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  aiometadata:
+    image: ghcr.io/cedya77/aiometadata:latest
+    container_name: aiometadata
+    restart: unless-stopped
+    ports:
+      - "3232:3232" # Nếu dùng Reverse Proxy như Traefik/Nginx, bạn có thể tắt port này
+    init: true
+    env_file:
+      - .env
+    environment:
+      # Ghi đè biến môi trường (nếu không khai trong .env)
+      - DATABASE_URI=postgresql://postgres:password123@aiometadata_postgres:5432/aiometadata
+      - REDIS_URL=redis://aiometadata_redis:6379
+    volumes:
+      # Mount thư mục lưu trữ poster cache (nếu bật ENABLE_BUILTIN_POSTER_CACHE) và SQLite (nếu dùng)
+      - ./data:/app/addon/data
+    depends_on:
+      aiometadata_redis:
+        condition: service_healthy
+      aiometadata_postgres:
+        condition: service_healthy
+    tty: true
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3232/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Redis - Bắt buộc cho việc caching API, danh mục và cấu hình
+  aiometadata_redis:
+    image: redis:alpine
+    container_name: aiometadata_redis
+    restart: unless-stopped
+    volumes:
+      - ./redis_data:/data
+    command: redis-server --appendonly yes --save 3600 1
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PostgreSQL - Tùy chọn nhưng Khuyến nghị thay thế cho SQLite mặc định
+  aiometadata_postgres:
+    image: postgres:15-alpine
+    container_name: aiometadata_postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=aiometadata
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password123
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d aiometadata"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Watchtower (Tùy chọn) - Tự động cập nhật container khi có bản mới
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower_aiometadata
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 86400 aiometadata # Kiểm tra cập nhật mỗi 24h một lần cho container aiometadata

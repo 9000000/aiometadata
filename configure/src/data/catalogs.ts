@@ -2,7 +2,7 @@ export interface CatalogDefinition {
   id: string;
   name: string;
   type: 'movie' | 'series' | 'anime';
-  source: 'tmdb' | 'tvdb' | 'mal' | 'tvmaze' | 'mdblist' | 'streaming' | 'stremthru' | 'custom' | 'trakt' | 'anilist' | 'letterboxd' | 'simkl' | 'flixpatrol'; 
+  source: 'tmdb' | 'tvdb' | 'mal' | 'tvmaze' | 'mdblist' | 'streaming' | 'stremthru' | 'custom' | 'trakt' | 'anilist' | 'letterboxd' | 'simkl' | 'flixpatrol' | 'franchise'; 
   isEnabledByDefault?: boolean;
   showOnHomeByDefault?: boolean;
 }
@@ -120,11 +120,15 @@ export const allSearchProviders: SearchProviderDefinition[] = [
   { value: 'simkl.search.series', label: 'Simkl (Series)', mediaType: ['anime_series'] },
 ];
 
+import franchiseCatalogsJson from "./franchiseCatalogs.json";
+export const franchiseCatalogs: CatalogDefinition[] = franchiseCatalogsJson as CatalogDefinition[];
+
 export const allCatalogDefinitions: CatalogDefinition[] = [
   ...baseCatalogs,
   ...animeCatalogs,
   ...authCatalogs,
   ...streamingCatalogs.map(({ regions, icon, ...rest }) => rest),
+  ...franchiseCatalogs,
 ]; 
 
 export type Catalog = CatalogDefinition;

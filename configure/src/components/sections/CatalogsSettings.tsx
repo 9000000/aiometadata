@@ -17,6 +17,7 @@ import { StreamingTop10Integration } from './StreamingTop10Integration';
 import { AIOMetadataIntegration } from './AIOMetadataIntegration';
 import { QuickAddDialog } from '@/components/QuickAddDialog';
 import { AICatalogDialog } from '@/components/AICatalogDialog';
+import { FranchisePickerDialog } from '@/components/setup/FranchisePickerDialog';
 import { useConfig } from '@/contexts/ConfigContext';
 import type { CatalogConfig } from '@/contexts/config';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, TouchSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core';
@@ -3980,6 +3981,7 @@ function CatalogsSettingsContent({
   const [isCustomManifestOpen, setIsCustomManifestOpen] = useState(false);
   const [isStreamingTop10Open, setIsStreamingTop10Open] = useState(false);
   const [isAIOMetadataOpen, setIsAIOMetadataOpen] = useState(false);
+  const [isFranchiseOpen, setIsFranchiseOpen] = useState(false);
   const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
   const [isAICatalogOpen, setIsAICatalogOpen] = useState(false);
   const [streamingDialogOpen, setStreamingDialogOpen] = useState(false);
@@ -5237,6 +5239,21 @@ function CatalogsSettingsContent({
                     <Button
                       variant="ghost"
                       size="icon"
+                      onClick={() => setIsFranchiseOpen(true)}
+                      aria-label="Franchises & Collections"
+                      className="h-9 w-9"
+                    >
+                      <Database className="h-5 w-5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Franchises & Collections</TooltipContent>
+                </Tooltip>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() => setIsStreamingTop10Open(true)}
                       aria-label="Streaming Top 10"
                       className="h-9 w-9"
@@ -5321,6 +5338,10 @@ function CatalogsSettingsContent({
           <StreamingTop10Integration
             isOpen={isStreamingTop10Open}
             onClose={() => setIsStreamingTop10Open(false)}
+          />
+          <FranchisePickerDialog
+            open={isFranchiseOpen}
+            onOpenChange={setIsFranchiseOpen}
           />
           <AIOMetadataIntegration
             isOpen={isAIOMetadataOpen}

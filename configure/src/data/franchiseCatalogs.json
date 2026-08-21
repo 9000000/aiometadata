@@ -1,0 +1,212 @@
+[
+  {
+    "id": "franchise.dc_animationsData",
+    "name": "DC: Animations",
+    "type": "series",
+    "source": "franchise",
+    "franchise": "dc"
+  },
+  {
+    "id": "franchise.dc_chronologicalData",
+    "name": "DC: Chronological",
+    "type": "movie",
+    "source": "franchise",
+    "franchise": "dc"
+  },
+  {
+    "id": "franchise.dc_DCEUMovies",
+    "name": "DC: D C E U Movies",
+    "type": "movie",
+    "source": "franchise",
+    "franchise": "dc"
+  },
+  {
+    "id": "franchise.dc_DCSeries",
+    "name": "DC: D C Series",
+    "type": "series",
+    "source": "franchise",
+    "franchise": "dc"
+  },
+  {
+    "id": "franchise.dc_everythingbatman",
+    "name": "DC: Everythingbatman",
+    "type": "movie",
+    "source": "franchise",
+    "franchise": "dc"
+  },
+  {
+    "id": "franchise.dc_everythingbatmananimation",
+    "name": "DC: Everythingbatmananimation",
+    "type": "series",
+    "source": "franchise",
+    "franchise": "dc"
+  },
+  {
+    "id": "franchise.dc_everythingsuperman",
+    "name": "DC: Everythingsuperman",
+    "type": "movie",
+    "source": "franchise",
+    "franchise": "dc"
+  },
+  {
+    "id": "franchise.dc_everythingsupermananimation",
+    "name": "DC: Everythingsupermananimation",
+    "type": "series",
+    "source": "franchise",
+    "franchise": "dc"
+  },
+  {
+    "id": "franchise.dc_moviesData",
+    "name": "DC: Movies",
+    "type": "movie",
+    "source": "franchise",
+    "franchise": "dc"
+  },
+  {
+    "id": "franchise.dc_releaseData",
+    "name": "DC: Release",
+    "type": "movie",
+    "source": "franchise",
+    "franchise": "dc"
+  },
+  {
+    "id": "franchise.dc_seriesData",
+    "name": "DC: Series",
+    "type": "series",
+    "source": "franchise",
+    "franchise": "dc"
+  },
+  {
+    "id": "franchise.marvel_animationsData",
+    "name": "Marvel: Animations",
+    "type": "series",
+    "source": "franchise",
+    "franchise": "marvel"
+  },
+  {
+    "id": "franchise.marvel_chronologicalData",
+    "name": "Marvel: Chronological",
+    "type": "movie",
+    "source": "franchise",
+    "franchise": "marvel"
+  },
+  {
+    "id": "franchise.marvel_moviesData",
+    "name": "Marvel: Movies",
+    "type": "movie",
+    "source": "franchise",
+    "franchise": "marvel"
+  },
+  {
+    "id": "franchise.marvel_releaseData",
+    "name": "Marvel: Release",
+    "type": "movie",
+    "source": "franchise",
+    "franchise": "marvel"
+  },
+  {
+    "id": "franchise.marvel_seriesData",
+    "name": "Marvel: Series",
+    "type": "series",
+    "source": "franchise",
+    "franchise": "marvel"
+  },
+  {
+    "id": "franchise.marvel_xmenData",
+    "name": "Marvel: Xmen",
+    "type": "movie",
+    "source": "franchise",
+    "franchise": "marvel"
+  },
+  {
+    "id": "franchise.star_wars_animatedSeriesData",
+    "name": "Star Wars: Animated Series",
+    "type": "series",
+    "source": "franchise",
+    "franchise": "star_wars"
+  },
+  {
+    "id": "franchise.star_wars_anthologyFilmsData",
+    "name": "Star Wars: Anthology Films",
+    "type": "movie",
+    "source": "franchise",
+    "franchise": "star_wars"
+  },
+  {
+    "id": "franchise.star_wars_bountyHuntersUnderworldData",
+    "name": "Star Wars: Bounty Hunters Underworld",
+    "type": "movie",
+    "source": "franchise",
+    "franchise": "star_wars"
+  },
+  {
+    "id": "franchise.star_wars_droidsCreaturesData",
+    "name": "Star Wars: Droids Creatures",
+    "type": "movie",
+    "source": "franchise",
+    "franchise": "star_wars"
+  },
+  {
+    "id": "franchise.star_wars_empireEraData",
+    "name": "Star Wars: Empire Era",
+    "type": "movie",
+    "source": "franchise",
+    "franchise": "star_wars"
+  },
+  {
+    "id": "franchise.star_wars_highRepublicEraData",
+    "name": "Star Wars: High Republic Era",
+    "type": "movie",
+    "source": "franchise",
+    "franchise": "star_wars"
+  },
+  {
+    "id": "franchise.star_wars_jediSithLoreData",
+    "name": "Star Wars: Jedi Sith Lore",
+    "type": "movie",
+    "source": "franchise",
+    "franchise": "star_wars"
+  },
+  {
+    "id": "franchise.star_wars_liveActionSeriesData",
+    "name": "Star Wars: Live Action Series",
+    "type": "series",
+    "source": "franchise",
+    "franchise": "star_wars"
+  },
+  {
+    "id": "franchise.star_wars_microSeriesShortsData",
+    "name": "Star Wars: Micro Series Shorts",
+    "type": "series",
+    "source": "franchise",
+    "franchise": "star_wars"
+  },
+  {
+    "id": "franchise.star_wars_moviesSeriesChronologicalData",
+    "name": "Star Wars: Movies Series Chronological",
+    "type": "series",
+    "source": "franchise",
+    "franchise": "star_wars"
+  },
+  {
+    "id": "franchise.star_wars_moviesSeriesReleaseData",
+    "name": "Star Wars: Movies Series Release",
+    "type": "series",
+    "source": "franchise",
+    "franchise": "star_wars"
+  },
+  {
+    "id": "franchise.star_wars_newRepublicEraData",
+    "name": "Star Wars: New Republic Era",
+    "type": "movie",
+    "source": "franchise",
+    "franchise": "star_wars"
+  },
+  {
+    "id": "franchise.star_wars_skywalkerSagaData",
+    "name": "Star Wars: Skywalker Saga",
+    "type": "movie",
+    "source": "franchise",
+    "franchise": "star_wars"
+  }
+]

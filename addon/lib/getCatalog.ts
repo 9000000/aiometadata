@@ -8,6 +8,7 @@ import { fetchSimklTrendingItems, fetchSimklRecipeItems, fetchSimklWatchlistItem
 import { fetchLetterboxdList, parseLetterboxdItems, getLetterboxdGenreIdByName } from "../utils/letterboxdUtils.js";
 import { getFlixPatrolMetas } from "../utils/flixpatrolUtils.js";
 import { fetchResume, parseResumeItems, fetchListItems, parseListItems, fetchPickItems, parsePickItems } from "../utils/publicmetadbUtils.js";
+import { getFranchiseCatalog } from "./franchiseUtils.js";
 import { mapWithLimit } from "../utils/concurrency.js";
 const anilist = require('./anilist');
 import * as jikan from "./mal.js"
@@ -87,6 +88,11 @@ async function getCatalog(type: string, language: string, page: number, id: stri
       logger.debug(`Routing to MAL discover catalog handler for id: ${id}`);
       const malDiscoverResults = await getMalDiscoverCatalog(type, id, genre, page, language, config, userUUID, includeVideos);
       return { metas: malDiscoverResults };
+    }
+    else if (id.startsWith('franchise.')) {
+      logger.debug(`Routing to Franchise catalog handler for id: ${id}`);
+      const franchiseResults = getFranchiseCatalog(id, page);
+      return { metas: franchiseResults };
     }
     else if (id.startsWith('mal.userlist.') || id === 'mal.suggestions') {
       logger.debug(`Routing to MAL user list catalog handler for id: ${id}`);

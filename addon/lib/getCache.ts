@@ -1406,6 +1406,14 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
     }
   }
 
+  if (idOnly.startsWith('publicmetadb.')) {
+    const catCfg = config.catalogs?.find((c: any) => c.id === idOnly);
+    if (catCfg?.cacheTTL) {
+      cacheTTL = catCfg.cacheTTL;
+      cacheLogger.debug(`[Catalog] Using custom cache TTL for PublicMetaDB catalog ${idOnly}: ${cacheTTL}s`);
+    }
+  }
+
   if (idOnly.startsWith('simkl.')) {
     const catCfg = config.catalogs?.find((c: any) => c.id === idOnly);
     if (catCfg?.cacheTTL) {

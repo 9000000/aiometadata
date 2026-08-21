@@ -14,7 +14,7 @@ export function loadFranchiseList(id: string): any[] {
     return franchiseCache[cacheKey];
   }
 
-  const filePath = path.join(__dirname, '../static/franchises', `${id}.json`);
+  const filePath = path.join(process.cwd(), 'addon', 'static', 'franchises', `${id}.json`);
   if (!fs.existsSync(filePath)) {
     return [];
   }

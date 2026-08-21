@@ -5053,9 +5053,9 @@ function CatalogsSettingsContent({
                       size="icon"
                       onClick={() => setIsAIOMetadataOpen(true)}
                       aria-label="AIOMetadata Catalogs"
-                      className="h-9 w-9"
+                      className="h-11 w-11"
                     >
-                      <img src="/logo.png" alt="AIOMetadata" className="h-5 w-5 object-contain" />
+                      <img src="/logo.png" alt="AIOMetadata" className="h-7 w-7 object-contain" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>AIOMetadata Built-in Catalogs</TooltipContent>
@@ -5068,9 +5068,9 @@ function CatalogsSettingsContent({
                       size="icon"
                       onClick={() => setIsMdbListOpen(true)}
                       aria-label="MDBList Integration"
-                      className="h-9 w-9"
+                      className="h-11 w-11"
                     >
-                      <img src="/mdblist_icon.png" alt="MDBList" className="h-5 w-5 object-contain" />
+                      <img src="/mdblist_icon.png" alt="MDBList" className="h-7 w-7 object-contain" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>MDBList Integration</TooltipContent>
@@ -5083,9 +5083,9 @@ function CatalogsSettingsContent({
                       size="icon" 
                       onClick={() => setIsTraktOpen(true)} 
                       aria-label="Trakt Integration"
-                      className="h-9 w-9"
+                      className="h-11 w-11"
                     >
-                      <img src="/trakt_icon.png" alt="Trakt" className="h-5 w-5 object-contain" />
+                      <img src="/trakt_icon.png" alt="Trakt" className="h-7 w-7 object-contain" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Trakt Integration</TooltipContent>
@@ -5098,12 +5098,12 @@ function CatalogsSettingsContent({
                       size="icon" 
                       onClick={() => setIsSimklOpen(true)} 
                       aria-label="Simkl Integration"
-                      className="h-9 w-9"
+                      className="h-11 w-11"
                     >
                       <img 
                         src="https://us.simkl.in/img_favicon/v2/favicon-192x192.png" 
                         alt="Simkl" 
-                        className="h-5 w-5 rounded object-contain" 
+                        className="h-7 w-7 rounded object-contain" 
                       />
                     </Button>
                   </TooltipTrigger>
@@ -5117,12 +5117,12 @@ function CatalogsSettingsContent({
                       size="icon"
                       onClick={() => setIsMovieLensOpen(true)}
                       aria-label="MovieLens Integration"
-                      className="h-9 w-9"
+                      className="h-11 w-11"
                     >
                       <img
                         src="https://movielens.org/favicon.ico"
                         alt="MovieLens"
-                        className="h-5 w-5 rounded object-contain"
+                        className="h-7 w-7 rounded object-contain"
                       />
                     </Button>
                   </TooltipTrigger>
@@ -5136,9 +5136,9 @@ function CatalogsSettingsContent({
                       size="icon"
                       onClick={() => setIsPublicMetaDBOpen(true)}
                       aria-label="PublicMetaDB Integration"
-                      className="h-9 w-9"
+                      className="h-11 w-11"
                     >
-                      <Database className="w-5 h-5" />
+                      <Database className="w-7 h-7" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>PublicMetaDB Integration</TooltipContent>
@@ -5151,9 +5151,9 @@ function CatalogsSettingsContent({
                       size="icon"
                       onClick={() => setIsTmdbListOpen(true)}
                       aria-label="TMDB Lists"
-                      className="h-9 w-9"
+                      className="h-11 w-11"
                     >
-                      <img src="/tmdb_icon.png" alt="TMDB" className="h-5 w-5 object-contain" />
+                      <img src="/tmdb_icon.png" alt="TMDB" className="h-7 w-7 object-contain" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>TMDB Lists</TooltipContent>
@@ -5166,9 +5166,9 @@ function CatalogsSettingsContent({
                       size="icon"
                       onClick={() => setIsTvdbListOpen(true)}
                       aria-label="TheTVDB Lists"
-                      className="h-9 w-9"
+                      className="h-11 w-11"
                     >
-                      <img src="/tvdb_icon.png" alt="TheTVDB" className="h-5 w-5 object-contain" />
+                      <img src="/tvdb_icon.png" alt="TheTVDB" className="h-7 w-7 object-contain" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>TheTVDB Lists</TooltipContent>
@@ -5181,9 +5181,9 @@ function CatalogsSettingsContent({
                       size="icon" 
                       onClick={() => setIsLetterboxdOpen(true)} 
                       aria-label="Letterboxd Integration"
-                      className="h-9 w-9"
+                      className="h-11 w-11"
                     >
-                      <img src="/letterboxd_icon.png" alt="Letterboxd" className="h-5 w-5 object-contain" />
+                      <img src="/letterboxd_icon.png" alt="Letterboxd" className="h-7 w-7 object-contain" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Letterboxd Integration</TooltipContent>
@@ -5196,9 +5196,9 @@ function CatalogsSettingsContent({
                       size="icon" 
                       onClick={() => setIsAniListOpen(true)} 
                       aria-label="AniList Integration"
-                      className="h-9 w-9"
+                      className="h-11 w-11"
                     >
-                      <img src="/anilist_icon.png" alt="AniList" className="h-5 w-5 object-contain" />
+                      <img src="/anilist_icon.png" alt="AniList" className="h-7 w-7 object-contain" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>AniList Integration</TooltipContent>
@@ -5211,9 +5211,9 @@ function CatalogsSettingsContent({
                       size="icon"
                       onClick={() => setIsMalOpen(true)}
                       aria-label="MyAnimeList Integration"
-                      className="h-9 w-9"
+                      className="h-11 w-11"
                     >
-                      <img src="/mal_icon.png" alt="MyAnimeList" className="h-5 w-5 object-contain rounded" />
+                      <img src="/mal_icon.png" alt="MyAnimeList" className="h-7 w-7 object-contain rounded" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>MyAnimeList Integration</TooltipContent>
@@ -5226,9 +5226,9 @@ function CatalogsSettingsContent({
                       size="icon"
                       onClick={handleOpenStreamingDialog}
                       aria-label="Streaming Providers"
-                      className="h-9 w-9"
+                      className="h-11 w-11"
                     >
-                      <img src="/streamingservices_icon.png" alt="Streaming" className="h-5 w-5 object-contain" />
+                      <img src="/streamingservices_icon.png" alt="Streaming" className="h-7 w-7 object-contain" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Streaming Providers</TooltipContent>
@@ -5241,9 +5241,9 @@ function CatalogsSettingsContent({
                       size="icon"
                       onClick={() => setIsFranchiseOpen(true)}
                       aria-label="Franchises & Collections"
-                      className="h-9 w-9"
+                      className="h-11 w-11"
                     >
-                      <Database className="h-5 w-5" />
+                      <Database className="h-7 w-7" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Franchises & Collections</TooltipContent>
@@ -5256,9 +5256,9 @@ function CatalogsSettingsContent({
                       size="icon"
                       onClick={() => setIsStreamingTop10Open(true)}
                       aria-label="Streaming Top 10"
-                      className="h-9 w-9"
+                      className="h-11 w-11"
                     >
-                      <Trophy className="w-5 h-5" />
+                      <Trophy className="w-7 h-7" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Streaming Top 10</TooltipContent>
@@ -5271,9 +5271,9 @@ function CatalogsSettingsContent({
                       size="icon"
                       onClick={() => setIsCustomManifestOpen(true)}
                       aria-label="Import Custom Manifest"
-                      className="h-9 w-9"
+                      className="h-11 w-11"
                     >
-                      <img src="/manifest_icon.png" alt="Manifest" className="h-5 w-5 object-contain" />
+                      <img src="/manifest_icon.png" alt="Manifest" className="h-7 w-7 object-contain" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Import Custom Manifest</TooltipContent>
@@ -5283,8 +5283,8 @@ function CatalogsSettingsContent({
 
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Button variant="ghost" size="icon" onClick={handleReloadCatalogs} aria-label="Reload Catalogs" className="h-9 w-9">
-                      <RefreshCw className="w-5 h-5" />
+                    <Button variant="ghost" size="icon" onClick={handleReloadCatalogs} aria-label="Reload Catalogs" className="h-11 w-11">
+                      <RefreshCw className="w-7 h-7" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Refresh catalogs to look for updates</TooltipContent>

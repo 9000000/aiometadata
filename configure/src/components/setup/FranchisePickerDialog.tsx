@@ -60,17 +60,37 @@ export function FranchisePickerDialog({
   const { config, setConfig } = useConfig();
   const [search, setSearch] = useState('');
 
-  // config.catalogs stores enabled catalogs (e.g. { "franchise.dc_movies": true })
-  const toggleCatalog = (id: string) => {
+  const isSelected = (id: string, type: string) => {
+    return !!config.catalogs?.find(c => c.id === id && c.type === type);
+  };
+
+  const toggleCatalog = (catalog: CatalogDefinition) => {
     setConfig(prev => {
-      const current = prev.catalogs?.[id];
-      return {
-        ...prev,
-        catalogs: {
-          ...prev.catalogs,
-          [id]: !current
-        }
-      };
+      const catalogs = prev.catalogs || [];
+      const exists = catalogs.some(c => c.id === catalog.id && c.type === catalog.type);
+      
+      if (exists) {
+        return {
+          ...prev,
+          catalogs: catalogs.filter(c => !(c.id === catalog.id && c.type === catalog.type))
+        };
+      } else {
+        return {
+          ...prev,
+          catalogs: [
+            ...catalogs,
+            {
+              id: catalog.id,
+              type: catalog.type,
+              name: catalog.name,
+              source: 'franchise',
+              enabled: true,
+              showInHome: true,
+              cacheTTL: 86400
+            }
+          ]
+        };
+      }
     });
   };
 
@@ -95,10 +115,10 @@ export function FranchisePickerDialog({
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
           {filtered.map(catalog => (
             <FranchiseTile
-              key={catalog.id}
+              key={`${catalog.id}-${catalog.type}`}
               catalog={catalog}
-              selected={!!config.catalogs?.[catalog.id]}
-              onClick={() => toggleCatalog(catalog.id)}
+              selected={isSelected(catalog.id, catalog.type)}
+              onClick={() => toggleCatalog(catalog)}
             />
           ))}
         </div>

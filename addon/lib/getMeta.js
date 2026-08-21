@@ -281,7 +281,7 @@ async function getAnimeArtwork(allIds, config, fallbackPosterUrl, fallbackBackgr
 }
 
 
-const host = process.env.HOST_NAME.startsWith('http')
+const host = process.env.HOST_NAME?.startsWith('http')
     ? process.env.HOST_NAME
     : `https://${process.env.HOST_NAME}`;
 
@@ -1446,7 +1446,8 @@ async function buildTmdbMovieResponse(stremioId, movieData, language, config, us
   })).filter(w => w.name);
 
   let overview = movieData.overview;
-  overview = Utils.processOverviewTranslations(movieData.translations, language, overview);
+  const overviewLanguage = config.overviewLanguage || language || 'en-US';
+  overview = Utils.processOverviewTranslations(movieData.translations, overviewLanguage, overview);
   const finalTitle = Utils.processTitleTranslations(
     movieData.translations,
     language,
@@ -1873,7 +1874,8 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
   }
   const runtime = seriesData.episode_run_time?.[0] ?? seriesData.last_episode_to_air?.runtime ?? seriesData.next_episode_to_air?.runtime ?? null;
   let overview = seriesData.overview;
-  overview = Utils.processOverviewTranslations(seriesData.translations, language, overview);
+  const overviewLanguage = config.overviewLanguage || language || 'en-US';
+  overview = Utils.processOverviewTranslations(seriesData.translations, overviewLanguage, overview);
   let finalName = seriesData.name;
   finalName = Utils.processTitleTranslations(
     seriesData.translations,
@@ -1966,12 +1968,13 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
 
   const { year, image: tvdbPosterPath, remoteIds, characters } = movieData;
   const langCode3 = await to3LetterCode(language, config);
+  const overviewLangCode3 = await to3LetterCode(config.overviewLanguage || language, config);
   const nameTranslations = movieData.translations?.nameTranslations || [];
   const overviewTranslations = movieData.translations?.overviewTranslations || [];
   const translatedName = nameTranslations.find(t => t.language === langCode3)?.name
              || nameTranslations.find(t => t.language === 'eng')?.name
              || movieData.name;
-  const overview = overviewTranslations.find(t => t.language === langCode3)?.overview
+  const overview = overviewTranslations.find(t => t.language === overviewLangCode3)?.overview
   || overviewTranslations.find(t => t.language === 'eng')?.overview
   || movieData.overview;
   
@@ -2223,13 +2226,14 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
   }
   
   const langCode3 = await to3LetterCode(language, config);
+  const overviewLangCode3 = await to3LetterCode(config.overviewLanguage || language, config);
   const nameTranslations = tvdbShow.translations?.nameTranslations || [];
   const overviewTranslations = tvdbShow.translations?.overviewTranslations || [];
   const translatedName = nameTranslations.find(t => t.language === langCode3)?.name
              || nameTranslations.find(t => t.language === 'eng')?.name
              || tvdbShow.name;
              
-  const overview = overviewTranslations.find(t => t.language === langCode3)?.overview
+  const overview = overviewTranslations.find(t => t.language === overviewLangCode3)?.overview
                    || overviewTranslations.find(t => t.language === 'eng')?.overview
                    || tvdbShow.overview;
   let imdbId = allIds?.imdbId;

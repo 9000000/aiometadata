@@ -3976,7 +3976,7 @@ addon.get("/", function (_, res) {
 });
 // --- Basic Manifest Route ---
 addon.get("/manifest.json", function (req, res) {
-  const host = process.env.HOST_NAME.startsWith('http')
+  const host = process.env.HOST_NAME?.startsWith('http')
     ? process.env.HOST_NAME
     : `https://${process.env.HOST_NAME}`;
     const basicManifest = {
@@ -4708,7 +4708,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
     // Art URL pattern overrides for catalog items
     // Skip poster override for up next catalogs unless useShowPosterForUpNext is enabled
     // (when disabled, up next uses episode thumbnails as posters which shouldn't be overridden)
-    const host = process.env.HOST_NAME.startsWith('http') ? process.env.HOST_NAME : `https://${process.env.HOST_NAME}`;
+    const host = process.env.HOST_NAME?.startsWith('http') ? process.env.HOST_NAME : `https://${process.env.HOST_NAME}`;
     const posterPatternsEnabled = config._currentSearchCatalogId
       ? (config.search?.engineRatingPosters?.[config._currentSearchCatalogId] === true)
       : (catalogConfig?.enableRatingPosters !== false);
@@ -4891,7 +4891,7 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
 
     {
       const userAgent = req.headers['user-agent'] || '';
-      const host = process.env.HOST_NAME.startsWith('http') ? process.env.HOST_NAME : `https://${process.env.HOST_NAME}`;
+      const host = process.env.HOST_NAME?.startsWith('http') ? process.env.HOST_NAME : `https://${process.env.HOST_NAME}`;
       const { resolveCustomArtUrl, resolvePosterPattern, resolveThumbnailPattern, getPosterRatingApiKey } = require('./utils/parseProps');
       const ids = extractIdsFromMeta(result.meta);
       const metaType = result.meta.type || type;

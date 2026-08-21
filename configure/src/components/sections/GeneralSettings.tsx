@@ -87,6 +87,10 @@ export function GeneralSettings() {
     setConfig(prevConfig => ({ ...prevConfig, language: value }));
   };
 
+  const handleOverviewLanguageChange = (value: string) => {
+    setConfig(prevConfig => ({ ...prevConfig, overviewLanguage: value }));
+  };
+
   const handleIncludeAdultChange = (checked: boolean) => {
     setConfig(prevConfig => ({ ...prevConfig, includeAdult: checked }));
   };
@@ -209,6 +213,23 @@ export function GeneralSettings() {
               <Select value={config.language} onValueChange={handleLanguageChange}>
                 <SelectTrigger id="language" className="w-full sm:w-[200px] shrink-0">
                   <SelectValue placeholder="Select language" />
+                </SelectTrigger>
+                <SelectContent>
+                  {languageOptions.map(opt => (
+                    <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="min-w-[12rem] flex-1">
+                <Label htmlFor="overview-language" className="font-medium">Description Language</Label>
+                <p className="text-sm text-muted-foreground">Language for meta descriptions (defaults to Display Language).</p>
+              </div>
+              <Select value={config.overviewLanguage || config.language || 'en-US'} onValueChange={handleOverviewLanguageChange}>
+                <SelectTrigger id="overview-language" className="w-full sm:w-[200px] shrink-0">
+                  <SelectValue placeholder="Select description language" />
                 </SelectTrigger>
                 <SelectContent>
                   {languageOptions.map(opt => (

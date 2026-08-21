@@ -20,7 +20,7 @@ function CATALOG_TTL() { return parseInt(process.env.CATALOG_TTL || 1 * 24 * 60 
 const buildInfo = require('../lib/buildInfo');
 // Dynamic import to avoid circular dependency
 
-const host = process.env.HOST_NAME.startsWith('http')
+const host = process.env.HOST_NAME?.startsWith('http')
     ? process.env.HOST_NAME
     : `https://${process.env.HOST_NAME}`;
 
@@ -1072,7 +1072,7 @@ function parseShareLink(title, imdb_id, type) {
 function parseAnimeGenreLink(genres, type, userUUID) {
   if (!Array.isArray(genres) || !process.env.HOST_NAME) return [];
   
-  const host = process.env.HOST_NAME.startsWith('http')
+  const host = process.env.HOST_NAME?.startsWith('http')
     ? process.env.HOST_NAME
     : `https://${process.env.HOST_NAME}`;
     
@@ -1104,7 +1104,7 @@ function parseAnimeGenreLink(genres, type, userUUID) {
 function parseGenreLink(genres, type, userUUID, isTvdb = false) {
   if (!Array.isArray(genres) || !process.env.HOST_NAME) return [];
   
-  const host = process.env.HOST_NAME.startsWith('http')
+  const host = process.env.HOST_NAME?.startsWith('http')
     ? process.env.HOST_NAME
     : `https://${process.env.HOST_NAME}`;
     
@@ -1205,7 +1205,7 @@ function parseYear(status, first_air_date, last_air_date) {
 function parseAnimeCreditsLink(characterData, userUUID, castCount) {
   if (!characterData || !characterData.length === 0) return [];
 
-  const host = process.env.HOST_NAME.startsWith('http')
+  const host = process.env.HOST_NAME?.startsWith('http')
     ? process.env.HOST_NAME
     : `https://${process.env.HOST_NAME}`;
     

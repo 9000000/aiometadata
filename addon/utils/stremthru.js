@@ -11,7 +11,7 @@ const buildInfo = require('../lib/buildInfo');
 
 const logger = consola.withTag('StremThru');
 
-const host = process.env.HOST_NAME.startsWith('http')
+const host = process.env.HOST_NAME?.startsWith('http')
     ? process.env.HOST_NAME
     : `https://${process.env.HOST_NAME}`;
 

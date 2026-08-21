@@ -5,8 +5,14 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: 'general.language', section: 'general', anchor: 'language',
     label: 'Display Language',
-    description: 'Language for titles and descriptions.',
+    description: 'Language for titles.',
     keywords: ['locale', 'translation', 'subtitle'],
+  },
+  {
+    id: 'general.overviewLanguage', section: 'general', anchor: 'overview-language',
+    label: 'Description Language',
+    description: 'Language for meta descriptions (defaults to Display Language).',
+    keywords: ['locale', 'translation', 'overview', 'description'],
   },
   {
     id: 'general.timezone', section: 'general', anchor: 'timezone',

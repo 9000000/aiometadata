@@ -1,6 +1,6 @@
 function getConfiguredHost(): string | null {
   if (!process.env.HOST_NAME) return null;
-  return process.env.HOST_NAME.startsWith('http')
+  return process.env.HOST_NAME?.startsWith('http')
     ? process.env.HOST_NAME
     : `https://${process.env.HOST_NAME}`;
 }

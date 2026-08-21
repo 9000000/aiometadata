@@ -2,6 +2,7 @@
 
 export interface UserConfig {
   language?: string;
+  overviewLanguage?: string;
   providers?: {
     movie?: string;
     series?: string;

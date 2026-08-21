@@ -7593,6 +7593,9 @@ addon.post("/api/dashboard/maintenance/execute", requireDashboardAdmin, async (r
         const { forceWarmImages } = require('./lib/comprehensiveCatalogWarmer');
         forceWarmImages();
         result = { success: true, message: 'Image warming started, catalog schedule left unchanged' };
+      } else if (action === 'sync-ttl') {
+        const { syncCatalogTtlToSchedule } = require('./lib/comprehensiveCatalogWarmer');
+        result = await syncCatalogTtlToSchedule();
       } else if (action === 'stop') {
         const { stopComprehensiveWarming } = require('./lib/comprehensiveCatalogWarmer');
         result = stopComprehensiveWarming();

@@ -15,6 +15,8 @@ const { buildProxyArtUrl } = require('./posterCache/proxyArt.js');
 const movielens = require('./movielens');
 const database = require('./database');
 const redis = require('./redisClient');
+/** Slack for clock skew, so a key already sitting on the target is left alone. */
+const EXPIRY_TOLERANCE_MS = 1000;
 const consola = require('consola');
 const { loadConfigFromDatabase } = require('./configApi.js');
 const { resolveDynamicTmdbDiscoverParams } = require('./tmdbDiscoverDateTokens');
@@ -231,18 +233,6 @@ class ComprehensiveCatalogWarmer {
     }
   }
 
-  /**
-   * True when the run put something into cache rather than reading it all back.
-   * A run that filled nothing left every TTL where it was, so moving the schedule
-   * would strand those keys past their expiry.
-   */
-  filledCache(uuid = null) {
-    const scope = uuid ? this.stats.uuidStats[uuid] : this.stats;
-    if (!scope) return true;
-    const pages = scope.totalPages || 0;
-    return pages === 0 || (scope.pagesFromCache || 0) < pages;
-  }
-
   async markWarmed(uuid, runStartedAt = null, stampSchedule = true) {
     try {
       const lastWarmupKey = `catalog-warmup:last-run:${uuid}`;
@@ -264,7 +254,7 @@ class ComprehensiveCatalogWarmer {
       }));
 
       if (!stampSchedule) {
-        this.log('info', `UUID ${uuid} filled nothing, leaving its warmup schedule where it was`);
+        this.log('info', `UUID ${uuid} images warmed, leaving its warmup schedule where it was`);
         return;
       }
 
@@ -273,6 +263,99 @@ class ComprehensiveCatalogWarmer {
       this.log('debug', `Marked warmup complete for UUID ${uuid}, next run: ${this.formatNextRunTime(nextRunTime)}`);
     } catch (error) {
       this.log('error', `Failed to mark warmup complete for UUID ${uuid}: ${error.message}`);
+    }
+  }
+
+  /**
+   * Pull every catalog key in to expire just before the next warm run.
+   * A key that outlives the run is handed back as a cache hit, keeps the expiry it
+   * already had and dies mid-interval with nothing scheduled to refetch it. Adding a
+   * catalog between runs is the usual way to end up there. TTLs are only shortened,
+   * never extended, so nothing is kept alive past what it was already given.
+   */
+  async syncCatalogTtlToSchedule() {
+    if (!redis) return { success: false, message: 'Redis is not available' };
+
+    this.syncConfigFromEnv();
+
+    if (!this.config.enabled) {
+      return { success: false, message: 'Comprehensive catalog warming is disabled' };
+    }
+    if (this.isRunning) {
+      return { success: false, message: 'Warmup is running, sync once it finishes' };
+    }
+    if (!this.config.uuids || this.config.uuids.length === 0) {
+      return { success: false, message: 'CACHE_WARMUP_UUIDS is not set' };
+    }
+
+    try {
+      const intervalMs = this.config.intervalHours * 60 * 60 * 1000;
+      let nextRun = null;
+
+      for (const uuid of this.config.uuids) {
+        const lastRun = await redis.get(`catalog-warmup:last-run:${uuid}`);
+        if (!lastRun) {
+          nextRun = null;
+          break;
+        }
+        const due = parseInt(lastRun, 10) + intervalMs;
+        if (nextRun === null || due < nextRun) nextRun = due;
+      }
+
+      const msUntilNextRun = nextRun === null ? 0 : nextRun - Date.now();
+      if (msUntilNextRun <= 1000) {
+        return { success: false, message: 'A warm run is already due, nothing to line up' };
+      }
+
+      const targetAt = nextRun - EXPIRY_TOLERANCE_MS;
+      const { getCacheEpoch } = require('./cacheEpoch');
+      const pattern = `e${getCacheEpoch()}:catalog:*`;
+
+      let scanned = 0;
+      let adjusted = 0;
+      let cursor = '0';
+
+      do {
+        const [next, keys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 500);
+        cursor = next;
+        if (!keys || keys.length === 0) continue;
+        scanned += keys.length;
+
+        const ttls = await redis.pipeline(keys.map((k) => ['pttl', k])).exec();
+        // Read the clock next to the reply the TTLs came back in, so the round trip
+        // is not mistaken for the key expiring late.
+        const readAt = Date.now();
+        const pipeline = redis.pipeline();
+        let queued = 0;
+
+        keys.forEach((key, i) => {
+          const pttl = ttls?.[i]?.[1];
+          if (typeof pttl !== 'number' || pttl <= 0) return;
+          if (readAt + pttl <= targetAt + EXPIRY_TOLERANCE_MS) return;
+          pipeline.pexpireat(key, targetAt);
+          queued++;
+        });
+
+        if (queued > 0) {
+          await pipeline.exec();
+          adjusted += queued;
+        }
+      } while (cursor !== '0');
+
+      const due = this.formatNextRunTime(nextRun);
+      this.log('success', `Lined up ${adjusted} of ${scanned} catalog keys to expire before the next warmup ${due}`);
+      return {
+        success: true,
+        message: adjusted > 0
+          ? `Lined up ${adjusted} of ${scanned} catalog keys to expire before the next warmup ${due}`
+          : `All ${scanned} catalog keys already expire before the next warmup ${due}`,
+        scanned,
+        adjusted,
+        nextRun: new Date(nextRun).toISOString(),
+      };
+    } catch (error) {
+      this.log('error', `Failed to sync catalog TTLs to the schedule: ${error.message}`);
+      return { success: false, message: `Failed to sync catalog TTLs: ${error.message}` };
     }
   }
 
@@ -994,6 +1077,7 @@ class ComprehensiveCatalogWarmer {
       this.stats.totalCatalogs = grandTotalCatalogs;
       this.stats.catalogsWarmed = 0;
       this.stats.totalPages = 0;
+      this.stats.pagesFromCache = 0;
       this.stats.totalItems = 0;
       this.stats.errors = [];
 
@@ -1054,7 +1138,7 @@ class ComprehensiveCatalogWarmer {
           this.stats.uuidStats[uuid].duration = `${Math.floor(uuidDuration / 60000)}m ${Math.floor((uuidDuration % 60000) / 1000)}s`;
 
           if (!uuidWarmingInterrupted) {
-            const stampSchedule = !imagesOnly && (!force || this.filledCache(uuid));
+            const stampSchedule = !imagesOnly;
             await this.markWarmed(uuid, uuidStartTime, stampSchedule);
             this.log('success', `UUID ${uuid} complete: ${this.stats.uuidStats[uuid].catalogsWarmed}/${this.stats.uuidStats[uuid].totalCatalogs} catalogs, ${this.stats.uuidStats[uuid].totalPages} pages, ${this.stats.uuidStats[uuid].totalItems} items in ${this.stats.uuidStats[uuid].duration}`);
           } else {
@@ -1081,9 +1165,7 @@ class ComprehensiveCatalogWarmer {
         this.log('info', `Image warming: ${imageStats.depth} queued, ${imageStats.warmed} warmed, ${imageStats.skipped} already cached`);
       }
       
-      // A forced run that filled nothing must not move the schedule, or the keys it
-      // skipped expire mid-interval with no run left to refetch them.
-      if (imagesOnly || (force && !this.filledCache())) {
+      if (imagesOnly) {
         this.log('info', `Schedule unchanged, still due ${this.stats.nextRun ? this.formatNextRunTime(new Date(this.stats.nextRun).getTime()) : 'on the next check'}`);
         return true;
       }
@@ -1340,6 +1422,10 @@ function forceWarmImages() {
   return warmer.runWarmup(true, { imagesOnly: true });
 }
 
+function syncCatalogTtlToSchedule() {
+  return warmer.syncCatalogTtlToSchedule();
+}
+
 function stopComprehensiveWarming() {
   return warmer.stopWarming();
 }
@@ -1349,5 +1435,6 @@ module.exports = {
   getWarmupStats,
   forceRestartWarmup,
   forceWarmImages,
+  syncCatalogTtlToSchedule,
   stopComprehensiveWarming
 };

@@ -17,6 +17,7 @@ import database from './lib/database.js';
 import consola from 'consola';
 import { installLogReporter, beginQuietWindow, endQuietWindow } from './lib/logBuffer.js';
 import { initializeSettings } from './lib/settingsService.js';
+import { isLiteMode } from './lib/metricsConfig.js';
 import { getPosterProxyPrefix, isBuiltinPosterCacheEnabled } from './lib/posterCache/config.js';
 import { runNginxImport } from './lib/posterCache/nginxImport.js';
 import * as posterCacheStore from './lib/posterCache/store.js';
@@ -111,7 +112,8 @@ function withTimeout<T>(label: string, ms: number, work: Promise<T>): Promise<T>
   return Promise.race([work, timeout]).finally(() => clearTimeout(timer)) as Promise<T>;
 }
 
-const initializationTasks: InitTask[] = [
+// Full set of initialization tasks (used when LITE_MODE is off)
+const FULL_INIT_TASKS: InitTask[] = [
   {
     key: 'idMapper',
     timeoutMs: 180_000,
@@ -165,6 +167,50 @@ const initializationTasks: InitTask[] = [
   }
 ];
 
+// Lite set: skip imdb ratings + keyword index, but keep anime mappers
+const LITE_INIT_TASKS: InitTask[] = [
+  {
+    key: 'idMapper',
+    timeoutMs: 180_000,
+    run: () => initializeMapper()
+  },
+  {
+    key: 'animeListMapper',
+    timeoutMs: 180_000,
+    run: () => initializeAnimeListMapper()
+  },
+  {
+    key: 'wikiMappings',
+    timeoutMs: 120_000,
+    run: () => initializeMappings(),
+    summary: () => {
+      const { getWikiMapperStats } = require('./lib/wiki-mapper.js');
+      return `${getWikiMapperStats().totalCount.toLocaleString()} mappings`;
+    }
+  },
+  {
+    key: 'tmdbNetworkIndex',
+    timeoutMs: 30_000,
+    run: () => initializeTmdbNetworkIndex()
+  },
+  {
+    key: 'cacheCleanup',
+    timeoutMs: 120_000,
+    run: () => runCacheCleanup()
+  },
+  {
+    key: 'flixpatrolIndex',
+    timeoutMs: 60_000,
+    run: () => {
+      const { initializeFlixPatrolAvailability } = require('./utils/flixpatrolUtils.js');
+      return initializeFlixPatrolAvailability();
+    }
+  }
+];
+// NOTE: imdbRatings (~1M entries) and tmdbKeywordIndex are skipped in LITE_MODE
+
+const initializationTasks: InitTask[] = isLiteMode() ? LITE_INIT_TASKS : FULL_INIT_TASKS;
+
 async function startServer(): Promise<void> {
   const startedAt = Date.now();
   beginQuietWindow();
@@ -200,7 +246,7 @@ async function startServer(): Promise<void> {
   await require('./lib/aliasResolver').initializeUserAliases();
   ok('userAliases');
 
-  if (isBuiltinPosterCacheEnabled()) {
+  if (!isLiteMode() && isBuiltinPosterCacheEnabled()) {
     readiness.register('posterCacheIndex', 'deferred');
 
     await posterCacheStore.init();
@@ -216,7 +262,7 @@ async function startServer(): Promise<void> {
   }
 
   const metaColdStore = require('./lib/metaColdStore');
-  if (metaColdStore.isEnabled()) {
+  if (!isLiteMode() && metaColdStore.isEnabled()) {
     metaColdStore.init();
     shutdownSequence.register('meta cold store', async () => {
       await metaColdStore.flushNow();
@@ -269,18 +315,24 @@ async function startServer(): Promise<void> {
       consola.error('Cache warming failed:', error?.message || error);
     });
 
-  const { startMALWarmup } = require('./lib/malCatalogWarmer.js');
-  startMALWarmup();
-
-  const { startComprehensiveCatalogWarming } = require('./lib/comprehensiveCatalogWarmer.js');
-  startComprehensiveCatalogWarming();
+  if (!isLiteMode()) {
+    // In full mode also run comprehensive catalog warmer
+    const { startComprehensiveCatalogWarming } = require('./lib/comprehensiveCatalogWarmer.js');
+    startComprehensiveCatalogWarming();
+    
+    // MAL warmer pre-fetches thousands of pages to Redis. Skip in LITE_MODE.
+    const { startMALWarmup } = require('./lib/malCatalogWarmer.js');
+    startMALWarmup();
+  }
 
   const { startCacheCleanupScheduler } = require('./lib/cacheCleanupScheduler.js');
   const indexModule = require('./index.js');
   startCacheCleanupScheduler(indexModule.getDashboardAPI());
 
-  indexModule.startEssentialWarmingSchedules();
-  indexModule.startMovieLensSyncSchedule();
+  if (!isLiteMode()) {
+    indexModule.startEssentialWarmingSchedules();
+    indexModule.startMovieLensSyncSchedule();
+  }
 
   const { warnings } = endQuietWindow();
   const snapshot = readiness.snapshot();

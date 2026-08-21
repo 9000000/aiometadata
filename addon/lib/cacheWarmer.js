@@ -395,6 +395,11 @@ async function warmFromUserActivity() {
  * Schedule essential warming at regular intervals
  */
 function scheduleEssentialWarming(intervalMinutes = 720) {
+  const { isLiteMode } = require('./metricsConfig');
+  if (isLiteMode()) {
+    logger.info('[API Cache Warming] LITE_MODE: essential warming disabled');
+    return;
+  }
   warmingIntervalMinutes = intervalMinutes;
   logger.info(`[API Cache Warming] Scheduling periodic warming every ${intervalMinutes} minutes`);
   

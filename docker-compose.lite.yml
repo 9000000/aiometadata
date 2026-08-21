@@ -1,0 +1,53 @@
+# docker-compose.lite.yml
+# AIOMetadata - LITE MODE (chi can SQLite + Redis, khong PostgreSQL)
+# Su dung: docker compose -f docker-compose.lite.yml up -d
+
+version: "3.8"
+
+services:
+  aiometadata:
+    image: ghcr.io/cedya77/aiometadata:latest
+    container_name: aiometadata_lite
+    restart: unless-stopped
+    ports:
+      - "3232:3232"
+    init: true
+    env_file:
+      - .env.lite
+    environment:
+      - DATABASE_URI=sqlite://addon/data/db.sqlite
+      - REDIS_URL=redis://aiometadata_redis_lite:6379
+    volumes:
+      - ./data:/app/addon/data
+    depends_on:
+      aiometadata_redis_lite:
+        condition: service_healthy
+    tty: true
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3232/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    # Gioi han tai nguyen cho Lite mode
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+
+  # Redis - Chi can Redis, khong can PostgreSQL trong Lite mode
+  aiometadata_redis_lite:
+    image: redis:alpine
+    container_name: aiometadata_redis_lite
+    restart: unless-stopped
+    volumes:
+      - ./redis_data_lite:/data
+    # Khong luu data xuong disk (tiep kiem I/O) - chi dung RAM
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

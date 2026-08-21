@@ -914,7 +914,6 @@ async function getSeriesMeta(preferredProvider, stremioId, language, config, use
       logger.warn(`[SeriesMeta] TMDB by ID failed: ${e.message}`);
       logger.warn(`[SeriesMeta] TMDB by ID error at: ${errorLine}`);
       logger.warn(`[SeriesMeta] TMDB by ID full stack trace:`, e.stack);
-      degraded = true;
     }
   } else if (provider === 'imdb' && id) {
     try {
@@ -926,7 +925,6 @@ async function getSeriesMeta(preferredProvider, stremioId, language, config, use
       }
     } catch (e) {
       logger.warn(`[SeriesMeta] IMDB by ID failed: ${e.message}`);
-      degraded = true;
     }
   } else if (provider === 'tvmaze' && id) {
     try {
@@ -942,7 +940,6 @@ async function getSeriesMeta(preferredProvider, stremioId, language, config, use
       }
     } catch (e) {
       logger.warn(`[SeriesMeta] TVmaze by ID failed: ${e.message}`);
-      degraded = true;
     }
   }
 

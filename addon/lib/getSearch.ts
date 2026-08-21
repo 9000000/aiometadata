@@ -1955,7 +1955,7 @@ async function parseTvmazeResult(show: any, config: any): Promise<any> {
   const tmdbId = show.externals?.themoviedb;
   let stremioId = `tvmaze:${show.id}` ;
   if(imdbId) stremioId = imdbId;
-  var fallbackImage = show.image?.original || `${host}/missing_poster.png`;
+  const fallbackImage = show.image?.original || `${host}/missing_poster.png`;
   let posterProxyId: string | null = imdbId || (tvdbId ? `tvdb:${tvdbId}` : null);
   if (config.posterRatingProvider === 'top') {
     if (imdbId || tmdbId) {

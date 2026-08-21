@@ -25,6 +25,7 @@ const { warmEssentialContent, warmPopularContent, scheduleEssentialWarming } = r
 const requestTracker = require("./lib/requestTracker");
 const { runWithRequestContext } = require('./lib/logBuffer.js');
 const { getSetting } = require('./lib/settingsService');
+const { isLiteMode } = require('./lib/metricsConfig');
 const consola = require('consola');
 const aiCatalogLogger = consola.withTag('AICatalog');
 const { stripReleaseAvailabilityForResponse } = require('./utils/releaseAvailability');
@@ -221,8 +222,10 @@ addon.use(createAliasResolutionMiddleware({
   isEnabled: isAliasFeatureEnabled,
 }));
 
-// Add request tracking middleware
-addon.use(requestTracker.middleware());
+// Add request tracking middleware (disabled in LITE_MODE)
+if (!isLiteMode()) {
+  addon.use(requestTracker.middleware());
+}
 
 addon.use((req, res, next) => {
   const m = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i.exec(req.path);
@@ -354,7 +357,7 @@ function applyImageCachePrefix(data) {
   }
 }
 
-const isCacheWarmingEnabled = () => process.env.ENABLE_CACHE_WARMING !== 'false';
+const isCacheWarmingEnabled = () => !isLiteMode() && process.env.ENABLE_CACHE_WARMING !== 'false';
 
 /** Called by the startup sequence once settings are loaded. */
 function startEssentialWarmingSchedules() {
@@ -3881,6 +3884,7 @@ addon.post("/api/cache/warm", requireDashboardAdmin, async (req, res) => {
 addon.get("/api/cache/status", requireDashboardAdmin, (req, res) => {
   
   const { isInitialWarmingComplete } = require('./lib/cacheWarmer');
+  const CACHE_WARMING_INTERVAL = parseInt(process.env.CACHE_WARMING_INTERVAL || '720', 10);
   
   res.json({
     cacheEnabled: true,

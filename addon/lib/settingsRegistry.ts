@@ -285,6 +285,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
 
   // --- Cache ---
   {
+    key: 'LITE_MODE',
+    envVar: 'LITE_MODE',
+    label: 'Lite Mode',
+    description: 'Disables intensive background tasks and extraneous cache warming to conserve limits',
+    category: 'Cache',
+    type: 'boolean',
+    default: false,
+  },
+  {
     key: 'META_TTL',
     envVar: 'META_TTL',
     label: 'Meta Cache TTL',

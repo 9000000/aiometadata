@@ -33,18 +33,21 @@ function yesterdayKey(tz) {
 
 class RequestTracker {
   constructor() {
+    const { isLiteMode } = require('./metricsConfig');
     this.startTime = Date.now();
     this.dailyKey = `requests:${new Date().toISOString().split("T")[0]}`;
     this.hourlyKey = `requests:${new Date().toISOString().substring(0, 13)}`;
     this.errorKey = `errors:${new Date().toISOString().split("T")[0]}`;
 
-    // Clean up any corrupted keys on startup
-    this.cleanupCorruptedKeys().catch((error) => {
-      logger.warn(
-        "[Request Tracker] Failed to cleanup on startup:",
-        error.message,
-      );
-    });
+    // In LITE_MODE, skip all Redis cleanup to save Upstash quota
+    if (!isLiteMode()) {
+      this.cleanupCorruptedKeys().catch((error) => {
+        logger.warn(
+          "[Request Tracker] Failed to cleanup on startup:",
+          error.message,
+        );
+      });
+    }
   }
 
   // Middleware to track all requests
@@ -117,8 +120,9 @@ class RequestTracker {
 
   // Track incoming request
   async trackRequest(req) {
-    // Skip metrics collection if disabled
-    if (isMetricsDisabled()) {
+    // Skip metrics collection if disabled or in LITE_MODE (saves Upstash Redis quota)
+    const { isLiteMode } = require('./metricsConfig');
+    if (isMetricsDisabled() || isLiteMode()) {
       return;
     }
     try {
@@ -158,8 +162,9 @@ class RequestTracker {
 
   // Track response
   async trackResponse(req, res, responseTime) {
-    // Skip metrics collection if disabled
-    if (isMetricsDisabled()) {
+    // Skip metrics collection if disabled or in LITE_MODE (saves Upstash Redis quota)
+    const { isLiteMode } = require('./metricsConfig');
+    if (isMetricsDisabled() || isLiteMode()) {
       return;
     }
     try {

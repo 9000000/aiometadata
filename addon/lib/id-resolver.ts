@@ -475,7 +475,7 @@ async function resolveAllIds(stremioId: string, type: string, config: any, prefe
             tvdb.findByImdbId(allIds.imdbId, config)
                 .then((res: any) => {
                     const duration = Date.now() - tvdbFindStartTime;
-                    const tvdbId = (type === 'movie' ? res?.[0]?.movie?.id : res?.[0]?.series?.id) || null;
+                    const tvdbId = tvdb.tvdbIdFromRemoteIdResults(res, type);
                     secondaryTimings.push({
                         operation: 'tvdb_find_by_imdb',
                         duration,
@@ -509,9 +509,7 @@ async function resolveAllIds(stremioId: string, type: string, config: any, prefe
             tvdb.findByTmdbId(allIds.tmdbId, config)
                 .then((res: any) => {
                     const duration = Date.now() - tvdbFindTmdbStartTime;
-                    const movieResult = res?.find((r: any) => r.movie);
-                    const seriesResult = res?.find((r: any) => r.series);
-                    const tvdbId = (type === 'movie' ? movieResult?.movie?.id : seriesResult?.series?.id) || null;
+                    const tvdbId = tvdb.tvdbIdFromRemoteIdResults(res, type);
                     secondaryTimings.push({
                         operation: 'tvdb_find_by_tmdb',
                         duration,

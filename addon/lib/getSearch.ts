@@ -1516,9 +1516,7 @@ async function performTvdbSearch(type: string, query: string, language: string, 
         return [];
       }
 
-      const tvdbId = type === 'movie'
-        ? results[0]?.movie?.id
-        : results[0]?.series?.id;
+      const tvdbId = tvdb.tvdbIdFromRemoteIdResults(results, type);
 
       if (!tvdbId) {
         logger.info(`No ${type} found in TVDB for IMDb ID ${imdbId}`);

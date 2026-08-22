@@ -56,7 +56,7 @@ async function recoverTvdbIdViaImdb(imdbId, contentType, config, currentTvdbId) 
   if (!imdbId) return null;
   try {
     const results = await tvdb.findByImdbId(imdbId, config);
-    const recovered = contentType === 'movie' ? results?.[0]?.movie?.id : results?.[0]?.series?.id;
+    const recovered = tvdb.tvdbIdFromRemoteIdResults(results, contentType);
     if (recovered && String(recovered) !== String(currentTvdbId)) return String(recovered);
   } catch (e) {
     logger.warn(`[Meta] TVDB recovery by IMDb ${imdbId} failed: ${e.message}`);

@@ -39,15 +39,13 @@ class RequestTracker {
     this.hourlyKey = `requests:${new Date().toISOString().substring(0, 13)}`;
     this.errorKey = `errors:${new Date().toISOString().split("T")[0]}`;
 
-    // In LITE_MODE, skip all Redis cleanup to save Upstash quota
-    if (!isLiteMode()) {
-      this.cleanupCorruptedKeys().catch((error) => {
-        logger.warn(
-          "[Request Tracker] Failed to cleanup on startup:",
-          error.message,
-        );
-      });
-    }
+    // Let it run in LITE_MODE because it only checks a few specific keys
+    this.cleanupCorruptedKeys().catch((error) => {
+      logger.warn(
+        "[Request Tracker] Failed to cleanup on startup:",
+        error.message,
+      );
+    });
   }
 
   // Middleware to track all requests

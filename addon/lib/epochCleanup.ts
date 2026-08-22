@@ -21,9 +21,9 @@ export const EPOCH_STATE_KEY = 'system:cache_epoch';
  * epoch and therefore sweeps the legacy `v<semver>:` keys once.
  */
 export async function performEpochCleanup(): Promise<void> {
-  const { isLiteMode } = require('./metricsConfig.js');
-  if (isLiteMode() || process.env.SKIP_CACHE_CLEANUP === 'true') {
-    logger.info('LITE_MODE enabled - skipping epoch cleanup scan.');
+  // Let it run in LITE_MODE because it only uses a few SCAN calls
+  if (process.env.SKIP_CACHE_CLEANUP === 'true') {
+    logger.info('SKIP_CACHE_CLEANUP=true - skipping epoch cleanup scan.');
     return;
   }
 

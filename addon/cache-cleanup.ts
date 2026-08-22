@@ -30,10 +30,10 @@ async function findKeysByPattern(pattern: string): Promise<string[]> {
  * Checks if the old cache format exists and clears it if necessary.
  * This function is designed to run only ONCE.
  */
-export async function runCacheCleanup() {
-  const { isLiteMode } = require('./lib/metricsConfig.js');
-  if (isLiteMode() || process.env.SKIP_CACHE_CLEANUP === 'true') {
-    logger.info('LITE_MODE enabled - skipping legacy cache cleanup.');
+export async function runCacheCleanup(): Promise<void> {
+  // Let it run in LITE_MODE because it only uses a few SCAN calls
+  if (process.env.SKIP_CACHE_CLEANUP === 'true') {
+    logger.info('SKIP_CACHE_CLEANUP=true - skipping id_map cleanup scan.');
     return;
   }
 

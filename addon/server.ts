@@ -1,6 +1,11 @@
 // Initialize global HTTP proxy before any other imports that use undici
 import './utils/httpClient.js';
 
+// ── Redis diagnostics: install BEFORE any module touches Redis ──
+import { installRedisCounter, printRedisReport, getTotal } from './lib/redisCounter.js';
+installRedisCounter();
+// ─────────────────────────────────────────────────────────────────
+
 import { addon, startServerWithCacheWarming } from './index.js';
 import { initializeMapper } from './lib/id-mapper.js';
 import { initializeAnimeListMapper } from './lib/anime-list-mapper.js';
@@ -325,9 +330,15 @@ async function startServer(): Promise<void> {
     startMALWarmup();
   }
 
-  const { startCacheCleanupScheduler } = require('./lib/cacheCleanupScheduler.js');
+  // Cache cleanup scheduler SCANs the entire Redis DB + checks TTL per key.
+  // In LITE_MODE this would generate thousands of requests, so skip it.
   const indexModule = require('./index.js');
-  startCacheCleanupScheduler(indexModule.getDashboardAPI());
+  if (!isLiteMode()) {
+    const { startCacheCleanupScheduler } = require('./lib/cacheCleanupScheduler.js');
+    startCacheCleanupScheduler(indexModule.getDashboardAPI());
+  } else {
+    consola.info('[Cache-Cleanup-Scheduler] Skipped in LITE_MODE');
+  }
 
   if (!isLiteMode()) {
     indexModule.startEssentialWarmingSchedules();
@@ -345,6 +356,14 @@ async function startServer(): Promise<void> {
   if (warnings > 0) notes.push(`${warnings} warnings`);
   ok('ready', `in ${seconds}s on :${PORT} — ${notes.join(', ')}`);
   process.stdout.write('\n');
+
+  // ── Redis diagnostics: print report after boot ──
+  printRedisReport();
+  // Print follow-up reports at 30s and 60s to catch deferred work
+  setTimeout(() => { consola.info(`[Redis-Counter] +30s total: ${getTotal()}`); printRedisReport(); }, 30_000);
+  setTimeout(() => { consola.info(`[Redis-Counter] +60s total: ${getTotal()}`); printRedisReport(); }, 60_000);
+  setTimeout(() => { consola.info(`[Redis-Counter] +120s total: ${getTotal()}`); printRedisReport(); }, 120_000);
+  // ────────────────────────────────────────────────
 }
 
 startServer().catch((error: Error) => {

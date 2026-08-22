@@ -821,7 +821,7 @@ Art the addon **passes through without storing** is decided by a chain of its ow
 
 ### `POSTER_CACHE_CAST`
 - **Default**: `false`
-- **Description**: Also cache cast/actor headshots. Served through the poster cache instead of the origin so they are cached locally like the rest of the artwork.
+- **Description**: Also cache cast/actor headshots. Numerous, at roughly ten to twenty per title, and each one is a separate image, so expect this to take a real bite out of `POSTER_CACHE_MAX_SIZE` on a large library.
 - **Example**: `POSTER_CACHE_CAST=true`
 
 ### `POSTER_CACHE_PROCESSED_IMAGES`

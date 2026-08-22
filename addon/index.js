@@ -347,9 +347,6 @@ function applyImageCachePrefix(data) {
         if (video?.thumbnail) video.thumbnail = prefixUrl(video.thumbnail, 'thumbnail');
       }
     }
-    // Cast/actor headshots have their own class: served through the poster
-    // cache instead of the origin so they are cached locally like the rest of
-    // the artwork.
     if (cacheCast && Array.isArray(meta.app_extras?.cast)) {
       for (const member of meta.app_extras.cast) {
         if (member?.photo) member.photo = prefixUrl(member.photo, 'cast');

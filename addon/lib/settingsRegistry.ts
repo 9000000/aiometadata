@@ -1571,7 +1571,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'POSTER_CACHE_CAST',
     envVar: 'POSTER_CACHE_CAST',
     label: 'Cache Cast Photos',
-    description: 'Also cache cast/actor headshots. Served through the poster cache instead of the origin so they are cached locally like the rest of the artwork.',
+    description: 'Also cache cast/actor headshots. Roughly ten to twenty per title, so this takes a real bite out of the disk budget on a large library.',
     category: 'Features',
     type: 'boolean',
     default: false,

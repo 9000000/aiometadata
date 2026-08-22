@@ -817,6 +817,26 @@ function buildScopedProviderConfig(config: any, contentScope: string): any {
   return { providers, artProviders };
 }
 
+/**
+ * With the detection override on, a tmdb or imdb id can still be built by the anime
+ * provider, so the anime half of the config decides the result and has to reach the
+ * hash. It is left out when the override is off, so those keys stay where they are.
+ */
+function animeOverrideKeyParts(config: any): any {
+  if (!config.providers?.forceAnimeForDetectedImdb) return {};
+  return {
+    anime: {
+      provider: config.providers?.anime || 'mal',
+      useImdbIdForCatalogAndSearch: config.mal?.useImdbIdForCatalogAndSearch || false,
+      art: {
+        poster: resolveArtProvider('anime', 'poster', config),
+        background: resolveArtProvider('anime', 'background', config),
+        logo: resolveArtProvider('anime', 'logo', config),
+      },
+    },
+  };
+}
+
 function getMetaCacheContext(config: any, metaId: string, type: string | null, useShowPoster: boolean = false): any {
   const [prefix] = metaId.split(':');
   const animePrefixes = ['mal', 'kitsu', 'anilist', 'anidb'];
@@ -873,6 +893,7 @@ function getMetaCacheContext(config: any, metaId: string, type: string | null, u
         scrapeImdb: config.tmdb?.scrapeImdb || false,
         forceLatinCastNames: config.tmdb?.forceLatinCastNames || false,
       },
+      ...animeOverrideKeyParts(config),
     };
   } else if (type === 'series') {
     context.metaProvider = config.providers?.series || 'tvdb';
@@ -887,10 +908,20 @@ function getMetaCacheContext(config: any, metaId: string, type: string | null, u
         forceLatinCastNames: config.tmdb?.forceLatinCastNames || false,
       },
       forceAnimeForDetectedImdb: config.providers?.forceAnimeForDetectedImdb || false,
+      ...animeOverrideKeyParts(config),
     };
     context.videoOptions = {
       tvdbSeasonType: config.tvdbSeasonType || 'default',
       forceAnimeForDetectedImdb: config.providers?.forceAnimeForDetectedImdb || false,
+      ...(config.providers?.forceAnimeForDetectedImdb
+        ? {
+            mal: {
+              skipFiller: config.mal?.skipFiller || false,
+              skipRecap: config.mal?.skipRecap || false,
+              allowEpisodeMarking: config.mal?.allowEpisodeMarking || false,
+            },
+          }
+        : {}),
     };
   }
 
@@ -1326,7 +1357,9 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
     };
   }
 
-  if (isMALCatalog || contentScope === 'anime') {
+  // Non-anime scopes need it too once the detection override is on, since it then
+  // decides the id of every anime the row happens to carry.
+  if (isMALCatalog || contentScope === 'anime' || config.providers?.forceAnimeForDetectedImdb) {
     catalogConfig.mal = {
       useImdbIdForCatalogAndSearch: config.mal?.useImdbIdForCatalogAndSearch || false
     };

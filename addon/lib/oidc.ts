@@ -15,6 +15,8 @@ export interface OidcConfig {
   clientId: string;
   clientSecret: string;
   groupsClaim: string;
+  scopes: string;
+  allowedEmailDomains: string[];
   usernameClaim: string;
   groupPermissions: Record<string, string> | null;
   defaultPermissions: string;
@@ -28,6 +30,7 @@ interface Discovery {
   issuer: string;
   userinfo_endpoint?: string;
   token_endpoint_auth_methods_supported?: string[];
+  scopes_supported?: string[];
 }
 
 function trimmed(value: unknown): string {
@@ -92,6 +95,13 @@ export function parseGroupPermissions(raw: string): Record<string, string> | nul
   return parsed;
 }
 
+function parseEmailDomains(raw: string): string[] {
+  return trimmed(raw)
+    .split(/[,\s]+/)
+    .map(entry => entry.trim().replace(/^@/, '').toLowerCase())
+    .filter(Boolean);
+}
+
 function buildOidcConfig(read: (key: string) => string): OidcConfig {
   return {
     enabled: read('OIDC_ENABLED') === 'true',
@@ -99,6 +109,8 @@ function buildOidcConfig(read: (key: string) => string): OidcConfig {
     clientId: trimmed(read('OIDC_CLIENT_ID')),
     clientSecret: trimmed(read('OIDC_CLIENT_SECRET')),
     groupsClaim: trimmed(read('OIDC_GROUPS_CLAIM')) || 'groups',
+    scopes: trimmed(read('OIDC_SCOPES')),
+    allowedEmailDomains: parseEmailDomains(read('OIDC_ALLOWED_EMAIL_DOMAINS')),
     usernameClaim: trimmed(read('OIDC_USERNAME_CLAIM')),
     groupPermissions: parseGroupPermissions(read('OIDC_GROUP_PERMISSIONS')),
     defaultPermissions: trimmed(read('OIDC_DEFAULT_PERMISSIONS')),
@@ -174,9 +186,21 @@ export function parsePermissionSpec(spec: string): Permission[] | null {
  * legal group names that a plain lookup would answer from Object.prototype.
  */
 function lookupSpec(map: Record<string, string>, group: string): string | undefined {
-  if (!Object.prototype.hasOwnProperty.call(map, group)) return undefined;
-  const spec = map[group];
-  return typeof spec === 'string' ? spec : undefined;
+  if (Object.prototype.hasOwnProperty.call(map, group)) {
+    const spec = map[group];
+    return typeof spec === 'string' ? spec : undefined;
+  }
+
+  // An instance keying on email holds addresses here, and case carries no meaning in
+  // one. Matching exactly would drop a sign-in silently, looking like no mapping at all.
+  if (!group.includes('@')) return undefined;
+  const wanted = group.toLowerCase();
+  for (const key of Object.keys(map)) {
+    if (key.toLowerCase() !== wanted) continue;
+    const spec = map[key];
+    return typeof spec === 'string' ? spec : undefined;
+  }
+  return undefined;
 }
 
 /**
@@ -263,6 +287,39 @@ function base64url(buffer: Buffer): string {
   return buffer.toString('base64url');
 }
 
+const DEFAULT_SCOPES = ['openid', 'profile', 'email', 'groups'];
+
+function splitScopes(raw: string): string[] {
+  return raw.split(/[,\s]+/).map(scope => scope.trim()).filter(Boolean);
+}
+
+/**
+ * `groups` is a convention rather than a standard scope, so a provider that has no
+ * concept of groups rejects the whole authorization request over it. Ask for what the
+ * discovery document says the provider takes, and keep openid whatever it says, since
+ * the request is not an OIDC one without it.
+ */
+function resolveScopes(config: OidcConfig, document: Discovery): string[] {
+  const configured = splitScopes(config.scopes);
+  const wanted = configured.length > 0 ? configured : [...DEFAULT_SCOPES];
+  if (!wanted.includes('openid')) wanted.unshift('openid');
+
+  // A scope list set by hand is the answer to a provider that takes a scope it never
+  // advertised, so filtering it against the same document would defeat the setting.
+  const supported = configured.length > 0 ? null : document.scopes_supported;
+  if (!Array.isArray(supported) || supported.length === 0) {
+    return Array.from(new Set(wanted));
+  }
+
+  const available = new Set(supported);
+  const kept = wanted.filter(scope => scope === 'openid' || available.has(scope));
+  const dropped = wanted.filter(scope => !kept.includes(scope));
+  if (dropped.length > 0) {
+    logger.info(`Provider does not advertise ${dropped.join(', ')}; requesting ${kept.join(' ')}`);
+  }
+  return Array.from(new Set(kept));
+}
+
 export async function buildAuthRequest(config: OidcConfig, redirectUri: string): Promise<AuthRequest> {
   const document = await discover(config.issuer);
 
@@ -275,7 +332,7 @@ export async function buildAuthRequest(config: OidcConfig, redirectUri: string):
     response_type: 'code',
     client_id: config.clientId,
     redirect_uri: redirectUri,
-    scope: 'openid profile email groups',
+    scope: resolveScopes(config, document).join(' '),
     state,
     nonce,
     code_challenge: challenge,
@@ -293,6 +350,29 @@ export interface Identity {
   username: string;
   email: string | null;
   groups: string[];
+}
+
+/**
+ * A provider that says an address is unverified has not checked that the person
+ * signing in owns it, so it cannot be the thing a permission mapping trusts. A
+ * provider that says nothing is taken at its word, since absence is not a denial.
+ */
+function readEmail(source: any): { email: string | null; verified: boolean } {
+  const email = trimmed(source?.email) || null;
+  const raw = source?.email_verified;
+  const verified = raw === undefined || raw === null ? true : raw === true || raw === 'true';
+  return { email, verified };
+}
+
+/** Null admits the sign-in. A string is the reason it was refused. */
+export function emailDomainRefusal(email: string | null, config: OidcConfig): string | null {
+  if (config.allowedEmailDomains.length === 0) return null;
+  if (!email) return 'the account presented no verified email address to check against the allowed domains';
+  const at = email.lastIndexOf('@');
+  const domain = at < 0 ? '' : email.slice(at + 1).toLowerCase();
+  if (!domain) return 'the account presented no verified email address to check against the allowed domains';
+  if (config.allowedEmailDomains.includes(domain)) return null;
+  return `the address is on ${domain}, which is not an allowed domain`;
 }
 
 function readGroups(payload: JWTPayload, claim: string): string[] {
@@ -368,7 +448,7 @@ export async function exchangeCode(
   }
 
   let groups = readGroups(payload, config.groupsClaim);
-  let email = trimmed((payload as any).email) || null;
+  let { email, verified: emailVerified } = readEmail(payload);
   // A named claim wins, so an instance keying on email is labelled by it too.
   let name = config.usernameClaim
     ? trimmed((payload as any)[config.usernameClaim])
@@ -389,7 +469,11 @@ export async function exchangeCode(
       if (info.ok) {
         const claims = await info.json() as JWTPayload;
         if (groups.length === 0) groups = readGroups(claims, config.groupsClaim);
-        email = email || trimmed((claims as any).email) || null;
+        if (!email) {
+          const fromUserinfo = readEmail(claims);
+          email = fromUserinfo.email;
+          emailVerified = fromUserinfo.verified;
+        }
         name = name || (config.usernameClaim
           ? trimmed((claims as any)[config.usernameClaim])
           : trimmed((claims as any).preferred_username) || trimmed((claims as any).name));
@@ -397,6 +481,14 @@ export async function exchangeCode(
     } catch (error: any) {
       logger.debug(`Could not read userinfo: ${error.message}`);
     }
+  }
+
+  if (email && !emailVerified) {
+    logger.warn(`Provider reports the address on ${subject} as unverified; ignoring it`);
+    email = null;
+    // Nothing read out of the email claim can be trusted either, and an instance
+    // keying its permission mapping on that claim is the case this protects.
+    if (config.groupsClaim === 'email') groups = [];
   }
 
   return { issuer: config.issuer, subject, username: name || email || subject, email, groups };

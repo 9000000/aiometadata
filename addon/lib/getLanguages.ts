@@ -4,25 +4,17 @@ const moviedb: any = require("./getTmdb");
 async function getLanguages(config: any): Promise<Array<{ iso_639_1: string; name: string }>> {
   try {
 
-    const [primaryTranslations, languages] = await Promise.all([
-      moviedb.primaryTranslations(config),
-      moviedb.languages(config),
-    ]);
+    // /configuration/languages is what content can be in. primary_translations is only the
+    // locales TMDB is translated into, and it drops every language it has no translation for.
+    const languages = await moviedb.languages(config);
 
-    const languageMap = new Map(
-      languages.map((lang: any) => [lang.iso_639_1, lang.english_name])
-    );
-
-    return primaryTranslations.map((translationCode: string) => {
-      const [languageCode] = translationCode.split("-");
-      const englishName = languageMap.get(languageCode) || 'Unknown';
-
-      return { iso_639_1: translationCode, name: englishName };
-    }).filter((lang: { iso_639_1: string; name: string }) => lang.name !== 'Unknown');
+    return languages
+      .filter((lang: any) => lang?.iso_639_1 && (lang.english_name || '').trim())
+      .map((lang: any) => ({ iso_639_1: lang.iso_639_1, name: lang.english_name }));
 
   } catch (error: any) {
     console.error("Error fetching language list from TMDB:", error.message);
-    return [{ iso_639_1: 'en-US', name: 'English' }];
+    return [{ iso_639_1: 'en', name: 'English' }];
   }
 }
 

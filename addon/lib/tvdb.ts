@@ -824,6 +824,17 @@ async function getSeriesEpisodes(tvdbId: string, language: string = 'en-US', sea
   });
 }
 
+/**
+ * /search/remoteid answers with one object per matched entity, keyed by its kind and
+ * in no set order, so a season can sort ahead of the series it belongs to. Pick the
+ * entity that was asked for rather than whatever landed first.
+ */
+function tvdbIdFromRemoteIdResults(results: any[], type: string): number | null {
+  const key = type === 'movie' ? 'movie' : 'series';
+  const match = (results || []).find((entry: any) => entry?.[key]?.id);
+  return match?.[key]?.id ?? null;
+}
+
 async function findByImdbId(imdbId: string, config: UserConfig): Promise<TvdbSearchResult[]> {
   const token = await getAuthToken(config.apiKeys?.tvdb, config.userUUID);
   if (!token) return [];
@@ -1320,6 +1331,21 @@ async function getCollectionDetails(collectionId: string, config: UserConfig): P
   });
 }
 
+async function getCollectionBySlug(slug: string, config: UserConfig): Promise<TvdbCollection | null> {
+  return cacheWrapTvdbApi(`collection-slug:${slug}`, async () => {
+    const token = await getAuthToken(config.apiKeys?.tvdb, config.userUUID);
+    if (!token) return null;
+    try {
+      const url = `${TVDB_API_URL}/lists/slug/${encodeURIComponent(slug)}`;
+      const response = await tvdbHttpRequest(url, { headers: { 'Authorization': `Bearer ${token}` } });
+      return (response.data as any)?.data || null;
+    } catch (error) {
+      logger.error(`Error fetching TVDB list for slug ${slug}:`, (error as Error).message);
+      return null;
+    }
+  });
+}
+
 async function getCollectionTranslations(collectionId: string, language: string, config: UserConfig): Promise<TvdbCollectionTranslation | null> {
   return cacheWrapTvdbApi(`collection-translations:${collectionId}:${language}`, async () => {
     const token = await getAuthToken(config.apiKeys?.tvdb, config.userUUID);
@@ -1346,6 +1372,7 @@ async function getCollectionTranslations(collectionId: string, language: string,
 }
 
 export {
+  tvdbIdFromRemoteIdResults,
   searchSeries,
   searchMovies,
   searchPeople,
@@ -1373,6 +1400,7 @@ export {
   getMovieLogo,
   getCollectionsList,
   getCollectionDetails,
+  getCollectionBySlug,
   getCollectionTranslations,
   getMemoryStats,
 };
@@ -1390,6 +1418,7 @@ const __privateTvdbCacheNormalizers = tvdbCacheNormalizers;
 
 // CommonJS compatibility
 module.exports = {
+  tvdbIdFromRemoteIdResults,
   searchSeries,
   searchMovies,
   searchPeople,
@@ -1417,6 +1446,7 @@ module.exports = {
   getMovieLogo,
   getCollectionsList,
   getCollectionDetails,
+  getCollectionBySlug,
   getCollectionTranslations,
   getMemoryStats,
   __privateTvdbCacheNormalizers,

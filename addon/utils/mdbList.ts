@@ -307,7 +307,7 @@ async function makeRateLimitedRequest<T>(
   throw new Error(`[${context}] All ${retries} attempts failed.`);
 }
 
-async function fetchMDBListItems(listId: string, apiKey: string, language: string, page: number, sort?: string, order?: string, genre?: string, unified?: boolean, catalogType?: string, cacheTTL?: number, filterScoreMin?: number, filterScoreMax?: number): Promise<{items: any[], totalItems?: number, hasMore?: boolean, totalPages?: number}> {
+async function fetchMDBListItems(listId: string, apiKey: string, language: string, page: number, sort?: string, order?: string, genre?: string, unified?: boolean, catalogType?: string, cacheTTL?: number, filterScoreMin?: number, filterScoreMax?: number, mediaTypeFilter?: string): Promise<{items: any[], totalItems?: number, hasMore?: boolean, totalPages?: number}> {
   // Use configurable page size (supports CATALOG_LIST_ITEMS_SIZE env var)
   const pageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE as string) || 20;
 
@@ -316,7 +316,7 @@ async function fetchMDBListItems(listId: string, apiKey: string, language: strin
     : 'shared';
 
   const ttlSegment = cacheTTL !== undefined ? `:ttl:${cacheTTL}` : '';
-  const cacheKey = `mdblist-api:items:${keyScope}:${listId}:${page}:${sort || ''}:${order || ''}:${genre || ''}:${unified !== false}:${catalogType || ''}:${filterScoreMin ?? ''}:${filterScoreMax ?? ''}:${pageSize}${ttlSegment}`;
+  const cacheKey = `mdblist-api:items:${keyScope}:${listId}:${page}:${sort || ''}:${order || ''}:${genre || ''}:${unified !== false}:${catalogType || ''}:${filterScoreMin ?? ''}:${filterScoreMax ?? ''}:${mediaTypeFilter || ''}:${pageSize}${ttlSegment}`;
 
   const ttl = cacheTTL !== undefined ? cacheTTL : parseInt(process.env.CATALOG_TTL || String(1 * 24 * 60 * 60), 10);
 
@@ -347,6 +347,10 @@ async function fetchMDBListItems(listId: string, apiKey: string, language: strin
       }
       if (typeof filterScoreMax === 'number') {
         url += `&filter_score_max=${filterScoreMax}`;
+      }
+      // MDBList spells series "show", and filtering here keeps pages full and the totals honest.
+      if (mediaTypeFilter) {
+        url += `&mediatype=${mediaTypeFilter}`;
       }
 
       // Log the final URL for debugging (with API key sanitized)

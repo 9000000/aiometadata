@@ -6,6 +6,7 @@ import { SimklIntegration } from './SimklIntegration';
 import { MovieLensIntegration } from './MovieLensIntegration';
 import { PublicMetaDBIntegration } from './PublicMetaDBIntegration';
 import { TMDBIntegration } from './TMDBIntegration';
+import { TVDBListIntegration } from './TVDBListIntegration';
 import { DiscoverBuilderDialog } from './DiscoverBuilderDialog';
 import { CollectionBuilderDialog } from './CollectionBuilderDialog';
 import { LetterboxdIntegration } from './LetterboxdIntegration';
@@ -1187,7 +1188,7 @@ const MOVIELENS_SORT_OPTIONS = [
 ];
 
 const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogConfig, isOpen: boolean, onClose: () => void }) => {
-  const { setConfig, catalogTTL } = useConfig();
+  const { setConfig, catalogTTL, config } = useConfig();
   const [cacheTTL, setCacheTTL] = useState<number>(catalog.cacheTTL || catalogTTL);
   const isWatchlist = catalog.id === 'movielens.watchlist' || catalog.id.startsWith('movielens.list.');
   const savedSort = catalog.metadata?.sortBy;
@@ -1200,11 +1201,21 @@ const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catalo
   const [maxYear, setMaxYear] = useState<string>(catalog.metadata?.maxYear ? String(catalog.metadata.maxYear) : '');
   const [includeRated, setIncludeRated] = useState<boolean>(catalog.metadata?.includeRated === true);
   const [maxDaysAgo, setMaxDaysAgo] = useState<string>(catalog.metadata?.maxDaysAgo ? String(catalog.metadata.maxDaysAgo) : '');
+  const [hideWatchedTrakt, setHideWatchedTrakt] = useState<string>(catalog.metadata?.hideWatchedTrakt === true ? 'on' : catalog.metadata?.hideWatchedTrakt === false ? 'off' : 'global');
+  const [hideWatchedAnilist, setHideWatchedAnilist] = useState<string>(catalog.metadata?.hideWatchedAnilist === true ? 'on' : catalog.metadata?.hideWatchedAnilist === false ? 'off' : 'global');
+  const [hideWatchedMdblist, setHideWatchedMdblist] = useState<string>(catalog.metadata?.hideWatchedMdblist === true ? 'on' : catalog.metadata?.hideWatchedMdblist === false ? 'off' : 'global');
+  const [hideWatchedSimkl, setHideWatchedSimkl] = useState<string>(catalog.metadata?.hideWatchedSimkl === true ? 'on' : catalog.metadata?.hideWatchedSimkl === false ? 'off' : 'global');
+  const [hideUnreleasedDigital, setHideUnreleasedDigital] = useState<string>(catalog.metadata?.hideUnreleasedDigital === true ? 'on' : catalog.metadata?.hideUnreleasedDigital === false ? 'off' : 'global');
 
   const handleSave = () => {
     const minYearNum = parseInt(minYear, 10);
     const maxYearNum = parseInt(maxYear, 10);
     const maxDaysAgoNum = parseInt(maxDaysAgo, 10);
+    const hideTraktValue = hideWatchedTrakt === 'on' ? true : hideWatchedTrakt === 'off' ? false : undefined;
+    const hideAnilistValue = hideWatchedAnilist === 'on' ? true : hideWatchedAnilist === 'off' ? false : undefined;
+    const hideMdblistValue = hideWatchedMdblist === 'on' ? true : hideWatchedMdblist === 'off' ? false : undefined;
+    const hideSimklValue = hideWatchedSimkl === 'on' ? true : hideWatchedSimkl === 'off' ? false : undefined;
+    const hideUnreleasedDigitalValue = hideUnreleasedDigital === 'on' ? true : hideUnreleasedDigital === 'off' ? false : undefined;
     setConfig(prev => ({
       ...prev,
       catalogs: prev.catalogs.map(c =>
@@ -1223,6 +1234,11 @@ const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catalo
                   includeRated: includeRated ? true : undefined,
                   maxDaysAgo: Number.isFinite(maxDaysAgoNum) && maxDaysAgoNum > 0 ? maxDaysAgoNum : undefined,
                 }),
+                hideWatchedTrakt: hideTraktValue,
+                hideWatchedAnilist: hideAnilistValue,
+                hideWatchedMdblist: hideMdblistValue,
+                hideWatchedSimkl: hideSimklValue,
+                hideUnreleasedDigital: hideUnreleasedDigitalValue,
               },
             }
           : c
@@ -1313,6 +1329,79 @@ const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catalo
             <p className="text-xs text-muted-foreground">
               Minimum 5 minutes ({Math.floor(cacheTTL / 3600)}h {Math.floor((cacheTTL % 3600) / 60)}m)
             </p>
+          </div>
+          {config.apiKeys?.traktTokenId && (
+            <div className="space-y-2">
+              <Label>Hide Trakt Watched</Label>
+              <Select value={hideWatchedTrakt} onValueChange={setHideWatchedTrakt}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="global">Use Global Setting</SelectItem>
+                  <SelectItem value="on">Always On</SelectItem>
+                  <SelectItem value="off">Always Off</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          {config.apiKeys?.anilistTokenId && (
+            <div className="space-y-2">
+              <Label>Hide AniList Watched</Label>
+              <Select value={hideWatchedAnilist} onValueChange={setHideWatchedAnilist}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="global">Use Global Setting</SelectItem>
+                  <SelectItem value="on">Always On</SelectItem>
+                  <SelectItem value="off">Always Off</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          {config.apiKeys?.mdblist && (
+            <div className="space-y-2">
+              <Label>Hide MDBList Watched</Label>
+              <Select value={hideWatchedMdblist} onValueChange={setHideWatchedMdblist}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="global">Use Global Setting</SelectItem>
+                  <SelectItem value="on">Always On</SelectItem>
+                  <SelectItem value="off">Always Off</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          {config.apiKeys?.simklTokenId && (
+            <div className="space-y-2">
+              <Label>Hide Simkl Watched</Label>
+              <Select value={hideWatchedSimkl} onValueChange={setHideWatchedSimkl}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="global">Use Global Setting</SelectItem>
+                  <SelectItem value="on">Always On</SelectItem>
+                  <SelectItem value="off">Always Off</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          <div className="space-y-2">
+            <Label>Hide Unreleased Movies</Label>
+            <Select value={hideUnreleasedDigital} onValueChange={setHideUnreleasedDigital}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="global">Use Global Setting</SelectItem>
+                <SelectItem value="on">Always On</SelectItem>
+                <SelectItem value="off">Always Off</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </div>
         <div className="flex justify-end gap-2">
@@ -2431,10 +2520,7 @@ const MergedCatalogCard = ({
   };
 
   const handleToggleEnabled = () => {
-    updateCatalog(c => {
-      const isNowEnabled = !c.enabled;
-      return { ...c, enabled: isNowEnabled, showInHome: isNowEnabled ? c.showInHome : false };
-    });
+    updateCatalog(c => ({ ...c, enabled: !c.enabled }));
   };
 
   const handleToggleShowInHome = () => {
@@ -2657,7 +2743,7 @@ const MergedCatalogCard = ({
                   <Home className={`h-5 w-5 ${catalog.showInHome && catalog.enabled ? 'text-blue-400' : 'text-muted-foreground'}`} />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{catalog.showInHome ? 'Remove from Home' : 'Show on Home'}</TooltipContent>
+              <TooltipContent>{catalog.showInHome && catalog.enabled ? 'Remove from Home' : 'Show on Home'}</TooltipContent>
             </Tooltip>
             {hasRatingPosters && (
               <Tooltip>
@@ -3452,6 +3538,8 @@ const SortableCatalogItem = React.memo(({ catalog, onEditDiscover, onCustomize, 
             (catalog.source === 'letterboxd' && (catalog as any).metadata?.url) ||
             (catalog.source === 'trakt' && ((catalog as any).metadata?.url || catalog.id.startsWith('trakt.list.') || (catalog.id.startsWith('trakt.') && (catalog as any).metadata?.author))) ||
             (catalog.source === 'tmdb' && catalog.id.startsWith('tmdb.list.') && ((catalog as any).metadata?.url || (catalog as any).metadata?.listId)) ||
+            (catalog.source === 'tmdb' && catalog.id.startsWith('tmdb.collection.')) ||
+            (catalog.source === 'tvdb' && catalog.id.startsWith('tvdb.list.') && ((catalog as any).metadata?.url || (catalog as any).metadata?.slug)) ||
             (catalog.source === 'anilist' && catalog.id.startsWith('anilist.') && ((catalog as any).metadata?.url || ((catalog as any).metadata?.username && (catalog as any).metadata?.listName)))) && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -3490,6 +3578,9 @@ const SortableCatalogItem = React.memo(({ catalog, onEditDiscover, onCustomize, 
                           listUrl = `https://trakt.tv/users/${username}/lists/${listSlug}`;
                         }
                       }
+                    } else if (catalog.source === 'tmdb' && catalog.id.startsWith('tmdb.collection.')) {
+                      listUrl = (catalog as any).metadata?.url
+                        || `https://www.themoviedb.org/collection/${catalog.id.replace('tmdb.collection.', '')}`;
                     } else if (catalog.source === 'tmdb' && catalog.id.startsWith('tmdb.list.')) {
                       listUrl = (catalog as any).metadata?.url || null;
                       
@@ -3503,6 +3594,13 @@ const SortableCatalogItem = React.memo(({ catalog, onEditDiscover, onCustomize, 
                           const listId = match[1];
                           listUrl = `https://www.themoviedb.org/list/${listId}`;
                         }
+                      }
+                    } else if (catalog.source === 'tvdb' && catalog.id.startsWith('tvdb.list.')) {
+                      listUrl = (catalog as any).metadata?.url || null;
+
+                      if (!listUrl) {
+                        const slug = (catalog as any).metadata?.slug || (catalog as any).metadata?.listId || catalog.id.replace('tvdb.list.', '').split('.')[0];
+                        listUrl = `https://thetvdb.com/lists/${slug}`;
                       }
                     } else if (catalog.source === 'anilist' && catalog.id.startsWith('anilist.')) {
                       listUrl = (catalog as any).metadata?.url || null;
@@ -3533,12 +3631,12 @@ const SortableCatalogItem = React.memo(({ catalog, onEditDiscover, onCustomize, 
                       window.open(listUrl, '_blank', 'noopener,noreferrer');
                     }
                   }}
-                  aria-label={`View on ${catalog.source === 'mdblist' ? 'MDBList' : catalog.source === 'letterboxd' ? 'Letterboxd' : catalog.source === 'trakt' ? 'Trakt' : catalog.source === 'tmdb' ? 'TMDB' : 'AniList'}`}
+                  aria-label={`View on ${catalog.source === 'mdblist' ? 'MDBList' : catalog.source === 'letterboxd' ? 'Letterboxd' : catalog.source === 'trakt' ? 'Trakt' : catalog.source === 'tmdb' ? 'TMDB' : catalog.source === 'tvdb' ? 'TheTVDB' : 'AniList'}`}
                 >
                   <ExternalLink className="h-5 w-5 text-blue-500" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>View on {catalog.source === 'mdblist' ? 'MDBList' : catalog.source === 'letterboxd' ? 'Letterboxd' : catalog.source === 'trakt' ? 'Trakt' : catalog.source === 'tmdb' ? 'TMDB' : 'AniList'}</TooltipContent>
+              <TooltipContent>View on {catalog.source === 'mdblist' ? 'MDBList' : catalog.source === 'letterboxd' ? 'Letterboxd' : catalog.source === 'trakt' ? 'Trakt' : catalog.source === 'tmdb' ? 'TMDB' : catalog.source === 'tvdb' ? 'TheTVDB' : 'AniList'}</TooltipContent>
             </Tooltip>
           )}
 
@@ -3876,6 +3974,7 @@ function CatalogsSettingsContent({
   const [editingDiscoverCatalog, setEditingDiscoverCatalog] = useState<CatalogConfig | null>(null);
   const [customizeTemplate, setCustomizeTemplate] = useState<CustomizeTemplate | null>(null);
   const [isLetterboxdOpen, setIsLetterboxdOpen] = useState(false);
+  const [isTvdbListOpen, setIsTvdbListOpen] = useState(false);
   const [isAniListOpen, setIsAniListOpen] = useState(false);
   const [isMalOpen, setIsMalOpen] = useState(false);
   const [isCustomManifestOpen, setIsCustomManifestOpen] = useState(false);
@@ -4308,8 +4407,7 @@ function CatalogsSettingsContent({
             const shouldDisable = catalogsToDisable.some(
               cat => `${cat.id}-${cat.type}` === catalogKey
             );
-            // When disabling, also set showInHome to false
-            return shouldDisable ? { ...c, enabled: false, showInHome: false } : c;
+            return shouldDisable ? { ...c, enabled: false } : c;
           })
         }));
       }
@@ -5061,6 +5159,21 @@ function CatalogsSettingsContent({
 
                 <Tooltip>
                   <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setIsTvdbListOpen(true)}
+                      aria-label="TheTVDB Lists"
+                      className="h-9 w-9"
+                    >
+                      <img src="/tvdb_icon.png" alt="TheTVDB" className="h-5 w-5 object-contain" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>TheTVDB Lists</TooltipContent>
+                </Tooltip>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
                     <Button 
                       variant="ghost" 
                       size="icon" 
@@ -5192,6 +5305,10 @@ function CatalogsSettingsContent({
           <LetterboxdIntegration
             isOpen={isLetterboxdOpen}
             onClose={() => setIsLetterboxdOpen(false)}
+          />
+          <TVDBListIntegration
+            isOpen={isTvdbListOpen}
+            onClose={() => setIsTvdbListOpen(false)}
           />
           <AniListIntegration
             isOpen={isAniListOpen}
@@ -5362,6 +5479,10 @@ function CatalogsSettingsContent({
       <LetterboxdIntegration
         isOpen={isLetterboxdOpen}
         onClose={() => setIsLetterboxdOpen(false)}
+      />
+      <TVDBListIntegration
+        isOpen={isTvdbListOpen}
+        onClose={() => setIsTvdbListOpen(false)}
       />
       <CustomManifestIntegration
         isOpen={isCustomManifestOpen}

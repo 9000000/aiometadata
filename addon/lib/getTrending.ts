@@ -4,6 +4,7 @@ import * as Utils from '../utils/parseProps.js';
 import { getMeta } from './getMeta.js';
 import { cacheWrapMetaSmart } from './getCache.js';
 import { UserConfig } from '../types/index.js';
+import { allowsUnrated, hasAgeRatingCap, passesAgeRating } from '../utils/ageRating.js';
 const consola = require('consola');
 
 const logger = consola.withTag('GetTrending'); 
@@ -59,58 +60,22 @@ async function getTrending(type: string, language: string, page: number, genre: 
     const validMetas = metas.filter(meta => meta !== null);
     logger.debug(`[getTrending] ${validMetas.length} Metas processing took ${metasTime.toFixed(2)}ms`);
 
-    const movieRatingHierarchy = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
-    const tvRatingHierarchy = ["TV-Y", "TV-Y7", "TV-G", "TV-PG", "TV-14", "TV-MA"];
-    
-    const movieToTvMap: { [key: string]: string } = {
-      'G': 'TV-G',
-      'PG': 'TV-PG', 
-      'PG-13': 'TV-14',
-      'R': 'TV-MA',
-      'NC-17': 'TV-MA'
-    };
-    
     const userRating = config.ageRating;
     let filteredMetas = validMetas;
-    
-    if (userRating && userRating.toLowerCase() !== 'none') {
-      const isTvRating = type === 'series';
-      const finalUserRating = isTvRating ? (movieToTvMap[userRating] || userRating) : userRating;
-      const ratingHierarchy = isTvRating ? tvRatingHierarchy : movieRatingHierarchy;
-      const userRatingIndex = ratingHierarchy.indexOf(finalUserRating);
 
-      if (userRatingIndex !== -1) {
-        const beforeCount = filteredMetas.length;
-        const filterStartTime = performance.now();
-        
-        filteredMetas = validMetas.filter(meta => {
-          const cert = meta.app_extras?.certification;
-          
-          // If rating is PG-13 or lower, exclude items without certification as they could be inappropriate
-          const isUserRatingRestrictive = finalUserRating === 'PG-13' || 
-                                         (movieRatingHierarchy.indexOf(finalUserRating) !== -1 && 
-                                          movieRatingHierarchy.indexOf(finalUserRating) <= movieRatingHierarchy.indexOf('PG-13')) ||
-                                         (tvRatingHierarchy.indexOf(finalUserRating) !== -1 && 
-                                          tvRatingHierarchy.indexOf(finalUserRating) <= tvRatingHierarchy.indexOf('TV-14'));
-          
-          if (!cert || cert === "" || cert.toLowerCase() === 'nr') {
-            return !isUserRatingRestrictive; // Exclude items without certification if user rating is restrictive
-          }
-          
-          const resultRatingIndex = ratingHierarchy.indexOf(cert);
+    if (hasAgeRatingCap(config)) {
+      const allowUnrated = allowsUnrated(config);
+      const beforeCount = filteredMetas.length;
+      const filterStartTime = performance.now();
 
-          if (resultRatingIndex === -1) {
-            return true;
-          }
-          
-          return resultRatingIndex <= userRatingIndex;
-        });
+      filteredMetas = validMetas.filter(meta =>
+        passesAgeRating(meta.app_extras?.certification, type, userRating, allowUnrated)
+      );
 
-        const afterCount = filteredMetas.length;
-        const filterTime = performance.now() - filterStartTime;
-        if (beforeCount !== afterCount) {
-          logger.debug(`[getTrending] Age rating filter removed ${beforeCount - afterCount} items in ${filterTime.toFixed(2)}ms`);
-        }
+      const afterCount = filteredMetas.length;
+      const filterTime = performance.now() - filterStartTime;
+      if (beforeCount !== afterCount) {
+        logger.debug(`[getTrending] Age rating filter removed ${beforeCount - afterCount} items in ${filterTime.toFixed(2)}ms`);
       }
     } else {
       logger.debug(`[getTrending] No age rating filtering applied (ageRating: ${userRating})`);

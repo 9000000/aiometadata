@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Callout } from "@/components/settings/Callout";
+import { ManagerSync } from "@/components/ManagerSync";
 import { Switch } from "@/components/ui/switch";
 import { missingRequiredKeys, type KeyStatus } from "@/lib/configStatus";
 import { navigateToSettingsSection } from "@/lib/settingsRoute";
@@ -303,7 +304,10 @@ export function SaveProvider({ children }: { children: ReactNode }) {
                 onCheckedChange={setSuppressReinstallNotice}
               />
             </div>
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {defaultInstallUrl ? (
+                <ManagerSync manifestUrl={defaultInstallUrl} onSynced={() => closeReinstallModal(false)} />
+              ) : null}
               <Button variant="outline" onClick={() => closeReinstallModal(false)}>Later</Button>
               <Button onClick={() => closeReinstallModal(true)}>Install</Button>
             </div>

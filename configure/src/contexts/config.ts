@@ -74,6 +74,7 @@ export interface CatalogConfig {
     hideUnreleasedDigital?: boolean;
     identifier?: string;
     url?: string;
+    slug?: string;
     // TMDB-specific metadata
     listId?: string;
     listDescription?: string;
@@ -224,6 +225,7 @@ export interface AppConfig {
   /** If true, display a "⭐ Rate Me" genre button in meta pages that links to the rating page */
   showRateMeButton?: boolean;
   ageRating: string;
+  allowUnratedContent?: boolean;
   sfw: boolean;
   hideUnreleasedDigital: boolean;
   hideUnreleasedDigitalSearch: boolean;

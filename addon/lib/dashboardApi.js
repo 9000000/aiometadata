@@ -1933,8 +1933,11 @@ class DashboardAPI {
           description: description,
           nextRun: catalogStats.enabled ? (catalogStats.nextRun ? this.getTimeUntil(new Date(catalogStats.nextRun)) : "Scheduled") : "Disabled",
           action: taskAction,
-          secondaryAction: (catalogStats.enabled && !catalogStats.isRunning)
-            ? { action: "warm-images", label: "Images", title: "Warm images only, leaving the catalog schedule where it is" }
+          secondaryActions: (catalogStats.enabled && !catalogStats.isRunning)
+            ? [
+                { action: "warm-images", label: "Images", icon: "image", title: "Warm images only, leaving the catalog schedule where it is" },
+                { action: "sync-ttl", label: "Sync TTL", icon: "clock", title: "Shorten catalog cache entries that outlive the next warmup, so it refreshes them instead of reading them back" },
+              ]
             : null,
           category: "warming",
           warmingDetail: {

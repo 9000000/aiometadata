@@ -56,7 +56,7 @@ async function recoverTvdbIdViaImdb(imdbId, contentType, config, currentTvdbId) 
   if (!imdbId) return null;
   try {
     const results = await tvdb.findByImdbId(imdbId, config);
-    const recovered = contentType === 'movie' ? results?.[0]?.movie?.id : results?.[0]?.series?.id;
+    const recovered = tvdb.tvdbIdFromRemoteIdResults(results, contentType);
     if (recovered && String(recovered) !== String(currentTvdbId)) return String(recovered);
   } catch (e) {
     logger.warn(`[Meta] TVDB recovery by IMDb ${imdbId} failed: ${e.message}`);
@@ -2058,7 +2058,8 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
     url: `stremio:///search?search=${w}`
   }));
   
-  const { trailers } = Utils.parseTvdbTrailers(movieData.trailers, translatedName);
+  const { trailers: allTrailers } = Utils.parseTvdbTrailers(movieData.trailers, translatedName);
+  const trailers = Utils.pickTrailersByLanguage(allTrailers, langCode3);
 
   if(!logoUrl && imdbId && await imdb.metahubImageExists(imdbId, 'logo')){
     logoUrl =  imdb.getLogoFromImdb(imdbId);
@@ -2326,7 +2327,8 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
     url: `stremio:///search?search=${w}`
   }));
 
-  const { trailers } = Utils.parseTvdbTrailers(tvdbShow.trailers, translatedName);
+  const { trailers: allTrailers } = Utils.parseTvdbTrailers(tvdbShow.trailers, translatedName);
+  const trailers = Utils.pickTrailersByLanguage(allTrailers, langCode3);
 
 
 
@@ -3147,7 +3149,8 @@ async function buildAnimeResponse(stremioId, malData, language, characterData, e
         }
       }
     }
-    if(malData.rating && config.displayAgeRating){
+    const malCertification = Utils.malRatingToCertification(malData.rating);
+    if(malData.rating && !malCertification && config.displayAgeRating){
       const ageRatingLink = {
         name: malData.rating,
         category: 'Genres',
@@ -3193,7 +3196,8 @@ async function buildAnimeResponse(stremioId, malData, language, characterData, e
         cast: Utils.parseCast(tmdbLikeCredits, undefined, 'mal'),
         director: [],
         writers: [],
-        watchProviders: watchProviders
+        watchProviders: watchProviders,
+        ...(malCertification ? { certification: malCertification, certificationLocal: malData.rating } : {})
       }
     };
 

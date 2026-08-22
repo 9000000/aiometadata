@@ -164,6 +164,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ['18+', 'certification', 'pg', 'age', 'mature', 'parental'],
   },
   {
+    id: 'filters.allowUnratedContent', section: 'filters', anchor: 'allow-unrated-content',
+    label: 'Show Unrated Titles',
+    description: 'Keep titles with no confirmed rating when a maximum content rating is set.',
+    keywords: ['unrated', 'nr', 'not rated', 'certification', 'age', 'parental'],
+  },
+  {
     id: 'filters.sfw', section: 'filters', anchor: 'sfw-mode',
     label: 'Safe for Work (SFW) Mode',
     description: 'Enable to show only safe for work anime content. This will filter out adult content, some ecchi content, and other mature themes.',
@@ -572,6 +578,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     label: 'Letterboxd Catalogs',
     description: 'Import your Letterboxd lists and watchlists as catalogs via StremThru',
     keywords: ['letterboxd', 'list', 'watchlist'],
+  },
+  {
+    id: 'catalogs.tvdbLists', section: 'catalogs', anchor: null,
+    label: 'TheTVDB Lists',
+    description: 'Add a TheTVDB list as its own catalog, by slug or by picking one from the site',
+    keywords: ['tvdb', 'thetvdb', 'list', 'slug', 'collection'],
   },
   // Composed, not verbatim: this is a coarse section-level entry with no single
   // control behind it, so there is no one sentence in the UI to quote.

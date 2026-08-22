@@ -11,6 +11,7 @@ import { Copy, Loader2, Save, Key, User, Download, List } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 import { TagChip } from "@/components/TagChip";
+import { ManagerSync } from "@/components/ManagerSync";
 import { cn } from "@/lib/utils";
 import { keyStatuses } from "@/lib/configStatus";
 import { Callout } from "@/components/settings/Callout";
@@ -540,6 +541,10 @@ export function ConfigurationManager() {
               <Button onClick={() => openInstall(taggedInstallUrl)}>
                 <Download className="h-4 w-4 mr-2" /> Install
               </Button>
+              <ManagerSync
+                manifestUrl={taggedInstallUrl}
+                onSynced={() => { markManifestInstalled(); }}
+              />
             </div>
           </CardContent>
         </Card>

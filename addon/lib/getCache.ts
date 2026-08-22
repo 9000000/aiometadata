@@ -3,6 +3,7 @@ const { loadConfigFromDatabase }: any = require('./configApi');
 const consola: any = require('consola');
 const crypto: any = require('crypto');
 const { isMetricsDisabled }: any = require('./metricsConfig');
+const { allowsUnrated, hasAgeRatingCap }: any = require('../utils/ageRating');
 const {
   decodeCachePayload,
   encodeCachePayload,
@@ -1072,8 +1073,23 @@ function applyCastCountProjection(meta: any, config: any): any {
   return meta;
 }
 
+/**
+ * Clients play a trailer from trailerStreams, and the field is a restatement of
+ * trailers, so it is derived here rather than stored. That keeps the two from
+ * drifting and keeps the cached component's shape unchanged.
+ */
+function applyTrailerStreamsProjection(meta: any): any {
+  if (!Array.isArray(meta?.trailers) || meta.trailers.length === 0) return meta;
+  if (Array.isArray(meta.trailerStreams) && meta.trailerStreams.length > 0) return meta;
+  meta.trailerStreams = meta.trailers
+    .filter((trailer: any) => trailer?.source)
+    .map((trailer: any) => ({ title: trailer.name || 'Trailer', ytId: trailer.source }));
+  return meta;
+}
+
 async function projectMetaForUser(meta: any, config: any): Promise<any> {
   if (!meta) return meta;
+  applyTrailerStreamsProjection(meta);
   applyCastCountProjection(meta, config);
   applyBlurThumbProjection(meta, config);
   applyDisplayAgeRatingProjection(meta, config);
@@ -1265,6 +1281,7 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
     sfw: config.sfw || false,
     includeAdult: config.includeAdult || false,
     ageRating: config.ageRating || null,
+    ...(hasAgeRatingCap(config) ? { allowUnratedContent: allowsUnrated(config) } : {}),
     showMetaProviderAttribution: config.showMetaProviderAttribution || false,
   };
 
@@ -1401,6 +1418,14 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
     if (catCfg?.cacheTTL) {
       cacheTTL = catCfg.cacheTTL;
       cacheLogger.debug(`[Catalog] Using custom cache TTL for AniList catalog ${idOnly}: ${cacheTTL}s`);
+    }
+  }
+
+  if (idOnly.startsWith('publicmetadb.')) {
+    const catCfg = config.catalogs?.find((c: any) => c.id === idOnly);
+    if (catCfg?.cacheTTL) {
+      cacheTTL = catCfg.cacheTTL;
+      cacheLogger.debug(`[Catalog] Using custom cache TTL for PublicMetaDB catalog ${idOnly}: ${cacheTTL}s`);
     }
   }
 
@@ -1541,6 +1566,7 @@ async function cacheWrapSearch(userUUID: string, searchKey: string, method: () =
     sfw: config.sfw || false,
     includeAdult: config.includeAdult || false,
     ageRating: config.ageRating || null,
+    ...(hasAgeRatingCap(config) ? { allowUnratedContent: allowsUnrated(config) } : {}),
     metaProviders: config.providers || {},
     artProviders: config.artProviders || {},
     blurThumbs: config.blurThumbs || false,
@@ -2285,7 +2311,8 @@ function cacheWrapJikanApi(key: string, method: () => Promise<any>, customTTL: n
     return classifyResult(result, error, cacheKey);
   };
 
-  return cacheWrapGlobal(`jikan-api:${subkey}`, method, ttl, {
+  // v2 carries the anime rating, which the pre-v2 payloads dropped on the way in.
+  return cacheWrapGlobal(`jikan-api:v2:${subkey}`, method, ttl, {
     resultClassifier: jikanResultClassifier,
     ...options,
     upstream: true,
@@ -2333,6 +2360,7 @@ async function cacheWrapStaticCatalog(userUUID: string, catalogKey: string, meth
     sfw: config.sfw || false,
     includeAdult: config.includeAdult || false,
     ageRating: config.ageRating || null,
+    ...(hasAgeRatingCap(config) ? { allowUnratedContent: allowsUnrated(config) } : {}),
     showPrefix: config.showPrefix || false,
     showMetaProviderAttribution: config.showMetaProviderAttribution || false,
     displayAgeRating: config.displayAgeRating || false,

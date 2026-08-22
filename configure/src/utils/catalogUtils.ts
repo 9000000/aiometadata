@@ -308,6 +308,135 @@ export function createLetterboxdCatalog(options: LetterboxdCatalogOptions): Cata
 }
 
 // ============================================================================
+// TheTVDB List Catalog Creation
+// ============================================================================
+
+export interface TvdbListPreview {
+  id: number;
+  name: string;
+  overview?: string;
+  slug?: string;
+  image?: string;
+  isOfficial?: boolean;
+  url?: string;
+  movieCount: number;
+  seriesCount: number;
+  itemCount: number;
+}
+
+export interface TvdbListCatalogOptions {
+  list: TvdbListPreview;
+  mode?: 'all' | 'split';
+  cacheTTL?: number;
+  displayTypeOverrides?: { movie?: string; series?: string };
+}
+
+/**
+ * Creates one or two catalogs for a TheTVDB list. A single-type list always
+ * collapses to one catalog, whatever the mode asks for.
+ */
+export function createTvdbListCatalogs(options: TvdbListCatalogOptions): CatalogConfig[] {
+  const { list, mode = 'all', cacheTTL, displayTypeOverrides } = options;
+
+  const listId = String(list.id);
+  const listUrl = list.url || `https://thetvdb.com/lists/${list.slug || listId}`;
+  const baseMetadata = {
+    listId,
+    listName: list.name,
+    ...(list.overview ? { description: list.overview } : {}),
+    ...(list.slug ? { slug: list.slug } : {}),
+    url: listUrl,
+  };
+
+  const build = (
+    id: string,
+    type: 'movie' | 'series' | 'all',
+    name: string,
+    itemCount: number
+  ): CatalogConfig => ({
+    id,
+    type,
+    name,
+    enabled: true,
+    showInHome: true,
+    source: 'tvdb',
+    enableRatingPosters: true,
+    ...(cacheTTL ? { cacheTTL } : {}),
+    ...(getDisplayTypeOverride(type, displayTypeOverrides)
+      ? { displayType: getDisplayTypeOverride(type, displayTypeOverrides) }
+      : {}),
+    metadata: { ...baseMetadata, itemCount },
+  });
+
+  const hasMovies = list.movieCount > 0;
+  const hasSeries = list.seriesCount > 0;
+
+  if (!hasMovies && !hasSeries) return [];
+  if (!hasSeries) {
+    return [build(`tvdb.list.${listId}`, 'movie', list.name, list.movieCount)];
+  }
+  if (!hasMovies) {
+    return [build(`tvdb.list.${listId}`, 'series', list.name, list.seriesCount)];
+  }
+  if (mode === 'split') {
+    return [
+      build(`tvdb.list.${listId}.movies`, 'movie', `${list.name} (Movies)`, list.movieCount),
+      build(`tvdb.list.${listId}.series`, 'series', `${list.name} (Series)`, list.seriesCount),
+    ];
+  }
+  return [build(`tvdb.list.${listId}`, 'all', list.name, list.itemCount)];
+}
+
+// ============================================================================
+// TMDB Collection Catalog Creation
+// ============================================================================
+
+export interface TmdbCollectionPreview {
+  id: number;
+  name: string;
+  overview?: string;
+  poster?: string;
+  backdrop?: string;
+  url?: string;
+  itemCount?: number;
+}
+
+export interface TmdbCollectionCatalogOptions {
+  collection: TmdbCollectionPreview;
+  sortDirection?: 'asc' | 'desc';
+  hideUnreleased?: boolean;
+  cacheTTL?: number;
+  displayTypeOverrides?: { movie?: string; series?: string };
+}
+
+/** Creates a movie catalog for a TMDB collection. Collections never hold series. */
+export function createTmdbCollectionCatalog(options: TmdbCollectionCatalogOptions): CatalogConfig {
+  const { collection, sortDirection = 'asc', hideUnreleased = false, cacheTTL, displayTypeOverrides } = options;
+  const displayType = getDisplayTypeOverride('movie', displayTypeOverrides);
+
+  return {
+    id: `tmdb.collection.${collection.id}`,
+    type: 'movie',
+    name: collection.name,
+    enabled: true,
+    showInHome: true,
+    source: 'tmdb',
+    enableRatingPosters: true,
+    ...(cacheTTL ? { cacheTTL } : {}),
+    ...(displayType && { displayType }),
+    metadata: {
+      listId: String(collection.id),
+      listName: collection.name,
+      ...(collection.overview ? { description: collection.overview } : {}),
+      ...(collection.itemCount !== undefined ? { itemCount: collection.itemCount } : {}),
+      sortDirection,
+      ...(hideUnreleased ? { hideUnreleased: true } : {}),
+      url: collection.url || `https://www.themoviedb.org/collection/${collection.id}`,
+    },
+  };
+}
+
+// ============================================================================
 // Custom Manifest Catalog Creation
 // ============================================================================
 

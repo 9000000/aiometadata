@@ -14,6 +14,8 @@ import {
   createMDBListCatalog,
   createTraktCatalog,
   createLetterboxdCatalog,
+  createTvdbListCatalogs,
+  createTmdbCollectionCatalog,
   createCustomManifestCatalog,
   getMdbListType,
   isDynamicMixedList,
@@ -37,7 +39,7 @@ interface SelectableItem {
 type QuickAddStep = 'input' | 'selection' | 'loading';
 
 export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
-  const { config, setConfig, catalogTTL, hasBuiltInMdblist } = useConfig();
+  const { config, setConfig, catalogTTL, hasBuiltInMdblist, auth } = useConfig();
   
   // State
   const [url, setUrl] = useState('');
@@ -95,7 +97,7 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
     setParsedUrl(parsed);
     
     if (parsed.service === 'unknown') {
-      setError('URL not recognized. Supported: MDBList lists/users, Trakt lists/users, Letterboxd lists/watchlists, or manifest.json URLs');
+      setError('URL not recognized. Supported: MDBList lists/users, Trakt lists/users, Letterboxd lists/watchlists, TheTVDB lists, TMDB collections, or manifest.json URLs');
     }
   }, []);
 
@@ -105,6 +107,8 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
       case 'mdblist': return 'default';
       case 'trakt': return 'secondary';
       case 'letterboxd': return 'outline';
+      case 'tvdb': return 'outline';
+      case 'tmdb': return 'secondary';
       case 'manifest': return 'secondary';
       default: return 'destructive';
     }
@@ -116,6 +120,8 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
       case 'mdblist': return 'MDBList';
       case 'trakt': return 'Trakt';
       case 'letterboxd': return 'Letterboxd';
+      case 'tvdb': return 'TheTVDB';
+      case 'tmdb': return 'TMDB Collection';
       case 'manifest': return 'Custom Manifest';
       default: return 'Unknown';
     }
@@ -127,6 +133,8 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
       case 'mdblist': return '/mdblist_icon.png';
       case 'trakt': return '/trakt_icon.png';
       case 'letterboxd': return '/letterboxd_icon.png';
+      case 'tvdb': return '/tvdb_icon.png';
+      case 'tmdb': return '/tmdb_icon.png';
       case 'manifest': return '/manifest_icon.png';
       default: return null;
     }
@@ -588,6 +596,111 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
   };
 
   // ============================================================================
+  // TheTVDB List Handler
+  // ============================================================================
+  const handleTvdbList = async () => {
+    if (!parsedUrl || parsedUrl.service !== 'tvdb' || !parsedUrl.listSlug) return;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const params = new URLSearchParams({ input: parsedUrl.listSlug });
+      if (config.apiKeys?.tvdb) params.set('apikey', config.apiKeys.tvdb);
+      if (auth?.userUUID) params.set('userUUID', auth.userUUID);
+
+      const response = await fetch(`/api/tvdb/lists/resolve?${params.toString()}`);
+      const list = await response.json();
+      if (!response.ok) {
+        throw new Error(list.error || 'Failed to fetch list from TheTVDB');
+      }
+
+      const newCatalogs = createTvdbListCatalogs({
+        list,
+        mode: 'all',
+        cacheTTL: catalogTTL,
+        displayTypeOverrides: config.displayTypeOverrides,
+      });
+
+      if (!newCatalogs.length) {
+        throw new Error('That list has no movies or series in it');
+      }
+
+      const fresh = newCatalogs.filter(c => !catalogExists(c.id));
+      if (!fresh.length) {
+        toast.info("This TheTVDB list is already in your catalogs");
+        onClose();
+        return;
+      }
+
+      setConfig(prev => ({
+        ...prev,
+        catalogs: [...prev.catalogs, ...fresh]
+      }));
+
+      toast.success("List added successfully", {
+        description: `${list.name} with ${list.itemCount} items has been added to your catalogs`
+      });
+
+      onClose();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'An unknown error occurred';
+      setError(message);
+      toast.error("Error", { description: message });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // ============================================================================
+  // TMDB Collection Handler
+  // ============================================================================
+  const handleTmdbCollection = async () => {
+    if (!parsedUrl || parsedUrl.service !== 'tmdb' || !parsedUrl.listSlug) return;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const params = new URLSearchParams({ input: parsedUrl.listSlug, language: config.language || 'en-US' });
+      if (config.apiKeys?.tmdb) params.set('apikey', config.apiKeys.tmdb);
+      if (auth?.userUUID) params.set('userUUID', auth.userUUID);
+
+      const response = await fetch(`/api/tmdb/collections/resolve?${params.toString()}`);
+      const collection = await response.json();
+      if (!response.ok) {
+        throw new Error(collection.error || 'Failed to fetch collection from TMDB');
+      }
+
+      const newCatalog = createTmdbCollectionCatalog({
+        collection,
+        cacheTTL: catalogTTL,
+        displayTypeOverrides: config.displayTypeOverrides,
+      });
+
+      if (catalogExists(newCatalog.id)) {
+        toast.info("This TMDB collection is already in your catalogs");
+        onClose();
+        return;
+      }
+
+      setConfig(prev => ({ ...prev, catalogs: [...prev.catalogs, newCatalog] }));
+
+      toast.success("Collection added successfully", {
+        description: `${collection.name} with ${collection.itemCount} movies has been added to your catalogs`
+      });
+
+      onClose();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'An unknown error occurred';
+      setError(message);
+      toast.error("Error", { description: message });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // ============================================================================
   // Custom Manifest Handler
   // ============================================================================
   const handleManifest = async () => {
@@ -703,6 +816,12 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
       case 'letterboxd':
         await handleLetterboxd();
         break;
+      case 'tvdb':
+        await handleTvdbList();
+        break;
+      case 'tmdb':
+        await handleTmdbCollection();
+        break;
       case 'manifest':
         await handleManifest();
         break;
@@ -743,7 +862,7 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
             <DialogTitle>Quick Add Catalog</DialogTitle>
           </div>
           <DialogDescription>
-            Paste a URL to quickly add catalogs from MDBList, Trakt, Letterboxd, or custom manifests.
+            Paste a URL to quickly add catalogs from MDBList, Trakt, Letterboxd, TheTVDB, TMDB, or custom manifests.
           </DialogDescription>
         </DialogHeader>
 
@@ -803,6 +922,8 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
                   <p><strong>MDBList:</strong> mdblist.com/lists/username/list-name or mdblist.com/users/username</p>
                   <p><strong>Trakt:</strong> trakt.tv/users/username/lists/list-slug or trakt.tv/users/username</p>
                   <p><strong>Letterboxd:</strong> letterboxd.com/username/list/list-name or letterboxd.com/username/watchlist</p>
+                  <p><strong>TheTVDB:</strong> thetvdb.com/lists/list-slug</p>
+                  <p><strong>TMDB:</strong> themoviedb.org/collection/86311</p>
                   <p><strong>Custom Manifest:</strong> Any URL ending with /manifest.json</p>
                 </CardContent>
               </Card>

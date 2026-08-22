@@ -1391,7 +1391,12 @@ addon.get("/api/mdblist/user", async (req, res) => {
 });
 
 // Proxy: Get user's lists
-const MDBLIST_LIST_CACHE_TTL = 30 * 60;
+const { envInt } = require('./utils/envNumber');
+
+/** Read per call so a dashboard change lands without a restart. */
+function mdblistListCacheTtl() {
+  return envInt('MDBLIST_LIST_CACHE_TTL', 30 * 60, 0);
+}
 
 /** Keyed per key rather than globally: without a username MDBList returns the caller's own lists. */
 /** The instance key stands in when the caller sends none, same as the catalog paths. */
@@ -1428,13 +1433,50 @@ addon.get("/api/mdblist/lists/user", async (req, res) => {
         const response = await makeRateLimitedMDBListRequest(url, apikey, 'MDBList Proxy - Get User Lists');
         return response.data;
       },
-      MDBLIST_LIST_CACHE_TTL
+      mdblistListCacheTtl()
     );
     res.json(payload);
   } catch (error) {
     consola.error("[MDBList Proxy] Error fetching user lists:", error.message);
     const status = error.response?.status || 500;
     res.status(status).json({ error: error.message || "Failed to fetch user lists" });
+  }
+});
+
+// Proxy: Search public lists by name, ordered by popularity
+addon.get("/api/mdblist/lists/search", async (req, res) => {
+  try {
+    const query = typeof req.query.query === 'string' ? req.query.query.trim() : '';
+    if (!query) {
+      return res.status(400).json({ error: "query is required" });
+    }
+
+    const apikey = resolveMdblistKey(req.query.apikey);
+    if (!apikey) {
+      return res.status(400).json({ error: "apikey is required" });
+    }
+
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 40, 1), 100);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const url = `https://api.mdblist.com/lists/search?apikey=${apikey}&query=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}`;
+
+    const payload = await cacheWrapGlobal(
+      mdblistCacheKey(['lists', 'search', query.toLowerCase(), String(limit), String(offset)], apikey),
+      async () => {
+        const response = await makeRateLimitedMDBListRequest(url, apikey, 'MDBList Proxy - Search Lists');
+        return {
+          results: Array.isArray(response.data) ? response.data : [],
+          hasMore: String(response.headers?.['x-has-more'] ?? '').toLowerCase() === 'true',
+          totalItems: parseInt(response.headers?.['x-total-items'], 10) || 0,
+        };
+      },
+      mdblistListCacheTtl()
+    );
+    res.json(payload);
+  } catch (error) {
+    consola.error("[MDBList Proxy] Error searching lists:", error.message);
+    const status = error.response?.status || 500;
+    res.status(status).json({ error: error.message || "Failed to search lists" });
   }
 });
 
@@ -1488,7 +1530,7 @@ addon.get("/api/mdblist/lists/:listId/items", async (req, res) => {
           poster: item.poster || null,
         }));
       },
-      MDBLIST_LIST_CACHE_TTL
+      mdblistListCacheTtl()
     );
 
     res.json({ items });
@@ -1523,7 +1565,7 @@ addon.get("/api/mdblist/lists/:username/:listname", async (req, res) => {
 addon.get("/api/mdblist/lists/:listId", async (req, res) => {
   try {
     const { listId } = req.params;
-    const { apikey } = req.query;
+    const apikey = resolveMdblistKey(req.query.apikey);
     
     if (!apikey) {
       return res.status(400).json({ error: "apikey is required" });
@@ -2084,6 +2126,276 @@ addon.get("/api/tvdb/discover/search/:entity", async (req, res) => {
     consola.error("[TVDB Discover] Error searching entity:", error.message);
     const status = error.response?.status || 500;
     return res.status(status).json({ error: error.message || "Failed to search TVDB discover entity" });
+  }
+});
+
+const TVDB_ARTWORK_BASE = 'https://artworks.thetvdb.com';
+
+function tvdbListImageUrl(image) {
+  if (!image || typeof image !== 'string') return '';
+  return image.startsWith('http') ? image : `${TVDB_ARTWORK_BASE}${image.startsWith('/') ? '' : '/'}${image}`;
+}
+
+function normalizeTvdbListRecord(record) {
+  const id = Number(String(record?.tvdb_id ?? record?.id ?? '').replace(/[^0-9]/g, ''));
+  if (!Number.isFinite(id) || id <= 0) return null;
+  const slug = record?.url || record?.slug || '';
+  return {
+    id,
+    name: record?.name || `List ${id}`,
+    overview: record?.overview || record?.overviews?.eng || '',
+    slug,
+    image: tvdbListImageUrl(record?.image || record?.image_url),
+    isOfficial: !!record?.isOfficial,
+    url: `https://thetvdb.com/lists/${slug || id}`
+  };
+}
+
+// Base list records carry no image, and search results carry no slug.
+async function enrichTvdbListRecords(records, config) {
+  const enriched = new Array(records.length);
+  const queue = records.map((record, index) => ({ record, index }));
+  const concurrency = Math.min(
+    parseInt(process.env.TVDB_LIST_ENRICH_CONCURRENCY || '10', 10),
+    queue.length
+  );
+
+  const worker = async () => {
+    while (queue.length) {
+      const { record, index } = queue.shift();
+      let details = null;
+      try {
+        details = await tvdbApi.getCollectionDetails(String(record.id), config);
+      } catch (error) {
+        consola.debug(`[TVDB Lists] Could not enrich list ${record.id}: ${error.message}`);
+      }
+      const entities = Array.isArray(details?.entities) ? details.entities : [];
+      const movieCount = entities.filter(e => e?.movieId).length;
+      const seriesCount = entities.filter(e => e?.seriesId).length;
+      enriched[index] = {
+        ...record,
+        ...(details?.image ? { image: tvdbListImageUrl(details.image) } : {}),
+        ...(details?.url ? { slug: details.url, url: `https://thetvdb.com/lists/${details.url}` } : {}),
+        ...(details?.overview && !record.overview ? { overview: details.overview } : {}),
+        // Search results omit isOfficial entirely, so it only ever arrives here.
+        isOfficial: typeof details?.isOfficial === 'boolean' ? details.isOfficial : !!record.isOfficial,
+        movieCount,
+        seriesCount,
+        itemCount: movieCount + seriesCount,
+      };
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.max(1, concurrency) }, worker));
+  return enriched.filter(Boolean);
+}
+
+async function buildTvdbListConfig(req, res) {
+  const tvdbApiKey = await resolveTvdbDiscoverApiKey(req);
+  if (!tvdbApiKey) {
+    res.status(400).json({ error: "TVDB API key is required (config.apiKeys.tvdb, TVDB_API_KEY, or BUILT_IN_TVDB_API_KEY)" });
+    return null;
+  }
+  const userUUID = typeof req.query.userUUID === 'string' && req.query.userUUID.trim()
+    ? req.query.userUUID.trim()
+    : undefined;
+  return { apiKeys: { tvdb: tvdbApiKey }, ...(userUUID ? { userUUID } : {}) };
+}
+
+// Proxy: browse TheTVDB lists, one page at a time
+addon.get("/api/tvdb/lists", async (req, res) => {
+  try {
+    const tvdbConfig = await buildTvdbListConfig(req, res);
+    if (!tvdbConfig) return;
+
+    const page = Math.max(0, parseInt(req.query.page, 10) || 0);
+    const results = await cacheWrapGlobal(
+      `tvdb:lists:browse:v2:${page}`,
+      async () => {
+        const records = await tvdbApi.getCollectionsList(tvdbConfig, page);
+        const normalized = (Array.isArray(records) ? records : []).map(normalizeTvdbListRecord).filter(Boolean);
+        return enrichTvdbListRecords(normalized, tvdbConfig);
+      },
+      6 * 60 * 60
+    );
+
+    return res.json({ page, results });
+  } catch (error) {
+    consola.error("[TVDB Lists] Error browsing lists:", error.message);
+    const status = error.response?.status || 500;
+    return res.status(status).json({ error: error.message || "Failed to browse TVDB lists" });
+  }
+});
+
+// Proxy: search TheTVDB lists by name
+addon.get("/api/tvdb/lists/search", async (req, res) => {
+  try {
+    const query = typeof req.query.query === 'string' ? req.query.query.trim() : '';
+    if (!query) {
+      return res.status(400).json({ error: "query is required" });
+    }
+
+    const tvdbConfig = await buildTvdbListConfig(req, res);
+    if (!tvdbConfig) return;
+
+    const results = await cacheWrapGlobal(
+      `tvdb:lists:search:v3:${query.toLowerCase()}`,
+      async () => {
+        const records = await tvdbApi.searchCollections(query, tvdbConfig);
+        const normalized = (Array.isArray(records) ? records : []).map(normalizeTvdbListRecord).filter(Boolean).slice(0, 40);
+        const enriched = await enrichTvdbListRecords(normalized, tvdbConfig);
+        // thetvdb.com only surfaces official lists, so match that ranking rather
+        // than the search index order, which buries them among unpublished ones.
+        return enriched.sort((a, b) =>
+          (Number(b.isOfficial) - Number(a.isOfficial)) || (b.itemCount - a.itemCount)
+        );
+      },
+      60 * 60
+    );
+
+    return res.json({ query, results });
+  } catch (error) {
+    consola.error("[TVDB Lists] Error searching lists:", error.message);
+    const status = error.response?.status || 500;
+    return res.status(status).json({ error: error.message || "Failed to search TVDB lists" });
+  }
+});
+
+// Proxy: resolve a list id, slug or thetvdb.com URL into a previewable record
+addon.get("/api/tvdb/lists/resolve", async (req, res) => {
+  try {
+    const raw = typeof req.query.input === 'string' ? req.query.input.trim() : '';
+    if (!raw) {
+      return res.status(400).json({ error: "input is required" });
+    }
+
+    const tvdbConfig = await buildTvdbListConfig(req, res);
+    if (!tvdbConfig) return;
+
+    const urlMatch = raw.match(/thetvdb\.com\/lists\/([^/?#]+)/i);
+    const candidate = urlMatch ? decodeURIComponent(urlMatch[1]) : raw;
+
+    const preview = await cacheWrapGlobal(
+      `tvdb:lists:resolve:v3:${candidate.toLowerCase()}`,
+      async () => {
+        // A slug can be all digits and still not be an id: list 1 has the slug "1001".
+        const base = await tvdbApi.getCollectionBySlug(candidate, tvdbConfig);
+        const listId = base?.id
+          ? String(base.id)
+          : (/^\d+$/.test(candidate) ? candidate : null);
+        if (!listId) return null;
+
+        const details = await tvdbApi.getCollectionDetails(listId, tvdbConfig);
+        if (!details?.id) return null;
+
+        const entities = Array.isArray(details.entities) ? details.entities : [];
+        const movieCount = entities.filter(e => e?.movieId).length;
+        const seriesCount = entities.filter(e => e?.seriesId).length;
+
+        return {
+          ...normalizeTvdbListRecord({ ...base, ...details }),
+          movieCount,
+          seriesCount,
+          itemCount: movieCount + seriesCount
+        };
+      },
+      6 * 60 * 60
+    );
+
+    if (!preview) {
+      return res.status(404).json({ error: "No TheTVDB list matched that id or slug" });
+    }
+
+    return res.json(preview);
+  } catch (error) {
+    consola.error("[TVDB Lists] Error resolving list:", error.message);
+    const status = error.response?.status || 500;
+    return res.status(status).json({ error: error.message || "Failed to resolve TVDB list" });
+  }
+});
+
+function normalizeTmdbCollection(record) {
+  const id = Number(record?.id);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  return {
+    id,
+    name: record?.name || `Collection ${id}`,
+    overview: record?.overview || '',
+    poster: record?.poster_path ? `https://image.tmdb.org/t/p/w342${record.poster_path}` : '',
+    backdrop: record?.backdrop_path ? `https://image.tmdb.org/t/p/w780${record.backdrop_path}` : '',
+    url: `https://www.themoviedb.org/collection/${id}`
+  };
+}
+
+// Proxy: search TMDB collections by name
+addon.get("/api/tmdb/collections/search", async (req, res) => {
+  try {
+    const query = typeof req.query.query === 'string' ? req.query.query.trim() : '';
+    if (!query) {
+      return res.status(400).json({ error: "query is required" });
+    }
+    const apikey = await resolveTmdbDiscoverApiKey(req);
+    if (!apikey) {
+      return res.status(400).json({ error: "TMDB API key is required" });
+    }
+
+    const language = typeof req.query.language === 'string' && req.query.language.trim()
+      ? req.query.language.trim()
+      : 'en-US';
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+
+    const data = await moviedb.searchCollection({ query, page, language }, { apiKeys: { tmdb: apikey } });
+    const results = (data?.results || []).map(normalizeTmdbCollection).filter(Boolean);
+
+    return res.json({ query, page, totalPages: data?.total_pages || 1, totalResults: data?.total_results || 0, results });
+  } catch (error) {
+    consola.error("[TMDB Collections] Error searching:", error.message);
+    const status = error.response?.status || 500;
+    return res.status(status).json({ error: error.message || "Failed to search TMDB collections" });
+  }
+});
+
+// Proxy: resolve a collection id or themoviedb.org/collection URL into a previewable record
+addon.get("/api/tmdb/collections/resolve", async (req, res) => {
+  try {
+    const raw = typeof req.query.input === 'string' ? req.query.input.trim() : '';
+    if (!raw) {
+      return res.status(400).json({ error: "input is required" });
+    }
+    const apikey = await resolveTmdbDiscoverApiKey(req);
+    if (!apikey) {
+      return res.status(400).json({ error: "TMDB API key is required" });
+    }
+
+    const urlMatch = raw.match(/themoviedb\.org\/collection\/(\d+)/i);
+    const collectionId = urlMatch ? urlMatch[1] : (/^\d+/.test(raw) ? raw.match(/^\d+/)[0] : null);
+    if (!collectionId) {
+      return res.status(400).json({ error: "Enter a collection id or a themoviedb.org/collection link" });
+    }
+
+    const language = typeof req.query.language === 'string' && req.query.language.trim()
+      ? req.query.language.trim()
+      : 'en-US';
+
+    const collection = await moviedb.collectionInfo({ id: collectionId, language }, { apiKeys: { tmdb: apikey } });
+    if (!collection?.id) {
+      return res.status(404).json({ error: "No TMDB collection matched that id" });
+    }
+
+    const parts = Array.isArray(collection.parts) ? collection.parts : [];
+    const dated = parts.filter(p => p?.release_date).map(p => p.release_date).sort();
+
+    return res.json({
+      ...normalizeTmdbCollection(collection),
+      itemCount: parts.length,
+      undatedCount: parts.length - dated.length,
+      firstRelease: dated[0] || null,
+      lastRelease: dated[dated.length - 1] || null
+    });
+  } catch (error) {
+    consola.error("[TMDB Collections] Error resolving:", error.message);
+    const status = error.response?.status || 500;
+    return res.status(status).json({ error: error.message || "Failed to resolve TMDB collection" });
   }
 });
 
@@ -3431,6 +3743,36 @@ addon.post("/api/managers/credentials", async (req, res) => {
   } catch (error) {
     consola.error(`[Managers] Failed to save credentials: ${error.message}`);
     res.status(500).json({ error: "Failed to save manager credentials" });
+  }
+});
+
+// GET /api/aiomanager/status - Ask an instance whether it serves the Hydra API
+addon.get("/api/aiomanager/status", async (req, res) => {
+  const instanceUrl = typeof req.query.instanceUrl === 'string' ? req.query.instanceUrl.trim() : '';
+  if (!instanceUrl) {
+    return res.status(400).json({ error: "instanceUrl is required" });
+  }
+  let parsed;
+  try {
+    parsed = new URL(instanceUrl);
+  } catch {
+    return res.status(400).json({ error: "instanceUrl must be a valid URL" });
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return res.status(400).json({ error: "instanceUrl must be a http(s) URL" });
+  }
+
+  try {
+    const { httpGet } = require('./utils/httpClient');
+    const response = await httpGet(`${instanceUrl.replace(/\/+$/, '')}/hydra/status`, { timeout: 10000 });
+    // Releases without Hydra answer the SPA catch-all, so HTML means unsupported.
+    if (typeof response.data === 'string' || !response.data?.capabilities) {
+      return res.json({ supported: false });
+    }
+    return res.json({ supported: true, ...response.data });
+  } catch (error) {
+    consola.debug(`[AIOManager Proxy] Status probe failed for ${instanceUrl}: ${error.message}`);
+    return res.json({ supported: false });
   }
 });
 
@@ -7260,6 +7602,9 @@ addon.post("/api/dashboard/maintenance/execute", requireDashboardAdmin, async (r
         const { forceWarmImages } = require('./lib/comprehensiveCatalogWarmer');
         forceWarmImages();
         result = { success: true, message: 'Image warming started, catalog schedule left unchanged' };
+      } else if (action === 'sync-ttl') {
+        const { syncCatalogTtlToSchedule } = require('./lib/comprehensiveCatalogWarmer');
+        result = await syncCatalogTtlToSchedule();
       } else if (action === 'stop') {
         const { stopComprehensiveWarming } = require('./lib/comprehensiveCatalogWarmer');
         result = stopComprehensiveWarming();

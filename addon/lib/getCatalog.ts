@@ -53,6 +53,11 @@ async function getCatalog(type: string, language: string, page: number, id: stri
       const tvdbDiscoverResults = await getTvdbDiscoverCatalog(type, id, genre, page, language, config, userUUID, includeVideos);
       return { metas: tvdbDiscoverResults };
     }
+    if (id.startsWith('tvdb.list.')) {
+      logger.debug(`Routing to TVDB list catalog handler for id: ${id}`);
+      const tvdbListResults = await getTvdbListCatalog(type, id, page, language, config, userUUID, includeVideos);
+      return { metas: tvdbListResults };
+    }
     if (id.startsWith('tvdb.') && !id.startsWith('tvdb.collection.')) {
       logger.debug(`Routing to TVDB catalog handler for id: ${id}`);
       const tvdbResults = await getTvdbCatalog(type, id, genre, page, language, config, id === 'tvdb.trending', includeVideos);
@@ -655,6 +660,58 @@ async function getTvdbCollectionsCatalog(type: string, id: string, page: number,
   return [];
 }
 
+async function getTvdbListCatalog(type: string, id: string, page: number, language: string, config: UserConfig, userUUID: string, includeVideos: boolean = false): Promise<any[]> {
+  const match = id.match(/^tvdb\.list\.(\d+)(?:\.(movies|series))?$/);
+  if (!match) {
+    logger.warn(`[TVDB List] Unrecognized catalog id ${id}`);
+    return [];
+  }
+  const listId = match[1];
+  const suffix = match[2];
+
+  const catalogConfig = config.catalogs?.find(c => c.id === id && c.type === type)
+    || config.catalogs?.find(c => c.id === id);
+  const configuredType = suffix
+    ? (suffix === 'movies' ? 'movie' : 'series')
+    : (catalogConfig?.type || type);
+
+  const details = await tvdb.getCollectionDetails(listId, config);
+  const entities = Array.isArray(details?.entities) ? [...details.entities] : [];
+  if (!entities.length) {
+    logger.info(`[TVDB List] List ${listId} has no entries`);
+    return [];
+  }
+  entities.sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
+
+  const wantsMovies = configuredType === 'movie' || configuredType === 'all';
+  const wantsSeries = configuredType === 'series' || configuredType === 'all';
+  const selected = entities.filter((e: any) => (e.movieId && wantsMovies) || (e.seriesId && wantsSeries));
+
+  const pageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE || '20');
+  const listPage = typeof page === 'number' ? page : parseInt(String(page), 10) || 1;
+  const startIndex = Math.max(0, (listPage - 1) * pageSize);
+  const pageEntities = selected.slice(startIndex, startIndex + pageSize);
+  if (!pageEntities.length) return [];
+
+  const metas = await Promise.all(pageEntities.map(async (entity: any) => {
+    const entityType = entity.movieId ? 'movie' : 'series';
+    const stremioId = `tvdb:${entity.movieId || entity.seriesId}`;
+    try {
+      const result = await cacheWrapMetaSmart(userUUID, stremioId, async () => {
+        return await getMeta(entityType, language, stremioId, config, userUUID, includeVideos);
+      }, undefined, { enableErrorCaching: true, maxRetries: 2, config }, entityType as any, includeVideos);
+      return result?.meta || null;
+    } catch (error: any) {
+      logger.warn(`[TVDB List] Failed to get meta for ${stremioId}: ${error.message}`);
+      return null;
+    }
+  }));
+
+  const validMetas = metas.filter(meta => meta !== null);
+  logger.success(`[TVDB List] Processed ${validMetas.length} items for ${id} (page ${listPage})`);
+  return validMetas;
+}
+
 async function getTvdbDiscoverCatalog(
   type: string,
   id: string,
@@ -886,6 +943,7 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
     // Handle different watchlist catalog IDs
     let listId: string;
     let unified: boolean | undefined;
+    let mediaTypeFilter: string | undefined;
     
     if (id === 'mdblist.watchlist') {
       // Unified watchlist
@@ -896,8 +954,11 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
       listId = 'watchlist';
       unified = false;
     } else if (id.startsWith('mdblist.recommended.')) {
-      listId = `recommended/${id.split('.')[2]}`;
+      const parts = id.split('.');
+      listId = `recommended/${parts[2]}`;
       unified = true;
+      if (parts[3] === 'movies') mediaTypeFilter = 'movie';
+      else if (parts[3] === 'series') mediaTypeFilter = 'show';
     } else {
       // Regular MDBList catalog
       listId = id.split(".")[1];
@@ -921,7 +982,8 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
       type,
       catalogConfig?.cacheTTL,
       scoreFiltersAllowed ? catalogConfig?.filter_score_min : undefined,
-      scoreFiltersAllowed ? catalogConfig?.filter_score_max : undefined
+      scoreFiltersAllowed ? catalogConfig?.filter_score_max : undefined,
+      mediaTypeFilter
     );
     
     // Smart pagination handling
@@ -1086,6 +1148,82 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
       return validMetas;
     } catch (error: any) {
       logger.error(`[TMDB Discover] Error fetching catalog ${id}: ${error.message}`);
+      return [];
+    }
+  }
+
+  // Handle TMDB Collection catalogs (tmdb.collection.{collectionId})
+  if (id.startsWith('tmdb.collection.')) {
+    logger.info(`Fetching TMDB collection catalog: ${id}, Page: ${page}`);
+
+    const collectionId = id.split('.')[2];
+    if (!collectionId) {
+      logger.error(`[TMDB Collection] Invalid collection id format: ${id}`);
+      return [];
+    }
+
+    const catalogConfig = config.catalogs?.find(c => c.id === id && c.type === type)
+      || config.catalogs?.find(c => c.id === id);
+    const collectionMeta = catalogConfig?.metadata || {};
+
+    try {
+      const collection = await moviedb.collectionInfo({ id: collectionId, language }, config);
+      let parts = Array.isArray(collection?.parts) ? [...collection.parts] : [];
+      if (!parts.length) {
+        logger.info(`[TMDB Collection] Collection ${collectionId} has no parts`);
+        return [];
+      }
+
+      if (config.sfw || !config.includeAdult) {
+        parts = parts.filter((part: any) => !part?.adult);
+      }
+      if (collectionMeta.hideUnreleased) {
+        const today = new Date().toISOString().slice(0, 10);
+        parts = parts.filter((part: any) => part?.release_date && part.release_date <= today);
+      }
+
+      if (genre && genre.toLowerCase() !== 'none') {
+        const genreList = await getGenreList('tmdb', language, 'movie', config);
+        const genreObj = genreList.find(g => g.name === genre);
+        if (genreObj) {
+          parts = parts.filter((part: any) => Array.isArray(part?.genre_ids) && part.genre_ids.includes(genreObj.id));
+        } else {
+          logger.warn(`[TMDB Collection] Genre "${genre}" not found`);
+        }
+        if (!parts.length) return [];
+      }
+
+      // TMDB returns parts in no particular order: the Bond collection starts at 1973.
+      const undatedLast = collectionMeta.sortDirection === 'desc' ? '' : '9999-99-99';
+      parts.sort((a: any, b: any) => {
+        const left = a?.release_date || undatedLast;
+        const right = b?.release_date || undatedLast;
+        return collectionMeta.sortDirection === 'desc' ? right.localeCompare(left) : left.localeCompare(right);
+      });
+
+      const pageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE as string) || 20;
+      const pageNum = typeof page === 'number' ? page : parseInt(String(page), 10) || 1;
+      const pageParts = parts.slice((pageNum - 1) * pageSize, (pageNum - 1) * pageSize + pageSize);
+      if (!pageParts.length) return [];
+
+      const metas = await mapWithLimit(pageParts, async (part: any) => {
+        const stremioId = `tmdb:${part.id}`;
+        try {
+          const result = await cacheWrapMetaSmart(userUUID, stremioId, async () => {
+            return await getMeta('movie', language, stremioId, config, userUUID, includeVideos);
+          }, undefined, { enableErrorCaching: true, maxRetries: 2, config }, 'movie' as any, includeVideos);
+          return result?.meta || null;
+        } catch (error: any) {
+          logger.warn(`[TMDB Collection] Failed to get meta for ${stremioId}: ${error.message}`);
+          return null;
+        }
+      });
+
+      const validMetas = metas.filter((meta: any) => meta !== null);
+      logger.success(`[TMDB Collection] Processed ${validMetas.length} items for ${id} (page ${pageNum})`);
+      return validMetas;
+    } catch (error: any) {
+      logger.error(`[TMDB Collection] Error fetching collection ${collectionId}: ${error.message}`);
       return [];
     }
   }
@@ -1665,6 +1803,18 @@ function sanitizeTmdbDiscoverParams(
     delete sanitized['first_air_date.lte'];
     delete sanitized.first_air_date_year;
     delete sanitized.with_type;
+
+    if (sanitized.with_release_type) {
+      // Only release_date follows with_release_type; primary_release_date ignores it.
+      if (typeof sanitized.sort_by === 'string' && sanitized.sort_by.startsWith('primary_release_date.')) {
+        sanitized.sort_by = sanitized.sort_by.replace('primary_release_date.', 'release_date.');
+      }
+      // With no region the type matches a release in any country.
+      if (!sanitized.region) {
+        const country = String(language || '').split('-')[1];
+        if (country) sanitized.region = country.toUpperCase();
+      }
+    }
   } else {
     delete sanitized['primary_release_date.gte'];
     delete sanitized['primary_release_date.lte'];

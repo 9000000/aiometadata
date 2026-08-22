@@ -3,6 +3,9 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { Check, Search } from 'lucide-react';
 
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import type { CatalogConfig } from '@/contexts/config';
+import { ProviderListSearch, PROVIDER_LABELS, type ListProvider } from './ProviderListSearch';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,6 +21,7 @@ export function CatalogPicker({
   existingKeys,
   tagOptions = [],
   onConfirm,
+  onCreate,
   onClose,
 }: {
   isOpen: boolean;
@@ -28,6 +32,8 @@ export function CatalogPicker({
   existingKeys: string[];
   tagOptions?: TagOption[];
   onConfirm: (picked: ManifestCatalog[]) => void;
+  /** Present only where creating a catalog makes sense, so remapping stays a pure pick. */
+  onCreate?: (created: CatalogConfig[]) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState('');
@@ -36,6 +42,7 @@ export function CatalogPicker({
   const [tagFilters, setTagFilters] = useState<string[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  const [tab, setTab] = useState<'config' | ListProvider>('config');
   // A row under a resting pointer would otherwise steal the selection back on
   // every repaint, so hovering only counts after the mouse has actually moved.
   const pointerActive = useRef(false);
@@ -47,6 +54,7 @@ export function CatalogPicker({
       setTypeFilter(null);
       setTagFilters([]);
       setActiveIndex(0);
+      setTab('config');
     }
   }, [isOpen]);
 
@@ -148,7 +156,7 @@ export function CatalogPicker({
 
   return (
     <Dialog open={isOpen} onOpenChange={open => !open && onClose()}>
-      <DialogContent className="max-w-xl">
+      <DialogContent className={onCreate ? 'flex max-h-[85vh] max-w-2xl flex-col' : 'max-w-xl'}>
         <DialogHeader>
           <DialogTitle>{multiple ? 'Add catalogs' : 'Pick a catalog'}</DialogTitle>
           <DialogDescription>
@@ -157,7 +165,26 @@ export function CatalogPicker({
               : 'Classic rows read from a single catalog.'}
           </DialogDescription>
         </DialogHeader>
-        <div>
+
+        {onCreate && (
+          <Tabs value={tab} onValueChange={value => setTab(value as 'config' | ListProvider)}>
+            <TabsList className="grid grid-cols-4">
+              <TabsTrigger value="config">Your catalogs</TabsTrigger>
+              {(['mdblist', 'tvdb', 'tmdb'] as ListProvider[]).map(provider => (
+                <TabsTrigger key={provider} value={provider}>{PROVIDER_LABELS[provider]}</TabsTrigger>
+              ))}
+            </TabsList>
+            {(['mdblist', 'tvdb', 'tmdb'] as ListProvider[]).map(provider => (
+              <TabsContent key={provider} value={provider} className="mt-3">
+                <div className="h-[26rem]">
+                  <ProviderListSearch provider={provider} onCreate={onCreate} />
+                </div>
+              </TabsContent>
+            ))}
+          </Tabs>
+        )}
+
+        <div className={onCreate && tab !== 'config' ? 'hidden' : undefined}>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -320,7 +347,7 @@ export function CatalogPicker({
             )}
           </div>
         </div>
-        {multiple && (
+        {multiple && (!onCreate || tab === 'config') && (
           <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
             <div className="flex flex-wrap items-center gap-1">
               <span className="text-xs text-muted-foreground">

@@ -2562,18 +2562,6 @@ function pickTrailersByLanguage(trailers, langCode3) {
   return english.length > 0 ? english : trailers;
 }
 
-/**
- * Maps parsed trailers to the trailerStreams shape.
- * @param {Array} trailers - Trailers in `{source, name}` form.
- * @returns {Array} The same ids as `{title, ytId}`.
- */
-function toTrailerStreams(trailers) {
-  if (!Array.isArray(trailers)) return [];
-  return trailers
-    .filter((trailer) => trailer?.source)
-    .map((trailer) => ({ title: trailer.name || 'Trailer', ytId: trailer.source }));
-}
-
 // In-flight request cache for TMDB movie images to deduplicate concurrent requests
 const tmdbMovieImagesInflight = new Map();
 
@@ -3478,7 +3466,6 @@ module.exports = {
   parseAnimeCatalogMetaBatch,
   parseTvdbTrailers,
   pickTrailersByLanguage,
-  toTrailerStreams,
   parseAnimeRelationsLink,
   parseAnimeGenreLink,
   getAnimePoster,

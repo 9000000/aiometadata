@@ -1072,8 +1072,23 @@ function applyCastCountProjection(meta: any, config: any): any {
   return meta;
 }
 
+/**
+ * Clients play a trailer from trailerStreams, and the field is a restatement of
+ * trailers, so it is derived here rather than stored. That keeps the two from
+ * drifting and keeps the cached component's shape unchanged.
+ */
+function applyTrailerStreamsProjection(meta: any): any {
+  if (!Array.isArray(meta?.trailers) || meta.trailers.length === 0) return meta;
+  if (Array.isArray(meta.trailerStreams) && meta.trailerStreams.length > 0) return meta;
+  meta.trailerStreams = meta.trailers
+    .filter((trailer: any) => trailer?.source)
+    .map((trailer: any) => ({ title: trailer.name || 'Trailer', ytId: trailer.source }));
+  return meta;
+}
+
 async function projectMetaForUser(meta: any, config: any): Promise<any> {
   if (!meta) return meta;
+  applyTrailerStreamsProjection(meta);
   applyCastCountProjection(meta, config);
   applyBlurThumbProjection(meta, config);
   applyDisplayAgeRatingProjection(meta, config);
@@ -1805,7 +1820,7 @@ async function writeMetaComponentsWithConfig({ config, metaId, result, ttl = MET
    }
 
    if (meta.trailers?.length) {
-     queueComponentCache(componentsToCache, componentCacheKeys.trailers, { trailers: meta.trailers, trailerStreams: meta.trailerStreams });
+     queueComponentCache(componentsToCache, componentCacheKeys.trailers, { trailers: meta.trailers });
    }
 
    const extrasForCache = projectAppExtrasForComponentCache(meta.app_extras);
@@ -2071,7 +2086,6 @@ async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = 
        reconstructedMeta.links = data.links;
      } else if (componentName === 'trailers') {
        if (data.trailers) reconstructedMeta.trailers = data.trailers;
-       if (data.trailerStreams) reconstructedMeta.trailerStreams = data.trailerStreams;
       } else if (componentName === 'extras') {
         if (data.app_extras && typeof data.app_extras === 'object' && !Array.isArray(data.app_extras)) {
           reconstructedMeta.app_extras = {

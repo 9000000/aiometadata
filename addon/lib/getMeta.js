@@ -2060,7 +2060,6 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
   
   const { trailers: allTrailers } = Utils.parseTvdbTrailers(movieData.trailers, translatedName);
   const trailers = Utils.pickTrailersByLanguage(allTrailers, langCode3);
-  const trailerStreams = Utils.toTrailerStreams(trailers);
 
   if(!logoUrl && imdbId && await imdb.metahubImageExists(imdbId, 'logo')){
     logoUrl =  imdb.getLogoFromImdb(imdbId);
@@ -2123,7 +2122,6 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
     landscapePoster: landscapePosterUrl,
     logo: processLogo(logoUrl),
     trailers: trailers,
-    trailerStreams: trailerStreams,
     behaviorHints: {
       defaultVideoId: kitsuId && idProvider === 'kitsu' ? `kitsu:${kitsuId}` : imdbId ? imdbId : stremioId,
       hasScheduledVideos: false
@@ -2331,7 +2329,6 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
 
   const { trailers: allTrailers } = Utils.parseTvdbTrailers(tvdbShow.trailers, translatedName);
   const trailers = Utils.pickTrailersByLanguage(allTrailers, langCode3);
-  const trailerStreams = Utils.toTrailerStreams(trailers);
 
 
 
@@ -2576,7 +2573,6 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
     logo: logoUrl,
     videos: videos,
     trailers: trailers,
-    trailerStreams: trailerStreams,
 
     links: links,
     behaviorHints: { defaultVideoId: null, hasScheduledVideos: true },

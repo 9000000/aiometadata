@@ -353,7 +353,6 @@ async function startServer(): Promise<void> {
   process.stdout.write('\n');
 
   // ── Redis diagnostics: print report after boot ──
-  readiness.markReady('server');
   if (process.send) {
     process.send('ready');
   }

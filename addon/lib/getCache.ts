@@ -41,6 +41,15 @@ function parsePositiveIntEnv(envValue: any, defaultValue: number, minValue: numb
 
 
 const { withEpoch, withGlobalEpoch }: any = require('./cacheEpoch');
+const { LRUCache } = require('lru-cache');
+
+const l1MemoryCache = new LRUCache({
+  maxSize: 50 * 1024 * 1024, // 100MB max L1 cache for node memory
+  sizeCalculation: (value: Buffer, key: string) => {
+    return value.length || 1024;
+  },
+  ttl: 1000 * 60 * 60 * 24 // 24h
+});
 const {
   isRefreshAheadEnabled,
   isDueForRefresh,
@@ -150,7 +159,10 @@ async function deleteKeysByPattern(pattern: string, options: any = {}): Promise<
     for (let i = 0; i < keys.length; i += batchSize) {
       const chunk = keys.slice(i, i + batchSize);
       const pipeline = redis.pipeline();
-      for (const k of chunk) pipeline.del(k);
+      for (const k of chunk) {
+        pipeline.del(k);
+        l1MemoryCache.delete(k);
+      }
       await pipeline.exec();
       totalDeleted += chunk.length;
     }
@@ -292,7 +304,7 @@ function updateCacheHealth(key: string, type: string, success: boolean = true): 
       cacheHealth.hits++;
       try {
         const requestTracker = require('./requestTracker');
-        requestTracker.trackCacheHit().catch(() => {});
+        requestTracker.trackCacheHit().catch(() => { });
       } catch (error: any) {
         // Ignore if requestTracker is not available
       }
@@ -300,7 +312,7 @@ function updateCacheHealth(key: string, type: string, success: boolean = true): 
       cacheHealth.misses++;
       try {
         const requestTracker = require('./requestTracker');
-        requestTracker.trackCacheMiss().catch(() => {});
+        requestTracker.trackCacheMiss().catch(() => { });
       } catch (error: any) {
         // Ignore if requestTracker is not available
       }
@@ -308,7 +320,7 @@ function updateCacheHealth(key: string, type: string, success: boolean = true): 
       cacheHealth.cachedErrors++;
       try {
         const requestTracker = require('./requestTracker');
-        requestTracker.trackCacheMiss().catch(() => {});
+        requestTracker.trackCacheMiss().catch(() => { });
       } catch (error: any) {
         // Ignore if requestTracker is not available
       }
@@ -466,7 +478,7 @@ function classifyResult(result: any, error: any = null, cacheKey: string | null 
   const hasArrayData = (Array.isArray(result) && result.length > 0);
 
   if (hasMetaData || hasMetasData || hasArrayData) {
-  return { type: 'SUCCESS', ttl: null };
+    return { type: 'SUCCESS', ttl: null };
   }
 
   return { type: 'EMPTY_RESULT', ttl: ERROR_TTL_STRATEGIES.EMPTY_RESULT };
@@ -500,11 +512,25 @@ async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: n
   let retries = 0;
 
   while (retries <= maxRetries) {
-  try {
-    const [cached, pttlMs] = wantsRefreshAhead
-      ? await Promise.all([redis.getBuffer(versionedKey), redis.pttl(versionedKey)])
-      : [await redis.getBuffer(versionedKey), -1];
-    if (cached) {
+    try {
+      let cached = l1MemoryCache.get(versionedKey);
+      let pttlMs = -1;
+
+      if (!cached) {
+        const [redisCached, redisPttl] = wantsRefreshAhead
+          ? await Promise.all([redis.getBuffer(versionedKey), redis.pttl(versionedKey)])
+          : [await redis.getBuffer(versionedKey), -1];
+        cached = redisCached;
+        pttlMs = redisPttl;
+
+        if (cached) {
+          l1MemoryCache.set(versionedKey, cached);
+        }
+      } else if (wantsRefreshAhead) {
+        pttlMs = await redis.pttl(versionedKey);
+      }
+
+      if (cached) {
         try {
           const parsed = await decodeCachePayload(cached);
 
@@ -513,6 +539,7 @@ async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: n
             if (errorAge > ERROR_TTL_STRATEGIES.TEMPORARY_ERROR * 1000) {
               cacheLogger.debug(`[Cache] Retrying expired temporary error for ${versionedKey}`);
               await redis.del(versionedKey);
+              l1MemoryCache.delete(versionedKey);
             } else {
               cacheLogger.debug(`[Cache] Cached error returned for ${versionedKey}`);
               updateCacheHealth(versionedKey, 'cached-error', true);
@@ -542,9 +569,11 @@ async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: n
                     if (resultClassifier(fresh, null, key).type !== 'SUCCESS') return false;
                     if (!mayReplaceOnRefresh(parsed, fresh)) return false;
                     if (!cacheValidator.validateBeforeCache(fresh, contentTypeForKey(key)).isValid) return false;
-                    const written = await redis.set(versionedKey, await encodeCachePayload(fresh), 'EX', ttl, 'XX');
+                    const encodedPayload = await encodeCachePayload(fresh);
+                    const written = await redis.set(versionedKey, encodedPayload, 'EX', ttl, 'XX');
+                    if (written) l1MemoryCache.set(versionedKey, encodedPayload);
                     return Boolean(written);
-                  }, pttlMs).catch(() => {});
+                  }, pttlMs).catch(() => { });
                 }
               } catch (refreshError: any) {
                 cacheLogger.warn(`[Cache] Refresh-ahead check failed for ${versionedKey}:`, refreshError);
@@ -557,17 +586,17 @@ async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: n
           cacheLogger.warn(`Corrupted cache entry for ${versionedKey}, attempting self-healing`);
           await attemptSelfHealing(versionedKey, parseError);
         }
-    }
-  } catch (err: any) {
-    cacheLogger.warn(`Failed to read from Redis for key ${versionedKey}:`, err);
+      }
+    } catch (err: any) {
+      cacheLogger.warn(`Failed to read from Redis for key ${versionedKey}:`, err);
       updateCacheHealth(versionedKey, 'error', false);
-  }
+    }
 
-  try {
-    const result = await method();
+    try {
+      const result = await method();
       updateCacheHealth(versionedKey, 'miss', true);
 
-    if (result !== null && result !== undefined) {
+      if (result !== null && result !== undefined) {
         const contentType = contentTypeForKey(key);
         const validation = cacheValidator.validateBeforeCache(result, contentType);
 
@@ -583,23 +612,25 @@ async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: n
         cacheLogger.debug(`[Cache] Classification: ${classification.type}, TTL: ${finalTtl}s`);
 
         if (finalTtl > 0) {
-        if (classification.type !== 'SUCCESS') {
+          if (classification.type !== 'SUCCESS') {
             cacheLogger.warn(`Caching ${classification.type} result for ${versionedKey} for ${finalTtl}s`);
-        }
+          }
 
-        try {
-          await redis.set(versionedKey, await encodeCachePayload(result), 'EX', finalTtl);
-      } catch (err: any) {
+          try {
+            const encodedPayload = await encodeCachePayload(result);
+            await redis.set(versionedKey, encodedPayload, 'EX', finalTtl);
+            l1MemoryCache.set(versionedKey, encodedPayload);
+          } catch (err: any) {
             cacheLogger.warn(`Failed to write to Redis for key ${versionedKey}:`, err);
-          updateCacheHealth(versionedKey, 'error', false);
+            updateCacheHealth(versionedKey, 'error', false);
           }
         } else {
           cacheLogger.debug(`[Cache] Skipping cache for ${versionedKey} (TTL: 0)`);
         }
-    }
-    return result;
-  } catch (error: any) {
-    cacheLogger.error(`Method failed for cache key ${versionedKey}:`, error);
+      }
+      return result;
+    } catch (error: any) {
+      cacheLogger.error(`Method failed for cache key ${versionedKey}:`, error);
       updateCacheHealth(versionedKey, 'error', false);
 
       if (enableErrorCaching) {
@@ -616,10 +647,12 @@ async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: n
               message: error.message,
               timestamp: new Date().toISOString()
             };
-            await redis.set(versionedKey, await encodeCachePayload(errorResult), 'EX', errorTtl);
+            const encodedError = await encodeCachePayload(errorResult);
+            await redis.set(versionedKey, encodedError, 'EX', errorTtl);
+            l1MemoryCache.set(versionedKey, encodedError);
             cacheLogger.warn(`Cached ${classification.type} error for ${versionedKey} for ${errorTtl}s`);
           } catch (err: any) {
-              cacheLogger.warn(`Failed to cache error for key ${versionedKey}:`, err);
+            cacheLogger.warn(`Failed to cache error for key ${versionedKey}:`, err);
           }
         }
       }
@@ -631,8 +664,8 @@ async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: n
         continue;
       }
 
-    throw error;
-  }
+      throw error;
+    }
   }
 }
 
@@ -652,9 +685,9 @@ async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, 
   let retries = 0;
 
   while (retries <= maxRetries) {
-  try {
-    const cached = await redis.getBuffer(versionedKey);
-    if (cached) {
+    try {
+      const cached = await redis.getBuffer(versionedKey);
+      if (cached) {
         try {
           const parsed = await decodeCachePayload(cached);
 
@@ -681,14 +714,14 @@ async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, 
           globalCacheLogger.warn(`Corrupted cache entry for ${versionedKey}, attempting self-healing`);
           await attemptSelfHealing(versionedKey, parseError);
         }
-    }
-  } catch (err: any) {
-    globalCacheLogger.warn(`Redis GET error for key ${versionedKey}:`, err.message);
+      }
+    } catch (err: any) {
+      globalCacheLogger.warn(`Redis GET error for key ${versionedKey}:`, err.message);
       updateCacheHealth(versionedKey, 'error', false);
-  }
+    }
 
-  try {
-    const result = await method();
+    try {
+      const result = await method();
       updateCacheHealth(versionedKey, 'miss', true);
 
       const classification = resultClassifier(result, null, key);
@@ -700,19 +733,19 @@ async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, 
       }
 
       if (finalTtl > 0) {
-      if (classification.type !== 'SUCCESS') {
-        globalCacheLogger.warn(`Caching ${classification.type} result for ${versionedKey} for ${finalTtl}s`);
-    }
+        if (classification.type !== 'SUCCESS') {
+          globalCacheLogger.warn(`Caching ${classification.type} result for ${versionedKey} for ${finalTtl}s`);
+        }
 
-    if (result !== null && result !== undefined) {
-      await redis.set(versionedKey, await encodeCachePayload(result), 'EX', finalTtl);
+        if (result !== null && result !== undefined) {
+          await redis.set(versionedKey, await encodeCachePayload(result), 'EX', finalTtl);
         }
       } else {
         globalCacheLogger.debug(`[Global-Cache] Skipping cache for ${versionedKey} (TTL: 0)`);
-    }
-    return result;
-  } catch (error: any) {
-    globalCacheLogger.error(`Method failed for cache key ${versionedKey}:`, error);
+      }
+      return result;
+    } catch (error: any) {
+      globalCacheLogger.error(`Method failed for cache key ${versionedKey}:`, error);
       updateCacheHealth(versionedKey, 'error', false);
 
       if (enableErrorCaching) {
@@ -744,8 +777,8 @@ async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, 
         continue;
       }
 
-    throw error;
-  }
+      throw error;
+    }
   }
 }
 
@@ -759,8 +792,8 @@ function getCatalogContentScope(idOnly: string, catalogType: string, config: any
 
   const simklAnimeCatalogs = ['simkl.trending.anime', 'simkl.calendar.anime'];
   if (simklAnimeCatalogs.includes(idOnly) ||
-      idOnly.startsWith('simkl.watchlist.anime.') ||
-      idOnly.startsWith('simkl.discover.anime.')) {
+    idOnly.startsWith('simkl.watchlist.anime.') ||
+    idOnly.startsWith('simkl.discover.anime.')) {
     return 'anime';
   }
 
@@ -1475,8 +1508,8 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
   const result = cachingDisabled
     ? normalizeReleaseAvailabilityInPayload(await method())
     : await cacheWrap(key, async () => {
-        return normalizeReleaseAvailabilityInPayload(await method());
-      }, cacheTTL, options);
+      return normalizeReleaseAvailabilityInPayload(await method());
+    }, cacheTTL, options);
   normalizeReleaseAvailabilityInPayload(result);
 
   if (result?.metas?.length) {
@@ -1502,7 +1535,7 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
   await applyImdbRatingProjectionToList(result?.metas);
 
   return result;
-  }
+}
 
 async function cacheWrapSearch(userUUID: string, searchKey: string, method: () => Promise<any>, searchEngine: string | null = null, options: any = {}): Promise<any> {
   let config: any;
@@ -1572,119 +1605,119 @@ async function cacheWrapSearch(userUUID: string, searchKey: string, method: () =
 }
 
 async function cacheWrapMeta(userUUID: string, metaId: string, method: () => Promise<any>, ttl: number = META_TTL(), options: any = {}, type: string | null = null): Promise<any> {
-   let config: any;
-   try {
-     config = await resolveConfigForCache(userUUID, options);
-   } catch (error: any) {
-     cacheLogger.warn(`Failed to load config for user ${userUUID}: ${error.message}`);
-     return { meta: null };
-   }
+  let config: any;
+  try {
+    config = await resolveConfigForCache(userUUID, options);
+  } catch (error: any) {
+    cacheLogger.warn(`Failed to load config for user ${userUUID}: ${error.message}`);
+    return { meta: null };
+  }
 
-   if (!config) {
-     cacheLogger.warn(`No config found for user ${userUUID}`);
-     return { meta: null };
-   }
+  if (!config) {
+    cacheLogger.warn(`No config found for user ${userUUID}`);
+    return { meta: null };
+  }
 
-   const [prefix, sourceId] = metaId.split(':');
-   const metaType = type;
+  const [prefix, sourceId] = metaId.split(':');
+  const metaType = type;
 
-   const metaConfig: any = {
-     language: config.language || 'en-US',
+  const metaConfig: any = {
+    language: config.language || 'en-US',
 
-     blurThumbs: config.blurThumbs || false,
-     showMetaProviderAttribution: config.showMetaProviderAttribution || false,
-     displayAgeRating: config.displayAgeRating || false,
+    blurThumbs: config.blurThumbs || false,
+    showMetaProviderAttribution: config.showMetaProviderAttribution || false,
+    displayAgeRating: config.displayAgeRating || false,
 
-     englishArtOnly: config.artProviders?.englishArtOnly || false,
-     originalLangFallback: config.artProviders?.originalLangFallback || false,
+    englishArtOnly: config.artProviders?.englishArtOnly || false,
+    originalLangFallback: config.artProviders?.originalLangFallback || false,
 
-     timezone: config.timezone || 'UTC',
-   };
+    timezone: config.timezone || 'UTC',
+  };
 
   const animePrefixes = ['mal', 'kitsu', 'anilist', 'anidb'];
   if (animePrefixes.includes(prefix) || metaType === 'anime') {
-     metaConfig.metaProvider = config.providers?.anime || 'mal';
-     metaConfig.artProvider = {
-       poster: resolveArtProvider('anime', 'poster', config),
-       background: resolveArtProvider('anime', 'background', config),
-       logo: resolveArtProvider('anime', 'logo', config)
-     };
-     metaConfig.animeIdProvider = config.providers?.anime_id_provider || 'imdb';
-     metaConfig.mal = {
+    metaConfig.metaProvider = config.providers?.anime || 'mal';
+    metaConfig.artProvider = {
+      poster: resolveArtProvider('anime', 'poster', config),
+      background: resolveArtProvider('anime', 'background', config),
+      logo: resolveArtProvider('anime', 'logo', config)
+    };
+    metaConfig.animeIdProvider = config.providers?.anime_id_provider || 'imdb';
+    metaConfig.mal = {
       skipFiller: config.mal?.skipFiller || false,
       useImdbIdForCatalogAndSearch: config.mal?.useImdbIdForCatalogAndSearch || false,
       skipRecap: config.mal?.skipRecap || false,
       allowEpisodeMarking: config.mal?.allowEpisodeMarking || false
     };
-   } else if (metaType === 'movie') {
-     metaConfig.metaProvider = config.providers?.movie || 'tmdb';
-     metaConfig.artProvider = {
-       poster: resolveArtProvider('movie', 'poster', config),
-       background: resolveArtProvider('movie', 'background', config),
-       logo: resolveArtProvider('movie', 'logo', config)
-     };
+  } else if (metaType === 'movie') {
+    metaConfig.metaProvider = config.providers?.movie || 'tmdb';
+    metaConfig.artProvider = {
+      poster: resolveArtProvider('movie', 'poster', config),
+      background: resolveArtProvider('movie', 'background', config),
+      logo: resolveArtProvider('movie', 'logo', config)
+    };
     metaConfig.tmdb = {
-     scrapeImdb: config.tmdb?.scrapeImdb || false,
-     forceLatinCastNames: config.tmdb?.forceLatinCastNames || false
+      scrapeImdb: config.tmdb?.scrapeImdb || false,
+      forceLatinCastNames: config.tmdb?.forceLatinCastNames || false
     };
     if (config.providers?.forceAnimeForDetectedImdb) {
       metaConfig.forceAnimeForDetectedImdb = true;
       metaConfig.animeIdProvider = config.providers?.anime_id_provider || 'imdb';
     }
-   } else if (metaType === 'series') {
-     metaConfig.metaProvider = config.providers?.series || 'tvdb';
-     metaConfig.forceAnimeForDetectedImdb = config.providers?.forceAnimeForDetectedImdb;
-     metaConfig.artProvider = {
-       poster: resolveArtProvider('series', 'poster', config),
-       background: resolveArtProvider('series', 'background', config),
-       logo: resolveArtProvider('series', 'logo', config)
-     };
-     metaConfig.tvdbSeasonType = config.tvdbSeasonType || 'default';
-     if (config.providers?.forceAnimeForDetectedImdb) {
-       metaConfig.animeIdProvider = config.providers?.anime_id_provider || 'imdb';
-     }
-   }
+  } else if (metaType === 'series') {
+    metaConfig.metaProvider = config.providers?.series || 'tvdb';
+    metaConfig.forceAnimeForDetectedImdb = config.providers?.forceAnimeForDetectedImdb;
+    metaConfig.artProvider = {
+      poster: resolveArtProvider('series', 'poster', config),
+      background: resolveArtProvider('series', 'background', config),
+      logo: resolveArtProvider('series', 'logo', config)
+    };
+    metaConfig.tvdbSeasonType = config.tvdbSeasonType || 'default';
+    if (config.providers?.forceAnimeForDetectedImdb) {
+      metaConfig.animeIdProvider = config.providers?.anime_id_provider || 'imdb';
+    }
+  }
 
   const metaConfigString = stableStringify(metaConfig);
   const cfgHash = hashConfig(metaConfigString);
-   const key = `meta:${cfgHash}:${metaId}`;
-   const metaSig = shortSignature(`${cfgHash}`);
+  const key = `meta:${cfgHash}:${metaId}`;
+  const metaSig = shortSignature(`${cfgHash}`);
   cacheLogger.debug(`[Meta] Key detail (${prefix}/${metaType}) [sig:${metaSig}]`);
 
-   const result = await cacheWrap(key, async () => {
-     return normalizeReleaseAvailabilityInPayload(await method());
-   }, ttl, options);
-   normalizeReleaseAvailabilityInPayload(result);
-   return result;
+  const result = await cacheWrap(key, async () => {
+    return normalizeReleaseAvailabilityInPayload(await method());
+  }, ttl, options);
+  normalizeReleaseAvailabilityInPayload(result);
+  return result;
 }
 
 async function cacheWrapMetaComponents(userUUID: string, metaId: string, method: () => Promise<any>, ttl: number = META_TTL(), options: any = {}, type: string | null = null, useShowPoster: boolean = false): Promise<any> {
-   if (!metaId || typeof metaId !== 'string') {
-     cacheLogger.warn(`Invalid metaId provided to cacheWrapMetaComponents: ${metaId}`);
-     return { meta: null };
-   }
+  if (!metaId || typeof metaId !== 'string') {
+    cacheLogger.warn(`Invalid metaId provided to cacheWrapMetaComponents: ${metaId}`);
+    return { meta: null };
+  }
 
-   let config: any;
-   try {
-     config = await resolveConfigForCache(userUUID, options);
-   } catch (error: any) {
-     cacheLogger.warn(`Failed to load config for user ${userUUID}: ${error.message}`);
-     return { meta: null };
-   }
+  let config: any;
+  try {
+    config = await resolveConfigForCache(userUUID, options);
+  } catch (error: any) {
+    cacheLogger.warn(`Failed to load config for user ${userUUID}: ${error.message}`);
+    return { meta: null };
+  }
 
-   if (!config) {
-     cacheLogger.warn(`No config found for user ${userUUID}`);
-     return { meta: null };
-   }
-   const result = await method();
-   return writeMetaComponentsWithConfig({
-     config,
-     metaId,
-     result,
-     ttl,
-     type,
-     useShowPoster,
-   });
+  if (!config) {
+    cacheLogger.warn(`No config found for user ${userUUID}`);
+    return { meta: null };
+  }
+  const result = await method();
+  return writeMetaComponentsWithConfig({
+    config,
+    metaId,
+    result,
+    ttl,
+    type,
+    useShowPoster,
+  });
 }
 
 async function writeMetaComponentsWithConfig({ config, metaId, result, ttl = META_TTL(), type = null, useShowPoster = false, overwrite = true }: { config: any; metaId: string; result: any; ttl?: number; type?: string | null; useShowPoster?: boolean; overwrite?: boolean }): Promise<any> {
@@ -1695,10 +1728,10 @@ async function writeMetaComponentsWithConfig({ config, metaId, result, ttl = MET
     useShowPoster,
   });
 
-   const meta = result?.meta || result;
+  const meta = result?.meta || result;
 
   if (!meta || !meta.id || !meta.name || !meta.type) {
-          cacheLogger.warn(`No valid meta object returned for ${metaId}`);
+    cacheLogger.warn(`No valid meta object returned for ${metaId}`);
     return { meta: null };
   }
 
@@ -1706,112 +1739,112 @@ async function writeMetaComponentsWithConfig({ config, metaId, result, ttl = MET
 
   try {
     const requestTracker = require('./requestTracker');
-    requestTracker.captureMetadataFromComponents(metaId, meta, meta.type, config?.language || 'en-US').catch(() => {});
+    requestTracker.captureMetadataFromComponents(metaId, meta, meta.type, config?.language || 'en-US').catch(() => { });
   } catch (error: any) {
     cacheLogger.warn(`Failed to capture metadata for dashboard: ${error.message}`);
   }
 
-   const componentsToCache: any[] = [];
+  const componentsToCache: any[] = [];
 
-   const basicMeta: any = {
-      id: metaId,
-      name: meta.name,
-      type: meta.type,
-      description: meta.description,
-      imdb_id: meta.imdb_id,
-      _imdbId: meta._imdbId,
-      _tmdbId: meta._tmdbId,
-      _tvdbId: meta._tvdbId,
-      _malId: meta._malId,
-      _kitsuId: meta._kitsuId,
-      _anilistId: meta._anilistId,
-      _anidbId: meta._anidbId,
-      slug: meta.slug,
-      genres: meta.genres,
-      director: meta.director,
-      writer: meta.writer,
-      year: meta.year,
-      releaseInfo: meta.releaseInfo,
-      released: meta.released,
-      [RELEASE_AVAILABILITY_FIELD]: meta[RELEASE_AVAILABILITY_FIELD],
-      runtime: meta.runtime,
-      country: meta.country,
-      imdbRating: meta.imdbRating,
-      behaviorHints: meta.behaviorHints,
-      posterShape: meta.posterShape || 'poster',
-      _hasPoster: !!meta.poster,
-      _hasBackground: !!meta.background,
-      _hasLandscapePoster: !!meta.landscapePoster,
-      _hasLogo: !!meta.logo,
-      _hasVideos: !!(meta.videos && Array.isArray(meta.videos) && meta.videos.length > 0),
-      _hasLinks: !!(meta.links && Array.isArray(meta.links) && meta.links.length > 0),
-      _metaProvider: meta._metaProvider
-   };
+  const basicMeta: any = {
+    id: metaId,
+    name: meta.name,
+    type: meta.type,
+    description: meta.description,
+    imdb_id: meta.imdb_id,
+    _imdbId: meta._imdbId,
+    _tmdbId: meta._tmdbId,
+    _tvdbId: meta._tvdbId,
+    _malId: meta._malId,
+    _kitsuId: meta._kitsuId,
+    _anilistId: meta._anilistId,
+    _anidbId: meta._anidbId,
+    slug: meta.slug,
+    genres: meta.genres,
+    director: meta.director,
+    writer: meta.writer,
+    year: meta.year,
+    releaseInfo: meta.releaseInfo,
+    released: meta.released,
+    [RELEASE_AVAILABILITY_FIELD]: meta[RELEASE_AVAILABILITY_FIELD],
+    runtime: meta.runtime,
+    country: meta.country,
+    imdbRating: meta.imdbRating,
+    behaviorHints: meta.behaviorHints,
+    posterShape: meta.posterShape || 'poster',
+    _hasPoster: !!meta.poster,
+    _hasBackground: !!meta.background,
+    _hasLandscapePoster: !!meta.landscapePoster,
+    _hasLogo: !!meta.logo,
+    _hasVideos: !!(meta.videos && Array.isArray(meta.videos) && meta.videos.length > 0),
+    _hasLinks: !!(meta.links && Array.isArray(meta.links) && meta.links.length > 0),
+    _metaProvider: meta._metaProvider
+  };
 
-   queueComponentCache(componentsToCache, componentCacheKeys.basic, basicMeta);
+  queueComponentCache(componentsToCache, componentCacheKeys.basic, basicMeta);
 
-   if (meta.poster) {
+  if (meta.poster) {
     let rawPoster = meta.poster;
 
     try {
-        const urlObj = new URL(rawPoster);
+      const urlObj = new URL(rawPoster);
 
-        if (rawPoster.includes('/poster/') && urlObj.searchParams.has('fallback')) {
-           rawPoster = decodeURIComponent(urlObj.searchParams.get('fallback')!);
-        }
-        else if (urlObj.hostname.includes('top-posters.com') && urlObj.searchParams.has('fallback_url')) {
-           rawPoster = decodeURIComponent(urlObj.searchParams.get('fallback_url')!);
-        }
+      if (rawPoster.includes('/poster/') && urlObj.searchParams.has('fallback')) {
+        rawPoster = decodeURIComponent(urlObj.searchParams.get('fallback')!);
+      }
+      else if (urlObj.hostname.includes('top-posters.com') && urlObj.searchParams.has('fallback_url')) {
+        rawPoster = decodeURIComponent(urlObj.searchParams.get('fallback_url')!);
+      }
 
-    } catch (e: any) {}
+    } catch (e: any) { }
 
     if (meta._rawPosterUrl) {
-        rawPoster = meta._rawPosterUrl;
+      rawPoster = meta._rawPosterUrl;
     }
 
     queueComponentCache(componentsToCache, componentCacheKeys.poster, { poster: rawPoster });
     queueComponentCache(componentsToCache, componentCacheKeys.rawPoster, { _rawPosterUrl: meta._rawPosterUrl });
   }
 
-   if (meta.background) {
-     queueComponentCache(componentsToCache, componentCacheKeys.background, { background: meta.background });
-   }
-   if (meta.landscapePoster) {
-     queueComponentCache(componentsToCache, componentCacheKeys.landscapePoster, { landscapePoster: meta.landscapePoster });
-   }
+  if (meta.background) {
+    queueComponentCache(componentsToCache, componentCacheKeys.background, { background: meta.background });
+  }
+  if (meta.landscapePoster) {
+    queueComponentCache(componentsToCache, componentCacheKeys.landscapePoster, { landscapePoster: meta.landscapePoster });
+  }
 
-   if (meta.logo) {
-     queueComponentCache(componentsToCache, componentCacheKeys.logo, { logo: meta.logo });
-   }
+  if (meta.logo) {
+    queueComponentCache(componentsToCache, componentCacheKeys.logo, { logo: meta.logo });
+  }
 
-   if (meta.videos && Array.isArray(meta.videos) && meta.videos.length > 0) {
-     queueComponentCache(componentsToCache, componentCacheKeys.videos, { videos: canonicalizeVideosForCache(meta.videos), _metaProvider: meta._metaProvider });
-   }
+  if (meta.videos && Array.isArray(meta.videos) && meta.videos.length > 0) {
+    queueComponentCache(componentsToCache, componentCacheKeys.videos, { videos: canonicalizeVideosForCache(meta.videos), _metaProvider: meta._metaProvider });
+  }
 
-   if (meta.app_extras?.cast?.length) {
-     queueComponentCache(componentsToCache, componentCacheKeys.cast, { cast: meta.app_extras.cast });
-   }
+  if (meta.app_extras?.cast?.length) {
+    queueComponentCache(componentsToCache, componentCacheKeys.cast, { cast: meta.app_extras.cast });
+  }
 
-   if (meta.app_extras?.directors?.length) {
-     queueComponentCache(componentsToCache, componentCacheKeys.director, { directors: meta.app_extras.directors });
-   }
+  if (meta.app_extras?.directors?.length) {
+    queueComponentCache(componentsToCache, componentCacheKeys.director, { directors: meta.app_extras.directors });
+  }
 
-   if (meta.app_extras?.writers?.length) {
-     queueComponentCache(componentsToCache, componentCacheKeys.writer, { writers: meta.app_extras.writers });
-   }
+  if (meta.app_extras?.writers?.length) {
+    queueComponentCache(componentsToCache, componentCacheKeys.writer, { writers: meta.app_extras.writers });
+  }
 
-   if (meta.links && Array.isArray(meta.links) && meta.links.length > 0) {
-     queueComponentCache(componentsToCache, componentCacheKeys.links, { links: canonicalizeLinksForCache(stripCertificationLinks(meta.links, meta.app_extras?.certification)) });
-   }
+  if (meta.links && Array.isArray(meta.links) && meta.links.length > 0) {
+    queueComponentCache(componentsToCache, componentCacheKeys.links, { links: canonicalizeLinksForCache(stripCertificationLinks(meta.links, meta.app_extras?.certification)) });
+  }
 
-   if (meta.trailers?.length) {
-     queueComponentCache(componentsToCache, componentCacheKeys.trailers, { trailers: meta.trailers });
-   }
+  if (meta.trailers?.length) {
+    queueComponentCache(componentsToCache, componentCacheKeys.trailers, { trailers: meta.trailers });
+  }
 
-   const extrasForCache = projectAppExtrasForComponentCache(meta.app_extras);
-   if (extrasForCache) {
-     queueComponentCache(componentsToCache, componentCacheKeys.extras, { app_extras: extrasForCache });
-   }
+  const extrasForCache = projectAppExtrasForComponentCache(meta.app_extras);
+  if (extrasForCache) {
+    queueComponentCache(componentsToCache, componentCacheKeys.extras, { app_extras: extrasForCache });
+  }
 
   await cacheComponentsPipeline(componentsToCache, ttl, { overwrite });
 
@@ -1824,7 +1857,7 @@ async function writeMetaComponentsWithConfig({ config, metaId, result, ttl = MET
     cacheLogger.warn(`[ColdStore] write-through failed for ${metaId}: ${coldErr?.message}`);
   }
 
-   return { meta: await projectMetaForUser(meta, config) };
+  return { meta: await projectMetaForUser(meta, config) };
 }
 
 async function writeMetaComponentsBatchWithConfig({ config, metas, ttl = META_TTL(), type = null, useShowPoster = false, overwrite = true }: { config: any; metas: any[]; ttl?: number; type?: string | null; useShowPoster?: boolean; overwrite?: boolean }): Promise<{ written: number; skipped: number }> {
@@ -1862,14 +1895,14 @@ async function writeMetaComponentsBatchWithConfig({ config, metas, ttl = META_TT
 }
 
 async function reconstructMetaFromComponents(userUUID: string, metaId: string, ttl: number = META_TTL(), options: any = {}, type: string | null = null, includeVideos: boolean = true, useShowPoster: boolean = false): Promise<any> {
-   if (!metaId || typeof metaId !== 'string') {
-     cacheLogger.warn(`Invalid metaId provided: ${metaId}`);
-     return { errorReason: 'invalid metaId' };
-   }
+  if (!metaId || typeof metaId !== 'string') {
+    cacheLogger.warn(`Invalid metaId provided: ${metaId}`);
+    return { errorReason: 'invalid metaId' };
+  }
 
-   let config: any;
-   try {
-     config = await resolveConfigForCache(userUUID, options);
+  let config: any;
+  try {
+    config = await resolveConfigForCache(userUUID, options);
   } catch (error: any) {
     cacheLogger.warn(`Failed to load config for user ${userUUID}: ${error.message}`);
     return { errorReason: `load config failed: ${error.message}` };
@@ -1895,12 +1928,12 @@ async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = 
     return { errorReason: 'invalid metaId' };
   }
 
-   const componentCacheKeys = buildMetaComponentCacheKeys({
+  const componentCacheKeys = buildMetaComponentCacheKeys({
     config,
     metaId,
     type,
     useShowPoster,
-   });
+  });
 
   const componentEntries = Object.entries(componentCacheKeys).filter(([componentName]) => {
     return includeVideos || componentName !== 'videos';
@@ -1915,20 +1948,20 @@ async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = 
   } else {
     try {
       const cachedValues = await redis.mgetBuffer(...cacheKeys);
-    componentResults = await Promise.all(componentNames.map(async (componentName: string, index: number) => {
-      const cached = cachedValues[index];
-      if (cached) {
-        try {
-          const parsed = await decodeCachePayload(cached);
-          return { componentName, data: parsed };
-        } catch (parseError: any) {
-          cacheLogger.warn(`Error parsing component ${componentName}:`, parseError);
+      componentResults = await Promise.all(componentNames.map(async (componentName: string, index: number) => {
+        const cached = cachedValues[index];
+        if (cached) {
+          try {
+            const parsed = await decodeCachePayload(cached);
+            return { componentName, data: parsed };
+          } catch (parseError: any) {
+            cacheLogger.warn(`Error parsing component ${componentName}:`, parseError);
+            return { componentName, data: null };
+          }
+        } else {
           return { componentName, data: null };
         }
-      } else {
-        return { componentName, data: null };
-      }
-    }));
+      }));
     } catch (error: any) {
       cacheLogger.warn(`Error fetching components with MGET:`, error);
       componentResults = componentNames.map(componentName => ({ componentName, data: null }));
@@ -1952,7 +1985,7 @@ async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = 
             componentResults[idx].data = hit.data;
             rewarm.set(key, hit.buffer, 'EX', META_TTL());
           }
-          rewarm.exec().catch(() => {});
+          rewarm.exec().catch(() => { });
           cacheHealth.coldStoreHits += 1;
           cacheHealth.coldStoreComponents += found.size;
         } else if (countColdStoreMiss) {
@@ -1972,7 +2005,7 @@ async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = 
     return { errorReason: 'no cached components' };
   }
 
-   const reconstructedMeta: any = {};
+  const reconstructedMeta: any = {};
 
   const basicComponent = availableComponents.find((c: any) => c.componentName === 'basic');
   if (basicComponent) {
@@ -1982,104 +2015,104 @@ async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = 
     const bd = basicComponent.data;
 
     if (bd._hasPoster) {
-        const hasPoster = availableComponents.some((c: any) => c.componentName === 'poster');
-        if (!hasPoster) {
-            cacheLogger.warn(`[Reconstruct] Integrity failure for ${metaId}: Missing required poster.`);
-            updateCacheHealth(`meta:reconstructed:${metaId}`, 'miss', true);
-            return { errorReason: 'corrupted: missing poster' };
-        }
+      const hasPoster = availableComponents.some((c: any) => c.componentName === 'poster');
+      if (!hasPoster) {
+        cacheLogger.warn(`[Reconstruct] Integrity failure for ${metaId}: Missing required poster.`);
+        updateCacheHealth(`meta:reconstructed:${metaId}`, 'miss', true);
+        return { errorReason: 'corrupted: missing poster' };
+      }
     }
 
     if (bd._hasBackground) {
-        const hasBg = availableComponents.some((c: any) => c.componentName === 'background');
-        if (!hasBg) {
-            cacheLogger.warn(`[Reconstruct] Integrity failure for ${metaId}: Missing required background.`);
-            updateCacheHealth(`meta:reconstructed:${metaId}`, 'miss', true);
-            return { errorReason: 'corrupted: missing background' };
-        }
+      const hasBg = availableComponents.some((c: any) => c.componentName === 'background');
+      if (!hasBg) {
+        cacheLogger.warn(`[Reconstruct] Integrity failure for ${metaId}: Missing required background.`);
+        updateCacheHealth(`meta:reconstructed:${metaId}`, 'miss', true);
+        return { errorReason: 'corrupted: missing background' };
+      }
     }
     if (bd._hasLandscapePoster) {
-        const hasLandscapePoster = availableComponents.some((c: any) => c.componentName === 'landscapePoster');
-        if (!hasLandscapePoster) {
-            cacheLogger.warn(`[Reconstruct] Integrity failure for ${metaId}: Missing required landscape poster.`);
-            updateCacheHealth(`meta:reconstructed:${metaId}`, 'miss', true);
-            return { errorReason: 'corrupted: missing landscape poster' };
-        }
+      const hasLandscapePoster = availableComponents.some((c: any) => c.componentName === 'landscapePoster');
+      if (!hasLandscapePoster) {
+        cacheLogger.warn(`[Reconstruct] Integrity failure for ${metaId}: Missing required landscape poster.`);
+        updateCacheHealth(`meta:reconstructed:${metaId}`, 'miss', true);
+        return { errorReason: 'corrupted: missing landscape poster' };
+      }
     }
 
     if (bd._hasLogo) {
-        const hasLogo = availableComponents.some((c: any) => c.componentName === 'logo');
-        if (!hasLogo) {
-            cacheLogger.warn(`[Reconstruct] Integrity failure for ${metaId}: Missing required logo.`);
-            updateCacheHealth(`meta:reconstructed:${metaId}`, 'miss', true);
-            return { errorReason: 'corrupted: missing logo' };
-        }
+      const hasLogo = availableComponents.some((c: any) => c.componentName === 'logo');
+      if (!hasLogo) {
+        cacheLogger.warn(`[Reconstruct] Integrity failure for ${metaId}: Missing required logo.`);
+        updateCacheHealth(`meta:reconstructed:${metaId}`, 'miss', true);
+        return { errorReason: 'corrupted: missing logo' };
+      }
     }
 
     if (includeVideos && bd._hasVideos) {
-        const hasVideos = availableComponents.some((c: any) => c.componentName === 'videos');
-        if (!hasVideos) {
-            cacheLogger.warn(`[Reconstruct] Integrity failure for ${metaId}: Missing required videos.`);
-            updateCacheHealth(`meta:reconstructed:${metaId}`, 'miss', true);
-            return { errorReason: 'corrupted: missing videos' };
-        }
+      const hasVideos = availableComponents.some((c: any) => c.componentName === 'videos');
+      if (!hasVideos) {
+        cacheLogger.warn(`[Reconstruct] Integrity failure for ${metaId}: Missing required videos.`);
+        updateCacheHealth(`meta:reconstructed:${metaId}`, 'miss', true);
+        return { errorReason: 'corrupted: missing videos' };
+      }
     }
 
     if (bd._hasLinks) {
-        const hasLinks = availableComponents.some((c: any) => c.componentName === 'links');
-        if (!hasLinks) {
-            cacheLogger.warn(`[Reconstruct] Integrity failure for ${metaId}: Missing required links component.`);
-            updateCacheHealth(`meta:reconstructed:${metaId}`, 'miss', true);
-            return { errorReason: 'corrupted: missing links' };
-        }
+      const hasLinks = availableComponents.some((c: any) => c.componentName === 'links');
+      if (!hasLinks) {
+        cacheLogger.warn(`[Reconstruct] Integrity failure for ${metaId}: Missing required links component.`);
+        updateCacheHealth(`meta:reconstructed:${metaId}`, 'miss', true);
+        return { errorReason: 'corrupted: missing links' };
+      }
     }
 
     const videosComponentForStamp = availableComponents.find((c: any) => c.componentName === 'videos');
     if (videosComponentForStamp && bd._metaProvider && videosComponentForStamp.data._metaProvider && bd._metaProvider !== videosComponentForStamp.data._metaProvider) {
-        cacheLogger.warn(`[Reconstruct] Provider mismatch for ${metaId}: basic=${bd._metaProvider}, videos=${videosComponentForStamp.data._metaProvider}.`);
-        updateCacheHealth(`meta:reconstructed:${metaId}`, 'miss', true);
-        return { errorReason: 'provider mismatch between basic and videos' };
+      cacheLogger.warn(`[Reconstruct] Provider mismatch for ${metaId}: basic=${bd._metaProvider}, videos=${videosComponentForStamp.data._metaProvider}.`);
+      updateCacheHealth(`meta:reconstructed:${metaId}`, 'miss', true);
+      return { errorReason: 'provider mismatch between basic and videos' };
     }
   }
 
 
-   availableComponents.forEach(({ componentName, data }: any) => {
-     if (componentName === 'basic') return;
+  availableComponents.forEach(({ componentName, data }: any) => {
+    if (componentName === 'basic') return;
 
-     if (componentName === 'poster') {
-       reconstructedMeta.poster = data.poster;
-     } else if (componentName === 'rawPoster') {
-       reconstructedMeta._rawPosterUrl = data._rawPosterUrl;
-     } else if (componentName === 'background') {
-       reconstructedMeta.background = data.background;
-     } else if (componentName === 'landscapePoster') {
-       reconstructedMeta.landscapePoster = data.landscapePoster;
-     } else if (componentName === 'logo') {
-       reconstructedMeta.logo = data.logo;
-      } else if (componentName === 'videos' && includeVideos) {
-        reconstructedMeta.videos = data.videos;
-     } else if (componentName === 'cast') {
-       if (!reconstructedMeta.app_extras) reconstructedMeta.app_extras = {};
-       reconstructedMeta.app_extras.cast = data.cast;
-     } else if (componentName === 'director') {
-       if (!reconstructedMeta.app_extras) reconstructedMeta.app_extras = {};
-       reconstructedMeta.app_extras.directors = data.directors;
-     } else if (componentName === 'writer') {
-       if (!reconstructedMeta.app_extras) reconstructedMeta.app_extras = {};
-       reconstructedMeta.app_extras.writers = data.writers;
-     } else if (componentName === 'links') {
-       reconstructedMeta.links = data.links;
-     } else if (componentName === 'trailers') {
-       if (data.trailers) reconstructedMeta.trailers = data.trailers;
-      } else if (componentName === 'extras') {
-        if (data.app_extras && typeof data.app_extras === 'object' && !Array.isArray(data.app_extras)) {
-          reconstructedMeta.app_extras = {
-            ...data.app_extras,
-            ...(reconstructedMeta.app_extras || {})
-          };
-        }
+    if (componentName === 'poster') {
+      reconstructedMeta.poster = data.poster;
+    } else if (componentName === 'rawPoster') {
+      reconstructedMeta._rawPosterUrl = data._rawPosterUrl;
+    } else if (componentName === 'background') {
+      reconstructedMeta.background = data.background;
+    } else if (componentName === 'landscapePoster') {
+      reconstructedMeta.landscapePoster = data.landscapePoster;
+    } else if (componentName === 'logo') {
+      reconstructedMeta.logo = data.logo;
+    } else if (componentName === 'videos' && includeVideos) {
+      reconstructedMeta.videos = data.videos;
+    } else if (componentName === 'cast') {
+      if (!reconstructedMeta.app_extras) reconstructedMeta.app_extras = {};
+      reconstructedMeta.app_extras.cast = data.cast;
+    } else if (componentName === 'director') {
+      if (!reconstructedMeta.app_extras) reconstructedMeta.app_extras = {};
+      reconstructedMeta.app_extras.directors = data.directors;
+    } else if (componentName === 'writer') {
+      if (!reconstructedMeta.app_extras) reconstructedMeta.app_extras = {};
+      reconstructedMeta.app_extras.writers = data.writers;
+    } else if (componentName === 'links') {
+      reconstructedMeta.links = data.links;
+    } else if (componentName === 'trailers') {
+      if (data.trailers) reconstructedMeta.trailers = data.trailers;
+    } else if (componentName === 'extras') {
+      if (data.app_extras && typeof data.app_extras === 'object' && !Array.isArray(data.app_extras)) {
+        reconstructedMeta.app_extras = {
+          ...data.app_extras,
+          ...(reconstructedMeta.app_extras || {})
+        };
       }
-   });
+    }
+  });
 
   if (!reconstructedMeta.poster && reconstructedMeta._rawPosterUrl) {
     cacheLogger.debug(`[Reconstruct] Missing poster component for ${metaId}, using _rawPosterUrl as fallback: ${reconstructedMeta._rawPosterUrl?.substring(0, 100)}...`);
@@ -2211,7 +2244,7 @@ async function cacheWrapMetaSmart(userUUID: string, metaId: string, method: () =
       idToCache = metaId;
     }
 
-    if(metaId.startsWith('tun_')){
+    if (metaId.startsWith('tun_')) {
       idToCache = metaId;
     }
 
@@ -2435,6 +2468,7 @@ async function clearCache(key: string): Promise<number | undefined> {
 
   try {
     const result = await redis.del(key);
+    l1MemoryCache.delete(key);
     cacheLogger.info(`Cleared key: ${key} (${result} keys removed)`);
     return result;
   } catch (error: any) {

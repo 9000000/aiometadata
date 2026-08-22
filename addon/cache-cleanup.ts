@@ -31,6 +31,12 @@ async function findKeysByPattern(pattern: string): Promise<string[]> {
  * This function is designed to run only ONCE.
  */
 export async function runCacheCleanup() {
+  const { isLiteMode } = require('./lib/metricsConfig.js');
+  if (isLiteMode() || process.env.SKIP_CACHE_CLEANUP === 'true') {
+    logger.info('LITE_MODE enabled - skipping legacy cache cleanup.');
+    return;
+  }
+
   if (!redisClient || redisClient.status !== 'ready') {
     logger.error('Redis client is not connected. Skipping cache migration.');
     return;

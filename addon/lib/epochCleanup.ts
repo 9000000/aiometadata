@@ -21,6 +21,12 @@ export const EPOCH_STATE_KEY = 'system:cache_epoch';
  * epoch and therefore sweeps the legacy `v<semver>:` keys once.
  */
 export async function performEpochCleanup(): Promise<void> {
+  const { isLiteMode } = require('./metricsConfig.js');
+  if (isLiteMode() || process.env.SKIP_CACHE_CLEANUP === 'true') {
+    logger.info('LITE_MODE enabled - skipping epoch cleanup scan.');
+    return;
+  }
+
   if (!redis) {
     logger.warn('Redis not available, skipping epoch cleanup');
     return;

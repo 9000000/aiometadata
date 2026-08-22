@@ -203,12 +203,13 @@ async function processRequest(requestTask: RequestTask): Promise<void> {
     requestTask.resolve(result);
   } catch (error: any) {
     const isRateLimit = error.response?.status === 429;
+    const isServerError = error.response?.status && [500, 502, 503, 504].includes(error.response.status);
     const isTimeout = error.code && (
         error.code.includes('TIMEOUT') ||
         error.code.includes('UND_ERR_HEADERS_TIMEOUT') ||
         error.code.includes('UND_ERR_BODY_TIMEOUT')
     );
-    const isRetryable = (isRateLimit || isTimeout) && requestTask.retries < MAX_RETRIES;
+    const isRetryable = (isRateLimit || isTimeout || isServerError) && requestTask.retries < MAX_RETRIES;
 
     if (isRetryable) {
       requestTask.retries++;
@@ -240,11 +241,12 @@ async function processRequest(requestTask: RequestTask): Promise<void> {
           if (!isProcessing) processQueue();
         }, totalDelay);
 
-      } else if (isTimeout) {
+      } else if (isTimeout || isServerError) {
         const timeoutDelay = Math.pow(2, requestTask.retries - 1) * 1000;
         const totalDelay = timeoutDelay + (Math.random() * 500);
+        const reason = isServerError ? `server error ${error.response.status}` : 'timeout';
         logger.warn(
-          `Jikan request timeout for "${requestTask.url}". Retrying in ${Math.round(totalDelay)}ms.`
+          `Jikan request ${reason} for "${requestTask.url}". Retrying in ${Math.round(totalDelay)}ms.`
         );
         setTimeout(() => {
           requestQueue.unshift(requestTask);

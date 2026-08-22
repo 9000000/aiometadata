@@ -2058,7 +2058,8 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
     url: `stremio:///search?search=${w}`
   }));
   
-  const { trailers } = Utils.parseTvdbTrailers(movieData.trailers, translatedName);
+  const { trailers: allTrailers } = Utils.parseTvdbTrailers(movieData.trailers, translatedName);
+  const trailers = Utils.pickTrailersByLanguage(allTrailers, langCode3);
 
   if(!logoUrl && imdbId && await imdb.metahubImageExists(imdbId, 'logo')){
     logoUrl =  imdb.getLogoFromImdb(imdbId);
@@ -2326,7 +2327,8 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
     url: `stremio:///search?search=${w}`
   }));
 
-  const { trailers } = Utils.parseTvdbTrailers(tvdbShow.trailers, translatedName);
+  const { trailers: allTrailers } = Utils.parseTvdbTrailers(tvdbShow.trailers, translatedName);
+  const trailers = Utils.pickTrailersByLanguage(allTrailers, langCode3);
 
 
 

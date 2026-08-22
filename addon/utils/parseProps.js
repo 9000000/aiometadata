@@ -2524,7 +2524,7 @@ function getYouTubeIdFromUrl(url) {
  * Parses the trailers array from the TVDB API into Stremio-compatible formats.
  * @param {Array} tvdbTrailers - The `trailers` array from the TVDB API response.
  * @param {string} defaultTitle - A fallback title to use for the trailer.
- * @returns {{trailers: Array, trailerStreams: Array}} An object containing both formats.
+ * @returns {{trailers: Array}} The parsed trailers.
  */
 function parseTvdbTrailers(tvdbTrailers, defaultTitle = 'Official Trailer') {
   const trailers = [];
@@ -2534,22 +2534,35 @@ function parseTvdbTrailers(tvdbTrailers, defaultTitle = 'Official Trailer') {
   }
 
   for (const trailer of tvdbTrailers) {
-    if (trailer.url && trailer.url.includes('youtube.com') || trailer.url.includes('youtu.be')) {
-      const ytId = getYouTubeIdFromUrl(trailer.url);
+    if (!trailer?.url) continue;
+    if (!(trailer.url.includes('youtube.com') || trailer.url.includes('youtu.be'))) continue;
 
-      if (ytId) {
-        const title = trailer.name || defaultTitle;
+    const ytId = getYouTubeIdFromUrl(trailer.url);
+    if (!ytId) continue;
 
-        trailers.push({
-          source: ytId,
-          type: 'Trailer',
-          name: defaultTitle
-        });
-      }
-    }
+    trailers.push({
+      source: ytId,
+      type: 'Trailer',
+      name: trailer.name || defaultTitle,
+      lang: trailer.language
+    });
   }
 
   return { trailers };
+}
+
+/**
+ * Narrows trailers to the user's language, falling back to English, then to all.
+ * @param {Array} trailers - Parsed trailers carrying a `lang`.
+ * @param {string} langCode3 - The user's language in TVDB's own coding.
+ * @returns {Array} The first non-empty tier.
+ */
+function pickTrailersByLanguage(trailers, langCode3) {
+  if (!Array.isArray(trailers) || trailers.length === 0) return [];
+  const wanted = trailers.filter((trailer) => trailer?.lang === langCode3);
+  if (wanted.length > 0) return wanted;
+  const english = trailers.filter((trailer) => trailer?.lang === 'eng');
+  return english.length > 0 ? english : trailers;
 }
 
 // In-flight request cache for TMDB movie images to deduplicate concurrent requests
@@ -3456,6 +3469,7 @@ module.exports = {
   parseAnimeCatalogMetaBatch,
   malRatingToCertification,
   parseTvdbTrailers,
+  pickTrailersByLanguage,
   parseAnimeRelationsLink,
   parseAnimeGenreLink,
   getAnimePoster,

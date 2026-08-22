@@ -2549,6 +2549,20 @@ function parseTvdbTrailers(tvdbTrailers, defaultTitle = 'Official Trailer') {
 }
 
 /**
+ * Narrows trailers to the user's language, falling back to English, then to all.
+ * @param {Array} trailers - Parsed trailers carrying a `lang`.
+ * @param {string} langCode3 - The user's language in TVDB's own coding.
+ * @returns {Array} The first non-empty tier.
+ */
+function pickTrailersByLanguage(trailers, langCode3) {
+  if (!Array.isArray(trailers) || trailers.length === 0) return [];
+  const wanted = trailers.filter((trailer) => trailer?.lang === langCode3);
+  if (wanted.length > 0) return wanted;
+  const english = trailers.filter((trailer) => trailer?.lang === 'eng');
+  return english.length > 0 ? english : trailers;
+}
+
+/**
  * Maps parsed trailers to the trailerStreams shape.
  * @param {Array} trailers - Trailers in `{source, name}` form.
  * @returns {Array} The same ids as `{title, ytId}`.
@@ -3463,6 +3477,7 @@ module.exports = {
   parseAnimeCatalogMeta,
   parseAnimeCatalogMetaBatch,
   parseTvdbTrailers,
+  pickTrailersByLanguage,
   toTrailerStreams,
   parseAnimeRelationsLink,
   parseAnimeGenreLink,

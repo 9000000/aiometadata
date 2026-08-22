@@ -2,6 +2,55 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.14.0](https://github.com/cedya77/aiometadata/compare/v2.13.0...v2.14.0) (2026-08-22)
+
+
+### Features
+
+* **aiomanager:** offer the sync button in the reinstall notice ([5095606](https://github.com/cedya77/aiometadata/commit/5095606460744f3e5ace7a4e5296fd194fa64fe4))
+* **aiomanager:** show the sync button where Hydra is available ([ca7371e](https://github.com/cedya77/aiometadata/commit/ca7371ed729b9e2e735b77ddc6c11788e34cceff))
+* cache cast photos through the poster cache ([f39af09](https://github.com/cedya77/aiometadata/commit/f39af09b8dc3c7e48f0aaeb2d8f13aa1616cdb8e))
+* cache cast photos through the poster cache ([c70d3ec](https://github.com/cedya77/aiometadata/commit/c70d3ec74c740c840d2bf2b49a54b11c1339005e))
+* **collections:** search provider lists from the catalog picker ([9da47b6](https://github.com/cedya77/aiometadata/commit/9da47b68b9c6af6a47a9b13f0f903b88123fd8cf))
+* **configure:** add the timezones the backend already maps ([238616d](https://github.com/cedya77/aiometadata/commit/238616df3e50455f109c536f1713fda9f4f8d59e))
+* **configure:** add the timezones the backend already maps ([610c9f1](https://github.com/cedya77/aiometadata/commit/610c9f11e688c089a4d085beaa88430709003a0f))
+* **filters:** let a content rating keep unrated titles ([38e7588](https://github.com/cedya77/aiometadata/commit/38e7588beff264443091675398f547e4eb6b3d30))
+* **mdblist:** let recommendations be added as movies or series ([a80a17c](https://github.com/cedya77/aiometadata/commit/a80a17c69dbc4205ba4ba93fb85a3fc22cd56257)), closes [#650](https://github.com/cedya77/aiometadata/issues/650)
+* **mdblist:** search public lists from the integration page ([44d6766](https://github.com/cedya77/aiometadata/commit/44d6766a65bac9837d2fc256a71574fff7300a93))
+* **oidc:** refuse sign-ins outside the allowed email domains ([3bb4211](https://github.com/cedya77/aiometadata/commit/3bb42114982bacb06ba962497ba0053c2312a42f))
+* **settings:** make the MDBList list cache TTL configurable ([c6ee5be](https://github.com/cedya77/aiometadata/commit/c6ee5be6b30b74b5f67fafef88fd53de0246e8c1))
+* **settings:** regroup the dashboard settings and add a filter ([c6ee5be](https://github.com/cedya77/aiometadata/commit/c6ee5be6b30b74b5f67fafef88fd53de0246e8c1))
+* **tmdb:** add TMDB collections as catalogs ([1854bf1](https://github.com/cedya77/aiometadata/commit/1854bf12995e92a553d412eb3dd36a6b928b79da))
+* **tvdb:** add TheTVDB lists as catalogs ([8676f57](https://github.com/cedya77/aiometadata/commit/8676f5782180b8e1558bd78e588f44513352e16f))
+* **warming:** add a sync TTL action to the catalog warming task ([5f6c6a9](https://github.com/cedya77/aiometadata/commit/5f6c6a9166ef72902a8a12592eb0970f48f36f99))
+
+
+### Bug Fixes
+
+* **catalogs:** honor the per-catalog cache TTL on PublicMetaDB catalogs ([d5699ba](https://github.com/cedya77/aiometadata/commit/d5699bac2b7e5a8d30b42b969c5c682837a1ff7f))
+* **catalogs:** keep the Home placement when a catalog is disabled ([1a6a060](https://github.com/cedya77/aiometadata/commit/1a6a06034d0175551d3d76c1ddbe6c6a34f09219))
+* **ci:** build the release image from release-please instead of by hand ([b759366](https://github.com/cedya77/aiometadata/commit/b759366de03687391e9338ce5f59d2e35355f3be))
+* **ci:** tag release images with the semver version ([bd8a359](https://github.com/cedya77/aiometadata/commit/bd8a3595bc02df5805b960f95f0b819ab4780643))
+* **ci:** tag release images with the semver version ([2380422](https://github.com/cedya77/aiometadata/commit/23804223ad7b17a8dcf6d2dd1ead96c7ec57a58e))
+* **configure:** sort the added timezones by offset in both DST seasons ([bb1eb6c](https://github.com/cedya77/aiometadata/commit/bb1eb6c253e5bf3cc9965957923145a22823d48b))
+* **discover:** sort digital releases by their digital date ([993ba39](https://github.com/cedya77/aiometadata/commit/993ba391f305e0138699f97744d0729c56c441b1)), closes [#664](https://github.com/cedya77/aiometadata/issues/664)
+* **jikan:** apply the rate limit settings set from the dashboard ([1c39dd2](https://github.com/cedya77/aiometadata/commit/1c39dd2ce71e766acdaec5fca76bffc8924508de))
+* **mal:** carry the MAL age rating onto catalog items ([38e7588](https://github.com/cedya77/aiometadata/commit/38e7588beff264443091675398f547e4eb6b3d30))
+* **mdblist:** honor the built-in API key outside quick add ([2bc6471](https://github.com/cedya77/aiometadata/commit/2bc6471c59f676660dc1c5601ff042bec4d2eb6c))
+* **movielens:** offer the hide watched and unreleased overrides ([5906774](https://github.com/cedya77/aiometadata/commit/5906774501531208f6f81e2ab99046cbe6f9ea7d))
+* **oidc:** ask for the scopes the provider advertises ([3bb4211](https://github.com/cedya77/aiometadata/commit/3bb42114982bacb06ba962497ba0053c2312a42f)), closes [#668](https://github.com/cedya77/aiometadata/issues/668)
+* **oidc:** match an email in the permission mapping without regard to case ([3bb4211](https://github.com/cedya77/aiometadata/commit/3bb42114982bacb06ba962497ba0053c2312a42f))
+* **oidc:** stop trusting an address the provider says is unverified ([3bb4211](https://github.com/cedya77/aiometadata/commit/3bb42114982bacb06ba962497ba0053c2312a42f))
+* **settings:** correct the Jikan defaults shown in the dashboard ([1c39dd2](https://github.com/cedya77/aiometadata/commit/1c39dd2ce71e766acdaec5fca76bffc8924508de))
+* **tmdb:** list every language the discover filter accepts ([51d9cb0](https://github.com/cedya77/aiometadata/commit/51d9cb0a7a7a6f00ddcdcb0e6844b9ef75ff73f2)), closes [#659](https://github.com/cedya77/aiometadata/issues/659)
+* **trailers:** derive trailerStreams instead of caching it ([15e111c](https://github.com/cedya77/aiometadata/commit/15e111ce4928055f8ba37d626be1d584bd00228e))
+* **trailers:** honour the language setting for TVDB trailers ([a68e530](https://github.com/cedya77/aiometadata/commit/a68e530007020aac09ee63549ada14592506c2b1))
+* **trailers:** honour the language setting for TVDB trailers ([7f941dc](https://github.com/cedya77/aiometadata/commit/7f941dcc86449239b8e607c869906d7a1fd81cf0))
+* **trailers:** match the user's language on TVDB's own coding ([d1e3382](https://github.com/cedya77/aiometadata/commit/d1e3382d1e418f6f900640f2638462c0c8cdc691))
+* **tsconfig:** put addon files in a project the editor can find ([4c4f7ce](https://github.com/cedya77/aiometadata/commit/4c4f7cee7fab5a9c4080ddb178e06f859d15d446))
+* **tvdb:** find the right entity in a remote id lookup ([3e04885](https://github.com/cedya77/aiometadata/commit/3e04885813603ecc6ae16809908e96ecfe3d112a))
+* **warming:** restore the schedule reset on a forced warm ([5f6c6a9](https://github.com/cedya77/aiometadata/commit/5f6c6a9166ef72902a8a12592eb0970f48f36f99))
+
 ## [2.13.0](https://github.com/cedya77/aiometadata/compare/v2.12.0...v2.13.0) (2026-08-16)
 
 

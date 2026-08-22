@@ -35,7 +35,7 @@ const logger = consola.withTag('Catalog');
 import { cacheWrapMetaSmart } from './getCache.js';
 import { UserConfig } from '../types/index.js';
 
-const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500';
+const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w342';
 const TVDB_IMAGE_BASE = 'https://artworks.thetvdb.com';
 
 const host = process.env.HOST_NAME?.startsWith('http')

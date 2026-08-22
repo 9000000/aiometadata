@@ -36,11 +36,16 @@ export function loadFranchiseList(id: string): any[] {
          targetId = `tmdb:${item.tmdbId}`;
       }
 
+      let poster = item.poster || null;
+      if (poster && typeof poster === 'string' && poster.includes('image.tmdb.org/t/p/')) {
+        poster = poster.replace(/\/t\/p\/(?:w500|w600_and_h900_bestv2|original)\//, '/t/p/w342/');
+      }
+
       return {
         id: targetId,
         type: item.type === 'tv' ? 'series' : (item.type || 'movie'),
         name: item.title || item.name,
-        poster: item.poster || null,
+        poster: poster,
         description: item.overview || undefined,
         releaseInfo: item.releaseYear || item.release_date || undefined
       };

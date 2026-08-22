@@ -178,8 +178,8 @@ function pinnedAgents(addresses: string[], keepAlive: boolean): { httpAgent: htt
   const maxSockets = Math.max(1, getFetchConcurrency());
   const maxCachedSessions = getTlsSessionCacheMax();
   return {
-    httpAgent: new http.Agent({ lookup, keepAlive, maxSockets, maxFreeSockets: 32 } as any),
-    httpsAgent: new https.Agent({ lookup, keepAlive, maxSockets, maxFreeSockets: 32, maxCachedSessions } as any),
+    httpAgent: new http.Agent({ lookup, keepAlive, maxSockets, maxFreeSockets: 64 } as any),
+    httpsAgent: new https.Agent({ lookup, keepAlive, maxSockets, maxFreeSockets: 64, maxCachedSessions } as any),
   };
 }
 

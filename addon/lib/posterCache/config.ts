@@ -633,7 +633,7 @@ export function browserMaxAgeFor(expiresAt: number): number {
   return clampBrowserMaxAge((expiresAt - Date.now()) / 1000);
 }
 
-export const DEFAULT_PROXY_MAX_AGE_DAYS = 1;
+export const DEFAULT_PROXY_MAX_AGE_DAYS = 3;
 
 export function getProxyMaxAgeDays(): number {
   const raw = (process.env.POSTER_PROXY_MAX_AGE_DAYS ?? '').trim();
@@ -729,7 +729,7 @@ export function getConnectionCacheMax(): number {
 
 export function getTlsSessionCacheMax(): number {
   const parsed = parseInt(process.env.POSTER_CACHE_TLS_SESSIONS || '', 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 10;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 100;
 }
 
 export function shouldLogRequests(): boolean {

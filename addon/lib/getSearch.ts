@@ -26,7 +26,7 @@ const wikiMappings: any = require('./wiki-mapper');
 const logger = consola.withTag('Search');
 const timingMetrics: any = require('./timing-metrics');
 const { parse }: any = require("path");
-const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500';
+const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w342';
 
 
 function getTvdbCertification(contentRatings: any[], countryCode: string, contentType: string): string | null {

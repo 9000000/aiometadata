@@ -473,44 +473,37 @@ const respond = function (req, res, data, opts) {
         cacheControl = "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0";
         consola.debug('[Cache] Setting manifest Cache-Control:', cacheControl);
       } else if (req.route.path.includes('/catalog/')) {
-        // Catalog: Very short cache with aggressive revalidation
+        // Catalog: allow client caching with stale-while-revalidate
         const configVersion = req.userConfig?.configVersion || Date.now();
         res.setHeader('X-Config-Version', configVersion.toString());
         res.setHeader('Last-Modified', new Date(configVersion).toUTCString());
         
-        // Use very short cache to force refresh when config changes
-        cacheControl = "no-cache, must-revalidate, max-age=0";
+        const catalogCache = getCacheHeaders(opts);
+        cacheControl = catalogCache ? `${catalogCache}, public` : "public, max-age=3600, stale-while-revalidate=86400";
         consola.debug('[Cache] Setting catalog Cache-Control:', cacheControl);
       } else if (req.route.path.includes('/meta/')) {
-        // Meta: Aggressive cache control to ensure fresh data when config changes
+        // Meta: allow client caching with stale-while-revalidate
         const configVersion = req.userConfig?.configVersion || Date.now();
         res.setHeader('X-Config-Version', configVersion.toString());
         res.setHeader('Last-Modified', new Date(configVersion).toUTCString());
         
-        // Use very short cache to force refresh when config changes
-        cacheControl = "no-cache, must-revalidate, max-age=0";
-        consola.debug('[Cache] Setting aggressive meta Cache-Control:', cacheControl);
+        const metaCache = getCacheHeaders(opts);
+        cacheControl = metaCache ? `${metaCache}, public` : "public, max-age=86400, stale-while-revalidate=604800";
+        consola.debug('[Cache] Setting meta Cache-Control:', cacheControl);
       } else {
         // For other routes, use getCacheHeaders if available, otherwise default
         const defaultCacheControl = getCacheHeaders(opts);
-        cacheControl = defaultCacheControl || "public, max-age=3600";
+        cacheControl = defaultCacheControl ? `${defaultCacheControl}, public` : "public, max-age=3600";
         consola.debug('[Cache] Setting default Cache-Control:', cacheControl);
       }
       } else {
         // For routes without path info, use getCacheHeaders if available, otherwise default
         const defaultCacheControl = getCacheHeaders(opts);
-        cacheControl = defaultCacheControl || "public, max-age=3600";
+        cacheControl = defaultCacheControl ? `${defaultCacheControl}, public` : "public, max-age=3600";
         consola.debug('[Cache] Setting default Cache-Control:', cacheControl);
       }
     
     res.setHeader("Cache-Control", cacheControl);
-  }
-  
-  // Force aggressive cache control for meta routes (final override)
-  if (req.route && req.route.path && (req.route.path.includes('/meta/') || req.route.path.includes('/catalog/'))) {
-    res.setHeader('Cache-Control', 'no-cache, must-revalidate, max-age=0');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
   }
   
   res.setHeader("Access-Control-Allow-Origin", "*");

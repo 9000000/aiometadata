@@ -1,6 +1,6 @@
 export const TMDB_IMAGE_HOST = 'https://image.tmdb.org/t/p';
 
-export const TMDB_POSTER_SIZE = 'w600_and_h900_bestv2';
+export const TMDB_POSTER_SIZE = (process.env.TMDB_POSTER_SIZE || 'w342').trim();
 
 const ORIGINAL = 'original';
 const SMALL_LOGO = 'w500';

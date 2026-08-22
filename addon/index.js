@@ -324,9 +324,10 @@ function applyImageCachePrefix(data) {
   const selfOrigin = posterCacheConfig.getSelfOrigin();
   const metaFieldClasses = posterCacheConfig.META_FIELD_CLASSES;
   const cacheThumbnails = posterCacheConfig.isClassEnabled('thumbnail');
+  const cacheCast = posterCacheConfig.isClassEnabled('cast');
 
   const enabledFields = posterCacheConfig.getCacheableFields();
-  if (enabledFields.length === 0 && !cacheThumbnails) return;
+  if (enabledFields.length === 0 && !cacheThumbnails && !cacheCast) return;
 
   const prefixUrl = (url, imageClass) => {
     if (!url || typeof url !== 'string') return url;
@@ -344,6 +345,11 @@ function applyImageCachePrefix(data) {
     if (cacheThumbnails && Array.isArray(meta.videos)) {
       for (const video of meta.videos) {
         if (video?.thumbnail) video.thumbnail = prefixUrl(video.thumbnail, 'thumbnail');
+      }
+    }
+    if (cacheCast && Array.isArray(meta.app_extras?.cast)) {
+      for (const member of meta.app_extras.cast) {
+        if (member?.photo) member.photo = prefixUrl(member.photo, 'cast');
       }
     }
   };

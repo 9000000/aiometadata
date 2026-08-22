@@ -1568,6 +1568,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: false,
   },
   {
+    key: 'POSTER_CACHE_CAST',
+    envVar: 'POSTER_CACHE_CAST',
+    label: 'Cache Cast Photos',
+    description: 'Also cache cast/actor headshots. Roughly ten to twenty per title, so this takes a real bite out of the disk budget on a large library.',
+    category: 'Features',
+    type: 'boolean',
+    default: false,
+  },
+  {
     key: 'POSTER_CACHE_PROCESSED_IMAGES',
     envVar: 'POSTER_CACHE_PROCESSED_IMAGES',
     label: 'Cache Processed Images',
@@ -2572,7 +2581,7 @@ export const CONDITIONAL_RULES: ConditionalRule[] = [
     disable: {
       keys: [
         'POSTER_CACHE_BACKGROUNDS', 'POSTER_CACHE_LANDSCAPE_POSTERS',
-        'POSTER_CACHE_LOGOS', 'POSTER_CACHE_THUMBNAILS',
+        'POSTER_CACHE_LOGOS', 'POSTER_CACHE_THUMBNAILS', 'POSTER_CACHE_CAST',
         'POSTER_CACHE_PROCESSED_IMAGES', 'POSTER_CACHE_MAX_SIZE',
         'POSTER_CACHE_TTL_DAYS',
         'POSTER_CACHE_INFER_TTL',

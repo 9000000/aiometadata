@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.14.1](https://github.com/cedya77/aiometadata/compare/v2.14.0...v2.14.1) (2026-08-22)
+
+
+### Bug Fixes
+
+* **cache:** key anime-detected metas on the anime settings ([633b7c8](https://github.com/cedya77/aiometadata/commit/633b7c8a1e1af42c8d7618b22dd987078ff4f4e3))
+
 ## [2.14.0](https://github.com/cedya77/aiometadata/compare/v2.13.0...v2.14.0) (2026-08-22)
 
 

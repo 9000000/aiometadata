@@ -23,6 +23,7 @@ import {
   previewPermissions,
   readOidcConfig,
   resolvePermissions,
+  emailDomainRefusal,
 } from './oidc';
 import {
   clearSigninFailures,
@@ -288,6 +289,22 @@ export function register(addon: any, options: { rateLimit?: any; requireAdmin?: 
 
     try {
       const identity = await exchangeCode(config, code, flow.codeVerifier, flow.nonce, redirectUriFor(req));
+
+      const domainRefusal = emailDomainRefusal(identity.email, config);
+      if (domainRefusal) {
+        logger.warn(`Refused ${identity.subject}: ${domainRefusal}`);
+        await recordSigninFailure({
+          reason: 'refused',
+          username: identity.username,
+          subject: identity.subject,
+          issuer: identity.issuer,
+          groups: identity.groups,
+          groupsClaim: config.groupsClaim,
+          address: clientAddress(req),
+          detail: `Sign-in refused because ${domainRefusal}`,
+        });
+        return res.status(403).send('Your account is not allowed to sign in here.');
+      }
 
       const permissions = resolvePermissions(identity.groups, config);
       if (permissions === null) {

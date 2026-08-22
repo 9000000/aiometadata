@@ -142,6 +142,12 @@ async function scanSessions(
  * startup adopts them; after that createSession is the only writer it needs.
  */
 export async function backfillSessionIndex(): Promise<number> {
+  const { isLiteMode } = require('./metricsConfig.js');
+  if (isLiteMode() || process.env.SKIP_CACHE_CLEANUP === 'true') {
+    logger.info('LITE_MODE enabled - skipping backfillSessionIndex scan.');
+    return 0;
+  }
+
   let adopted = 0;
   try {
     await scanSessions(async (id, record) => {

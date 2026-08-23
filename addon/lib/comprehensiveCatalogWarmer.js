@@ -7,6 +7,7 @@ const {
   projectCatalogPayloadForCache,
   writeMetaComponentsBatchWithConfig,
 } = require('./getCache');
+const { sleep } = require('../utils/concurrency');
 const { getGenreList } = require('./getGenreList');
 const { parseAnimeCatalogMetaBatch } = require('../utils/parseProps');
 const { envInt } = require('../utils/envNumber');
@@ -183,7 +184,7 @@ class ComprehensiveCatalogWarmer {
   }
 
   async delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return sleep(ms);
   }
 
   isQuietHours() {

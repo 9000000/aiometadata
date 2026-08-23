@@ -1,5 +1,6 @@
 const jikan = require('./mal');
 const { cacheWrapJikanApi, cacheWrapCatalog } = require('./getCache');
+const { sleep } = require('../utils/concurrency');
 const { parseAnimeCatalogMetaBatch } = require('../utils/parseProps');
 const { envInt } = require('../utils/envNumber');
 const malWarmerLogger = (require('consola').default || require('consola')).withTag('MAL Warmer');
@@ -582,7 +583,7 @@ class MALCatalogWarmer {
   }
 
   delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return sleep(ms);
   }
 
   getStats() {

@@ -273,3 +273,24 @@ export function resolveInstallFilters(
     refused: [...rating.refused, ...unrated.refused],
   };
 }
+
+/**
+ * The profiles that decide this catalog's limit: the ones it is actually in, out of
+ * those the URL named. A row that belongs only to an unrestricted profile must not
+ * inherit the cap of another profile installed alongside it. Rows outside the user's
+ * catalog list, search among them, fall back to every named profile, so the strictest
+ * one wins rather than none of them.
+ */
+export function scopeTagsToCatalog(config: any, tags: string[], id: string, type: string): string[] {
+  if (tags.length === 0) return tags;
+  const catalogs = config.catalogs || [];
+  const matches = (c: any) => c.id === id && (c.type === type || c.displayType === type);
+  const stripped = String(id).replace(/_(movie|series|anime|all)$/, '');
+  const catalog = catalogs.find(matches)
+    || (stripped === id ? null : catalogs.find((c: any) => c.id === stripped && (c.type === type || c.displayType === type)));
+
+  const own = Array.isArray(catalog?.tags) ? catalog.tags.map((t: any) => String(t).toLowerCase()) : [];
+  if (own.length === 0) return tags;
+  const scoped = tags.filter(t => own.includes(t.toLowerCase()));
+  return scoped.length > 0 ? scoped : tags;
+}

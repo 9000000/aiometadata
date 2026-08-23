@@ -15,7 +15,7 @@ const { cursorKey, resolveStartPage, writeCursor, fillFilteredPage } = require("
 const anilist = require("./lib/anilist");
 const { getSearch } = require("./lib/getSearch");
 const { getManifest, resolveManifestTags, DEFAULT_LANGUAGE } = require("./lib/getManifest");
-const { resolveInstallFilters, uniformTagRating, allowsUnrated } = require("./utils/ageRating");
+const { resolveInstallFilters, uniformTagRating, allowsUnrated, scopeTagsToCatalog } = require("./utils/ageRating");
 const { getMeta } = require("./lib/getMeta");
 const { cacheWrapMetaSmart, cacheWrapCatalog, cacheWrapSearch, cacheWrapJikanApi, cacheWrapGlobal, getCacheHealth, clearCacheHealth, logCacheHealth, stableStringify, deleteKeysByPattern, scanKeys } = require("./lib/getCache");
 const { hasPermission } = require("./lib/authSession");
@@ -37,6 +37,14 @@ const database = require('./lib/database');
 const { loadConfigFromDatabase } = require('./lib/configApi');
 const { getTrending } = require("./lib/getTrending");
 const { resolveProxyRatingPosterUrl, parseAnimeCatalogMetaBatch } = require("./utils/parseProps");
+const { extractIdsFromMeta, extractCanonicalIdFromDynamicUpNextId } = require("./utils/metaIds");
+const { sleep } = require("./utils/concurrency");
+const { resolveMdblistKey, mdblistCacheKey } = require("./utils/mdblistUtils");
+const { normalizeTraktEndpoint, resolveTraktProxyAuthMode } = require("./utils/traktProxyRoutes");
+const { normalizeTvdbListRecord, enrichTvdbListRecords } = require("./utils/tvdbLists");
+const { resolveTmdbDiscoverApiKey, resolveTvdbDiscoverApiKey, normalizeTmdbDiscoverType, normalizeTvdbDiscoverType, toTvdbCountryCode } = require("./utils/discoverParams");
+const { normalizeRedirectUri } = require("./utils/oauthRedirect");
+const { shuffleMetas } = require("./utils/mergedCatalog");
 const { getFavorites, getWatchList } = require("./lib/getPersonalLists");
 const { resolveDynamicTmdbDiscoverParams } = require('./lib/tmdbDiscoverDateTokens');
 const { blurImage, convertBannerToBackground } = require('./utils/imageProcessor');
@@ -56,7 +64,6 @@ const {
 const { renderOAuthPage } = require('./lib/oauthPage');
 const { hasAnyWatchTrackingEnabled } = require('./lib/watchTracking');
 const { SimklClient } = require('./lib/simkl');
-const getCountryISO3 = require('country-iso-2-to-3');
 const jikan = require('./lib/mal');
 const buildInfo = require('./lib/buildInfo');
 const { clientDistDir, clientIndexPath, publicDir } = require('./lib/runtimePaths');
@@ -66,14 +73,6 @@ const idMapper = require('./lib/id-mapper');
 const wikiMappings = require('./lib/wiki-mapper.js');
 
 // Normalize redirect URIs to always include a scheme
-const normalizeRedirectUri = (uri) => {
-  if (!uri) return uri;
-  const trimmed = uri.trim();
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-    return trimmed;
-  }
-  return `https://${trimmed.replace(/^\/+/, '')}`;
-};
 // Best-effort same-process duplicate handling. Trakt enforces authorization-code
 // single use; this set is not shared across replicas and does not consume state.
 const usedTraktCodes = new Set();
@@ -85,71 +84,9 @@ const SIMKL_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const usedMalCodes = new Set();
 const MAL_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
-function extractCanonicalIdFromDynamicUpNextId(type, stremioId) {
-  if (type !== 'series' || typeof stremioId !== 'string') {
-    return null;
-  }
-
-  const prefixes = ['mdblist_upnext_', 'pmdb_resume_', 'upnext_'];
-  const prefix = prefixes.find(p => stremioId.startsWith(p));
-  if (!prefix) {
-    return null;
-  }
-
-  const remainder = stremioId.slice(prefix.length);
-  const episodeSeparatorIndex = remainder.lastIndexOf('_');
-  if (episodeSeparatorIndex <= 0) {
-    return null;
-  }
-
-  const canonicalId = remainder.slice(0, episodeSeparatorIndex);
-  const episodePart = remainder.slice(episodeSeparatorIndex + 1);
-  const isSupportedCanonicalId = /^tt\d+$/.test(canonicalId) ||
-    /^tmdb:\d+$/.test(canonicalId) ||
-    /^tvdb:\d+$/.test(canonicalId);
-  const isSupportedEpisodePart = /^trakt\d+$/.test(episodePart) ||
-    /^S\d+E\d+$/.test(episodePart) ||
-    episodePart === 'unknown';
-
-  return isSupportedCanonicalId && isSupportedEpisodePart ? canonicalId : null;
-}
-
-function shuffleMetas(metas = []) {
-  const shuffled = Array.isArray(metas) ? metas.slice() : [];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  return shuffled;
-}
 
 
-function extractIdsFromMeta(meta) {
-  const ids: any = {};
-  if (!meta) return ids;
 
-  const id = meta.id || '';
-  if (id) ids.id = id;
-  if (id.startsWith('tmdb:')) ids.tmdbId = id.slice(5);
-  else if (id.startsWith('tvdb:')) ids.tvdbId = id.slice(5);
-  else if (id.startsWith('kitsu:')) ids.kitsuId = id.slice(6);
-  else if (id.startsWith('mal:')) ids.malId = id.slice(4);
-  else if (id.startsWith('anilist:')) ids.anilistId = id.slice(8);
-  else if (id.startsWith('anidb:')) ids.anidbId = id.slice(6);
-  else if (id.startsWith('tt')) ids.imdbId = id;
-
-  // Pick up additional IDs from meta properties
-  if (meta.imdb_id) ids.imdbId = meta.imdb_id;
-  if (meta._tmdbId && !ids.tmdbId) ids.tmdbId = meta._tmdbId;
-  if (meta._tvdbId && !ids.tvdbId) ids.tvdbId = meta._tvdbId;
-  if (meta._imdbId && !ids.imdbId) ids.imdbId = meta._imdbId;
-  if (meta._malId && !ids.malId) ids.malId = meta._malId;
-  if (meta._kitsuId && !ids.kitsuId) ids.kitsuId = meta._kitsuId;
-  if (meta._anilistId && !ids.anilistId) ids.anilistId = meta._anilistId;
-  if (meta._anidbId && !ids.anidbId) ids.anidbId = meta._anidbId;
-
-  return ids;
-}
 
 const { createResponseCompression } = require('./utils/responseCompression');
 addon.use(createResponseCompression());
@@ -415,26 +352,6 @@ const getCacheHeaders = function (opts) {
  * Copied rather than assigned onto the config, because concurrent loads for the same
  * user are coalesced and hand back the same object.
  */
-/**
- * The profiles that decide this catalog's limit: the ones it is actually in, out of
- * those the URL named. A row that belongs only to an unrestricted profile must not
- * inherit the cap of another profile installed alongside it. Rows outside the user's
- * catalog list, search among them, fall back to every named profile, so the strictest
- * one wins rather than none of them.
- */
-function scopeTagsToCatalog(config, tags, id, type) {
-  if (tags.length === 0) return tags;
-  const catalogs = config.catalogs || [];
-  const matches = (c) => c.id === id && (c.type === type || c.displayType === type);
-  const stripped = String(id).replace(/_(movie|series|anime|all)$/, '');
-  const catalog = catalogs.find(matches)
-    || (stripped === id ? null : catalogs.find(c => c.id === stripped && (c.type === type || c.displayType === type)));
-
-  const own = Array.isArray(catalog?.tags) ? catalog.tags.map(t => String(t).toLowerCase()) : [];
-  if (own.length === 0) return tags;
-  const scoped = tags.filter(t => own.includes(t.toLowerCase()));
-  return scoped.length > 0 ? scoped : tags;
-}
 
 function applyRatingOverrides(config, req, userUUID) {
   const rawRating = req.query.contentrating ?? req.query.contentRating;
@@ -663,11 +580,6 @@ addon.get("/api/auth/trakt/authorize", async (req, res) => {
 // Coalesce duplicate exchanges handled by this process only.
 const pendingTraktExchanges = new Map();
 
-// Helper: sleep with ms
-function sleepMs(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 async function exchangeWithRetry(traktClient, code, maxRetries = 3) {
   let lastError;
 
@@ -699,7 +611,7 @@ async function exchangeWithRetry(traktClient, code, maxRetries = 3) {
           `Waiting ${waitSeconds}s before retry...`
         );
 
-        await sleepMs(waitSeconds * 1000);
+        await sleep(waitSeconds * 1000);
         continue;
       }
 
@@ -1263,67 +1175,6 @@ addon.post("/api/auth/simkl/disconnect", async (req, res) => {
   }
 });
 
-function normalizeTraktEndpoint(endpoint) {
-  if (typeof endpoint !== 'string') return '';
-  const normalized = endpoint.trim();
-  if (!normalized) return '';
-  return normalized.startsWith('/') ? normalized : `/${normalized}`;
-}
-
-function isOptionalUsersRoute(pathnameLower) {
-  const parts = pathnameLower.split('/').filter(Boolean);
-  // /users/{id}
-  if (parts.length === 2) return true;
-  // /users/{id}/stats
-  if (parts.length === 3 && parts[2] === 'stats') return true;
-  // /users/{id}/lists
-  if (parts.length === 3 && parts[2] === 'lists') return true;
-  // /users/{id}/lists/{list_id}
-  if (parts.length === 4 && parts[2] === 'lists') return true;
-  // /users/{id}/lists/{list_id}/items[...]
-  if (parts.length >= 5 && parts[2] === 'lists' && parts[4] === 'items') return true;
-  return false;
-}
-
-function resolveTraktProxyAuthMode(pathname) {
-  const pathnameLower = pathname.toLowerCase();
-
-  // Auth required routes.
-  if (
-    pathnameLower.startsWith('/calendars/my/') ||
-    pathnameLower.startsWith('/recommendations/') ||
-    pathnameLower.startsWith('/sync/') ||
-    pathnameLower.startsWith('/users/hidden/') ||
-    pathnameLower.includes('/progress/watched')
-  ) {
-    return 'required';
-  }
-
-  // /users/me/* always needs OAuth (Trakt resolves "me" from the token).
-  if (pathnameLower === '/users/me' || pathnameLower.startsWith('/users/me/')) {
-    return 'required';
-  }
-
-  // OAuth optional routes we currently proxy.
-  if (pathnameLower.startsWith('/users/') && isOptionalUsersRoute(pathnameLower)) {
-    return 'optional';
-  }
-
-  // Known public/unauthed route groups we currently proxy.
-  if (
-    pathnameLower.startsWith('/genres/') ||
-    pathnameLower.startsWith('/lists/') ||
-    pathnameLower.startsWith('/movies/') ||
-    pathnameLower.startsWith('/shows/') ||
-    pathnameLower.startsWith('/search/') ||
-    pathnameLower.startsWith('/people/')
-  ) {
-    return 'unauthed';
-  }
-
-  // Default to auth-required for unknown routes.
-  return 'required';
-}
 
 // Proxy endpoint for Trakt API calls with auth-aware routing
 addon.post("/api/trakt/proxy", async (req, res) => {
@@ -1439,16 +1290,6 @@ function mdblistListCacheTtl() {
 
 /** Keyed per key rather than globally: without a username MDBList returns the caller's own lists. */
 /** The instance key stands in when the caller sends none, same as the catalog paths. */
-function resolveMdblistKey(supplied) {
-  const value = String(supplied || '').trim();
-  return value || process.env.MDBLIST_API_KEY || process.env.BUILT_IN_MDBLIST_API_KEY || '';
-}
-
-function mdblistCacheKey(parts, apikey) {
-  const fingerprint = crypto.createHash('sha256').update(String(apikey)).digest('hex').slice(0, 16);
-  return `mdblist:${parts.join(':')}:${fingerprint}`;
-}
-
 addon.get("/api/mdblist/lists/user", async (req, res) => {
   try {
     const { username, sort } = req.query;
@@ -1626,65 +1467,7 @@ const tvdbApi = require('./lib/tvdb');
 const TMDB_DISCOVER_CACHE_TTL = 24 * 60 * 60; // 24h for mostly static discover reference data
 const TVDB_DISCOVER_CACHE_TTL = 24 * 60 * 60; // 24h for mostly static discover reference data
 
-function normalizeTmdbDiscoverType(type) {
-  return type === 'tv' ? 'tv' : 'movie';
-}
 
-function normalizeTvdbDiscoverType(type) {
-  return type === 'series' ? 'series' : 'movies';
-}
-
-function toTvdbCountryCode(regionCode) {
-  const normalized = typeof regionCode === 'string' ? regionCode.trim().toUpperCase() : '';
-  if (!normalized) return 'usa';
-  const countryData = getCountryISO3(normalized);
-  if (!countryData) return 'usa';
-  return String(countryData).toLowerCase();
-}
-
-async function resolveTmdbDiscoverApiKey(req) {
-  const requestApiKey = typeof req.query.apikey === 'string' ? req.query.apikey.trim() : '';
-  if (requestApiKey) {
-    return requestApiKey;
-  }
-
-  const userUUID = typeof req.query.userUUID === 'string' ? req.query.userUUID.trim() : '';
-  if (userUUID) {
-    try {
-      const userConfig = await loadConfigFromDatabase(userUUID);
-      const userConfigKey = userConfig?.apiKeys?.tmdb?.trim() || '';
-      if (userConfigKey) {
-        return userConfigKey;
-      }
-    } catch (error) {
-      consola.debug(`[TMDB Discover] Could not load config for user ${userUUID}: ${error.message}`);
-    }
-  }
-
-  return (process.env.TMDB_API_KEY || process.env.TMDB_API || process.env.BUILT_IN_TMDB_API_KEY || '').trim();
-}
-
-async function resolveTvdbDiscoverApiKey(req) {
-  const requestApiKey = typeof req.query.apikey === 'string' ? req.query.apikey.trim() : '';
-  if (requestApiKey) {
-    return requestApiKey;
-  }
-
-  const userUUID = typeof req.query.userUUID === 'string' ? req.query.userUUID.trim() : '';
-  if (userUUID) {
-    try {
-      const userConfig = await loadConfigFromDatabase(userUUID);
-      const userConfigKey = userConfig?.apiKeys?.tvdb?.trim() || '';
-      if (userConfigKey) {
-        return userConfigKey;
-      }
-    } catch (error) {
-      consola.debug(`[TVDB Discover] Could not load config for user ${userUUID}: ${error.message}`);
-    }
-  }
-
-  return (process.env.TVDB_API_KEY || process.env.BUILT_IN_TVDB_API_KEY || '').trim();
-}
 
 // Proxy: Get TMDB list details
 addon.get("/api/tmdb/list/:listId", async (req, res) => {
@@ -2168,66 +1951,6 @@ addon.get("/api/tvdb/discover/search/:entity", async (req, res) => {
   }
 });
 
-const TVDB_ARTWORK_BASE = 'https://artworks.thetvdb.com';
-
-function tvdbListImageUrl(image) {
-  if (!image || typeof image !== 'string') return '';
-  return image.startsWith('http') ? image : `${TVDB_ARTWORK_BASE}${image.startsWith('/') ? '' : '/'}${image}`;
-}
-
-function normalizeTvdbListRecord(record) {
-  const id = Number(String(record?.tvdb_id ?? record?.id ?? '').replace(/[^0-9]/g, ''));
-  if (!Number.isFinite(id) || id <= 0) return null;
-  const slug = record?.url || record?.slug || '';
-  return {
-    id,
-    name: record?.name || `List ${id}`,
-    overview: record?.overview || record?.overviews?.eng || '',
-    slug,
-    image: tvdbListImageUrl(record?.image || record?.image_url),
-    isOfficial: !!record?.isOfficial,
-    url: `https://thetvdb.com/lists/${slug || id}`
-  };
-}
-
-// Base list records carry no image, and search results carry no slug.
-async function enrichTvdbListRecords(records, config) {
-  const enriched = new Array(records.length);
-  const queue = records.map((record, index) => ({ record, index }));
-  const concurrency = Math.min(
-    parseInt(process.env.TVDB_LIST_ENRICH_CONCURRENCY || '10', 10),
-    queue.length
-  );
-
-  const worker = async () => {
-    while (queue.length) {
-      const { record, index } = queue.shift();
-      let details = null;
-      try {
-        details = await tvdbApi.getCollectionDetails(String(record.id), config);
-      } catch (error) {
-        consola.debug(`[TVDB Lists] Could not enrich list ${record.id}: ${error.message}`);
-      }
-      const entities = Array.isArray(details?.entities) ? details.entities : [];
-      const movieCount = entities.filter(e => e?.movieId).length;
-      const seriesCount = entities.filter(e => e?.seriesId).length;
-      enriched[index] = {
-        ...record,
-        ...(details?.image ? { image: tvdbListImageUrl(details.image) } : {}),
-        ...(details?.url ? { slug: details.url, url: `https://thetvdb.com/lists/${details.url}` } : {}),
-        ...(details?.overview && !record.overview ? { overview: details.overview } : {}),
-        // Search results omit isOfficial entirely, so it only ever arrives here.
-        isOfficial: typeof details?.isOfficial === 'boolean' ? details.isOfficial : !!record.isOfficial,
-        movieCount,
-        seriesCount,
-        itemCount: movieCount + seriesCount,
-      };
-    }
-  };
-
-  await Promise.all(Array.from({ length: Math.max(1, concurrency) }, worker));
-  return enriched.filter(Boolean);
-}
 
 async function buildTvdbListConfig(req, res) {
   const tvdbApiKey = await resolveTvdbDiscoverApiKey(req);

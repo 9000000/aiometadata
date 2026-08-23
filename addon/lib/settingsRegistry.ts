@@ -216,7 +216,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'OAuth',
     type: 'string',
     default: '',
-    envOnly: true,
     validate: (value: string) => value === '' || ['oauth', 'pin', 'both'].includes(value.trim().toLowerCase()),
   },
   {

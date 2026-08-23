@@ -51,9 +51,18 @@ export function useDeviceAuth({
 
   const start = useCallback(async () => {
     setRequesting(true);
+    // Opened before the request, while the click is still the reason we are
+    // running. A window.open after an await has lost the user gesture and every
+    // major browser blocks it, which left the card telling people a tab had
+    // opened when it had not. `noopener` is not passed here because it makes
+    // open() return null, and we need the handle to navigate the tab once the
+    // code arrives; clearing `opener` on the new window buys the same thing.
+    const pinTab = window.open('', '_blank');
+    if (pinTab) pinTab.opener = null;
     try {
       const response = await fetch(startPath, { method: 'POST' });
       if (!response.ok) {
+        pinTab?.close();
         const data = await response.json().catch(() => null);
         toast.error(data?.error || `Could not start the ${providerLabel} authorization`);
         return;
@@ -65,8 +74,15 @@ export function useDeviceAuth({
         verificationUrl: data.verificationUrl,
         interval: Math.max(2, Number(data.interval) || 5),
       });
-      window.open(data.verificationUrl, '_blank', 'noopener,noreferrer');
+      // Blocked anyway, or the browser handed back nothing: the card still
+      // shows the URL as a link, so this is the convenience path only.
+      if (pinTab) {
+        pinTab.location.href = data.verificationUrl;
+      } else {
+        window.open(data.verificationUrl, '_blank', 'noopener,noreferrer');
+      }
     } catch (error) {
+      pinTab?.close();
       console.error(`${providerLabel} device auth request error:`, error);
       toast.error(`Could not start the ${providerLabel} authorization`);
     } finally {

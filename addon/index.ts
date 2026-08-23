@@ -233,7 +233,16 @@ async function deviceAuthPollRateLimitMiddleware(req, res, next) {
 
   try {
     const minuteBucket = Math.floor(Date.now() / 60000);
-    const rateKey = `rate-limit:device-auth-poll:${minuteBucket}`;
+    // Keyed per caller, the way the config-load limiter is. A single bucket for
+    // the whole instance would let a handful of concurrent authorizations spend
+    // the budget, and would let anyone spend it deliberately: a pending code
+    // polls every few seconds and these routes need no session.
+    const target = (typeof req.query?.sessionId === 'string' && req.query.sessionId)
+      || (typeof req.body?.sessionId === 'string' && req.body.sessionId)
+      || req.session?.accountId
+      || req.ip
+      || 'unknown';
+    const rateKey = `rate-limit:device-auth-poll:${target}:${minuteBucket}`;
 
     // Bounded: with no Redis listening, ioredis holds a command for the better
     // part of a minute, and these routes are polled every few seconds. A count
@@ -1303,11 +1312,13 @@ addon.get("/api/auth/simkl/pin/status", deviceAuthPollRateLimitMiddleware, async
     const user = await simklClient.getMe(poll.access_token);
     const tokenId = await persistSimklToken(user, poll.access_token);
 
-    await deleteDeviceAuthSession(sessionId);
-
     if (!tokenId) {
+      // Session left in place: storing the token is the only thing that failed,
+      // so the next poll can try again rather than making the user start over.
       return res.status(500).json({ error: "Simkl authorized the connection, but this server could not store the token." });
     }
+
+    await deleteDeviceAuthSession(sessionId);
 
     consola.info(`[Simkl PIN] Connected user ${user.username} - tokenId: ${tokenId}`);
     res.json({ status: 'authorized', tokenId, username: user.username });

@@ -91,6 +91,8 @@ export async function getDeviceAuthSession(
     }
   }
 
+  pruneMemorySessions(now);
+
   if (!session || session.provider !== provider) return null;
   if (session.expiresAt <= now) {
     await deleteDeviceAuthSession(sessionId);
@@ -118,13 +120,16 @@ export async function registerPoll(
   return true;
 }
 
+/** Longest gap we back off to, so a repeated slow down cannot stall the flow. */
+const MAX_POLL_INTERVAL_MS = 30000;
+
 /** Backs off after a provider tells us we're polling too fast. */
 export async function widenPollInterval(
   sessionId: string,
   session: DeviceAuthSession,
   now: number = Date.now()
 ): Promise<void> {
-  session.pollIntervalMs += 2000;
+  session.pollIntervalMs = Math.min(session.pollIntervalMs + 2000, MAX_POLL_INTERVAL_MS);
   await saveDeviceAuthSession(sessionId, session, now);
 }
 

@@ -11,7 +11,6 @@ export interface SimklTokens {
 }
 
 export interface SimklPinRequest {
-  device_code: string;
   user_code: string;
   verification_url: string;
   expires_in: number;
@@ -47,8 +46,18 @@ export class SimklClient {
    */
   async requestPin(): Promise<SimklPinRequest> {
     const params = new URLSearchParams({ client_id: this.clientId });
-    const response = await httpGet(`${SIMKL_API_BASE}/oauth/pin?${params.toString()}`);
-    const data = response.data;
+    let data: any;
+    try {
+      const response = await httpGet(`${SIMKL_API_BASE}/oauth/pin?${params.toString()}`);
+      data = response.data;
+    } catch (error: any) {
+      const status = error?.response?.status;
+      if (status === 401 || status === 403) {
+        logger.error(`Simkl rejected the client credentials (HTTP ${status})`);
+        throw new Error('Simkl rejected this instance\'s client id');
+      }
+      throw error;
+    }
 
     if (!data || data.result !== 'OK' || !data.user_code) {
       logger.error('Unexpected Simkl PIN response:', JSON.stringify(data));
@@ -56,7 +65,6 @@ export class SimklClient {
     }
 
     return {
-      device_code: String(data.device_code || ''),
       user_code: String(data.user_code),
       verification_url: String(data.verification_url || data.verification_uri || 'https://simkl.com/pin'),
       expires_in: Number(data.expires_in) || 900,
@@ -101,10 +109,16 @@ export class SimklClient {
       return { status: 'authorized', access_token: String(data.access_token) };
     }
 
-    const message = typeof data?.message === 'string' ? data.message.toLowerCase() : '';
-    if (message.includes('expired') || message.includes('invalid')) {
+    // Simkl answers an unknown code by minting a fresh one and returning the
+    // step-1 body, which carries `device_code` and no `access_token`. Its
+    // documentation names that field as the signal that the code we polled is
+    // gone. Reading it as pending would keep polling, and every one of those
+    // polls mints another code, so this has to come before anything else.
+    if (data && data.device_code) {
       return { status: 'expired' };
     }
+
+    const message = typeof data?.message === 'string' ? data.message.toLowerCase() : '';
     if (message.includes('slow down')) {
       return { status: 'slow_down' };
     }

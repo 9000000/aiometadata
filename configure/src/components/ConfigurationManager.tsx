@@ -11,6 +11,7 @@ import { Copy, Loader2, Save, Key, User, Download, List } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 import { TagChip } from "@/components/TagChip";
+import { stricterRatings } from "@/lib/ageRatings";
 import { ManagerSync } from "@/components/ManagerSync";
 import { cn } from "@/lib/utils";
 import { keyStatuses } from "@/lib/configStatus";
@@ -26,6 +27,10 @@ interface SavedConfig {
 const LazyConfigImportExport = lazy(() =>
   import("@/components/ConfigImportExport").then((module) => ({ default: module.ConfigImportExport }))
 );
+
+const RATING_CHIP = 'rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors';
+const RATING_CHIP_ON = 'border-primary bg-primary text-primary-foreground';
+const RATING_CHIP_OFF = 'border-muted-foreground/30 text-muted-foreground hover:text-foreground';
 
 function joinTagNames(names: string[]) {
   return names.map((name, i) => (
@@ -51,6 +56,7 @@ export function ConfigurationManager() {
   const { config, setConfig, auth, setAuth, hasBuiltInTvdb, hasBuiltInTmdb, hasBuiltInGemini, isLoading: contextLoading, manifestChangedSinceInstall, markManifestInstalled } = useConfig();
   const { requestSave, isSaving, error, savedConfig, canSave, missingKeys, openInstall } = useSave();
   const [selectedTagNames, setSelectedTagNames] = useState<string[]>([]);
+  const [selectedRating, setSelectedRating] = useState("");
   const [requireAddonPassword, setRequireAddonPassword] = useState(false);
   const [showLoadDialog, setShowLoadDialog] = useState(false);
   const [loadPassword, setLoadPassword] = useState("");
@@ -260,14 +266,23 @@ export function ConfigurationManager() {
 
   const emptyTags = selectedTags.filter(name => !enabledTagCounts[name.toLowerCase()]);
 
+  // Only ratings below the saved one, since the addon refuses anything looser: the
+  // point is a stricter install off the same UUID, not a way around the saved cap.
+  const ratingChoices = useMemo(() => stricterRatings(config.ageRating), [config.ageRating]);
+
+  useEffect(() => {
+    if (selectedRating && !ratingChoices.includes(selectedRating)) setSelectedRating("");
+  }, [ratingChoices, selectedRating]);
+
   // One tag per param. A tag name can hold any character, so a separator would be
   // ambiguous for the addon to split back apart.
   const taggedInstallUrl = useMemo(() => {
     if (!identity) return "";
-    if (selectedTags.length === 0) return identity.installUrl;
-    const query = selectedTags.map(name => `tag=${encodeURIComponent(name)}`).join('&');
-    return `${identity.installUrl}?${query}`;
-  }, [identity, selectedTags]);
+    const params = selectedTags.map(name => `tag=${encodeURIComponent(name)}`);
+    if (selectedRating) params.push(`contentrating=${encodeURIComponent(selectedRating)}`);
+    if (params.length === 0) return identity.installUrl;
+    return `${identity.installUrl}?${params.join('&')}`;
+  }, [identity, selectedTags, selectedRating]);
 
   const toggleTag = (name: string) => {
     setSelectedTagNames(prev =>
@@ -488,6 +503,30 @@ export function ConfigurationManager() {
                     ))}
                   </div>
                 )}
+                {ratingChoices.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                    <span className="text-xs text-muted-foreground mr-1">Content rating:</span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRating('')}
+                      aria-pressed={selectedRating === ''}
+                      className={cn(RATING_CHIP, selectedRating === '' ? RATING_CHIP_ON : RATING_CHIP_OFF)}
+                    >
+                      {config.ageRating && config.ageRating !== 'None' ? config.ageRating : 'No limit'}
+                    </button>
+                    {ratingChoices.map((rating) => (
+                      <button
+                        key={rating}
+                        type="button"
+                        onClick={() => setSelectedRating(rating)}
+                        aria-pressed={selectedRating === rating}
+                        className={cn(RATING_CHIP, selectedRating === rating ? RATING_CHIP_ON : RATING_CHIP_OFF)}
+                      >
+                        {rating}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <div className="flex items-center gap-2 mt-1">
                   <Input
                     value={taggedInstallUrl}
@@ -510,6 +549,11 @@ export function ConfigurationManager() {
                 {emptyTags.length > 0 && (
                   <p className="text-xs text-amber-400 mt-1">
                     No enabled catalog is tagged {joinTagNames(emptyTags)}, so nothing will install from it.
+                  </p>
+                )}
+                {selectedRating !== '' && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Caps catalogs and search at <span className="font-medium">{selectedRating}</span> for this install only. Meta pages are not filtered.
                   </p>
                 )}
               </div>

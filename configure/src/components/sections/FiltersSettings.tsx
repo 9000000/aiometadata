@@ -4,16 +4,8 @@ import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { useConfig } from '@/contexts/ConfigContext';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { AGE_RATING_OPTIONS as ageRatingOptions } from '@/lib/ageRatings';
 
-// Define the options for the age rating select dropdown
-const ageRatingOptions = [
-    { value: 'None', label: 'None (Show All)' },
-    { value: 'G', label: 'G (All Ages)' },
-    { value: 'PG', label: 'PG (Parental Guidance)' },
-    { value: 'PG-13', label: 'PG-13 (Parents Strongly Cautioned)' },
-    { value: 'R', label: 'R (Restricted)' },
-    { value: 'NC-17', label: 'NC-17 (Adults Only)' },
-];
 
 export function FiltersSettings() {
   const { config, setConfig } = useConfig();

@@ -70,3 +70,76 @@ export function passesAgeRating(
   if (userRatingIndex === -1 || resultRatingIndex === -1) return true;
   return resultRatingIndex <= userRatingIndex;
 }
+
+/**
+ * Spellings an install URL may use for a cap, mapped onto the scale it is stored on.
+ * The TV scale collapses onto the nearest MPAA step, and TV-MA lands on R rather than
+ * NC-17 because the reverse mapping is lossy and the stricter reading is the safe one.
+ */
+const RATING_OVERRIDE_ALIASES: Record<string, string> = {
+  'NONE': 'None',
+  'G': 'G',
+  'PG': 'PG',
+  'PG13': 'PG-13',
+  'PG-13': 'PG-13',
+  'R': 'R',
+  'NC17': 'NC-17',
+  'NC-17': 'NC-17',
+  'R18': 'NC-17',
+  'R+': 'NC-17',
+  'RX': 'NC-17',
+  'TV-Y': 'G',
+  'TV-Y7': 'G',
+  'TV-G': 'G',
+  'TV-PG': 'PG',
+  'TV-14': 'PG-13',
+  'TV-MA': 'R',
+};
+
+/** How permissive a cap is. An absent or "None" cap permits everything. */
+function capRank(rating: string | null | undefined): number {
+  if (typeof rating !== 'string' || !rating.trim() || rating.trim().toLowerCase() === 'none') {
+    return MOVIE_RATING_HIERARCHY.length;
+  }
+  const index = MOVIE_RATING_HIERARCHY.indexOf(rating.trim());
+  return index === -1 ? MOVIE_RATING_HIERARCHY.length : index;
+}
+
+/** A single ?contentrating= value, or null when it names nothing recognisable. */
+export function parseRatingOverride(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const key = raw.trim().toUpperCase();
+  return RATING_OVERRIDE_ALIASES[key] || null;
+}
+
+/**
+ * Works out the cap an install URL asks for. The override may only tighten what the
+ * stored config allows: it is the mechanism behind a kids install off a shared UUID,
+ * so letting it loosen would mean anyone who can edit the URL can lift the limit.
+ * Anything unrecognised or more permissive is refused rather than approximated, and
+ * several values resolve to the strictest of them.
+ */
+export function resolveRatingOverride(
+  config: { ageRating?: unknown } | null | undefined,
+  raw: unknown
+): { rating: string | null; requested: string[]; refused: string[] } {
+  const values = (raw === undefined || raw === null ? [] : Array.isArray(raw) ? raw : [raw])
+    .filter((value: any) => typeof value === 'string' && value.trim())
+    .map((value: string) => value.trim());
+  if (values.length === 0) return { rating: null, requested: [], refused: [] };
+
+  const stored = typeof config?.ageRating === 'string' ? config.ageRating : null;
+  const storedRank = capRank(stored);
+
+  let rating: string | null = null;
+  const refused: string[] = [];
+  for (const value of values) {
+    const parsed = parseRatingOverride(value);
+    if (!parsed || capRank(parsed) >= storedRank) {
+      refused.push(value);
+      continue;
+    }
+    if (rating === null || capRank(parsed) < capRank(rating)) rating = parsed;
+  }
+  return { rating, requested: values, refused };
+}

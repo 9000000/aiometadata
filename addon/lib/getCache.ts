@@ -925,6 +925,13 @@ function getMetaCacheContext(config: any, metaId: string, type: string | null, u
     };
   }
 
+  // A cap named by the install URL changes which providers a meta is built from, so it
+  // cannot share a key with the same title built without one. Only set when a URL asks
+  // for it, which leaves every existing key where it is.
+  if (config._ratingOverride) {
+    context.providerOptions = { ...context.providerOptions, ratingOverride: config._ratingOverride };
+  }
+
   return context;
 }
 

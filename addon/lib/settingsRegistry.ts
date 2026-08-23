@@ -209,6 +209,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envOnly: true,
   },
   {
+    key: 'SIMKL_AUTH_MODE',
+    envVar: 'SIMKL_AUTH_MODE',
+    label: 'Simkl Auth Mode',
+    description: "Which Simkl connection flows to offer: 'oauth', 'pin', or 'both'. Defaults to 'pin' when no client secret is set.",
+    category: 'OAuth',
+    type: 'string',
+    default: '',
+    validate: (value: string) => value === '' || ['oauth', 'pin', 'both'].includes(value.trim().toLowerCase()),
+  },
+  {
     key: 'SIMKL_REDIRECT_URI',
     envVar: 'SIMKL_REDIRECT_URI',
     label: 'Simkl Redirect URI',
@@ -1020,6 +1030,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'Rate Limits',
     type: 'number',
     default: 20,
+  },
+  {
+    key: 'DEVICE_AUTH_POLL_RATE_LIMIT_PER_MIN',
+    envVar: 'DEVICE_AUTH_POLL_RATE_LIMIT_PER_MIN',
+    label: 'Device Auth Poll Rate Limit',
+    description: 'Maximum device/PIN authorization status polls per minute, across the Simkl PIN and Trakt device flows.',
+    category: 'Rate Limits',
+    type: 'number',
+    default: 240,
   },
   {
     key: 'JIKAN_MAX_CONCURRENT',

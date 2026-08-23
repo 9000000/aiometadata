@@ -27,6 +27,15 @@ const LazyConfigImportExport = lazy(() =>
   import("@/components/ConfigImportExport").then((module) => ({ default: module.ConfigImportExport }))
 );
 
+function joinTagNames(names: string[]) {
+  return names.map((name, i) => (
+    <span key={name}>
+      {i > 0 && (i === names.length - 1 ? ' or ' : ', ')}
+      <span className="font-medium">{name}</span>
+    </span>
+  ));
+}
+
 function ConfigurationSectionFallback() {
   return (
     <div className="space-y-3 rounded-lg border bg-muted/20 p-5">
@@ -41,7 +50,7 @@ function ConfigurationSectionFallback() {
 export function ConfigurationManager() {
   const { config, setConfig, auth, setAuth, hasBuiltInTvdb, hasBuiltInTmdb, hasBuiltInGemini, isLoading: contextLoading, manifestChangedSinceInstall, markManifestInstalled } = useConfig();
   const { requestSave, isSaving, error, savedConfig, canSave, missingKeys, openInstall } = useSave();
-  const [selectedTag, setSelectedTag] = useState("");
+  const [selectedTagNames, setSelectedTagNames] = useState<string[]>([]);
   const [requireAddonPassword, setRequireAddonPassword] = useState(false);
   const [showLoadDialog, setShowLoadDialog] = useState(false);
   const [loadPassword, setLoadPassword] = useState("");
@@ -56,10 +65,13 @@ export function ConfigurationManager() {
     [config, hasBuiltInTmdb, hasBuiltInTvdb, hasBuiltInGemini] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
-  const identity: SavedConfig | null = savedConfig
-    ?? (auth.authenticated && auth.userUUID && auth.installUrl
-      ? { userUUID: auth.userUUID, installUrl: auth.installUrl }
-      : null);
+  const identity: SavedConfig | null = useMemo(
+    () => savedConfig
+      ?? (auth.authenticated && auth.userUUID && auth.installUrl
+        ? { userUUID: auth.userUUID, installUrl: auth.installUrl }
+        : null),
+    [savedConfig, auth.authenticated, auth.userUUID, auth.installUrl],
+  );
 
   useEffect(() => {
     fetch("/api/config/addon-info")
@@ -225,10 +237,43 @@ export function ConfigurationManager() {
     ? "Updates your saved configuration in the database."
     : "You'll create a password, then get a UUID and install URL.";
 
-  const profileTags = config.tags ?? [];
-  const taggedInstallUrl = identity
-    ? (selectedTag ? `${identity.installUrl}?tag=${encodeURIComponent(selectedTag)}` : identity.installUrl)
-    : "";
+  const profileTags = useMemo(() => config.tags ?? [], [config.tags]);
+
+  // Registry order rather than click order, so the URL and the addon name read the
+  // same way the chips do. Renamed or deleted tags drop out on their own.
+  const selectedTags = useMemo(
+    () => profileTags.map(t => t.name).filter(name => selectedTagNames.includes(name)),
+    [profileTags, selectedTagNames],
+  );
+
+  const enabledTagCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const catalog of config.catalogs ?? []) {
+      if (!catalog.enabled) continue;
+      for (const tag of catalog.tags ?? []) {
+        const key = tag.toLowerCase();
+        counts[key] = (counts[key] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [config.catalogs]);
+
+  const emptyTags = selectedTags.filter(name => !enabledTagCounts[name.toLowerCase()]);
+
+  // One tag per param. A tag name can hold any character, so a separator would be
+  // ambiguous for the addon to split back apart.
+  const taggedInstallUrl = useMemo(() => {
+    if (!identity) return "";
+    if (selectedTags.length === 0) return identity.installUrl;
+    const query = selectedTags.map(name => `tag=${encodeURIComponent(name)}`).join('&');
+    return `${identity.installUrl}?${query}`;
+  }, [identity, selectedTags]);
+
+  const toggleTag = (name: string) => {
+    setSelectedTagNames(prev =>
+      prev.includes(name) ? prev.filter(t => t !== name) : [...prev, name]
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -420,10 +465,11 @@ export function ConfigurationManager() {
                     <span className="text-xs text-muted-foreground mr-1">Profile:</span>
                     <button
                       type="button"
-                      onClick={() => setSelectedTag('')}
+                      onClick={() => setSelectedTagNames([])}
+                      aria-pressed={selectedTags.length === 0}
                       className={cn(
                         'rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors',
-                        selectedTag === ''
+                        selectedTags.length === 0
                           ? 'border-primary bg-primary text-primary-foreground'
                           : 'border-muted-foreground/30 text-muted-foreground hover:text-foreground',
                       )}
@@ -435,8 +481,9 @@ export function ConfigurationManager() {
                         key={t.name}
                         name={t.name}
                         color={t.color}
-                        onClick={() => setSelectedTag(t.name)}
-                        dimmed={selectedTag !== '' && selectedTag !== t.name}
+                        onClick={() => toggleTag(t.name)}
+                        pressed={selectedTags.includes(t.name)}
+                        dimmed={selectedTags.length > 0 && !selectedTags.includes(t.name)}
                       />
                     ))}
                   </div>
@@ -455,9 +502,14 @@ export function ConfigurationManager() {
                     <Copy className="h-4 w-4" />
                   </Button>
                 </div>
-                {selectedTag !== '' && (
+                {selectedTags.length > 0 && (
                   <p className="text-xs text-muted-foreground mt-1">
-                    Installs only catalogs tagged <span className="font-medium">{selectedTag}</span> as a separate addon profile.
+                    Installs only catalogs tagged {joinTagNames(selectedTags)} as a separate addon profile.
+                  </p>
+                )}
+                {emptyTags.length > 0 && (
+                  <p className="text-xs text-amber-400 mt-1">
+                    No enabled catalog is tagged {joinTagNames(emptyTags)}, so nothing will install from it.
                   </p>
                 )}
               </div>

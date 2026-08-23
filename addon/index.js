@@ -14,7 +14,7 @@ const { applyCatalogFilters, catalogFiltersActive } = require("./utils/catalogFi
 const { cursorKey, resolveStartPage, writeCursor, fillFilteredPage } = require("./lib/catalogPagination");
 const anilist = require("./lib/anilist");
 const { getSearch } = require("./lib/getSearch");
-const { getManifest, DEFAULT_LANGUAGE } = require("./lib/getManifest");
+const { getManifest, resolveManifestTags, DEFAULT_LANGUAGE } = require("./lib/getManifest");
 const { getMeta } = require("./lib/getMeta");
 const { cacheWrapMetaSmart, cacheWrapCatalog, cacheWrapSearch, cacheWrapJikanApi, cacheWrapStaticCatalog, cacheWrapGlobal, getCacheHealth, clearCacheHealth, logCacheHealth, stableStringify, deleteKeysByPattern, scanKeys } = require("./lib/getCache");
 const { hasPermission } = require("./lib/authSession");
@@ -454,8 +454,10 @@ const respond = function (req, res, data, opts) {
         etagContent += ':manifest';
       }
 
-      if (typeof req.query.tag === 'string' && req.query.tag.trim()) {
-        etagContent += ':tag:' + req.query.tag.trim().toLowerCase();
+      // Set by the manifest route once the query has been resolved, so the validator
+      // follows the profiles that were actually built rather than the raw query.
+      if (Array.isArray(req.manifestTags) && req.manifestTags.length > 0) {
+        etagContent += ':tags:' + req.manifestTags.map((t) => t.toLowerCase()).join(',');
       }
 
       const etagHash = crypto.createHash('md5').update(etagContent).digest('hex');
@@ -4019,9 +4021,13 @@ addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
             return res.status(404).send({ err: "User configuration not found." });
         }
         
-        const tag = typeof req.query.tag === 'string' ? req.query.tag.trim() : '';
-        consola.debug(`[Manifest] Building fresh manifest for user: ${userUUID}${tag ? ` (tag: ${tag})` : ''}`);
-        const manifest = await getManifest(config, { tag });
+        const { tags, unknown: unknownTags } = resolveManifestTags(config, req.query.tag);
+        req.manifestTags = tags;
+        consola.debug(`[Manifest] Building fresh manifest for user: ${userUUID}${tags.length ? ` (tags: ${tags.join(', ')})` : ''}`);
+        if (unknownTags.length > 0) {
+            consola.warn(`[Manifest] User ${userUUID} asked for ${unknownTags.join(', ')}, which no catalog is tagged with`);
+        }
+        const manifest = await getManifest(config, { tags });
             if (!manifest) {
                 res.setHeader('Access-Control-Allow-Origin', '*');
                 res.setHeader('Access-Control-Allow-Headers', '*');
@@ -4050,7 +4056,9 @@ addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
         manifest._debug = {
             language: config.language || DEFAULT_LANGUAGE,
             configVersion: config.configVersion || Date.now(),
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            ...(tags.length > 0 ? { tags } : {}),
+            ...(unknownTags.length > 0 ? { unknownTags } : {})
         };
         
         // Add a timestamp to force cache invalidation

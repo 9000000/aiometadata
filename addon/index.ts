@@ -147,7 +147,7 @@ function shuffleMetas(metas = []) {
 
 
 function extractIdsFromMeta(meta) {
-  const ids = {};
+  const ids: any = {};
   if (!meta) return ids;
 
   const id = meta.id || '';
@@ -489,7 +489,7 @@ function applyRatingOverrides(config, req, userUUID) {
   return next;
 }
 
-const respond = function (req, res, data, opts) {
+const respond = function (req, res, data, opts?) {
   // Store minimal tracking data in res.locals for success detection
   if (req.path.includes('/catalog/') && data && data.metas) {
     res.locals.resultCount = data.metas.length;
@@ -938,7 +938,7 @@ addon.post("/api/oauth/token/info", async (req, res) => {
     if (!token) {
       return res.status(404).json({ error: "Token not found" });
     }
-    const response = { provider: token.provider, username: token.user_id, expiresAt: token.expires_at };
+    const response: any = { provider: token.provider, username: token.user_id, expiresAt: token.expires_at };
     if (token.provider === 'trakt') {
       try {
         const { isTokenInvalidated } = require('./utils/traktUtils');
@@ -4224,7 +4224,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
               return !isNaN(releaseDate.getTime()) && releaseDate >= now;
             });
             
-            meta.videos.sort((a, b) => new Date(a.released) - new Date(b.released));
+            meta.videos.sort((a, b) => new Date(a.released).getTime() - new Date(b.released).getTime());
           }
           
           if (!meta.videos || meta.videos.length === 0) return null;
@@ -4328,7 +4328,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
 
   // Pass config to req for ETag generation
   req.userConfig = config;
-  let extraArgs = {};
+  let extraArgs: any = {};
   if (extra) {
     extraArgs = Object.fromEntries(new URLSearchParams(req.url.split("/").pop().split("?")[0].slice(0, -5)).entries());
   }
@@ -4391,7 +4391,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
   }
   // MovieLens uses: sortBy, sortDirection, tags, minYear, maxYear, minPop, maxDaysAgo, maxFutureDays
   else if (cleanId.startsWith('movielens.')) {
-    const mlMeta = catalogConfig?.metadata || {};
+    const mlMeta: any = catalogConfig?.metadata || {};
     if (mlMeta.sortBy) extraArgs.sort = mlMeta.sortBy;
     if (mlMeta.sortDirection) extraArgs.sortDirection = mlMeta.sortDirection;
     if (mlMeta.tags) extraArgs.tags = mlMeta.tags;
@@ -5305,7 +5305,7 @@ addon.post("/stremio/:userUUID/rating", async function (req, res) {
           
           if (tmdbId || imdbId || tvdbId) {
             // Build IDs object for Trakt (only include non-null values)
-            const ids = {};
+            const ids: any = {};
             if (tmdbId) ids.tmdb = parseInt(tmdbId, 10);
             if (imdbId) ids.imdb = imdbId;
             if (tvdbId) ids.tvdb = parseInt(tvdbId, 10);
@@ -5438,7 +5438,7 @@ addon.post("/stremio/:userUUID/rating", async function (req, res) {
           const mdblistType = type.toLowerCase() === 'series' ? 'shows' : 'movies';
           
           // Build IDs object for MDBList
-          const ids = {};
+          const ids: any = {};
           if (tmdbId) ids.tmdb = parseInt(tmdbId);
           if (imdbId) ids.imdb = imdbId;
           if (tvdbId) ids.tvdb = parseInt(tvdbId);
@@ -5551,7 +5551,7 @@ async function produceProcessedBytes(bareUrl, fetchFallback) {
   return fetchFallback();
 }
 
-async function sendCachedImage(res, result, fallbackContentType) {
+async function sendCachedImage(res, result, fallbackContentType?) {
   const { entry } = result;
   res.setHeader('X-Cache-Status', result.status);
   res.setHeader('Content-Type', entry.contentType || fallbackContentType || 'image/jpeg');
@@ -6393,7 +6393,7 @@ addon.get('/api/cache/invalidation-status/:userUUID', requireDashboardAdmin, asy
     // Count cache entries for this user
     const userCachePattern = `*${userUUID}*`;
     // Group by cache type
-    const cacheStats = {
+    const cacheStats: any = {
       total: 0,
       byType: {}
     };
@@ -7171,7 +7171,7 @@ addon.get("/api/dashboard/poster-cache/stats", requireDashboardAdmin, async (req
   try {
     const response = await fetch(`${posterCacheUrl}/stats`);
     if (!response.ok) throw new Error(`Poster cache answered ${response.status}`);
-    const stats = await response.json();
+    const stats: any = await response.json();
     res.json({ ...policyPayload, ...stats, external: 'ok' });
   } catch (error) {
     consola.debug(`[API] Poster cache stats unreachable at ${posterCacheUrl}: ${error.message}`);
@@ -7395,7 +7395,7 @@ addon.get("/api/dashboard/content", requireAuthUnlessGuestMode, (req, res) => {
           missingMetadata: 0, // TODO: Implement real tracking
           failedMappings: 0,  // TODO: Implement real tracking
           correctionRequests: 0, // TODO: Implement real tracking
-          successRate: parseFloat(100 - stats.errorRate)
+          successRate: parseFloat(String(100 - stats.errorRate))
         }
       });
     }).catch(error => {
@@ -7576,7 +7576,7 @@ addon.post("/api/dashboard/maintenance/execute", requireDashboardAdmin, async (r
       return res.status(400).json({ error: 'Task ID and action are required' });
     }
     
-    let result = { success: false, message: '' };
+    let result: any = { success: false, message: '' };
     
     // Handle maintenance tasks
     if (taskId === 1) { // Clear expired cache entries
@@ -7822,7 +7822,7 @@ async function startServerWithCacheWarming() {
   return addon;
 }
 
-module.exports = {
+export {
   addon, startServerWithCacheWarming, getDashboardAPI, applyImageCachePrefix,
   startEssentialWarmingSchedules, startMovieLensSyncSchedule,
 };

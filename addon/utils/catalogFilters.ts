@@ -25,7 +25,7 @@ function applyAgeRatingFilter(metas: any[], type: string, config: any): any[] {
   const before = metas.length;
   const filtered = metas.filter(meta => {
     const cert = meta.app_extras?.certification || meta.certification || null;
-    return passesAgeRating(cert, type, config.ageRating, allowUnrated);
+    return passesAgeRating(cert, meta.type || type, config.ageRating, allowUnrated);
   });
 
   if (before !== filtered.length) {
@@ -51,7 +51,7 @@ const WATCHED_FILTERS: [string, string][] = [
 function catalogFiltersActive({ config, catalogConfig, cleanId }: Omit<CatalogFilterOptions, 'type'>): boolean {
   const isSearch = ['search', 'people_search', 'gemini.search'].includes(cleanId);
 
-  if (!isSearch && hasAgeRatingCap(config)) return true;
+  if (hasAgeRatingCap(config)) return true;
 
   const catalogHideDigital = catalogConfig?.metadata?.hideUnreleasedDigital;
   const hideUnreleasedDigital = isSearch
@@ -77,9 +77,7 @@ async function applyCatalogFilters(metas: any[], { type, config, catalogConfig, 
 
   const isSearch = ['search', 'people_search', 'gemini.search'].includes(cleanId);
 
-  if (!isSearch) {
-    metas = applyAgeRatingFilter(metas, type, config);
-  }
+  metas = applyAgeRatingFilter(metas, type, config);
   const hideWatchedExcluded = isHideWatchedExcluded(cleanId);
 
   const catalogHideDigital = catalogConfig?.metadata?.hideUnreleasedDigital;

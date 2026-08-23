@@ -16,7 +16,7 @@ const { performGeminiSearch, resolveGeminiModel }: any = require('../utils/gemin
 const { performOpenRouterSearch }: any = require('../utils/openrouter-service');
 import consola from 'consola';
 import { tmdbImageUrl, tmdbLogoSize, tmdbBackdropSize, tmdbPosterSize } from '../utils/tmdbImageSize';
-import { allowsUnrated, hasAgeRatingCap, passesAgeRating } from '../utils/ageRating';
+import { hasAgeRatingCap } from '../utils/ageRating';
 const { cacheWrapMetaSmart, cacheWrapGlobal }: any = require('./getCache');
 const { getSetting }: any = require('./settingsService');
 import { fetchImdbSuggestions, type ImdbSuggestion } from '../utils/imdbSuggestions.js';
@@ -693,14 +693,6 @@ async function performTmdbSearch(type: string, query: string, language: string, 
   const hydratedMetas = keywordFilteredResults.map((result: any) => result.parsed);
 
   let filteredResults = hydratedMetas;
-  if (config.ageRating && config.ageRating.toLowerCase() !== 'none') {
-      const allowUnrated = allowsUnrated(config);
-
-      filteredResults = filteredResults.filter((result: any) => {
-          return passesAgeRating(result.certification, type, config.ageRating, allowUnrated);
-      });
-      logger.debug(`Age rating filter applied: ${hydratedMetas.length} -> ${filteredResults.length} results.`);
-  }
   if (type === 'movie' && config.hideUnreleasedDigitalSearch) {
     const beforeCount = filteredResults.length;
     filteredResults = filteredResults.filter((meta: any) => Utils.isReleasedDigitally(meta));
@@ -993,14 +985,6 @@ async function performSimklSearch(type: string, query: string, language: string,
     if (meta?.id && !seenMetas.has(meta.id)) {
       seenMetas.add(meta.id);
       metas.push(meta);
-    }
-  }
-
-  if (config.ageRating && String(config.ageRating).toLowerCase() !== 'none') {
-    const beforeCount = metas.length;
-    metas = metas.filter((meta: any) => passesAgeRating(meta.certification, type, config.ageRating, allowsUnrated(config)));
-    if (beforeCount !== metas.length) {
-      logger.info(`Age rating filter (Simkl): filtered out ${beforeCount - metas.length} results`);
     }
   }
 
@@ -1405,20 +1389,6 @@ async function performAiSearch(query: string, language: string, config: any): Pr
 
     let filteredResults = validResults;
 
-    if (config.ageRating && config.ageRating.toLowerCase() !== 'none') {
-      const beforeCount = filteredResults.length;
-      const allowUnrated = allowsUnrated(config);
-
-      filteredResults = filteredResults.filter((result: any) => {
-        return passesAgeRating(result.certification, result.type, config.ageRating, allowUnrated);
-      });
-
-      const afterCount = filteredResults.length;
-      if (beforeCount !== afterCount) {
-        logger.info(`Age rating filter: ${beforeCount} -> ${afterCount} results`);
-      }
-    }
-
     if (config.hideUnreleasedDigitalSearch) {
       const beforeCount = filteredResults.length;
       filteredResults = filteredResults.filter((meta: any) =>
@@ -1591,16 +1561,7 @@ async function performTvdbSearch(type: string, query: string, language: string, 
 
   const sortedResults = Utils.sortTvdbSearchResults(finalResults, sanitizedQuery);
 
-  let ageFilteredResults = sortedResults;
-  if (config.ageRating && config.ageRating.toLowerCase() !== 'none') {
-    const allowUnrated = allowsUnrated(config);
-
-    ageFilteredResults = sortedResults.filter((result: any) => {
-      return passesAgeRating(result.certification, type, config.ageRating, allowUnrated);
-    });
-
-    logger.debug(`TVDB filtered ${finalResults.length} results to ${ageFilteredResults.length} based on age rating: ${config.ageRating}`);
-  }
+  const ageFilteredResults = sortedResults;
   logger.info(`TVDB search results completed in ${Date.now() - searchStartTime}ms`);
 
   return ageFilteredResults;
@@ -1724,16 +1685,7 @@ async function performTvdbPeopleSearch(type: string, query: string, language: st
   });
 
   const sortedResults = filteredResults.map((p: any) => p.originalItem);
-  let ageFilteredResults = sortedResults;
-  if (config.ageRating && config.ageRating.toLowerCase() !== 'none') {
-    const allowUnrated = allowsUnrated(config);
-
-    ageFilteredResults = sortedResults.filter((result: any) => {
-      return passesAgeRating(result.certification, type, config.ageRating, allowUnrated);
-    });
-
-    logger.debug(`TVDB filtered ${finalResults.length} results to ${ageFilteredResults.length} based on age rating: ${config.ageRating}`);
-  }
+  const ageFilteredResults = sortedResults;
   logger.info(`TVDB people search results completed in ${Date.now() - searchStartTime}ms`);
 
   return ageFilteredResults;
@@ -2026,20 +1978,6 @@ async function performTraktSearch(type: string, query: string, language: string,
 
     let finalMetas = validMetas;
 
-    if (config.ageRating && config.ageRating.toLowerCase() !== 'none') {
-      const beforeCount = finalMetas.length;
-      const allowUnrated = allowsUnrated(config);
-
-      finalMetas = finalMetas.filter((result: any) => {
-        return passesAgeRating(result.certification, type, config.ageRating, allowUnrated);
-      });
-
-      const afterCount = finalMetas.length;
-      if (beforeCount !== afterCount) {
-        logger.info(`Age rating filter (Trakt): filtered out ${beforeCount - afterCount} results`);
-      }
-    }
-
     if (type === 'movie' && config.hideUnreleasedDigitalSearch) {
       const beforeCount = finalMetas.length;
       finalMetas = finalMetas.filter((meta: any) => Utils.isReleasedDigitally(meta));
@@ -2172,20 +2110,6 @@ async function performMdbListSearch(type: string, query: string, language: strin
     const validMetas = metas.filter(Boolean);
 
     let finalMetas = validMetas;
-
-    if (config.ageRating && config.ageRating.toLowerCase() !== 'none') {
-      const beforeCount = finalMetas.length;
-      const allowUnrated = allowsUnrated(config);
-
-      finalMetas = finalMetas.filter((result: any) => {
-        return passesAgeRating(result.certification, type, config.ageRating, allowUnrated);
-      });
-
-      const afterCount = finalMetas.length;
-      if (beforeCount !== afterCount) {
-        logger.info(`Age rating filter (MDBList): filtered out ${beforeCount - afterCount} results`);
-      }
-    }
 
     if (type === 'movie' && config.hideUnreleasedDigitalSearch) {
       const beforeCount = finalMetas.length;
@@ -2405,20 +2329,6 @@ async function performTraktPeopleSearch(type: string, query: string, language: s
     const validMetas = metas.filter(Boolean);
 
     let finalMetas = validMetas.map(({ _matchType, ...meta }: any) => meta);
-
-    if (config.ageRating && config.ageRating.toLowerCase() !== 'none') {
-      const beforeCount = finalMetas.length;
-      const allowUnrated = allowsUnrated(config);
-
-      finalMetas = finalMetas.filter((result: any) => {
-        return passesAgeRating(result.certification, type, config.ageRating, allowUnrated);
-      });
-
-      const afterCount = finalMetas.length;
-      if (beforeCount !== afterCount) {
-        logger.info(`Age rating filter (Trakt): filtered out ${beforeCount - afterCount} results`);
-      }
-    }
 
     if (type === 'movie' && config.hideUnreleasedDigitalSearch) {
       const beforeCount = finalMetas.length;

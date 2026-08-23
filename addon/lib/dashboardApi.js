@@ -51,6 +51,13 @@ const PRESERVED_CACHE_KEYS = [
   // Clearing this would make the next boot re-sweep the whole keyspace.
   EPOCH_STATE_KEY,
   'imdb:ratings', 'imdb-ratings-etag',
+  // Sessions live here. Clearing them signs out whoever pressed the button, and
+  // their next request 401s before it can report what the clear actually did.
+  'auth:',
+  // Neither of these is derived from a provider, so a clear cannot rebuild them
+  // on demand: the mappings come from a scheduled import and the metadata is
+  // accumulated from traffic the rating page reads back.
+  'id_map:', 'content_metadata:',
 ];
 
 const isPreservedCacheKey = (key) =>
@@ -2302,19 +2309,6 @@ class DashboardAPI {
         throw new Error("Cache not available");
       }
 
-      // Keys to preserve during "all" cache clear (maintenance tracking, system state)
-      const preservePatterns = [
-        'maintenance:*',           // Maintenance task timestamps
-        'cache-warming:*',         // Cache warming timestamps
-        'catalog-warmup:*',        // Comprehensive warming state
-        'anime_list:last_update',  // Anime-list XML update timestamp
-        'addon:start_time',        // Uptime tracking
-        'system:app_version',      // Version tracking
-        EPOCH_STATE_KEY,           // Cache epoch the keyspace was last cleaned to
-        'imdb:ratings',            // IMDb ratings hash (essential, large dataset)
-        'imdb-ratings-etag',       // IMDb ratings ETag for update checking
-      ];
-
       let deletedCount = 0;
       let cursor = '0';
       
@@ -2326,15 +2320,7 @@ class DashboardAPI {
             const keys = reply[1];
             
             if (keys.length > 0) {
-              // Filter out keys that should be preserved
-              const keysToDelete = keys.filter(key => {
-                return !preservePatterns.some(pattern => {
-                  if (pattern.endsWith('*')) {
-                    return key.startsWith(pattern.slice(0, -1));
-                  }
-                  return key === pattern;
-                });
-              });
+              const keysToDelete = keys.filter(key => !isPreservedCacheKey(key));
               
               if (keysToDelete.length > 0) {
                 const batchSize = 100;
@@ -2362,8 +2348,8 @@ class DashboardAPI {
           do {
             const reply = await this.cache.scan(cursor, 'MATCH', '*meta*', 'COUNT', 1000);
             cursor = reply[0];
-            const keys = reply[1];
-            
+            const keys = (reply[1] || []).filter(key => !isPreservedCacheKey(key));
+
             if (keys.length > 0) {
               const batchSize = 100;
               for (let i = 0; i < keys.length; i += batchSize) {

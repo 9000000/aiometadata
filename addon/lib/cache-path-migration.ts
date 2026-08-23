@@ -28,6 +28,11 @@ const ETAG_KEYS = [
 async function runCachePathMigration(): Promise<void> {
 
   try {
+    await fs.mkdir(CACHE_DIR, { recursive: true }).catch((err: any) => {
+      if (err.code !== 'EEXIST') {
+        logger.warn('Failed to create cache directory:', err.message);
+      }
+    });
     try {
       const flagContent = await fs.readFile(MIGRATION_FLAG_FILE, 'utf-8');
       const flagData = JSON.parse(flagContent);

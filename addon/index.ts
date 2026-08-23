@@ -17,7 +17,7 @@ const { getSearch } = require("./lib/getSearch");
 const { getManifest, resolveManifestTags, DEFAULT_LANGUAGE } = require("./lib/getManifest");
 const { resolveInstallFilters, uniformTagRating, allowsUnrated } = require("./utils/ageRating");
 const { getMeta } = require("./lib/getMeta");
-const { cacheWrapMetaSmart, cacheWrapCatalog, cacheWrapSearch, cacheWrapJikanApi, cacheWrapStaticCatalog, cacheWrapGlobal, getCacheHealth, clearCacheHealth, logCacheHealth, stableStringify, deleteKeysByPattern, scanKeys } = require("./lib/getCache");
+const { cacheWrapMetaSmart, cacheWrapCatalog, cacheWrapSearch, cacheWrapJikanApi, cacheWrapGlobal, getCacheHealth, clearCacheHealth, logCacheHealth, stableStringify, deleteKeysByPattern, scanKeys } = require("./lib/getCache");
 const { hasPermission } = require("./lib/authSession");
 const { isOidcConfigured } = require("./lib/oidc");
 const { resolveConfigAccess } = require("./lib/configAccess");
@@ -30,34 +30,13 @@ const consola = require('consola');
 const aiCatalogLogger = consola.withTag('AICatalog');
 const { stripReleaseAvailabilityForResponse } = require('./utils/releaseAvailability');
 
-const { getMediaRatingFromMDBList, supportsMdblistScoreFilters } = require("./utils/mdbList");
+const { supportsMdblistScoreFilters } = require("./utils/mdbList");
 
-// Warm user-specific content based on their config
-async function warmUserContent(userUUID, contentType) {
-  try {
-    // Load user config
-    const config = await loadConfigFromDatabase(userUUID);
-    if (!config) return;
-    
-    // Add userUUID to config for per-user token caching
-    config.userUUID = userUUID;
-    
-    // Warm popular content based on user's preferences
-    const language = config.language || DEFAULT_LANGUAGE;
-    
-    // Note: Popular content warming is now handled globally by warmPopularContent()
-    // which runs every 6 hours and caches trending content for all users
-    
-    consola.success(`[Cache Warming] User content warmed for ${userUUID} (${contentType})`);
-  } catch (error) {
-    consola.warn(`[Cache Warming] Failed to warm user content for ${userUUID}:`, error.message);
-  }
-}
 const configApi = require('./lib/configApi');
 const database = require('./lib/database');
 const { loadConfigFromDatabase } = require('./lib/configApi');
 const { getTrending } = require("./lib/getTrending");
-const { resolveProxyRatingPosterUrl, parseAnimeCatalogMeta, parseAnimeCatalogMetaBatch } = require("./utils/parseProps");
+const { resolveProxyRatingPosterUrl, parseAnimeCatalogMetaBatch } = require("./utils/parseProps");
 const { getFavorites, getWatchList } = require("./lib/getPersonalLists");
 const { resolveDynamicTmdbDiscoverParams } = require('./lib/tmdbDiscoverDateTokens');
 const { blurImage, convertBannerToBackground } = require('./utils/imageProcessor');
@@ -77,7 +56,6 @@ const {
 const { renderOAuthPage } = require('./lib/oauthPage');
 const { hasAnyWatchTrackingEnabled } = require('./lib/watchTracking');
 const { SimklClient } = require('./lib/simkl');
-const axios = require('axios');
 const getCountryISO3 = require('country-iso-2-to-3');
 const jikan = require('./lib/mal');
 const buildInfo = require('./lib/buildInfo');
@@ -4534,8 +4512,6 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
     }
   }
 
-  const catalogKey = `${cleanId}:${actualType}:${stableStringify(cacheExtraArgs)}`;
-
   const cacheOptions = {
     enableErrorCaching: true,
     maxRetries: 2,
@@ -5661,7 +5637,7 @@ addon.get("/poster/:type/:id", handlePosterProxy);
 
 function streamArtWithFallback(assetName) {
   return async function (req, res) {
-    const { type, id } = req.params;
+    const { id } = req.params;
     const { fallback, url: customUrl, sig } = req.query;
     if (!customUrl) {
       return res.redirect(302, fallback || '');
@@ -5873,7 +5849,6 @@ addon.get("/stremio/:userUUID/rating", async function (req, res) {
       try {
         // Use the type from URL to look up metadata
         const stremioType = metaType.toLowerCase();
-        const contentKey = `${stremioType}:${id}`;
         
         // Try to get metadata from cache using the canonical key
         const canonicalKey = requestTracker.canonicalContentMetadataKey(stremioType, id);
@@ -6282,7 +6257,7 @@ addon.post('/api/cache/test-granular', async (req, res) => {
       return res.status(400).json({ error: 'userUUID, metaId, and type are required' });
     }
     
-    const { cacheWrapMetaSmart, reconstructMetaFromComponents } = require('./lib/getCache');
+    const { reconstructMetaFromComponents } = require('./lib/getCache');
     
     // Test reconstruction
     const reconstructed = await reconstructMetaFromComponents(userUUID, metaId, undefined, {}, type);

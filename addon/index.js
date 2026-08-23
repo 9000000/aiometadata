@@ -363,9 +363,12 @@ function applyImageCachePrefix(data) {
 
 const isCacheWarmingEnabled = () => process.env.ENABLE_CACHE_WARMING !== 'false';
 
+/** Read at call time so the status route reports a value changed from the dashboard. */
+const cacheWarmingIntervalMinutes = () => parseInt(process.env.CACHE_WARMING_INTERVAL || '720', 10);
+
 /** Called by the startup sequence once settings are loaded. */
 function startEssentialWarmingSchedules() {
-  const CACHE_WARMING_INTERVAL = parseInt(process.env.CACHE_WARMING_INTERVAL || '720', 10);
+  const CACHE_WARMING_INTERVAL = cacheWarmingIntervalMinutes();
 
   if (isCacheWarmingEnabled()) {
     consola.info(`[API Cache Warming] Initializing API cache warming (interval: ${CACHE_WARMING_INTERVAL} minutes)`);
@@ -3952,7 +3955,7 @@ addon.get("/api/cache/status", requireDashboardAdmin, (req, res) => {
   res.json({
     cacheEnabled: true,
     warmingEnabled: isCacheWarmingEnabled(),
-    warmingInterval: CACHE_WARMING_INTERVAL,
+    warmingInterval: cacheWarmingIntervalMinutes(),
     initialWarmingComplete: isInitialWarmingComplete(),
     addonVersion: ADDON_VERSION
   });

@@ -53,7 +53,6 @@ const {
 
 function META_TTL() { return parseInt(process.env.META_TTL || String(7 * 24 * 60 * 60), 10); }
 function CATALOG_TTL() { return parseInt(process.env.CATALOG_TTL || String(1 * 24 * 60 * 60), 10); }
-function TMDB_TRENDING_TTL() { return parseInt(process.env.TMDB_TRENDING_TTL || String(3 * 60 * 60), 10); }
 const JIKAN_API_TTL = 30 * 24 * 60 * 60;
 const STATIC_CATALOG_TTL = 30 * 24 * 60 * 60;
 const TVDB_API_TTL = 12 * 60 * 60;
@@ -1284,9 +1283,6 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
 
   const idOnly = catalogKey.split(':')[0];
   const catalogType = catalogKey.split(':')[1];
-  const trendingIds = new Set(['tmdb.trending']);
-  const isTrendingCatalog = trendingIds.has(idOnly);
-
   const isAuthCatalog = idOnly === 'tmdb.watchlist' || idOnly === 'tmdb.favorites';
 
   const isAiringTodayCatalog = idOnly === 'tmdb.airing_today';
@@ -1385,9 +1381,6 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
   if (isAuthCatalog) {
     cacheTTL = 0;
     cacheLogger.debug(`[Catalog] Not caching auth catalog ${idOnly} (user-specific data changes frequently)`);
-  } else if (isTrendingCatalog) {
-    cacheTTL = TMDB_TRENDING_TTL();
-    cacheLogger.debug(`[Catalog] Using TMDB trending cache TTL for ${idOnly}: ${cacheTTL}s`);
   }
 
   const decadeCatalogs = ['mal.80sDecade', 'mal.90sDecade', 'mal.00sDecade', 'mal.10sDecade'];

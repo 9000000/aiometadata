@@ -312,15 +312,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: 86400,
   },
   {
-    key: 'TMDB_TRENDING_TTL',
-    envVar: 'TMDB_TRENDING_TTL',
-    label: 'TMDB Trending TTL',
-    description: 'Time-to-live for TMDB trending cache in seconds',
-    category: 'Cache',
-    type: 'number',
-    default: 10800,
-  },
-  {
     key: 'MDBLIST_LIST_CACHE_TTL',
     envVar: 'MDBLIST_LIST_CACHE_TTL',
     label: 'MDBList List Cache TTL',

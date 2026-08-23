@@ -1183,6 +1183,10 @@ function projectAppExtrasForCatalogCache(appExtras: any): any {
   const projected: any = {};
   const fields = [
     'certification',
+    // The catalog renders this in preference to `certification` when it is set, so
+    // dropping it made a cached row fall back to the US rating while the meta page
+    // kept showing the user's own. Same title, two answers, on a cache hit only.
+    'certificationLocal',
     'ratings',
     'releaseAvailability',
     'cast',

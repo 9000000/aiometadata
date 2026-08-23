@@ -15,7 +15,7 @@ const { getImdbRating } = require('../lib/getImdbRating');
 const consola = require('consola');
 const { cacheWrapMetaSmart, cacheWrapGlobal } = require('../lib/getCache');
 const { getReleaseAvailability } = require('./releaseAvailability');
-const { malRatingToCertification } = require('./ageRating');
+const { malRatingToCertification, isUnratedCertification } = require('./ageRating');
 const wikiMappings = require('../lib/wiki-mapper.js');
 function CATALOG_TTL() { return parseInt(process.env.CATALOG_TTL || 1 * 24 * 60 * 60, 10); }
 const buildInfo = require('../lib/buildInfo');
@@ -1234,6 +1234,19 @@ function parseAnimeCreditsLink(characterData, userUUID, castCount) {
   return [...voiceActorLinks];
 }
 
+function newestCertification(releaseDates, matches) {
+  const candidates = releaseDates
+    .filter(matches)
+    .sort((a, b) => new Date(b.release_date) - new Date(a.release_date));
+  return candidates.length > 0 ? candidates[0].certification : null;
+}
+
+/**
+ * A restoration or reissue is not resubmitted to the ratings board, so it comes back
+ * unrated with a release date decades newer than the original. Taking the newest
+ * release outright would let that erase the rating the film actually carries, so a
+ * real rating is preferred at every step and an unrated one is only the last word.
+ */
 function getTmdbMovieCertificationForCountry(certificationsData, country = 'US') {
   if (!certificationsData) {
     return null;
@@ -1242,23 +1255,24 @@ function getTmdbMovieCertificationForCountry(certificationsData, country = 'US')
   const countryData = certificationsData.results?.find(r => r.iso_3166_1 === country);
   if (!countryData?.release_dates) return null;
 
-  const theatricalWithCert = countryData.release_dates
-    .filter(rd => rd.type === 3 && rd.certification && rd.certification.trim() !== '')
-    .sort((a, b) => new Date(b.release_date) - new Date(a.release_date));
+  const theatrical = newestCertification(
+    countryData.release_dates,
+    rd => rd.type === 3 && !isUnratedCertification(rd.certification)
+  );
+  if (theatrical) return theatrical;
 
-  if (theatricalWithCert.length > 0) {
-    return theatricalWithCert[0].certification;
-  }
+  const anyRelease = newestCertification(
+    countryData.release_dates,
+    rd => !isUnratedCertification(rd.certification)
+  );
+  if (anyRelease) return anyRelease;
 
-  const anyWithCert = countryData.release_dates
-    .filter(rd => rd.certification && rd.certification.trim() !== '')
-    .sort((a, b) => new Date(b.release_date) - new Date(a.release_date));
-
-  if (anyWithCert.length > 0) {
-    return anyWithCert[0].certification;
-  }
-
-  return null;
+  // Nothing here is rated. Answer with the unrated value rather than null, because a
+  // caller reading a second country falls back to the first only when this is null.
+  return newestCertification(
+    countryData.release_dates,
+    rd => typeof rd.certification === 'string' && rd.certification.trim() !== ''
+  );
 }
 
 function getTmdbTvCertificationForCountry(certificationsData, country = 'US') {

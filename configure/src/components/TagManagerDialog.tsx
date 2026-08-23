@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, Trash2, Pencil, X } from 'lucide-react';
+import { Check, Trash2, Pencil, X, ShieldCheck } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -25,6 +25,7 @@ import { useCatalogTags } from '@/hooks/useCatalogTags';
 import { TAG_COLORS, TAG_COLOR_KEYS } from '@/lib/tagColors';
 import { TagChip } from '@/components/TagChip';
 import { MAX_TAG_NAME_LENGTH, type TagColorKey } from '@/contexts/config';
+import { TagLimitPicker } from '@/components/TagLimitPicker';
 
 interface TagManagerDialogProps {
   open: boolean;
@@ -32,7 +33,8 @@ interface TagManagerDialogProps {
 }
 
 export function TagManagerDialog({ open, onOpenChange }: TagManagerDialogProps) {
-  const { tags, tagCounts, renameTag, recolorTag, deleteTag } = useCatalogTags();
+  const { tags, tagCounts, renameTag, recolorTag, setTagFilters, deleteTag } = useCatalogTags();
+  const [limitFor, setLimitFor] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [colorPickerFor, setColorPickerFor] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
@@ -81,7 +83,8 @@ export function TagManagerDialog({ open, onOpenChange }: TagManagerDialogProps) 
               )}
             </div>
             <DialogDescription>
-              Rename, recolor, or delete tags. Changes apply to every catalog.
+              Rename, recolor, or delete tags, and give one a content rating it installs with.
+              Changes apply to every catalog.
             </DialogDescription>
           </DialogHeader>
 
@@ -97,6 +100,8 @@ export function TagManagerDialog({ open, onOpenChange }: TagManagerDialogProps) 
               {tags.map((t) => {
                 const count = tagCounts[t.name] || 0;
                 const showColors = colorPickerFor === t.name || editing === t.name;
+                const hasLimit = !!t.ageRating && t.ageRating !== 'None';
+                const showLimit = limitFor === t.name;
 
                 return (
                   <div key={t.name} className="p-3">
@@ -128,15 +133,26 @@ export function TagManagerDialog({ open, onOpenChange }: TagManagerDialogProps) 
                           </div>
                         )}
 
-                        <button
-                          type="button"
-                          onClick={() => setColorPickerFor(showColors ? null : t.name)}
-                          className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-                          aria-expanded={showColors}
-                        >
-                          <span className={cn('h-3 w-3 rounded-full', TAG_COLORS[t.color].swatch)} />
-                          Color
-                        </button>
+                        <div className="flex flex-wrap items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => setColorPickerFor(showColors ? null : t.name)}
+                            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                            aria-expanded={showColors}
+                          >
+                            <span className={cn('h-3 w-3 rounded-full', TAG_COLORS[t.color].swatch)} />
+                            Color
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setLimitFor(showLimit ? null : t.name)}
+                            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                            aria-expanded={showLimit}
+                          >
+                            <ShieldCheck className="h-3 w-3" />
+                            {hasLimit ? `Rated ${t.ageRating} and lower` : 'Content rating'}
+                          </button>
+                        </div>
                       </div>
 
                       <div className="flex shrink-0 items-center gap-1">
@@ -192,6 +208,16 @@ export function TagManagerDialog({ open, onOpenChange }: TagManagerDialogProps) 
                             )}
                           />
                         ))}
+                      </div>
+                    )}
+
+                    {showLimit && (
+                      <div className="mt-3">
+                        <TagLimitPicker
+                          id={t.name}
+                          value={{ ageRating: t.ageRating, allowUnratedContent: t.allowUnratedContent }}
+                          onChange={(patch) => setTagFilters(t.name, patch)}
+                        />
                       </div>
                     )}
                   </div>

@@ -24,6 +24,18 @@ export function malRatingToCertification(rating: unknown): string | null {
   return MAL_RATING_TO_MPAA[prefix] || null;
 }
 
+/**
+ * TMDB spells "no rating information" as NR or UR and lists it at order 0 of a
+ * country's own scale, so these are the absence of a rating rather than one of its
+ * steps. 14 countries use NR and 2 use UR; the rest are spellings seen in the wild.
+ */
+const UNRATED_CERTIFICATIONS = new Set(['NR', 'UR', 'UNRATED', 'NOT RATED', 'N/A', 'NONE']);
+
+export function isUnratedCertification(certification: unknown): boolean {
+  const value = typeof certification === 'string' ? certification.trim() : '';
+  return value === '' || UNRATED_CERTIFICATIONS.has(value.toUpperCase());
+}
+
 export function hasAgeRatingCap(config: { ageRating?: unknown } | null | undefined): boolean {
   const cap = config?.ageRating;
   return typeof cap === 'string' && cap !== '' && cap.toLowerCase() !== 'none';
@@ -46,7 +58,7 @@ export function passesAgeRating(
   const isTvRating = type === 'series';
   const userRating = isTvRating ? (MOVIE_TO_TV_RATING[ageRating] || ageRating) : ageRating;
 
-  if (!certification || certification === '' || certification.toLowerCase() === 'nr') {
+  if (isUnratedCertification(certification)) {
     if (allowUnrated) return true;
     return !(userRating === 'PG-13'
       || (MOVIE_RATING_HIERARCHY.indexOf(userRating) !== -1 && MOVIE_RATING_HIERARCHY.indexOf(userRating) <= MOVIE_RATING_HIERARCHY.indexOf('PG-13'))
@@ -105,6 +117,41 @@ function capRank(rating: string | null | undefined): number {
   return index === -1 ? MOVIE_RATING_HIERARCHY.length : index;
 }
 
+/** Spellings an install URL may use for the unrated switch. */
+const UNRATED_CHOICES: Record<string, boolean> = {
+  HIDE: false, EXCLUDE: false, OFF: false, NO: false, FALSE: false, '0': false,
+  SHOW: true, INCLUDE: true, ON: true, YES: true, TRUE: true, '1': true,
+};
+
+/**
+ * Whether an install URL asks for titles with no rating to be hidden. Like the cap it
+ * may only tighten, so a config that already hides them cannot be talked into showing
+ * them by editing the URL. `null` means the saved setting stands.
+ */
+export function resolveUnratedOverride(
+  config: { ageRating?: unknown; allowUnratedContent?: unknown } | null | undefined,
+  raw: unknown
+): { allowUnrated: boolean | null; refused: string[] } {
+  const values = queryValues(raw);
+  if (values.length === 0) return { allowUnrated: null, refused: [] };
+
+  // A config that filters nothing is not restricting anything, so the switch it holds
+  // is leftover state rather than intent: the picker is hidden while the cap is None.
+  // Only treat it as a restriction the URL may not undo once a cap is actually set.
+  const stored = hasAgeRatingCap(config) ? allowsUnrated(config) : true;
+  let allowUnrated: boolean | null = null;
+  const refused: string[] = [];
+  for (const value of values) {
+    const choice = UNRATED_CHOICES[value.toUpperCase()];
+    if (choice === undefined || (choice && !stored)) {
+      refused.push(value);
+      continue;
+    }
+    if (!choice) allowUnrated = false;
+  }
+  return { allowUnrated, refused };
+}
+
 /** A single ?contentrating= value, or null when it names nothing recognisable. */
 export function parseRatingOverride(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
@@ -119,13 +166,17 @@ export function parseRatingOverride(raw: unknown): string | null {
  * Anything unrecognised or more permissive is refused rather than approximated, and
  * several values resolve to the strictest of them.
  */
+function queryValues(raw: unknown): string[] {
+  return (raw === undefined || raw === null ? [] : Array.isArray(raw) ? raw : [raw])
+    .filter((value: any) => typeof value === 'string' && value.trim())
+    .map((value: string) => value.trim());
+}
+
 export function resolveRatingOverride(
   config: { ageRating?: unknown } | null | undefined,
   raw: unknown
 ): { rating: string | null; requested: string[]; refused: string[] } {
-  const values = (raw === undefined || raw === null ? [] : Array.isArray(raw) ? raw : [raw])
-    .filter((value: any) => typeof value === 'string' && value.trim())
-    .map((value: string) => value.trim());
+  const values = queryValues(raw);
   if (values.length === 0) return { rating: null, requested: [], refused: [] };
 
   const stored = typeof config?.ageRating === 'string' ? config.ageRating : null;
@@ -142,4 +193,83 @@ export function resolveRatingOverride(
     if (rating === null || capRank(parsed) < capRank(rating)) rating = parsed;
   }
   return { rating, requested: values, refused };
+}
+
+export interface InstallFilterTag {
+  name: string;
+  ageRating?: unknown;
+  allowUnratedContent?: unknown;
+}
+
+/**
+ * A tag carries the limit it was created for, so installing a profile brings its own
+ * cap with it rather than leaving one to be aimed at catalogs by hand. Several tags
+ * resolve to the strictest of them, which the resolvers below already do.
+ */
+function tagFilters(
+  config: { tags?: unknown } | null | undefined,
+  tags: string[]
+): { ratings: string[]; hidesUnrated: boolean } {
+  const defined = new Map<string, InstallFilterTag>();
+  for (const tag of (Array.isArray(config?.tags) ? config!.tags as InstallFilterTag[] : [])) {
+    if (tag?.name) defined.set(String(tag.name).toLowerCase(), tag);
+  }
+
+  const ratings: string[] = [];
+  let hidesUnrated = false;
+  for (const name of tags) {
+    const tag = defined.get(name.toLowerCase());
+    if (!tag) continue;
+    if (typeof tag.ageRating === 'string' && tag.ageRating.trim() && tag.ageRating !== 'None') {
+      ratings.push(tag.ageRating.trim());
+    }
+    if (tag.allowUnratedContent === false) hidesUnrated = true;
+  }
+  return { ratings, hidesUnrated };
+}
+
+/**
+ * The rating every named profile agrees on, or null when they disagree. Used for the
+ * addon name, which must not claim a cap that only part of the install carries.
+ */
+export function uniformTagRating(
+  config: { tags?: unknown } | null | undefined,
+  tags: string[]
+): string | null {
+  if (tags.length === 0) return null;
+  const defined = new Map<string, InstallFilterTag>();
+  for (const tag of (Array.isArray(config?.tags) ? config!.tags as InstallFilterTag[] : [])) {
+    if (tag?.name) defined.set(String(tag.name).toLowerCase(), tag);
+  }
+  const seen = new Set<string>();
+  for (const name of tags) {
+    const raw = defined.get(name.toLowerCase())?.ageRating;
+    const rating = typeof raw === 'string' && raw.trim() ? raw.trim() : 'None';
+    seen.add(rating === 'None' ? 'None' : rating);
+  }
+  if (seen.size !== 1) return null;
+  const only = [...seen][0];
+  return only === 'None' ? null : only;
+}
+
+/**
+ * Everything an install URL says about filtering, from the tags it names and from the
+ * raw parameters, resolved together so the strictest wins and nothing may loosen what
+ * the saved config already enforces.
+ */
+export function resolveInstallFilters(
+  config: { ageRating?: unknown; allowUnratedContent?: unknown; tags?: unknown } | null | undefined,
+  input: { rating?: unknown; unrated?: unknown; tags?: string[] }
+): { ageRating: string | null; allowUnrated: boolean | null; refused: string[] } {
+  const fromTags = tagFilters(config, input.tags || []);
+  const rating = resolveRatingOverride(config, [...fromTags.ratings, ...queryValues(input.rating)]);
+  const unrated = resolveUnratedOverride(config, [
+    ...(fromTags.hidesUnrated ? ['hide'] : []),
+    ...queryValues(input.unrated),
+  ]);
+  return {
+    ageRating: rating.rating,
+    allowUnrated: unrated.allowUnrated,
+    refused: [...rating.refused, ...unrated.refused],
+  };
 }

@@ -15,7 +15,7 @@ const { cursorKey, resolveStartPage, writeCursor, fillFilteredPage } = require("
 const anilist = require("./lib/anilist");
 const { getSearch } = require("./lib/getSearch");
 const { getManifest, resolveManifestTags, DEFAULT_LANGUAGE } = require("./lib/getManifest");
-const { resolveRatingOverride } = require("./utils/ageRating");
+const { resolveInstallFilters, uniformTagRating, allowsUnrated } = require("./utils/ageRating");
 const { getMeta } = require("./lib/getMeta");
 const { cacheWrapMetaSmart, cacheWrapCatalog, cacheWrapSearch, cacheWrapJikanApi, cacheWrapStaticCatalog, cacheWrapGlobal, getCacheHealth, clearCacheHealth, logCacheHealth, stableStringify, deleteKeysByPattern, scanKeys } = require("./lib/getCache");
 const { hasPermission } = require("./lib/authSession");
@@ -429,22 +429,61 @@ const getCacheHeaders = function (opts) {
 };
 
 /**
- * A cap named by the install URL, so one UUID can serve both an unrestricted and a
- * family install. Copied rather than assigned onto the config, because concurrent
- * loads for the same user are coalesced and hand back the same object.
+ * The filtering an install URL asks for, from the profiles it names and from the raw
+ * parameters. One UUID can then serve both an unrestricted and a family install.
+ * Copied rather than assigned onto the config, because concurrent loads for the same
+ * user are coalesced and hand back the same object.
  */
-function applyRatingOverride(config, req, userUUID) {
-  const raw = req.query.contentrating ?? req.query.contentRating;
-  if (raw === undefined) return config;
+/**
+ * The profiles that decide this catalog's limit: the ones it is actually in, out of
+ * those the URL named. A row that belongs only to an unrestricted profile must not
+ * inherit the cap of another profile installed alongside it. Rows outside the user's
+ * catalog list, search among them, fall back to every named profile, so the strictest
+ * one wins rather than none of them.
+ */
+function scopeTagsToCatalog(config, tags, id, type) {
+  if (tags.length === 0) return tags;
+  const catalogs = config.catalogs || [];
+  const matches = (c) => c.id === id && (c.type === type || c.displayType === type);
+  const stripped = String(id).replace(/_(movie|series|anime|all)$/, '');
+  const catalog = catalogs.find(matches)
+    || (stripped === id ? null : catalogs.find(c => c.id === stripped && (c.type === type || c.displayType === type)));
 
-  const { rating, requested, refused } = resolveRatingOverride(config, raw);
+  const own = Array.isArray(catalog?.tags) ? catalog.tags.map(t => String(t).toLowerCase()) : [];
+  if (own.length === 0) return tags;
+  const scoped = tags.filter(t => own.includes(t.toLowerCase()));
+  return scoped.length > 0 ? scoped : tags;
+}
+
+function applyRatingOverrides(config, req, userUUID) {
+  const rawRating = req.query.contentrating ?? req.query.contentRating;
+  const rawUnrated = req.query.unrated;
+  const rawTag = req.query.tag;
+  if (rawRating === undefined && rawUnrated === undefined && rawTag === undefined) return config;
+
+  const { tags: urlTags } = resolveManifestTags(config, rawTag);
+  const tags = scopeTagsToCatalog(config, urlTags, req.params.id, req.params.type);
+  const { ageRating, allowUnrated, refused } = resolveInstallFilters(config, {
+    rating: rawRating,
+    unrated: rawUnrated,
+    tags,
+  });
   if (refused.length > 0) {
-    consola.warn(`[Rating] User ${userUUID} asked for ${refused.join(', ')}, which is not a rating below their configured ${config.ageRating || 'None'}`);
+    consola.warn(`[Rating] User ${userUUID} asked for ${refused.join(', ')}, which does not tighten their configured ${config.ageRating || 'None'}`);
   }
-  if (!rating) return config;
 
-  consola.debug(`[Rating] User ${userUUID} capped at ${rating} for this install (configured ${config.ageRating || 'None'}, asked ${requested.join(', ')})`);
-  return { ...config, ageRating: rating, _ratingOverride: rating };
+  const hidesUnrated = allowUnrated === false && allowsUnrated(config);
+  const showsUnrated = allowUnrated === true && !allowsUnrated(config);
+  if (!ageRating && !hidesUnrated && !showsUnrated) return config;
+
+  const next = { ...config };
+  if (ageRating) {
+    next.ageRating = ageRating;
+    next._ratingOverride = ageRating;
+  }
+  if (hidesUnrated || showsUnrated) next.allowUnratedContent = !hidesUnrated;
+  consola.debug(`[Rating] User ${userUUID} install capped at ${next.ageRating}${hidesUnrated ? ', unrated hidden' : ''} (configured ${config.ageRating || 'None'}${tags.length ? `, profiles ${tags.join(', ')}` : ''})`);
+  return next;
 }
 
 const respond = function (req, res, data, opts) {
@@ -4045,10 +4084,16 @@ addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
         req.manifestTags = tags;
         // The cap itself applies to catalog and search requests, not to the manifest.
         // It is resolved here anyway so an install URL can be checked before it is used.
-        const rawRating = req.query.contentrating ?? req.query.contentRating;
-        const { rating: ratingOverride, refused: refusedRatings } = resolveRatingOverride(config, rawRating);
-        if (refusedRatings.length > 0) {
-            consola.warn(`[Manifest] User ${userUUID} asked for ${refusedRatings.join(', ')}, which is not a rating below their configured ${config.ageRating || 'None'}`);
+        const installFilters = resolveInstallFilters(config, {
+            rating: req.query.contentrating ?? req.query.contentRating,
+            unrated: req.query.unrated,
+            tags,
+        });
+        const ratingOverride = installFilters.ageRating;
+        const hidesUnrated = installFilters.allowUnrated === false && allowsUnrated(config);
+        const refusedFilters = installFilters.refused;
+        if (refusedFilters.length > 0) {
+            consola.warn(`[Manifest] User ${userUUID} asked for ${refusedFilters.join(', ')}, which does not tighten their configured ${config.ageRating || 'None'}`);
         }
         consola.debug(`[Manifest] Building fresh manifest for user: ${userUUID}${tags.length ? ` (tags: ${tags.join(', ')})` : ''}`);
         if (unknownTags.length > 0) {
@@ -4087,11 +4132,17 @@ addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
             ...(tags.length > 0 ? { tags } : {}),
             ...(unknownTags.length > 0 ? { unknownTags } : {}),
             ...(ratingOverride ? { contentRating: ratingOverride } : {}),
-            ...(refusedRatings.length > 0 ? { refusedContentRating: refusedRatings } : {})
+            ...(hidesUnrated ? { unrated: 'hidden' } : {}),
+            ...(refusedFilters.length > 0 ? { refusedContentRating: refusedFilters } : {})
         };
         
-        if (ratingOverride) {
-            manifest.name = `${manifest.name} · ${ratingOverride}`;
+        // Only when every named profile agrees, so a mixed install is not labelled with
+        // a cap that half its rows do not carry.
+        const labelRating = req.query.contentrating || req.query.contentRating
+            ? ratingOverride
+            : uniformTagRating(config, tags);
+        if (labelRating) {
+            manifest.name = `${manifest.name} · ${labelRating}`;
         }
 
         // Add a timestamp to force cache invalidation
@@ -4122,7 +4173,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
   if (!storedConfig) {
     return res.status(404).send({ error: "User configuration not found" });
   }
-  const config = applyRatingOverride(storedConfig, req, userUUID);
+  const config = applyRatingOverrides(storedConfig, req, userUUID);
   config.userUUID = userUUID;
 
   // Handle calendar-videos catalog

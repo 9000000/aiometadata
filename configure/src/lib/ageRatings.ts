@@ -14,10 +14,3 @@ export const AGE_RATING_OPTIONS = [
   { value: 'None', label: AGE_RATING_LABELS['None'] },
   ...AGE_RATING_ORDER.map(value => ({ value, label: AGE_RATING_LABELS[value] })),
 ];
-
-/** Ratings an install URL can ask for, given what the saved config already caps at. */
-export function stricterRatings(stored: string | undefined | null): string[] {
-  const cap = !stored || stored === 'None' ? AGE_RATING_ORDER.length : AGE_RATING_ORDER.indexOf(stored as any);
-  const limit = cap === -1 ? AGE_RATING_ORDER.length : cap;
-  return AGE_RATING_ORDER.slice(0, limit);
-}

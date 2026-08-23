@@ -16,6 +16,7 @@ import { useCatalogTags } from '@/hooks/useCatalogTags';
 import { TAG_COLORS, TAG_COLOR_KEYS, nextTagColor } from '@/lib/tagColors';
 import { TagChip } from '@/components/TagChip';
 import { MAX_TAG_NAME_LENGTH, type TagColorKey } from '@/contexts/config';
+import { TagLimitPicker, type TagLimit } from '@/components/TagLimitPicker';
 
 interface TagEditorDialogProps {
   open: boolean;
@@ -30,6 +31,7 @@ export function TagEditorDialog({ open, onOpenChange, targetKeys, title }: TagEd
 
   const [newName, setNewName] = useState('');
   const [newColor, setNewColor] = useState<TagColorKey | null>(null);
+  const [newLimit, setNewLimit] = useState<TagLimit>({});
 
   const targetCount = targetKeys.size;
 
@@ -59,9 +61,10 @@ export function TagEditorDialog({ open, onOpenChange, targetKeys, title }: TagEd
   const handleCreate = () => {
     const clean = newName.trim();
     if (!clean || clean.length > MAX_TAG_NAME_LENGTH) return;
-    addTagToCatalogs(targetKeys, clean, resolvedNewColor);
+    addTagToCatalogs(targetKeys, clean, resolvedNewColor, newLimit);
     setNewName('');
     setNewColor(null);
+    setNewLimit({});
   };
 
   return (
@@ -158,7 +161,7 @@ export function TagEditorDialog({ open, onOpenChange, targetKeys, title }: TagEd
           </div>
           {duplicateTag ? (
             <p className="text-xs text-amber-500">
-              A tag named "{duplicateTag.name}" already exists — adding will apply it to the selection.
+              A tag named "{duplicateTag.name}" already exists. Adding will apply it to the selection.
             </p>
           ) : (
             <p className="text-xs text-muted-foreground">
@@ -185,6 +188,19 @@ export function TagEditorDialog({ open, onOpenChange, targetKeys, title }: TagEd
                 />
               ))}
             </div>
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-xs font-medium text-muted-foreground">Content rating</p>
+            {duplicateTag ? (
+              <p className="text-xs text-muted-foreground">
+                {duplicateTag.ageRating && duplicateTag.ageRating !== 'None'
+                  ? `"${duplicateTag.name}" already installs rated ${duplicateTag.ageRating} and lower. Change it from Manage tags.`
+                  : `"${duplicateTag.name}" installs with no content rating. Give it one from Manage tags.`}
+              </p>
+            ) : (
+              <TagLimitPicker id="new" value={newLimit} onChange={(patch) => setNewLimit(prev => ({ ...prev, ...patch }))} />
+            )}
           </div>
 
           {newName.trim() && (

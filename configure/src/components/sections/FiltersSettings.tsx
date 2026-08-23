@@ -9,6 +9,7 @@ import { AGE_RATING_OPTIONS as ageRatingOptions } from '@/lib/ageRatings';
 
 export function FiltersSettings() {
   const { config, setConfig } = useConfig();
+  const hasAgeRatingCap = !!config.ageRating && config.ageRating !== 'None';
 
   const handleAgeRatingChange = (value: string) => {
     setConfig(prev => ({ ...prev, ageRating: value }));
@@ -77,7 +78,9 @@ export function FiltersSettings() {
                   {ageRatingOptions.map(opt => <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>)}
                 </SelectContent>
               </Select>
-              {config.ageRating && config.ageRating !== 'None' && (
+              {/* Also shown when it is off with no limit set: an install URL can carry a
+                  limit of its own, and that reads this, so it must not be unreachable. */}
+              {(hasAgeRatingCap || config.allowUnratedContent === false) && (
                 <div className="space-y-2">
                   <div className="flex items-center space-x-2">
                     <Switch
@@ -92,6 +95,11 @@ export function FiltersSettings() {
                     Most catalog rows carry no rating at all, so turning this off leaves them nearly empty.
                     Turn it off only if you would rather hide anything whose rating cannot be confirmed.
                   </p>
+                  {!hasAgeRatingCap && (
+                    <p className="text-xs text-muted-foreground">
+                      With no limit set above, this only applies to an install URL that carries one.
+                    </p>
+                  )}
                 </div>
               )}
             </div>

@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.15.0](https://github.com/cedya77/aiometadata/compare/v2.14.1...v2.15.0) (2026-08-24)
+
+
+### Features
+
+* **catalogs:** cap the content rating from the install url ([10b625c](https://github.com/cedya77/aiometadata/commit/10b625cd2149eba71e2a7e1910d8e33562d5a096)), closes [#676](https://github.com/cedya77/aiometadata/issues/676)
+* **collections:** featured collections in the builder ([121abae](https://github.com/cedya77/aiometadata/commit/121abae8b61014371484f41731ea06381c0c3752))
+* **manifest:** install several tag profiles as one addon ([178438c](https://github.com/cedya77/aiometadata/commit/178438cb49b045189a9a49a7f149742275a9cb89)), closes [#677](https://github.com/cedya77/aiometadata/issues/677)
+* **search:** show when a show started and ended ([1338a92](https://github.com/cedya77/aiometadata/commit/1338a9250f97ef4b06b28b13539966d9ef82455a))
+* **simkl:** add PIN authentication ([3bc40bf](https://github.com/cedya77/aiometadata/commit/3bc40bf5a94d8a8a8c85054a7783e617b82ea67c))
+* **simkl:** add PIN authentication ([118f374](https://github.com/cedya77/aiometadata/commit/118f374f63d287cf2c606be650cdef335c729b20))
+
+
+### Bug Fixes
+
+* **anime:** stop calling multi-episode ONAs movies ([ad31847](https://github.com/cedya77/aiometadata/commit/ad31847d166989cca537ff4893690478f7ebd83e))
+* **cache:** bump the cache epoch so the id fixes take effect ([b0da330](https://github.com/cedya77/aiometadata/commit/b0da3304ee58ff3ff5c4a534ebe5e38cb9736135))
+* **cache:** read the warming interval outside the scheduler ([1eed37f](https://github.com/cedya77/aiometadata/commit/1eed37f6205ec98881a7167c8ed9b4946575614d))
+* **catalogs:** keep the local content rating on a cached row ([c862577](https://github.com/cedya77/aiometadata/commit/c86257783ab5b035e4ba107a852e7f269b4d5f16))
+* **catalogs:** re-read the catalog ceiling instead of trusting boot ([bf834f5](https://github.com/cedya77/aiometadata/commit/bf834f55fec87ff7f4bf8b9c412d08c15575ec7a))
+* **collections:** make the builder usable on a phone ([6161ee0](https://github.com/cedya77/aiometadata/commit/6161ee05cc649e31735a979a8fc06c4cc52952c4))
+* **collections:** stop the preview clipping its own labels ([2e4e2b6](https://github.com/cedya77/aiometadata/commit/2e4e2b6f2209ad552cba7251bcf32fdd9d4918d0))
+* **dashboard:** stop the cache clear from signing the operator out ([73dad82](https://github.com/cedya77/aiometadata/commit/73dad82c66116cc813f20ef3e99187df46a88477))
+* **filters:** hide unrated titles at every content rating ([3f70c40](https://github.com/cedya77/aiometadata/commit/3f70c40bf0e1d37d7fddf97ef2f40dc7b629bd6c))
+* **ids:** stop a series mapping answering a movie lookup ([225b4df](https://github.com/cedya77/aiometadata/commit/225b4df0bea4456ed6e43cc61e3f71719bf76cf2))
+* **integrations:** stop disconnect logging you out ([c534137](https://github.com/cedya77/aiometadata/commit/c534137583d4de8dad06c95bfabf9c766426632d)), closes [#684](https://github.com/cedya77/aiometadata/issues/684)
+* **search:** apply the content rating to every search engine ([c0c5d42](https://github.com/cedya77/aiometadata/commit/c0c5d421573b2f8e2523d43cc1c6eba1a319d6d4))
+* **simkl:** close the gaps in the PIN flow ([0a95c31](https://github.com/cedya77/aiometadata/commit/0a95c3161ca90459e49a46f4098c5f53be5d2da3))
+
 ## [2.14.1](https://github.com/cedya77/aiometadata/compare/v2.14.0...v2.14.1) (2026-08-22)
 
 

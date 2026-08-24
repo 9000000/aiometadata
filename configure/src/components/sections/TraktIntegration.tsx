@@ -256,9 +256,10 @@ export function TraktIntegration({ isOpen, onClose }: TraktIntegrationProps) {
       setTempTokenId("");
       setIsConnected(false);
       setUsername(null);
+      // Reloading dropped the session, which is held in memory only, so the
+      // saved config comes back from the server and is adopted in place.
+      if (data.config) setConfig(data.config);
       toast.success("Trakt account disconnected");
-      
-      window.location.reload();
     } catch (error) {
       console.error("Disconnect error:", error);
       toast.error(error.message || "Failed to disconnect Trakt");

@@ -64,7 +64,10 @@ function reinstallNoticeSuppressed(uuid?: string | null): boolean {
 
 /** The blurb is instance-specific and stripped before saving, so it must not count as a change. */
 function fingerprintConfig(config: AppConfig): string {
-  const { apiKeys, ...rest } = config as any;
+  // Manager accounts are written by their own endpoints, which persist as they go and
+  // stamp a sync time on the way. Save does not own them, so counting them here would
+  // report unsaved work every time a sync succeeded.
+  const { apiKeys, managers: _managers, managerAccounts: _managerAccounts, ...rest } = config as any;
   const trimmedApiKeys = Object.fromEntries(
     Object.entries(apiKeys ?? {}).map(([k, v]) => [k, typeof v === 'string' ? v.trim() : v])
   );
@@ -306,7 +309,7 @@ export function SaveProvider({ children }: { children: ReactNode }) {
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
               {defaultInstallUrl ? (
-                <ManagerSync manifestUrl={defaultInstallUrl} onSynced={() => closeReinstallModal(false)} />
+                <ManagerSync baseInstallUrl={defaultInstallUrl} onSynced={() => closeReinstallModal(false)} />
               ) : null}
               <Button variant="outline" onClick={() => closeReinstallModal(false)}>Later</Button>
               <Button onClick={() => closeReinstallModal(true)}>Install</Button>

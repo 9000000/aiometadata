@@ -21,6 +21,7 @@ const { cacheWrapMetaSmart, cacheWrapCatalog, cacheWrapSearch, cacheWrapJikanApi
 const { hasPermission } = require("./lib/authSession");
 const { isOidcConfigured } = require("./lib/oidc");
 const { resolveConfigAccess } = require("./lib/configAccess");
+const managerAccounts = require("./lib/managerAccounts");
 const redis = require("./lib/redisClient");
 const { warmEssentialContent, warmPopularContent, scheduleEssentialWarming } = require("./lib/cacheWarmer");
 const requestTracker = require("./lib/requestTracker");
@@ -222,6 +223,11 @@ const REDIS_LIMITER_TIMEOUT_MS = 500;
 function DEVICE_AUTH_POLL_RATE_LIMIT_PER_MIN() {
   const parsed = parseInt(getSetting('DEVICE_AUTH_POLL_RATE_LIMIT_PER_MIN'), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 240;
+}
+
+function getManagerSyncHostDelayMs() {
+  const parsed = parseInt(getSetting('MANAGER_SYNC_HOST_DELAY_MS'), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 400;
 }
 
 // Own bucket: a pending code polls every few seconds and would eat the much
@@ -3690,7 +3696,109 @@ addon.get("/api/publicmetadb/picks", async (req, res) => {
   }
 });
 
-// POST /api/managers/credentials - Persist manager sync credentials into the user's stored config
+// --- Addon manager accounts (AIOManager and friends) ---------------------------
+
+// Relays one Hydra reinstall. Shared by the single-account route and the batch below
+// so both apply the same manifest-origin guard and read upstream errors the same way.
+async function hydraReinstall(instanceUrl: string, apiKey: string, addonUrl: string) {
+  const { httpPost } = require('./utils/httpClient');
+  const target = `${managerAccounts.normalizeInstanceUrl(instanceUrl)}/hydra/reinstall`;
+  try {
+    const response = await httpPost(target, { addonUrl }, {
+      headers: { 'X-API-Key': apiKey },
+      timeout: 15000
+    });
+    if (typeof response.data === 'string') {
+      consola.warn(`[AIOManager Proxy] Non-JSON response from ${target} (status ${response.status}); this instance does not expose the Hydra API, reinstall was not processed`);
+      return { ok: false, status: 502, error: "Your AIOManager instance does not support the Hydra API yet (it requires a newer AIOManager release), so the sync was not processed" };
+    }
+    return { ok: true, status: 200, data: response.data ?? { success: true } };
+  } catch (error: any) {
+    const upstreamStatus = error.response?.status;
+    let upstreamData = error.response?.data;
+    if (typeof upstreamData === 'string') {
+      try { upstreamData = JSON.parse(upstreamData); } catch { upstreamData = null; }
+    }
+    consola.error(`[AIOManager Proxy] Hydra reinstall failed: ${error.message}`);
+    return {
+      ok: false,
+      status: upstreamStatus >= 400 && upstreamStatus < 600 ? upstreamStatus : 502,
+      error: upstreamData?.error || upstreamData?.message || error.message || "Hydra reinstall failed"
+    };
+  }
+}
+
+/** A manifest may only be pushed to a manager if this instance is the one serving it. */
+function servedByThisInstance(addonUrl: string): boolean {
+  const hostName = (process.env.HOST_NAME || '').replace(/\/+$/, '');
+  if (!hostName) return true;
+  try {
+    const expected = new URL(hostName.includes('://') ? hostName : `https://${hostName}`).host.toLowerCase();
+    return new URL(String(addonUrl)).host.toLowerCase() === expected;
+  } catch {
+    return false;
+  }
+}
+
+// POST /api/managers/accounts - Add or edit one manager account. The API key is stored
+// out of line and only its id is written to the config.
+addon.post("/api/managers/accounts", async (req, res) => {
+  try {
+    const { userUUID, password, accountId, managerId, label, instanceUrl, apiKey, profileTags, autoSync } = req.body || {};
+    if (!userUUID || !managerId || !instanceUrl) {
+      return res.status(400).json({ error: "userUUID, managerId and instanceUrl are required" });
+    }
+    const normalized = managerAccounts.normalizeInstanceUrl(instanceUrl);
+    if (!managerAccounts.isHttpUrl(normalized)) {
+      return res.status(400).json({ error: "instanceUrl must be a http(s) URL" });
+    }
+    const access = await resolveConfigAccess(req, userUUID, password);
+    if (!access || !access.passwordHash) {
+      return res.status(401).json({ error: "Invalid UUID or password" });
+    }
+    const config = access.config;
+    await managerAccounts.migrateLegacyManagers(config, userUUID);
+    if (!accountId && !apiKey) {
+      return res.status(400).json({ error: "apiKey is required for a new account" });
+    }
+    const account = await managerAccounts.upsertAccount(config, userUUID, {
+      accountId, managerId, label, instanceUrl: normalized, apiKey, profileTags, autoSync
+    });
+    await database.saveUserConfig(userUUID, access.passwordHash, config);
+    res.json({ success: true, account, managerAccounts: config.managerAccounts });
+  } catch (error) {
+    consola.error(`[Managers] Failed to save account: ${error.message}`);
+    res.status(500).json({ error: "Failed to save the manager account" });
+  }
+});
+
+// DELETE /api/managers/accounts - Remove one account and the key it points at
+addon.delete("/api/managers/accounts", async (req, res) => {
+  try {
+    const { userUUID, password, accountId } = req.body || {};
+    if (!userUUID || !accountId) {
+      return res.status(400).json({ error: "userUUID and accountId are required" });
+    }
+    const access = await resolveConfigAccess(req, userUUID, password);
+    if (!access || !access.passwordHash) {
+      return res.status(401).json({ error: "Invalid UUID or password" });
+    }
+    const config = access.config;
+    await managerAccounts.migrateLegacyManagers(config, userUUID);
+    const removed = await managerAccounts.removeAccount(config, accountId);
+    if (!removed) {
+      return res.status(404).json({ error: "No such account" });
+    }
+    await database.saveUserConfig(userUUID, access.passwordHash, config);
+    res.json({ success: true, managerAccounts: config.managerAccounts });
+  } catch (error) {
+    consola.error(`[Managers] Failed to remove account: ${error.message}`);
+    res.status(500).json({ error: "Failed to remove the manager account" });
+  }
+});
+
+// POST /api/managers/credentials - Legacy single-account save, kept so a cached page
+// still works. Writes through to the account list rather than the old inline shape.
 addon.post("/api/managers/credentials", async (req, res) => {
   try {
     const { userUUID, password, managerId, instanceUrl, apiKey } = req.body || {};
@@ -3701,16 +3809,82 @@ addon.post("/api/managers/credentials", async (req, res) => {
     if (!access || !access.passwordHash) {
       return res.status(401).json({ error: "Invalid UUID or password" });
     }
-    const existingConfig = access.config;
-    existingConfig.managers = {
-      ...(existingConfig.managers || {}),
-      [managerId]: { instanceUrl, apiKey }
-    };
-    await database.saveUserConfig(userUUID, access.passwordHash, existingConfig);
-    res.json({ success: true });
+    const config = access.config;
+    await managerAccounts.migrateLegacyManagers(config, userUUID);
+    const normalized = managerAccounts.normalizeInstanceUrl(instanceUrl);
+    const existing = managerAccounts.accountsOf(config)
+      .find(account => account.managerId === managerId && account.instanceUrl === normalized);
+    await managerAccounts.upsertAccount(config, userUUID, {
+      accountId: existing?.id,
+      managerId,
+      instanceUrl: normalized,
+      apiKey,
+      label: existing?.label || managerAccounts.hostLabel(normalized),
+    });
+    await database.saveUserConfig(userUUID, access.passwordHash, config);
+    res.json({ success: true, managerAccounts: config.managerAccounts });
   } catch (error) {
     consola.error(`[Managers] Failed to save credentials: ${error.message}`);
     res.status(500).json({ error: "Failed to save manager credentials" });
+  }
+});
+
+// POST /api/managers/sync - Push one manifest to several accounts at once. Sequential
+// per host, because Hydra rate limits reinstall at 10/min and several accounts can live
+// on the same instance. One failure is reported against its account, not the batch.
+addon.post("/api/managers/sync", async (req, res) => {
+  try {
+    const { userUUID, password, targets } = req.body || {};
+    if (!userUUID || !Array.isArray(targets) || targets.length === 0) {
+      return res.status(400).json({ error: "userUUID and a non-empty targets array are required" });
+    }
+    const access = await resolveConfigAccess(req, userUUID, password);
+    if (!access || !access.passwordHash) {
+      return res.status(401).json({ error: "Invalid UUID or password" });
+    }
+    const config = access.config;
+    await managerAccounts.migrateLegacyManagers(config, userUUID);
+
+    const byHost = new Map<string, Array<{ accountId: string; addonUrl: string }>>();
+    for (const target of targets) {
+      const account = managerAccounts.findAccount(config, target?.accountId);
+      const host = account ? managerAccounts.normalizeInstanceUrl(account.instanceUrl).toLowerCase() : String(target?.accountId);
+      if (!byHost.has(host)) byHost.set(host, []);
+      byHost.get(host).push(target);
+    }
+
+    const delayMs = getManagerSyncHostDelayMs();
+    const results = [];
+    await Promise.all([...byHost.values()].map(async (group) => {
+      for (let i = 0; i < group.length; i++) {
+        const { accountId, addonUrl } = group[i] || {};
+        const account = managerAccounts.findAccount(config, accountId);
+        if (!account) {
+          results.push({ accountId, ok: false, error: "No such account" });
+          continue;
+        }
+        if (!addonUrl || !servedByThisInstance(addonUrl)) {
+          results.push({ accountId, label: account.label, ok: false, error: "addonUrl must be a manifest URL from this addon" });
+          continue;
+        }
+        const apiKey = await managerAccounts.resolveAccountKey(account);
+        if (!apiKey) {
+          results.push({ accountId, label: account.label, ok: false, error: "Stored API key is missing, re-enter it" });
+          continue;
+        }
+        if (i > 0 && delayMs > 0) await sleep(delayMs);
+        const outcome = await hydraReinstall(account.instanceUrl, apiKey, addonUrl);
+        if (outcome.ok) account.lastSyncedAt = new Date().toISOString();
+        results.push({ accountId, label: account.label, ok: outcome.ok, ...(outcome.ok ? {} : { error: outcome.error, status: outcome.status }) });
+      }
+    }));
+
+    await database.saveUserConfig(userUUID, access.passwordHash, config);
+    const synced = results.filter(r => r.ok).length;
+    res.json({ success: synced > 0, synced, failed: results.length - synced, results, managerAccounts: config.managerAccounts });
+  } catch (error) {
+    consola.error(`[Managers] Batch sync failed: ${error.message}`);
+    res.status(500).json({ error: "Failed to sync to the manager accounts" });
   }
 });
 
@@ -3744,55 +3918,57 @@ addon.get("/api/aiomanager/status", async (req, res) => {
   }
 });
 
-// POST /api/aiomanager/reinstall - Proxy "Sync to AIOManager" to the user's instance (Hydra API)
+// POST /api/aiomanager/reinstall - Proxy one Hydra reinstall. Takes either a saved
+// accountId, whose key is resolved here so the page never holds it, or a key typed in
+// for a one-off sync that is not being remembered.
 addon.post("/api/aiomanager/reinstall", async (req, res) => {
   try {
-    const { instanceUrl, apiKey, addonUrl } = req.body || {};
-    if (!instanceUrl || !apiKey || !addonUrl) {
-      return res.status(400).json({ error: "instanceUrl, apiKey and addonUrl are required" });
+    const { instanceUrl, apiKey, addonUrl, userUUID, password, accountId } = req.body || {};
+    if (!addonUrl) {
+      return res.status(400).json({ error: "addonUrl is required" });
     }
-    let parsedInstance;
-    try {
-      parsedInstance = new URL(instanceUrl);
-    } catch {
-      return res.status(400).json({ error: "instanceUrl must be a valid URL" });
+    if (!servedByThisInstance(addonUrl)) {
+      return res.status(400).json({ error: "addonUrl must be a manifest URL from this addon" });
     }
-    if (parsedInstance.protocol !== 'http:' && parsedInstance.protocol !== 'https:') {
+
+    let targetUrl = managerAccounts.normalizeInstanceUrl(instanceUrl || '');
+    let targetKey = apiKey;
+
+    if (accountId) {
+      if (!userUUID) {
+        return res.status(400).json({ error: "userUUID is required to sync a saved account" });
+      }
+      const access = await resolveConfigAccess(req, userUUID, password);
+      if (!access || !access.passwordHash) {
+        return res.status(401).json({ error: "Invalid UUID or password" });
+      }
+      await managerAccounts.migrateLegacyManagers(access.config, userUUID);
+      const account = managerAccounts.findAccount(access.config, accountId);
+      if (!account) {
+        return res.status(404).json({ error: "No such account" });
+      }
+      targetKey = await managerAccounts.resolveAccountKey(account);
+      if (!targetKey) {
+        return res.status(400).json({ error: "Stored API key is missing, re-enter it" });
+      }
+      targetUrl = managerAccounts.normalizeInstanceUrl(account.instanceUrl);
+    }
+
+    if (!targetUrl || !targetKey) {
+      return res.status(400).json({ error: "instanceUrl and apiKey are required" });
+    }
+    if (!managerAccounts.isHttpUrl(targetUrl)) {
       return res.status(400).json({ error: "instanceUrl must be a http(s) URL" });
     }
-    // Only relay reinstalls for manifests served by this instance
-    const hostName = (process.env.HOST_NAME || '').replace(/\/+$/, '');
-    if (hostName) {
-      let expectedHost = null;
-      let addonHost = null;
-      try {
-        expectedHost = new URL(hostName.includes('://') ? hostName : `https://${hostName}`).host.toLowerCase();
-        addonHost = new URL(String(addonUrl)).host.toLowerCase();
-      } catch {}
-      if (!expectedHost || !addonHost || addonHost !== expectedHost) {
-        return res.status(400).json({ error: "addonUrl must be a manifest URL from this addon" });
-      }
+
+    const outcome = await hydraReinstall(targetUrl, targetKey, addonUrl);
+    if (!outcome.ok) {
+      return res.status(outcome.status).json({ error: outcome.error });
     }
-    const { httpPost } = require('./utils/httpClient');
-    const target = `${instanceUrl.replace(/\/+$/, '')}/hydra/reinstall`;
-    const response = await httpPost(target, { addonUrl }, {
-      headers: { 'X-API-Key': apiKey },
-      timeout: 15000
-    });
-    if (typeof response.data === 'string') {
-      consola.warn(`[AIOManager Proxy] Non-JSON response from ${target} (status ${response.status}); this AIOManager instance does not expose the Hydra API, reinstall was not processed`);
-      return res.status(502).json({ error: "Your AIOManager instance does not support the Hydra API yet (it requires a newer AIOManager release), so the sync was not processed" });
-    }
-    res.json(response.data ?? { success: true });
+    res.json(outcome.data);
   } catch (error) {
-    const upstreamStatus = error.response?.status;
-    let upstreamData = error.response?.data;
-    if (typeof upstreamData === 'string') {
-      try { upstreamData = JSON.parse(upstreamData); } catch { upstreamData = null; }
-    }
     consola.error(`[AIOManager Proxy] Hydra reinstall failed: ${error.message}`);
-    const status = upstreamStatus >= 400 && upstreamStatus < 600 ? upstreamStatus : 502;
-    res.status(status).json({ error: upstreamData?.error || error.message || "Hydra reinstall failed" });
+    res.status(502).json({ error: error.message || "Hydra reinstall failed" });
   }
 });
 

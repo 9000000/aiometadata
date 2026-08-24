@@ -11,6 +11,7 @@ import { Download, Upload, FileText, Shield, AlertCircle, Loader2, Trash2, Lock,
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { exportConfigFile } from "@/lib/exportConfigFile";
+import { mergeImportedAccounts } from "@/lib/managerAccounts";
 import { CollapsibleSettingCard } from "@/components/settings/CollapsibleSettingCard";
 import { SettingRow } from "@/components/settings/SettingRow";
 
@@ -80,6 +81,10 @@ export function ConfigImportExport() {
 
     const mergedConfig = {
       ...importData.config,
+      // Credentials, not content: an import adds destinations it knows about and
+      // never removes the ones already holding a working key.
+      managers: config.managers,
+      managerAccounts: mergeImportedAccounts(config.managerAccounts, importData.config.managerAccounts),
       apiKeys: (() => {
         if (importData.metadata?.apiKeysExcluded) {
           return config.apiKeys;

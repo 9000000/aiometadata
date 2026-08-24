@@ -7,16 +7,21 @@ const logger = consola.withTag('FranchiseCollections');
 // In-Memory cache for franchise lists
 const franchiseCache: Record<string, any[]> = {};
 
-const RAW_GITHUB_BASE = 'https://raw.githubusercontent.com/9000000/aiometadata/tet/addon/static/franchises';
+const RAW_GITHUB_BASE = process.env.FRANCHISE_REMOTE_BASE_URL || 'https://raw.githubusercontent.com/9000000/aiometadata/main/addon/static/franchises';
 
 function normalizeFranchiseItems(parsedData: any[]): any[] {
   return parsedData.map((item: any) => {
     let targetId = item.imdbId || item.id;
     
+    // Clean up prefix if exists
+    if (typeof targetId === 'string' && /^(dc|marvel|sw)_tt\d+$/.test(targetId)) {
+      targetId = targetId.replace(/^(dc|marvel|sw)_/, '');
+    }
+
     // Prefix raw numbers with tmdb:
     if (typeof targetId === 'number') {
       targetId = `tmdb:${targetId}`;
-    } else if (item.tmdbId && !targetId.startsWith('tt')) {
+    } else if (item.tmdbId && (!targetId || !targetId.startsWith('tt'))) {
       targetId = `tmdb:${item.tmdbId}`;
     }
 
@@ -25,9 +30,16 @@ function normalizeFranchiseItems(parsedData: any[]): any[] {
       poster = poster.replace(/\/t\/p\/(?:w500|w600_and_h900_bestv2|original)\//, '/t/p/w342/');
     }
 
+    let itemType = item.type;
+    if (itemType === 'tv' || itemType === 'series') {
+      itemType = 'series';
+    } else {
+      itemType = 'movie';
+    }
+
     return {
       id: targetId,
-      type: item.type === 'tv' ? 'series' : (item.type || 'movie'),
+      type: itemType,
       name: item.title || item.name,
       poster: poster,
       description: item.overview || undefined,

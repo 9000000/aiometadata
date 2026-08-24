@@ -340,6 +340,10 @@ async function startServer(): Promise<void> {
     indexModule.startMovieLensSyncSchedule();
   }
 
+  // Start franchise auto-sync background task
+  const { initFranchiseAutoSync } = require('./lib/franchiseUtils.js');
+  initFranchiseAutoSync();
+
   const { warnings } = endQuietWindow();
   const snapshot = readiness.snapshot();
   const states = Object.values(snapshot.components);

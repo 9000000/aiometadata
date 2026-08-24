@@ -1,0 +1,50 @@
+name: Sync Franchise Collections
+
+on:
+  schedule:
+    # Tự động chạy vào lúc 04:00 UTC Chủ Nhật hàng tuần
+    - cron: '0 4 * * 0'
+  workflow_dispatch: # Cho phép bấm nút chạy thủ công bất kỳ lúc nào trên GitHub
+
+permissions:
+  contents: write
+
+jobs:
+  sync-franchises:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Franchise Sync Script
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/sync-franchises.js
+
+      - name: Build backend and frontend
+        run: |
+          npm run build:backend
+          npm run build
+
+      - name: Commit and push if changes detected
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add addon/static/franchises/*.json addon/static/catalog-types.json addon/static/translations.json configure/src/data/franchiseCatalogs.json
+          if git diff --staged --quiet; then
+            echo "No changes in franchise data."
+          else
+            git commit -m "chore(franchise): auto-sync franchise collections data [skip ci]"
+            git push
+          fi

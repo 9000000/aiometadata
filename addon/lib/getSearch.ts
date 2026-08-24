@@ -1,3 +1,4 @@
+const { tvdbLanguageChain, pickTranslation, pickArtwork }: any = require('../utils/tvdbLanguage');
 require("dotenv").config();
 const { getGenreList }: any = require("./getGenreList");
 const Utils: any = require("../utils/parseProps");
@@ -96,8 +97,7 @@ const findArtwork = (artworks: any[], type: number, lang: string | null, config:
     return artworks?.find((a: any) => a.type === type && a.language === 'eng')?.image
       || artworks?.find((a: any) => a.type === type)?.image;
   }
-  return artworks?.find((a: any) => a.type === type && a.language === lang)?.image
-    || artworks?.find((a: any) => a.type === type && a.language === 'eng')?.image
+  return pickArtwork(artworks, type, tvdbLanguageChain(lang), 'image')
     || artworks?.find((a: any) => a.type === type)?.image;
 };
 
@@ -107,13 +107,9 @@ async function parseTvdbSearchResult(type: string, extendedRecord: any, language
   const langCode3 = await to3LetterCode(language, config);
   const overviewTranslations = extendedRecord.translations?.overviewTranslations || [];
   const nameTranslations = extendedRecord.translations?.nameTranslations || [];
-  const translatedName = nameTranslations.find((t: any) => t.language === langCode3)?.name
-                       || nameTranslations.find((t: any) => t.language === 'eng')?.name
-                       || extendedRecord.name;
-
-  const overview = overviewTranslations.find((t: any) => t.language === langCode3)?.overview
-                   || overviewTranslations.find((t: any) => t.language === 'eng')?.overview
-                   || extendedRecord.overview;
+  const langChain = tvdbLanguageChain(langCode3);
+  const translatedName = pickTranslation(nameTranslations, langChain, 'name') || extendedRecord.name;
+  const overview = pickTranslation(overviewTranslations, langChain, 'overview') || extendedRecord.overview;
 
   let tmdbId = extendedRecord.remoteIds?.find((id: any) => id.sourceName === 'TheMovieDB.com')?.id;
   let imdbId = extendedRecord.remoteIds?.find((id: any) => id.sourceName === 'IMDB')?.id;

@@ -443,7 +443,7 @@ export function CollectionPreview({
   if (!entry) {
     return (
       <div className="rounded-md border border-dashed px-3 py-10 text-center text-sm text-muted-foreground">
-        Select something on the left to preview it.
+        Select something <span className="@2xl/panes:hidden">in the Entries tab</span><span className="hidden @2xl/panes:inline">on the left</span> to preview it.
       </div>
     );
   }

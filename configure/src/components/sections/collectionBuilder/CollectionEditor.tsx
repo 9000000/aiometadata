@@ -253,7 +253,7 @@ export function CollectionEditor({
         />
       ) : (
         <p className="rounded-md border border-dashed px-3 py-8 text-center text-sm text-muted-foreground">
-          Pick a {terms.child.toLowerCase()} on the left to edit it.
+          Pick a {terms.child.toLowerCase()} <span className="@2xl/panes:hidden">in the Entries tab</span><span className="hidden @2xl/panes:inline">on the left</span> to edit it.
         </p>
       )}
     </div>

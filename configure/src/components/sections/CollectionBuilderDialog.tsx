@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Check,
   ChevronLeft,
+  Sparkles,
   ChevronRight,
   Copy,
   Download,
@@ -43,7 +44,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useConfig } from '@/contexts/ConfigContext';
+import { useConfig, type InstanceLimits } from '@/contexts/ConfigContext';
 import type { CatalogConfig } from '@/contexts/config';
 import { useSave } from '@/contexts/SaveContext';
 import { getSourceBadgeStyle } from '@/lib/sourceBadges';
@@ -85,6 +86,8 @@ import {
   type ManifestCatalog,
 } from '@/lib/collectionBuilder/manifestSources';
 import { buildProblemTargets, withStagedCatalogs } from '@/lib/collectionBuilder/problems';
+import { FEATURED_COLLECTIONS, type FeaturedCollection } from '@/lib/collectionBuilder/featured';
+import { FeaturedList } from './collectionBuilder/FeaturedList';
 import {
   blockingIssues,
   buildIssueCenter,
@@ -200,7 +203,7 @@ function reissueTakenIds(entries: BuilderEntry[], taken: Set<string>): void {
 // ---- Main dialog ----
 
 export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDialogProps) {
-  const { config, setConfig, auth, maxCatalogs, collectionImportCatalogCap } = useConfig();
+  const { config, setConfig, auth, maxCatalogs, collectionImportCatalogCap, refreshInstanceLimits } = useConfig();
 
   const [entries, setEntries] = useState<BuilderEntry[]>([]);
   /** Entries as they stood when opened or last applied, to spot real edits. */
@@ -212,6 +215,12 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const [activeTab, setActiveTab] = useState('design');
   // Only consulted below @2xl, where the panes cannot sit side by side.
   const [mobilePane, setMobilePane] = useState<'entries' | 'editor' | 'preview'>('entries');
+  const [featuredOpen, setFeaturedOpen] = useState(false);
+  const [featuredError, setFeaturedError] = useState('');
+  const [importPreviewIndex, setImportPreviewIndex] = useState(0);
+  const [featuredPreview, setFeaturedPreview] = useState<
+    { featured: FeaturedCollection; text: string; entries: BuilderEntry[]; index: number } | null
+  >(null);
   const [railQuery, setRailQuery] = useState('');
   const [showManifestField, setShowManifestField] = useState(false);
   const [titleFocusId, setTitleFocusId] = useState<string | null>(null);
@@ -222,6 +231,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setSelection({ entryId: id ?? '', folderId: null });
   }, []);
   const [target, setTarget] = useState<Target>('nuvio');
+
   const [manifestUrl, setManifestUrl] = useState('');
   const [usePlaceholder, setUsePlaceholder] = useState(false);
   const [sourceList, setSourceList] = useState<CatalogSourceList>({ catalogs: [], origin: 'derived' });
@@ -255,6 +265,25 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
+
+  // The dashboard can change the catalog ceiling while this page is open, and the
+  // value was otherwise read once at boot.
+  // A user who arrives without a saved config has no manifest URL, then saves from
+  // in here and gets one. The reset effect above runs on open only, so without
+  // this the field stays empty and the share tab keeps asking them to save.
+  // Only fills a blank, so a URL typed by hand is left alone.
+  useEffect(() => {
+    if (!isOpen || !auth.userUUID) return;
+    setManifestUrl(current => current || buildManifestUrl(auth.userUUID));
+  }, [isOpen, auth.userUUID]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    void refreshInstanceLimits();
+    // This dialog stays mounted when closed, so a preview left open would still
+    // be sitting there on the way back in.
+    setFeaturedPreview(null);
+  }, [isOpen, refreshInstanceLimits]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -748,7 +777,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   };
 
   /** False when a gate took over, so callers can hold off on closing. */
-  const handleSave = (mode: 'apply' | 'save'): boolean => {
+  const handleSave = (mode: 'apply' | 'save', limits?: InstanceLimits | null): boolean => {
     // Save is already disabled on these two, but Apply only is not, so they
     // still have to be caught here. The issue list is the advance notice.
     if (rowTypeBlocked()) return false;
@@ -757,7 +786,11 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       setNativeBlockFor('apply');
       return false;
     }
-    if (overBy > 0) {
+    // A ceiling raised in the dashboard a moment ago is read here, rather than
+    // the one this page loaded with.
+    const liveLimit = limits ? (limits.maxCatalogs ?? limits.collectionImportCatalogCap) : catalogLimit;
+    const liveOverBy = Math.max(0, pendingCount - Math.max(0, liveLimit - enabledCatalogCount));
+    if (liveOverBy > 0) {
       setPendingMode(mode);
       setOverLimitOpen(true);
       return false;
@@ -803,6 +836,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   const previewImport = (text: string, convert = convertNative) => {
     setImportText(text);
+    setImportPreviewIndex(0);
     setImportPreview(text.trim() ? parseImport(text, { convertNative: convert }) : null);
   };
 
@@ -860,6 +894,36 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     } finally {
       setImportFetching(false);
     }
+  };
+
+  // Rendered in the preview pane rather than a dialog, so the design you are
+  // considering sits beside the one you already have instead of covering it.
+  const loadFeatured = async (featured: FeaturedCollection) => {
+    setImportFetching(true);
+    setFeaturedError('');
+    try {
+      const url = new URL(featured.url, window.location.origin).toString();
+      let response = await fetch(url).catch(() => null);
+      if (!response || !response.ok) {
+        response = await fetch(`/api/proxy-manifest?url=${encodeURIComponent(url)}`);
+      }
+      if (!response.ok) throw new Error(`That link answered ${response.status}.`);
+      const text = await response.text();
+      const parsed = parseImport(text, { convertNative: false });
+      if (!parsed.entries.length) throw new Error('Nothing importable in that file.');
+      setFeaturedPreview({ featured, text, entries: parsed.entries, index: 0 });
+      setMobilePane('preview');
+    } catch (error) {
+      setFeaturedError(error instanceof Error ? error.message : 'Could not read that collection.');
+    } finally {
+      setImportFetching(false);
+    }
+  };
+
+  const importFeaturedPreview = () => {
+    if (!featuredPreview) return;
+    setImportOpen(true);
+    previewImport(featuredPreview.text);
   };
 
   const handleImportPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -1196,6 +1260,11 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setImportOpen(false);
     setImportText('');
     setImportPreview(null);
+    // The pane was showing the design being considered; it has now been taken,
+    // so it goes back to previewing whatever is selected. On a phone that pane
+    // was the whole screen, so land on the list of what just arrived.
+    setFeaturedPreview(null);
+    setMobilePane('entries');
     setConvertNative(false);
     const notes: string[] = [];
     if (mergeNote) notes.push(mergeNote);
@@ -1396,6 +1465,39 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               <Button size="sm" variant="ghost" className="w-full" onClick={() => setImportOpen(true)}>
                 <Upload className="mr-1.5 h-4 w-4" /> Import JSON
               </Button>
+
+              {FEATURED_COLLECTIONS.length > 0 && (
+                <div className="rounded-md border">
+                  <button
+                    type="button"
+                    onClick={() => setFeaturedOpen(open => !open)}
+                    aria-expanded={featuredOpen}
+                    className="flex w-full items-center justify-between gap-2 px-2.5 py-2 text-sm hover:bg-accent/40"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <Sparkles className="h-4 w-4 text-amber-400" />
+                      Featured
+                      <span className="text-xs text-muted-foreground">{FEATURED_COLLECTIONS.length}</span>
+                    </span>
+                    <ChevronRight
+                      className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${featuredOpen ? 'rotate-90' : ''}`}
+                    />
+                  </button>
+                  {featuredOpen && (
+                    <div className="border-t p-2">
+                      <FeaturedList
+                        items={FEATURED_COLLECTIONS}
+                        headroom={headroom}
+                        busy={importFetching}
+                        onLoad={featured => { void loadFeatured(featured); }}
+                      />
+                      {featuredError && (
+                        <p className="mt-2 text-xs text-amber-500">{featuredError}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {(entries.length > 6 || railQuery !== '') && (
                 <div className="relative">
@@ -1761,14 +1863,80 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               </Tabs>
             </div>
 
-            <div className={`min-h-0 min-w-0 overflow-y-auto @2xl:hidden @6xl/panes:block ${mobilePane === 'preview' ? 'block' : 'hidden'}`}>
+            <div
+              className={`min-h-0 min-w-0 overflow-y-auto @6xl/panes:block ${
+                featuredPreview ? 'block' : `@2xl:hidden ${mobilePane === 'preview' ? 'block' : 'hidden'}`
+              }`}
+            >
               <div className="sticky top-0 rounded-lg border p-4">
-                <span className="mb-3 block text-sm font-medium text-muted-foreground">Live preview</span>
-                <CollectionPreview
-                  entry={selected}
-                  target={target}
-                  onEditFolder={folderId => selected && goToProblem(selected.id, folderId)}
-                />
+                {featuredPreview ? (
+                  <>
+                    <div className="mb-3 space-y-1">
+                      <div className="flex flex-wrap items-baseline gap-x-2">
+                        <span className="text-sm font-medium">{featuredPreview.featured.name}</span>
+                        <span className="text-xs text-muted-foreground">
+                          by {featuredPreview.featured.author}
+                        </span>
+                      </div>
+                      <p className="text-xs text-amber-500">Just looking. Nothing is imported yet.</p>
+                    </div>
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <span className="min-w-0 truncate text-xs text-muted-foreground">
+                        {featuredPreview.entries[featuredPreview.index]?.title || 'Untitled'}
+                        {featuredPreview.entries.length > 1 &&
+                          ` — ${featuredPreview.index + 1} of ${featuredPreview.entries.length}`}
+                      </span>
+                      {featuredPreview.entries.length > 1 && (
+                        <div className="flex shrink-0 gap-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            aria-label="Previous"
+                            disabled={featuredPreview.index === 0}
+                            onClick={() => setFeaturedPreview(p => (p ? { ...p, index: p.index - 1 } : p))}
+                          >
+                            <ChevronLeft className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            aria-label="Next"
+                            disabled={featuredPreview.index >= featuredPreview.entries.length - 1}
+                            onClick={() => setFeaturedPreview(p => (p ? { ...p, index: p.index + 1 } : p))}
+                          >
+                            <ChevronRight className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                    <CollectionPreview
+                      entry={featuredPreview.entries[featuredPreview.index] ?? null}
+                      target={target}
+                      onEditFolder={() => undefined}
+                    />
+                    <div className="mt-3 flex gap-2">
+                      <Button size="sm" className="flex-1" onClick={importFeaturedPreview}>
+                        Import this
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => { setFeaturedPreview(null); setMobilePane('entries'); }}
+                      >
+                        Dismiss
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <span className="mb-3 block text-sm font-medium text-muted-foreground">Live preview</span>
+                    <CollectionPreview
+                      entry={selected}
+                      target={target}
+                      onEditFolder={folderId => selected && goToProblem(selected.id, folderId)}
+                    />
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -1847,9 +2015,9 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               </Button>
             )}
             <Button variant="ghost" onClick={requestClose}>Close</Button>
-            <Button variant="outline" onClick={() => handleSave('apply')}>Apply only</Button>
+            <Button variant="outline" onClick={() => { void refreshInstanceLimits().then(fresh => handleSave('apply', fresh)); }}>Apply only</Button>
             <Button
-              onClick={() => handleSave('save')}
+              onClick={() => { void refreshInstanceLimits().then(fresh => handleSave('save', fresh)); }}
               disabled={isSaving || !verdict.canSave}
               title={verdict.canSave ? undefined : 'Resolve the issues listed above first'}
             >
@@ -1861,7 +2029,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       </Dialog>
 
       <Dialog open={importOpen} onOpenChange={open => { if (!open) { setImportOpen(false); setImportText(''); setImportUrl(''); setImportUrlError(''); setImportPreview(null); setConfirmReplace(false); } }}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-[min(84vw,42rem)]">
           <DialogHeader>
             <DialogTitle>Import collections</DialogTitle>
             <DialogDescription>
@@ -1951,6 +2119,48 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   </Badge>
                 )}
               </div>
+
+              {importPreview.entries.length > 0 && !featuredPreview && (() => {
+                const at = Math.min(importPreviewIndex, importPreview.entries.length - 1);
+                const shown = importPreview.entries[at];
+                // A file states its own shape, which need not be the target being edited.
+                const shape = importPreview.format === 'fusion' || importPreview.format === 'nuvio'
+                  ? importPreview.format
+                  : target;
+                return (
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="min-w-0 truncate text-xs text-muted-foreground">
+                        {shown?.title || 'Untitled'}
+                        {importPreview.entries.length > 1 && ` — ${at + 1} of ${importPreview.entries.length}`}
+                      </span>
+                      {importPreview.entries.length > 1 && (
+                        <div className="flex shrink-0 gap-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            aria-label="Previous entry"
+                            disabled={at === 0}
+                            onClick={() => setImportPreviewIndex(at - 1)}
+                          >
+                            <ChevronLeft className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            aria-label="Next entry"
+                            disabled={at >= importPreview.entries.length - 1}
+                            onClick={() => setImportPreviewIndex(at + 1)}
+                          >
+                            <ChevronRight className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                    <CollectionPreview entry={shown ?? null} target={shape} onEditFolder={() => undefined} />
+                  </div>
+                );
+              })()}
 
               {importPreview.nativeCount > 0 && (
                 <div className="space-y-2 rounded-md border p-2">

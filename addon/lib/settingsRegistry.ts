@@ -708,7 +708,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     description: 'Most catalogs a collection import may add, used when Max Catalogs is empty. Community collection files can reference thousands, and every one added becomes a manifest entry.',
     category: 'Catalogs & Search',
     type: 'number',
-    default: 300,
+    default: 400,
   },
   {
     key: 'CATALOG_LIST_ITEMS_SIZE',

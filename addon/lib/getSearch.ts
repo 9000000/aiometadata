@@ -311,7 +311,9 @@ async function performKitsuSearch(type: string, query: string, language: string,
 
           let itemType = type;
           if (item.subtype?.toLowerCase() === 'ona') {
-            if (malId) {
+            if (item.episodeCount > 1) {
+              itemType = 'series';
+            } else if (malId) {
               itemType = await idMapper.resolveOnaType(malId, config);
             } else if (item.episodeCount === 1) {
               itemType = 'movie';

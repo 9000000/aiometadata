@@ -175,6 +175,7 @@ function parseAnimeApiTsv(text) {
       myanimelist: numeric('myanimelist'),
       simkl: numeric('simkl'),
       themoviedb: numeric('themoviedb'),
+      themoviedb_type: tmdbNamespace(tsvValue(parts[columns.themoviedb_type])),
       thetvdb: numeric('thetvdb'),
       imdb: imdb.startsWith('tt') ? imdb : null,
       type: animeApiType(tsvValue(parts[columns.themoviedb_type]), tsvValue(parts[columns.trakt_type])),
@@ -213,6 +214,24 @@ function tmdbIdsOf(item) {
     return [...toIdList(value.tv), ...toIdList(value.movie)];
   }
   return toIdList(value);
+}
+
+function tmdbNamespace(value) {
+  const type = String(value || '').toLowerCase();
+  return type === 'tv' || type === 'movie' ? type : null;
+}
+
+/**
+ * TMDB numbers movies and shows in separate spaces, so the same id is usually a
+ * valid movie AND a valid show. Fribb keeps the two apart under `themoviedb_id`;
+ * flattening it to a scalar loses that, so record which side the id came from.
+ */
+function tmdbNamespaceOf(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    if (toIdList(value.tv).length) return 'tv';
+    if (toIdList(value.movie).length) return 'movie';
+  }
+  return null;
 }
 
 function contradicts(a, b) {
@@ -318,6 +337,7 @@ function enrichWithAnimeApi(animeList) {
         }
 
         item[fribbKey] = row[apiKey];
+        if (fribbKey === 'themoviedb_id') item.themoviedb_type = row.themoviedb_type;
         owners[fribbKey].set(row[apiKey], item);
         stats[fribbKey]++;
         filled = true;
@@ -394,6 +414,7 @@ function appendAnimeApiOnlyRows(animeList) {
       anidb_id: row.anidb,
       simkl_id: row.simkl,
       themoviedb_id: row.themoviedb,
+      themoviedb_type: row.themoviedb_type,
       tvdb_id: row.thetvdb,
       imdb_id: row.imdb,
     });
@@ -470,6 +491,7 @@ function processAndIndexData(data) {
     // primary kept here is just a representative, NOT a canonical part — do not
     // use it to fetch metadata for a specific part (use the incoming id instead).
     const tmdbIds = tmdbIdsOf(item);
+    item.themoviedb_type = tmdbNamespaceOf(item.themoviedb_id) || tmdbNamespace(item.themoviedb_type);
     item.themoviedb_id = tmdbIds[0] ?? null;
 
     const imdbIds = toIdList(item.imdb_id);
@@ -1626,8 +1648,15 @@ async function resolveOnaType(malId, config = {}) {
     return 'movie';
   }
 
-  // Step 2: Check TMDB movie endpoint using the Fribb mapping's themoviedb_id
+  // Step 2: A tv-side TMDB id settles it. Probing movie/<id> with one would hit
+  // an unrelated film that happens to share the number and call the ONA a movie.
   const mapping = animeIdMap.get(numericMalId);
+  if (mapping?.themoviedb_type === 'tv') {
+    onaTypeCache.set(numericMalId, 'series');
+    return 'series';
+  }
+
+  // Step 3: Check TMDB movie endpoint using the Fribb mapping's themoviedb_id
   if (mapping?.themoviedb_id) {
     try {
       const { movieInfo } = require('./getTmdb.js');

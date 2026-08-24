@@ -131,7 +131,10 @@ export function FranchisePickerDialog({
       <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col p-0 overflow-hidden">
         <div className="p-6 pb-4 border-b shrink-0 space-y-4">
           <DialogHeader>
-            <DialogTitle>Franchise Collections</DialogTitle>
+            <DialogTitle className="flex items-center gap-2">
+              <img src="/franchise_icon.png" alt="Franchise" className="h-6 w-6 object-contain rounded" />
+              Franchise Collections
+            </DialogTitle>
             <DialogDescription>
               Select the franchise catalogs you want to appear in your Stremio library.
             </DialogDescription>

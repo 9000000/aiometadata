@@ -5243,7 +5243,7 @@ function CatalogsSettingsContent({
                       aria-label="Franchises & Collections"
                       className="h-11 w-11"
                     >
-                      <Database className="h-7 w-7" />
+                      <img src="/franchise_icon.png" alt="Franchises & Collections" className="h-7 w-7 object-contain rounded" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Franchises & Collections</TooltipContent>

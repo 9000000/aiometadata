@@ -15,63 +15,63 @@
   },
   {
     "id": "franchise.dc_DCEUMovies",
-    "name": "DC: D C E U Movies",
+    "name": "DC: DCEU",
     "type": "movie",
     "source": "franchise",
     "franchise": "dc"
   },
   {
     "id": "franchise.dc_DCSeries",
-    "name": "DC: D C Series",
+    "name": "DC",
     "type": "series",
     "source": "franchise",
     "franchise": "dc"
   },
   {
     "id": "franchise.dc_everythingbatman",
-    "name": "DC: Everythingbatman",
+    "name": "DC: Everything Batman",
     "type": "movie",
     "source": "franchise",
     "franchise": "dc"
   },
   {
     "id": "franchise.dc_everythingbatmananimation",
-    "name": "DC: Everythingbatmananimation",
+    "name": "DC: Everything Batman Animation",
     "type": "series",
     "source": "franchise",
     "franchise": "dc"
   },
   {
     "id": "franchise.dc_everythingsuperman",
-    "name": "DC: Everythingsuperman",
+    "name": "DC: Everything Superman",
     "type": "movie",
     "source": "franchise",
     "franchise": "dc"
   },
   {
     "id": "franchise.dc_everythingsupermananimation",
-    "name": "DC: Everythingsupermananimation",
+    "name": "DC: Everything Superman Animation",
     "type": "series",
     "source": "franchise",
     "franchise": "dc"
   },
   {
     "id": "franchise.dc_moviesData",
-    "name": "DC: Movies",
+    "name": "DC",
     "type": "movie",
     "source": "franchise",
     "franchise": "dc"
   },
   {
     "id": "franchise.dc_releaseData",
-    "name": "DC: Release",
+    "name": "DC: Release Order",
     "type": "movie",
     "source": "franchise",
     "franchise": "dc"
   },
   {
     "id": "franchise.dc_seriesData",
-    "name": "DC: Series",
+    "name": "DC",
     "type": "series",
     "source": "franchise",
     "franchise": "dc"
@@ -92,42 +92,42 @@
   },
   {
     "id": "franchise.marvel_moviesData",
-    "name": "Marvel: Movies",
+    "name": "Marvel",
     "type": "movie",
     "source": "franchise",
     "franchise": "marvel"
   },
   {
     "id": "franchise.marvel_releaseData",
-    "name": "Marvel: Release",
+    "name": "Marvel: Release Order",
     "type": "movie",
     "source": "franchise",
     "franchise": "marvel"
   },
   {
     "id": "franchise.marvel_seriesData",
-    "name": "Marvel: Series",
+    "name": "Marvel",
     "type": "series",
     "source": "franchise",
     "franchise": "marvel"
   },
   {
     "id": "franchise.marvel_xmenData",
-    "name": "Marvel: Xmen",
+    "name": "Marvel: X-Men",
     "type": "movie",
     "source": "franchise",
     "franchise": "marvel"
   },
   {
     "id": "franchise.star_wars_animatedSeriesData",
-    "name": "Star Wars: Animated Series",
+    "name": "Star Wars: Animated",
     "type": "series",
     "source": "franchise",
     "franchise": "star_wars"
   },
   {
     "id": "franchise.star_wars_anthologyFilmsData",
-    "name": "Star Wars: Anthology Films",
+    "name": "Star Wars: Anthology",
     "type": "movie",
     "source": "franchise",
     "franchise": "star_wars"
@@ -169,28 +169,28 @@
   },
   {
     "id": "franchise.star_wars_liveActionSeriesData",
-    "name": "Star Wars: Live Action Series",
+    "name": "Star Wars: Live Action",
     "type": "series",
     "source": "franchise",
     "franchise": "star_wars"
   },
   {
     "id": "franchise.star_wars_microSeriesShortsData",
-    "name": "Star Wars: Micro Series Shorts",
+    "name": "Star Wars: Shorts",
     "type": "series",
     "source": "franchise",
     "franchise": "star_wars"
   },
   {
     "id": "franchise.star_wars_moviesSeriesChronologicalData",
-    "name": "Star Wars: Movies Series Chronological",
+    "name": "Star Wars: Chronological",
     "type": "series",
     "source": "franchise",
     "franchise": "star_wars"
   },
   {
     "id": "franchise.star_wars_moviesSeriesReleaseData",
-    "name": "Star Wars: Movies Series Release",
+    "name": "Star Wars: Release Order",
     "type": "series",
     "source": "franchise",
     "franchise": "star_wars"

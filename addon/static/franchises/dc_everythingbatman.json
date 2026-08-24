@@ -4,7 +4,7 @@
     "type": "movie",
     "imdbId": "tt0035665",
     "tmdbId": 125249,
-    "id": "dc_tt0035665",
+    "id": "tt0035665",
     "releaseYear": "1943",
     "poster": "https://image.tmdb.org/t/p/w500/AvzD3mrtokIzZOiV6zAG7geIo6F.jpg",
     "overview": "Japanese master spy Daka operates a covert espionage-sabotage organization located in Gotham City's now-deserted Little Tokyo, which turns American scientists into pliable zombies. The great crime-fighters Batman and Robin, with the help of their allies, are in pursuit."
@@ -14,7 +14,7 @@
     "type": "movie",
     "imdbId": "tt0041162",
     "tmdbId": 93560,
-    "id": "dc_tt0041162",
+    "id": "tt0041162",
     "releaseYear": "1949",
     "poster": "https://image.tmdb.org/t/p/w500/411pEyeqP5rLS6Zc9batSRL0c8G.jpg",
     "overview": "This 15-chapter serial pits Batman and Robin against The Wizard, who uses a device that allows him to control machinery to hold the city hostage."
@@ -24,7 +24,7 @@
     "type": "movie",
     "imdbId": "tt0060153",
     "tmdbId": 2661,
-    "id": "dc_tt0060153",
+    "id": "tt0060153",
     "releaseYear": "1966",
     "poster": "https://image.tmdb.org/t/p/w500/zzoPxWHnPa0eyfkMLgwbNvdEcVF.jpg",
     "overview": "The Dynamic Duo faces four super-villains who plan to hold the world for ransom with the help of a secret invention that instantly dehydrates people."
@@ -34,7 +34,7 @@
     "type": "movie",
     "imdbId": "tt0096895",
     "tmdbId": 268,
-    "id": "dc_tt0096895",
+    "id": "tt0096895",
     "releaseYear": "1989",
     "poster": "https://image.tmdb.org/t/p/w500/cij4dd21v2Rk2YtUQbV5kW69WB2.jpg",
     "overview": "Batman must face his most ruthless nemesis when a deformed madman calling himself \"The Joker\" seizes control of Gotham's criminal underworld."
@@ -44,7 +44,7 @@
     "type": "movie",
     "imdbId": "tt0103776",
     "tmdbId": 364,
-    "id": "dc_tt0103776",
+    "id": "tt0103776",
     "releaseYear": "1992",
     "poster": "https://image.tmdb.org/t/p/w500/uEIvgvxzK08922iU61OvO3ORs0s.jpg",
     "overview": "Batman must face The Penguin, a sewer-dwelling gangleader intent on being accepted into Gotham society.  Meanwhile, another Gotham resident finds herself transformed into Catwoman and is out for revenge..."
@@ -54,7 +54,7 @@
     "type": "movie",
     "imdbId": "tt0112462",
     "tmdbId": 414,
-    "id": "dc_tt0112462",
+    "id": "tt0112462",
     "releaseYear": "1995",
     "poster": "https://image.tmdb.org/t/p/w500/i0fJS8M5UKoETjjJ0zwUiKaR8tr.jpg",
     "overview": "In the looming shadows of Gotham City, two villainous souls devise twin schemes of revenge against the city's dark guardian. Two-Face, disfigured by chance and fueled by vengeance, is obsessed with destroying Batman, while the Riddler, a disillusioned genius, pursues the destruction of billionaire Bruce Wayne. Together they've hatched a plot to absorb and control the minds of all of Gotham City's residents, and only Batman and his new partner, Robin, can stop them! But the Dark Knight is hindered by a mystery from his own childhood. He must hope that a new found love can help him overcome the incident that made him what he is. In the end, he must decide: will he be Batman—forever?"
@@ -64,7 +64,7 @@
     "type": "movie",
     "imdbId": "tt0118688",
     "tmdbId": 415,
-    "id": "dc_tt0118688",
+    "id": "tt0118688",
     "releaseYear": "1997",
     "poster": "https://image.tmdb.org/t/p/w500/cGRDufDDSrFrv7VI4YnmWnslne0.jpg",
     "overview": "Batman and Robin deal with relationship issues while preventing Mr. Freeze and Poison Ivy from attacking Gotham City."
@@ -74,7 +74,7 @@
     "type": "movie",
     "imdbId": "tt0372784",
     "tmdbId": 272,
-    "id": "dc_tt0372784",
+    "id": "tt0372784",
     "releaseYear": "2005",
     "poster": "https://image.tmdb.org/t/p/w500/4MpN4kIEqUjW8OPtOQJXlTdHiJV.jpg",
     "overview": "Driven by tragedy, billionaire Bruce Wayne dedicates his life to uncovering and defeating the corruption that plagues his home, Gotham City.  Unable to work within the system, he instead creates a new identity, a symbol of fear for the criminal underworld - The Batman."
@@ -84,7 +84,7 @@
     "type": "movie",
     "imdbId": "tt0468569",
     "tmdbId": 155,
-    "id": "dc_tt0468569",
+    "id": "tt0468569",
     "releaseYear": "2008",
     "poster": "https://image.tmdb.org/t/p/w500/qJ2tW6WMUDux911r6m7haRef0WH.jpg",
     "overview": "Batman raises the stakes in his war on crime. With the help of Lt. Jim Gordon and District Attorney Harvey Dent, Batman sets out to dismantle the remaining criminal organizations that plague the streets. The partnership proves to be effective, but they soon find themselves prey to a reign of chaos unleashed by a rising criminal mastermind known to the terrified citizens of Gotham as the Joker."
@@ -94,7 +94,7 @@
     "type": "movie",
     "imdbId": "tt1345836",
     "tmdbId": 49026,
-    "id": "dc_tt1345836",
+    "id": "tt1345836",
     "releaseYear": "2012",
     "poster": "https://image.tmdb.org/t/p/w500/hr0L2aueqlP2BYUblTTjmtn0hw4.jpg",
     "overview": "Following the death of District Attorney Harvey Dent, Batman assumes responsibility for Dent's crimes to protect the late attorney's reputation and is subsequently hunted by the Gotham City Police Department. Eight years later, Batman encounters the mysterious Selina Kyle and the villainous Bane, a new terrorist leader who overwhelms Gotham's finest. The Dark Knight resurfaces to protect a city that has branded him an enemy."
@@ -104,7 +104,7 @@
     "type": "movie",
     "imdbId": "tt2975590",
     "tmdbId": 209112,
-    "id": "dc_tt2975590",
+    "id": "tt2975590",
     "releaseYear": "2016",
     "poster": "https://image.tmdb.org/t/p/w500/5UsK3grJvtQrtzEgqNlDljJW96w.jpg",
     "overview": "Fearing the actions of a god-like Super Hero left unchecked, Gotham City’s own formidable, forceful vigilante takes on Metropolis’s most revered, modern-day savior, while the world wrestles with what sort of hero it really needs. And with Batman and Superman at war with one another, a new threat quickly arises, putting mankind in greater danger than it’s ever known before."
@@ -114,7 +114,7 @@
     "type": "movie",
     "imdbId": "tt1386697",
     "tmdbId": 297761,
-    "id": "dc_tt1386697",
+    "id": "tt1386697",
     "releaseYear": "2016",
     "poster": "https://image.tmdb.org/t/p/w500/sk3FZgh3sRrmr8vyhaitNobMcfh.jpg",
     "overview": "From DC Comics comes the Suicide Squad, an antihero team of incarcerated supervillains who act as deniable assets for the United States government, undertaking high-risk black ops missions in exchange for commuted prison sentences."
@@ -124,7 +124,7 @@
     "type": "movie",
     "imdbId": "tt0974015",
     "tmdbId": 141052,
-    "id": "dc_tt0974015",
+    "id": "tt0974015",
     "releaseYear": "2017",
     "poster": "https://image.tmdb.org/t/p/w500/eifGNCSDuxJeS1loAXil5bIGgvC.jpg",
     "overview": "Fuelled by his restored faith in humanity and inspired by Superman's selfless act, Bruce Wayne and Diana Prince assemble a team of metahumans consisting of Barry Allen, Arthur Curry and Victor Stone to face the catastrophic threat of Steppenwolf and the Parademons who are on the hunt for three Mother Boxes on Earth."
@@ -134,7 +134,7 @@
     "type": "movie",
     "imdbId": "tt12361974",
     "tmdbId": 791373,
-    "id": "dc_tt12361974",
+    "id": "tt12361974",
     "releaseYear": "2021",
     "poster": "https://image.tmdb.org/t/p/w500/tnAuB8q5vv7Ax9UAEje5Xi4BXik.jpg",
     "overview": "Determined to ensure Superman's ultimate sacrifice was not in vain, Bruce Wayne aligns forces with Diana Prince with plans to recruit a team of metahumans to protect the world from an approaching threat of catastrophic proportions."
@@ -144,7 +144,7 @@
     "type": "movie",
     "imdbId": "tt1877830",
     "tmdbId": 414906,
-    "id": "dc_tt1877830",
+    "id": "tt1877830",
     "releaseYear": "2022",
     "poster": "https://image.tmdb.org/t/p/w500/74xTEgt7R36Fpooo50r9T25onhq.jpg",
     "overview": "In his second year of fighting crime, Batman uncovers corruption in Gotham City that connects to his own family while facing a serial killer known as the Riddler."
@@ -154,7 +154,7 @@
     "type": "movie",
     "imdbId": "tt0439572",
     "tmdbId": 298618,
-    "id": "dc_tt0439572",
+    "id": "tt0439572",
     "releaseYear": "2023",
     "poster": "https://image.tmdb.org/t/p/w500/rktDFPbfHfUbArZ6OOOKsXcv0Bm.jpg",
     "overview": "When his attempt to save his family inadvertently alters the future, Barry Allen becomes trapped in a reality in which General Zod has returned and there are no Super Heroes to turn to. In order to save the world that he is in and return to the future that he knows, Barry's only hope is to race for his life. But will making the ultimate sacrifice be enough to reset the universe?"
@@ -164,7 +164,7 @@
     "type": "movie",
     "imdbId": "tt19850008",
     "tmdbId": 806704,
-    "id": "dc_tt19850008",
+    "id": "tt19850008",
     "releaseYear": "2027",
     "poster": "https://image.tmdb.org/t/p/w500/qwDWC2OzPw9zGc2lVCbjDrdaL6A.jpg",
     "overview": "Sequel to the 2022 film The Batman."

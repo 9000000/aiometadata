@@ -1000,7 +1000,7 @@ export function SimklIntegration({ isOpen, onClose }: SimklIntegrationProps) {
                       disabled={config.catalogs.some(c => c.id === 'simkl.calendar.series')}
                     >
                       <Plus className="mr-2 h-4 w-4" />
-                      Airing Soon (Series)
+                      Airing Soon
                     </Button>
                   </div>
                   <div>
@@ -1034,7 +1034,7 @@ export function SimklIntegration({ isOpen, onClose }: SimklIntegrationProps) {
                     <p className="text-xs font-medium text-muted-foreground">Hidden Gems — highly rated, under the radar</p>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                       <Button
-                        onClick={() => handleAddRecipeCatalog('hiddengems', 'movies', 'Hidden Gems (Movies)')}
+                        onClick={() => handleAddRecipeCatalog('hiddengems', 'movies', 'Hidden Gems')}
                         variant="outline"
                         disabled={config.catalogs.some(c => c.id === 'simkl.recipe.hiddengems.movies')}
                       >
@@ -1042,7 +1042,7 @@ export function SimklIntegration({ isOpen, onClose }: SimklIntegrationProps) {
                         Movies
                       </Button>
                       <Button
-                        onClick={() => handleAddRecipeCatalog('hiddengems', 'shows', 'Hidden Gems (Shows)')}
+                        onClick={() => handleAddRecipeCatalog('hiddengems', 'shows', 'Hidden Gems')}
                         variant="outline"
                         disabled={config.catalogs.some(c => c.id === 'simkl.recipe.hiddengems.shows')}
                       >
@@ -1050,7 +1050,7 @@ export function SimklIntegration({ isOpen, onClose }: SimklIntegrationProps) {
                         Shows
                       </Button>
                       <Button
-                        onClick={() => handleAddRecipeCatalog('hiddengems', 'anime', 'Hidden Gems (Anime)')}
+                        onClick={() => handleAddRecipeCatalog('hiddengems', 'anime', 'Hidden Gems')}
                         variant="outline"
                         disabled={config.catalogs.some(c => c.id === 'simkl.recipe.hiddengems.anime')}
                       >
@@ -1063,7 +1063,7 @@ export function SimklIntegration({ isOpen, onClose }: SimklIntegrationProps) {
                     <p className="text-xs font-medium text-muted-foreground">Binge-Worthy — finished series, low drop-off</p>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <Button
-                        onClick={() => handleAddRecipeCatalog('marathon', 'shows', 'Binge-Worthy (Shows)')}
+                        onClick={() => handleAddRecipeCatalog('marathon', 'shows', 'Binge-Worthy')}
                         variant="outline"
                         disabled={config.catalogs.some(c => c.id === 'simkl.recipe.marathon.shows')}
                       >
@@ -1071,7 +1071,7 @@ export function SimklIntegration({ isOpen, onClose }: SimklIntegrationProps) {
                         Shows
                       </Button>
                       <Button
-                        onClick={() => handleAddRecipeCatalog('marathon', 'anime', 'Binge-Worthy (Anime)')}
+                        onClick={() => handleAddRecipeCatalog('marathon', 'anime', 'Binge-Worthy')}
                         variant="outline"
                         disabled={config.catalogs.some(c => c.id === 'simkl.recipe.marathon.anime')}
                       >

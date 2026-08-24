@@ -65,7 +65,7 @@ interface StreamingCatalogDefinition extends CatalogDefinition {
 export const streamingCatalogs: StreamingCatalogDefinition[] = streamingServices.flatMap(service => [
   {
     id: `streaming.${service.id}`,
-    name: `${service.name} (Movies)` ,
+    name: service.name,
     type: 'movie',
     source: 'streaming',
     isEnabledByDefault: false,
@@ -77,7 +77,7 @@ export const streamingCatalogs: StreamingCatalogDefinition[] = streamingServices
   },
   {
     id: `streaming.${service.id}`,
-    name: `${service.name} (Series)` ,
+    name: service.name,
     type: 'series',
     source: 'streaming',
     isEnabledByDefault: false,

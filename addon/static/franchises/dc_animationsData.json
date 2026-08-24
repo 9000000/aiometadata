@@ -4,7 +4,7 @@
     "type": "series",
     "imdbId": "tt0775372",
     "tmdbId": 4028,
-    "id": "dc_tt0775372",
+    "id": "tt0775372",
     "releaseYear": "2006",
     "poster": "https://image.tmdb.org/t/p/w500/wWBCxzUqzSli4gdeRvhXvlcUS0a.jpg"
   },
@@ -13,7 +13,7 @@
     "type": "series",
     "imdbId": "tt1213218",
     "tmdbId": 15804,
-    "id": "dc_tt1213218",
+    "id": "tt1213218",
     "releaseYear": "2008",
     "poster": "https://image.tmdb.org/t/p/w500/ukXZ1N9Pd99vDNetFKYNpFYgoXF.jpg"
   },
@@ -22,7 +22,7 @@
     "type": "movie",
     "imdbId": "tt1773355",
     "tmdbId": 355142,
-    "id": "dc_tt1773355",
+    "id": "tt1773355",
     "releaseYear": "2010",
     "poster": "https://image.tmdb.org/t/p/w500/tmrGc8SJafrDyMfLnp3dZoDTF7P.jpg"
   },
@@ -31,7 +31,7 @@
     "type": "movie",
     "imdbId": "tt1701223",
     "tmdbId": 43641,
-    "id": "dc_tt1701223",
+    "id": "tt1701223",
     "releaseYear": "2010",
     "poster": "https://image.tmdb.org/t/p/w500/3MgwChvi42N1RnhQE9A4pQVHyUY.jpg"
   },
@@ -40,7 +40,7 @@
     "type": "series",
     "imdbId": "tt1641384",
     "tmdbId": 33217,
-    "id": "dc_tt1641384",
+    "id": "tt1641384",
     "releaseYear": "2010",
     "poster": "https://image.tmdb.org/t/p/w500/zMJw34G4OJhcd9NjKSRjJdDqjbR.jpg"
   },
@@ -49,7 +49,7 @@
     "type": "movie",
     "imdbId": "tt1672723",
     "tmdbId": 69735,
-    "id": "dc_tt1672723",
+    "id": "tt1672723",
     "releaseYear": "2011",
     "poster": "https://image.tmdb.org/t/p/w500/mLZRhulJcDsxZWTdfx0trtk6y07.jpg"
   },
@@ -58,7 +58,7 @@
     "type": "movie",
     "imdbId": "tt1986806",
     "tmdbId": 76420,
-    "id": "dc_tt1986806",
+    "id": "tt1986806",
     "releaseYear": "2011",
     "poster": "https://image.tmdb.org/t/p/w500/pLImznZnHHZAEWnmL9pFbOLUcgr.jpg"
   },
@@ -67,7 +67,7 @@
     "type": "series",
     "imdbId": "tt2263761",
     "tmdbId": 283746,
-    "id": "dc_tt2263761",
+    "id": "tt2263761",
     "releaseYear": "2011",
     "poster": "https://image.tmdb.org/t/p/w500/odSwVbAdYj66sU24pLY6FkLb6SC.jpg"
   },
@@ -76,7 +76,7 @@
     "type": "series",
     "imdbId": "tt1724587",
     "tmdbId": 40351,
-    "id": "dc_tt1724587",
+    "id": "tt1724587",
     "releaseYear": "2011",
     "poster": "https://image.tmdb.org/t/p/w500/xJwEpFAoedQ6POM9dD83ijFk5ME.jpg"
   },
@@ -85,7 +85,7 @@
     "type": "movie",
     "imdbId": "tt2027128",
     "tmdbId": 76589,
-    "id": "dc_tt2027128",
+    "id": "tt2027128",
     "releaseYear": "2012",
     "poster": "https://image.tmdb.org/t/p/w500/seCbcjdZYUl8SRKjeWfyi2ngzFj.jpg"
   },
@@ -94,7 +94,7 @@
     "type": "movie",
     "imdbId": "tt2224455",
     "tmdbId": 103269,
-    "id": "dc_tt2224455",
+    "id": "tt2224455",
     "releaseYear": "2012",
     "poster": "https://image.tmdb.org/t/p/w500/kozJARWRoGHlOu6UVCdVPD4n8Jm.jpg"
   },
@@ -103,7 +103,7 @@
     "type": "movie",
     "imdbId": "tt2313197",
     "tmdbId": 123025,
-    "id": "dc_tt2313197",
+    "id": "tt2313197",
     "releaseYear": "2012",
     "poster": "https://image.tmdb.org/t/p/w500/kkjTbwV1Xnj8wBL52PjOcXzTbnb.jpg"
   },
@@ -112,7 +112,7 @@
     "type": "movie",
     "imdbId": "tt2381287",
     "tmdbId": 145174,
-    "id": "dc_tt2381287",
+    "id": "tt2381287",
     "releaseYear": "2012",
     "poster": "https://image.tmdb.org/t/p/w500/kYHOYvRApTTY2TzxCixEsNeDKC2.jpg"
   },
@@ -121,7 +121,7 @@
     "type": "series",
     "imdbId": "tt2273962",
     "tmdbId": 55853,
-    "id": "dc_tt2273962",
+    "id": "tt2273962",
     "releaseYear": "2012",
     "poster": "https://image.tmdb.org/t/p/w500/immBsD4mW9cVFzM5XFKuqCsnIbG.jpg"
   },
@@ -130,7 +130,7 @@
     "type": "movie",
     "imdbId": "tt2166834",
     "tmdbId": 142061,
-    "id": "dc_tt2166834",
+    "id": "tt2166834",
     "releaseYear": "2013",
     "poster": "https://image.tmdb.org/t/p/w500/arEZYd6uMOFTILne9Ux0A8qctMe.jpg"
   },
@@ -139,7 +139,7 @@
     "type": "movie",
     "imdbId": "tt2617456",
     "tmdbId": 166076,
-    "id": "dc_tt2617456",
+    "id": "tt2617456",
     "releaseYear": "2013",
     "poster": "https://image.tmdb.org/t/p/w500/nnZKtmVSnueWd4pjk1BekLJxXRL.jpg"
   },
@@ -148,7 +148,7 @@
     "type": "movie",
     "imdbId": "tt2861210",
     "tmdbId": 1078989,
-    "id": "dc_tt2861210",
+    "id": "tt2861210",
     "releaseYear": "2013",
     "poster": "https://image.tmdb.org/t/p/w500/2dkOoSvkuRJ2F6fULVbqg5rhs1O.jpg"
   },
@@ -157,7 +157,7 @@
     "type": "movie",
     "imdbId": "tt2465238",
     "tmdbId": 177271,
-    "id": "dc_tt2465238",
+    "id": "tt2465238",
     "releaseYear": "2013",
     "poster": "https://image.tmdb.org/t/p/w500/7nezWm9gOsQPKfbHkUiB8R4SSZO.jpg"
   },
@@ -166,7 +166,7 @@
     "type": "movie",
     "imdbId": "tt3018178",
     "tmdbId": 761135,
-    "id": "dc_tt3018178",
+    "id": "tt3018178",
     "releaseYear": "2013",
     "poster": "https://image.tmdb.org/t/p/w500/sWvMp7y6r9Ov9PV3OfhKWJtLKCp.jpg"
   },
@@ -175,7 +175,7 @@
     "type": "movie",
     "imdbId": "tt2820466",
     "tmdbId": 183011,
-    "id": "dc_tt2820466",
+    "id": "tt2820466",
     "releaseYear": "2013",
     "poster": "https://image.tmdb.org/t/p/w500/isCknjIWem0W3KwNUDLrDN7F40H.jpg"
   },
@@ -184,7 +184,7 @@
     "type": "movie",
     "imdbId": "tt3254454",
     "tmdbId": 256421,
-    "id": "dc_tt3254454",
+    "id": "tt3254454",
     "releaseYear": "2013",
     "poster": "https://image.tmdb.org/t/p/w500/fvOtZGpSd3I0pqiv2shzB4OztCx.jpg"
   },
@@ -193,7 +193,7 @@
     "type": "series",
     "imdbId": "tt2303065",
     "tmdbId": 75395,
-    "id": "dc_tt2303065",
+    "id": "tt2303065",
     "releaseYear": "2013",
     "poster": "https://image.tmdb.org/t/p/w500/ri0PaQhMEVs78tLvCNkHv2bUww9.jpg"
   },
@@ -202,7 +202,7 @@
     "type": "series",
     "imdbId": "tt2771780",
     "tmdbId": 45140,
-    "id": "dc_tt2771780",
+    "id": "tt2771780",
     "releaseYear": "2013",
     "poster": "https://image.tmdb.org/t/p/w500/udaLIJ6Na7GOHjvTlyP9JFPTccv.jpg"
   },
@@ -211,7 +211,7 @@
     "type": "series",
     "imdbId": "tt2329077",
     "tmdbId": 41676,
-    "id": "dc_tt2329077",
+    "id": "tt2329077",
     "releaseYear": "2013",
     "poster": "https://image.tmdb.org/t/p/w500/4qHERbfhZlgK8ecaNyCvbHbsRfd.jpg"
   },
@@ -220,7 +220,7 @@
     "type": "movie",
     "imdbId": "tt3468260",
     "tmdbId": 251768,
-    "id": "dc_tt3468260",
+    "id": "tt3468260",
     "releaseYear": "2014",
     "poster": "https://image.tmdb.org/t/p/w500/qchNuTbnleCtlIB8wyV03f36VuF.jpg"
   },
@@ -229,7 +229,7 @@
     "type": "movie",
     "imdbId": "tt3060952",
     "tmdbId": 217993,
-    "id": "dc_tt3060952",
+    "id": "tt3060952",
     "releaseYear": "2014",
     "poster": "https://image.tmdb.org/t/p/w500/eu6zEhpt9QVgZk8T4FJCwKCbJkq.jpg"
   },
@@ -238,7 +238,7 @@
     "type": "movie",
     "imdbId": "tt3578794",
     "tmdbId": 263484,
-    "id": "dc_tt3578794",
+    "id": "tt3578794",
     "releaseYear": "2014",
     "poster": "https://image.tmdb.org/t/p/w500/oeM92UDXNqvOcm5fpTeWsyGKsuX.jpg"
   },
@@ -247,7 +247,7 @@
     "type": "movie",
     "imdbId": "tt3643208",
     "tmdbId": 264170,
-    "id": "dc_tt3643208",
+    "id": "tt3643208",
     "releaseYear": "2014",
     "poster": "https://image.tmdb.org/t/p/w500/doNcszmSj14ik6owOlGx5Ul9hwC.jpg"
   },
@@ -256,7 +256,7 @@
     "type": "movie",
     "imdbId": "tt3643216",
     "tmdbId": 269246,
-    "id": "dc_tt3643216",
+    "id": "tt3643216",
     "releaseYear": "2014",
     "poster": "https://image.tmdb.org/t/p/w500/dDD8EwK7LHhfq2gmJznS94QSFaD.jpg"
   },
@@ -265,7 +265,7 @@
     "type": "movie",
     "imdbId": "tt3139072",
     "tmdbId": 251519,
-    "id": "dc_tt3139072",
+    "id": "tt3139072",
     "releaseYear": "2014",
     "poster": "https://image.tmdb.org/t/p/w500/yHx8OLSKc3VtIBB5lIe90c0fHOX.jpg"
   },
@@ -274,7 +274,7 @@
     "type": "movie",
     "imdbId": "tt3139086",
     "tmdbId": 242643,
-    "id": "dc_tt3139086",
+    "id": "tt3139086",
     "releaseYear": "2014",
     "poster": "https://image.tmdb.org/t/p/w500/b9KxvIAZkl2f57kjObj8Z9z9LhL.jpg"
   },
@@ -283,7 +283,7 @@
     "type": "movie",
     "imdbId": "tt4189294",
     "tmdbId": 300424,
-    "id": "dc_tt4189294",
+    "id": "tt4189294",
     "releaseYear": "2014",
     "poster": "https://image.tmdb.org/t/p/w500/7JmTzxQx78PfRKVuQjpG80jjXoM.jpg"
   },
@@ -292,7 +292,7 @@
     "type": "series",
     "imdbId": "tt3851668",
     "tmdbId": 281000,
-    "id": "dc_tt3851668",
+    "id": "tt3851668",
     "releaseYear": "2014",
     "poster": "https://image.tmdb.org/t/p/w500/zDsCHkXbPRVkld6Vew8eCK086Ur.jpg"
   },
@@ -301,7 +301,7 @@
     "type": "movie",
     "imdbId": "tt3878542",
     "tmdbId": 297556,
-    "id": "dc_tt3878542",
+    "id": "tt3878542",
     "releaseYear": "2015",
     "poster": "https://image.tmdb.org/t/p/w500/iaYZA8teYeIxmR8wRrEED5wwR0u.jpg"
   },
@@ -310,7 +310,7 @@
     "type": "movie",
     "imdbId": "tt7516768",
     "tmdbId": 506452,
-    "id": "dc_tt7516768",
+    "id": "tt7516768",
     "releaseYear": "2015",
     "poster": "https://image.tmdb.org/t/p/w500/9BFTFHTynUf3XfJKDt9svkr15Di.jpg"
   },
@@ -319,7 +319,7 @@
     "type": "movie",
     "imdbId": "tt4189260",
     "tmdbId": 322456,
-    "id": "dc_tt4189260",
+    "id": "tt4189260",
     "releaseYear": "2015",
     "poster": "https://image.tmdb.org/t/p/w500/g3EP0qrVY9k08OABBsLQMHzA0nG.jpg"
   },
@@ -328,7 +328,7 @@
     "type": "movie",
     "imdbId": "tt4324274",
     "tmdbId": 321528,
-    "id": "dc_tt4324274",
+    "id": "tt4324274",
     "releaseYear": "2015",
     "poster": "https://image.tmdb.org/t/p/w500/aGp9XDXmVM5lCKHWtgBC15S7XLr.jpg"
   },
@@ -337,7 +337,7 @@
     "type": "movie",
     "imdbId": "tt4437640",
     "tmdbId": 327418,
-    "id": "dc_tt4437640",
+    "id": "tt4437640",
     "releaseYear": "2015",
     "poster": "https://image.tmdb.org/t/p/w500/9e6iPMBr9rQKPoK8g3YDTVvI5ud.jpg"
   },
@@ -346,7 +346,7 @@
     "type": "movie",
     "imdbId": "tt4324302",
     "tmdbId": 323027,
-    "id": "dc_tt4324302",
+    "id": "tt4324302",
     "releaseYear": "2015",
     "poster": "https://image.tmdb.org/t/p/w500/9EoqQuEZKmQIYjexoUbkxMcMCVr.jpg"
   },
@@ -355,7 +355,7 @@
     "type": "movie",
     "imdbId": "tt4729754",
     "tmdbId": 342917,
-    "id": "dc_tt4729754",
+    "id": "tt4729754",
     "releaseYear": "2015",
     "poster": "https://image.tmdb.org/t/p/w500/jceXBNFMPLAKlo2MPJGJlXJBQJL.jpg"
   },
@@ -364,7 +364,7 @@
     "type": "movie",
     "imdbId": "tt4938416",
     "tmdbId": 353595,
-    "id": "dc_tt4938416",
+    "id": "tt4938416",
     "releaseYear": "2015",
     "poster": "https://image.tmdb.org/t/p/w500/x7RowYDdokZgb8yW2cAlOS70JiK.jpg"
   },
@@ -373,7 +373,7 @@
     "type": "movie",
     "imdbId": "tt5028778",
     "tmdbId": 363863,
-    "id": "dc_tt5028778",
+    "id": "tt5028778",
     "releaseYear": "2015",
     "poster": "https://image.tmdb.org/t/p/w500/1SCkb0XAJUlqr9ugt91Up94P1LF.jpg"
   },
@@ -382,7 +382,7 @@
     "type": "movie",
     "imdbId": "tt4870838",
     "tmdbId": 366924,
-    "id": "dc_tt4870838",
+    "id": "tt4870838",
     "releaseYear": "2016",
     "poster": "https://image.tmdb.org/t/p/w500/1UmPJWfaivtNjsScJqcsbsQRGNY.jpg"
   },
@@ -391,7 +391,7 @@
     "type": "movie",
     "imdbId": "tt5251438",
     "tmdbId": 382512,
-    "id": "dc_tt5251438",
+    "id": "tt5251438",
     "releaseYear": "2016",
     "poster": "https://image.tmdb.org/t/p/w500/aRsWTDTf0YJhcoDEDIW6xAFxBiG.jpg"
   },
@@ -400,7 +400,7 @@
     "type": "movie",
     "imdbId": "tt5779638",
     "tmdbId": 403333,
-    "id": "dc_tt5779638",
+    "id": "tt5779638",
     "releaseYear": "2016",
     "poster": "https://image.tmdb.org/t/p/w500/7r4GBHpBggEqOaSblfzgS9FUEj5.jpg"
   },
@@ -409,7 +409,7 @@
     "type": "movie",
     "imdbId": "tt5091548",
     "tmdbId": 379291,
-    "id": "dc_tt5091548",
+    "id": "tt5091548",
     "releaseYear": "2016",
     "poster": "https://image.tmdb.org/t/p/w500/ctHGhbe19xIX6wlECsFydHiha4W.jpg"
   },
@@ -418,7 +418,7 @@
     "type": "movie",
     "imdbId": "tt5612702",
     "tmdbId": 396330,
-    "id": "dc_tt5612702",
+    "id": "tt5612702",
     "releaseYear": "2016",
     "poster": "https://image.tmdb.org/t/p/w500/lVlV77juRfkB4gXtkgEqZyqHzkk.jpg"
   },
@@ -427,7 +427,7 @@
     "type": "movie",
     "imdbId": "tt4853102",
     "tmdbId": 382322,
-    "id": "dc_tt4853102",
+    "id": "tt4853102",
     "releaseYear": "2016",
     "poster": "https://image.tmdb.org/t/p/w500/lrQ3LeNIN0nmviZ692seNBUl1Pq.jpg"
   },
@@ -436,7 +436,7 @@
     "type": "movie",
     "imdbId": "tt5896146",
     "tmdbId": 411802,
-    "id": "dc_tt5896146",
+    "id": "tt5896146",
     "releaseYear": "2016",
     "poster": "https://image.tmdb.org/t/p/w500/3re2aBFRYk4KDcoAxoyr8ZTOXX8.jpg"
   },
@@ -445,7 +445,7 @@
     "type": "movie",
     "imdbId": "tt5836262",
     "tmdbId": 401650,
-    "id": "dc_tt5836262",
+    "id": "tt5836262",
     "releaseYear": "2016",
     "poster": "https://image.tmdb.org/t/p/w500/jDixhOwE3MszqEdZ87464mMaESB.jpg"
   },
@@ -454,7 +454,7 @@
     "type": "movie",
     "imdbId": "tt5973626",
     "tmdbId": 411736,
-    "id": "dc_tt5973626",
+    "id": "tt5973626",
     "releaseYear": "2016",
     "poster": "https://image.tmdb.org/t/p/w500/kXV5rVxxRYWHksELUi6dxzWG7Sj.jpg"
   },
@@ -463,7 +463,7 @@
     "type": "series",
     "imdbId": "tt5419200",
     "tmdbId": 68837,
-    "id": "dc_tt5419200",
+    "id": "tt5419200",
     "releaseYear": "2016",
     "poster": "https://image.tmdb.org/t/p/w500/AdTh5kAXYwo0dwHONqCFO7y8Jmf.jpg"
   },
@@ -472,7 +472,7 @@
     "type": "movie",
     "imdbId": "tt2494376",
     "tmdbId": 408220,
-    "id": "dc_tt2494376",
+    "id": "tt2494376",
     "releaseYear": "2017",
     "poster": "https://image.tmdb.org/t/p/w500/gWcTaDFXDrOAPfVzfBFz0Aya5BE.jpg"
   },
@@ -481,7 +481,7 @@
     "type": "movie",
     "imdbId": "tt4116284",
     "tmdbId": 324849,
-    "id": "dc_tt4116284",
+    "id": "tt4116284",
     "releaseYear": "2017",
     "poster": "https://image.tmdb.org/t/p/w500/snGwr2gag4Fcgx2OGmH9otl6ofW.jpg"
   },
@@ -490,7 +490,7 @@
     "type": "movie",
     "imdbId": "tt6315800",
     "tmdbId": 408647,
-    "id": "dc_tt6315800",
+    "id": "tt6315800",
     "releaseYear": "2017",
     "poster": "https://image.tmdb.org/t/p/w500/nuGIlNAJUati4qEAH1nrYKUA3xa.jpg"
   },
@@ -499,7 +499,7 @@
     "type": "movie",
     "imdbId": "tmdb_1081412",
     "tmdbId": 1081412,
-    "id": "dc_tmdb_1081412",
+    "id": "tmdb_1081412",
     "releaseYear": "2017",
     "poster": "https://image.tmdb.org/t/p/w500/mD8ugLBVSI8Rc3ddyFaotUSQRWh.jpg"
   },
@@ -508,7 +508,7 @@
     "type": "movie",
     "imdbId": "tt6945882",
     "tmdbId": 457249,
-    "id": "dc_tt6945882",
+    "id": "tt6945882",
     "releaseYear": "2017",
     "poster": "https://image.tmdb.org/t/p/w500/5A52QYVaZFGWZnXeNfvMOrnd49E.jpg"
   },
@@ -517,7 +517,7 @@
     "type": "movie",
     "imdbId": "tt6869644",
     "tmdbId": 452931,
-    "id": "dc_tt6869644",
+    "id": "tt6869644",
     "releaseYear": "2017",
     "poster": "https://image.tmdb.org/t/p/w500/pctL5rjYqspdbxAfiiOY8xjn7zF.jpg"
   },
@@ -526,7 +526,7 @@
     "type": "movie",
     "imdbId": "tt7158814",
     "tmdbId": 460135,
-    "id": "dc_tt7158814",
+    "id": "tt7158814",
     "releaseYear": "2017",
     "poster": "https://image.tmdb.org/t/p/w500/niLX2txdI5GlVowJlnb5Hr26QpK.jpg"
   },
@@ -535,7 +535,7 @@
     "type": "movie",
     "imdbId": "tt6556890",
     "tmdbId": 408648,
-    "id": "dc_tt6556890",
+    "id": "tt6556890",
     "releaseYear": "2017",
     "poster": "https://image.tmdb.org/t/p/w500/xAP0aqAMlsNN3NEvikRkjaTlmjw.jpg"
   },
@@ -544,7 +544,7 @@
     "type": "movie",
     "imdbId": "tt6142314",
     "tmdbId": 464882,
-    "id": "dc_tt6142314",
+    "id": "tt6142314",
     "releaseYear": "2017",
     "poster": "https://image.tmdb.org/t/p/w500/yTbj8Kcp4WFwMRdEejnn55KIsfH.jpg"
   },
@@ -553,7 +553,7 @@
     "type": "movie",
     "imdbId": "tt7112166",
     "tmdbId": 467172,
-    "id": "dc_tt7112166",
+    "id": "tt7112166",
     "releaseYear": "2017",
     "poster": "https://image.tmdb.org/t/p/w500/wTnuhMGXWprk2syHLtBBi2ZndIh.jpg"
   },
@@ -562,7 +562,7 @@
     "type": "series",
     "imdbId": "tt5957358",
     "tmdbId": 75486,
-    "id": "dc_tt5957358",
+    "id": "tt5957358",
     "releaseYear": "2017",
     "poster": "https://image.tmdb.org/t/p/w500/45sUIqQEt0XGNVMyQ9hxcdLjaq5.jpg"
   },
@@ -571,7 +571,7 @@
     "type": "movie",
     "imdbId": "tt7578566",
     "tmdbId": 484862,
-    "id": "dc_tt7578566",
+    "id": "tt7578566",
     "releaseYear": "2018",
     "poster": "https://image.tmdb.org/t/p/w500/uImdPC9V5L4uSWA6HV6Q6nxc8Ib.jpg"
   },
@@ -580,7 +580,7 @@
     "type": "movie",
     "imdbId": "tt7167630",
     "tmdbId": 471474,
-    "id": "dc_tt7167630",
+    "id": "tt7167630",
     "releaseYear": "2018",
     "poster": "https://image.tmdb.org/t/p/w500/7souLi5zqQCnpZVghaXv0Wowi0y.jpg"
   },
@@ -589,7 +589,7 @@
     "type": "movie",
     "imdbId": "tt7877382",
     "tmdbId": 504997,
-    "id": "dc_tt7877382",
+    "id": "tt7877382",
     "releaseYear": "2018",
     "poster": "https://image.tmdb.org/t/p/w500/9oUCHY4vsjXM6cQpvZmBrd6lusQ.jpg"
   },
@@ -598,7 +598,7 @@
     "type": "movie",
     "imdbId": "tt7167602",
     "tmdbId": 487242,
-    "id": "dc_tt7167602",
+    "id": "tt7167602",
     "releaseYear": "2018",
     "poster": "https://image.tmdb.org/t/p/w500/va1IgsZeWBbKLsZcFwz3CM1MkMu.jpg"
   },
@@ -607,7 +607,7 @@
     "type": "movie",
     "imdbId": "tt7451284",
     "tmdbId": 485942,
-    "id": "dc_tt7451284",
+    "id": "tt7451284",
     "releaseYear": "2018",
     "poster": "https://image.tmdb.org/t/p/w500/5xSB0Npkc9Fd9kahKBsq9P4Cdzp.jpg"
   },
@@ -616,7 +616,7 @@
     "type": "movie",
     "imdbId": "tt8050266",
     "tmdbId": 506734,
-    "id": "dc_tt8050266",
+    "id": "tt8050266",
     "releaseYear": "2018",
     "poster": "https://image.tmdb.org/t/p/w500/d0F6ntggeAwbZBzXXamOEUUapa4.jpg"
   },
@@ -625,7 +625,7 @@
     "type": "movie",
     "imdbId": "tt8421602",
     "tmdbId": 536584,
-    "id": "dc_tt8421602",
+    "id": "tt8421602",
     "releaseYear": "2018",
     "poster": "https://image.tmdb.org/t/p/w500/zVO4Y36FaTvlccPv1vJr5LJ6I87.jpg"
   },
@@ -634,7 +634,7 @@
     "type": "movie",
     "imdbId": "tt7424200",
     "tmdbId": 474395,
-    "id": "dc_tt7424200",
+    "id": "tt7424200",
     "releaseYear": "2018",
     "poster": "https://image.tmdb.org/t/p/w500/mFHihhE9hlvJEk2f1AqdLRaYHd6.jpg"
   },
@@ -643,7 +643,7 @@
     "type": "movie",
     "imdbId": "tt8457394",
     "tmdbId": 513736,
-    "id": "dc_tt8457394",
+    "id": "tt8457394",
     "releaseYear": "2018",
     "poster": "https://image.tmdb.org/t/p/w500/vVTZLKNIkI7HyPeoFbPE3edAWaa.jpg"
   },
@@ -652,7 +652,7 @@
     "type": "movie",
     "imdbId": "tt8634256",
     "tmdbId": 513730,
-    "id": "dc_tt8634256",
+    "id": "tt8634256",
     "releaseYear": "2018",
     "poster": "https://image.tmdb.org/t/p/w500/6KT5oqjul7QQTmxpAmUK8WCigUx.jpg"
   },
@@ -661,7 +661,7 @@
     "type": "movie",
     "imdbId": "tt7167658",
     "tmdbId": 487670,
-    "id": "dc_tt7167658",
+    "id": "tt7167658",
     "releaseYear": "2018",
     "poster": "https://image.tmdb.org/t/p/w500/y0uxSHaSFmt6XaBJgjkeLqe7aM.jpg"
   },
@@ -670,7 +670,7 @@
     "type": "movie",
     "imdbId": "tt9293522",
     "tmdbId": 539626,
-    "id": "dc_tt9293522",
+    "id": "tt9293522",
     "releaseYear": "2018",
     "poster": "https://image.tmdb.org/t/p/w500/jo6ItNdatsIJuIN6WNXI94q74Yq.jpg"
   },
@@ -679,7 +679,7 @@
     "type": "movie",
     "imdbId": "tt9177882",
     "tmdbId": 539517,
-    "id": "dc_tt9177882",
+    "id": "tt9177882",
     "releaseYear": "2018",
     "poster": "https://image.tmdb.org/t/p/w500/tZIMe2pYug1cS9e7AZnd1bTTidM.jpg"
   },
@@ -688,7 +688,7 @@
     "type": "movie",
     "imdbId": "tt7167686",
     "tmdbId": 487672,
-    "id": "dc_tt7167686",
+    "id": "tt7167686",
     "releaseYear": "2019",
     "poster": "https://image.tmdb.org/t/p/w500/e9TzqscNRUaG8HqEP3K1jUvi8pC.jpg"
   },
@@ -697,7 +697,7 @@
     "type": "movie",
     "imdbId": "tt8752474",
     "tmdbId": 537059,
-    "id": "dc_tt8752474",
+    "id": "tt8752474",
     "releaseYear": "2019",
     "poster": "https://image.tmdb.org/t/p/w500/t4v46Gb9tqTZZzBRshBkeoOzxFg.jpg"
   },
@@ -706,7 +706,7 @@
     "type": "movie",
     "imdbId": "tt9775360",
     "tmdbId": 581997,
-    "id": "dc_tt9775360",
+    "id": "tt9775360",
     "releaseYear": "2019",
     "poster": "https://image.tmdb.org/t/p/w500/yP3h0Pu8htyb9450mWJ9Vu1rU.jpg"
   },
@@ -715,7 +715,7 @@
     "type": "movie",
     "imdbId": "tt8752440",
     "tmdbId": 537056,
-    "id": "dc_tt8752440",
+    "id": "tt8752440",
     "releaseYear": "2019",
     "poster": "https://image.tmdb.org/t/p/w500/eiVQORVyVuNNZHPAELuWtlXoQsD.jpg"
   },
@@ -724,7 +724,7 @@
     "type": "movie",
     "imdbId": "tt10736082",
     "tmdbId": 618346,
-    "id": "dc_tt10736082",
+    "id": "tt10736082",
     "releaseYear": "2019",
     "poster": "https://image.tmdb.org/t/p/w500/unKs4vcDibIgRKyveOTwiBX6bBq.jpg"
   },
@@ -733,7 +733,7 @@
     "type": "movie",
     "imdbId": "tt10327712",
     "tmdbId": 602307,
-    "id": "dc_tt10327712",
+    "id": "tt10327712",
     "releaseYear": "2019",
     "poster": "https://image.tmdb.org/t/p/w500/rA5bdwbzEAKfvjHRzza6Q3r0otq.jpg"
   },
@@ -742,7 +742,7 @@
     "type": "movie",
     "imdbId": "tt10548944",
     "tmdbId": 556901,
-    "id": "dc_tt10548944",
+    "id": "tt10548944",
     "releaseYear": "2019",
     "poster": "https://image.tmdb.org/t/p/w500/GWJEdzVC9aOBSOMF9NHodYxSsE.jpg"
   },
@@ -751,7 +751,7 @@
     "type": "movie",
     "imdbId": "tt8752498",
     "tmdbId": 537055,
-    "id": "dc_tt8752498",
+    "id": "tt8752498",
     "releaseYear": "2019",
     "poster": "https://image.tmdb.org/t/p/w500/w1SBqj0fn1j72ST5i1jauWo3swT.jpg"
   },
@@ -760,7 +760,7 @@
     "type": "movie",
     "imdbId": "tt11229556",
     "tmdbId": 637663,
-    "id": "dc_tt11229556",
+    "id": "tt11229556",
     "releaseYear": "2019",
     "poster": "https://image.tmdb.org/t/p/w500/4Ni5u7VMFbw4kIpqx5wKqjlFVwA.jpg"
   },
@@ -769,7 +769,7 @@
     "type": "series",
     "imdbId": "tt9628244",
     "tmdbId": 87491,
-    "id": "dc_tt9628244",
+    "id": "tt9628244",
     "releaseYear": "2019",
     "poster": "https://image.tmdb.org/t/p/w500/xpOW4hlnkqlIXrjkUHUWPF3Hws2.jpg"
   },
@@ -778,7 +778,7 @@
     "type": "series",
     "imdbId": "tt7658402",
     "tmdbId": 74440,
-    "id": "dc_tt7658402",
+    "id": "tt7658402",
     "releaseYear": "2019",
     "poster": "https://image.tmdb.org/t/p/w500/9Dm1SEh8Wxt8LNNg02exHQ595zg.jpg"
   },
@@ -787,7 +787,7 @@
     "type": "movie",
     "imdbId": "tt10985510",
     "tmdbId": 618355,
-    "id": "dc_tt10985510",
+    "id": "tt10985510",
     "releaseYear": "2020",
     "poster": "https://image.tmdb.org/t/p/w500/frSfz7olCSQsp2SmTyu2ciGGQiX.jpg"
   },
@@ -796,7 +796,7 @@
     "type": "movie",
     "imdbId": "tt11802028",
     "tmdbId": 618352,
-    "id": "dc_tt11802028",
+    "id": "tt11802028",
     "releaseYear": "2020",
     "poster": "https://image.tmdb.org/t/p/w500/akauuYAyzR07bIYtZzFAqzguhp6.jpg"
   },
@@ -805,7 +805,7 @@
     "type": "movie",
     "imdbId": "tt12093878",
     "tmdbId": 690369,
-    "id": "dc_tt12093878",
+    "id": "tt12093878",
     "releaseYear": "2020",
     "poster": "https://image.tmdb.org/t/p/w500/ziIyuNNNwYqv0qbOpV9VvvdnRBb.jpg"
   },
@@ -814,7 +814,7 @@
     "type": "movie",
     "imdbId": "tt11079148",
     "tmdbId": 618344,
-    "id": "dc_tt11079148",
+    "id": "tt11079148",
     "releaseYear": "2020",
     "poster": "https://image.tmdb.org/t/p/w500/c01Y4suApJ1Wic2xLmaq1QYcfoZ.jpg"
   },
@@ -823,7 +823,7 @@
     "type": "movie",
     "imdbId": "tt12272414",
     "tmdbId": 618350,
-    "id": "dc_tt12272414",
+    "id": "tt12272414",
     "releaseYear": "2020",
     "poster": "https://image.tmdb.org/t/p/w500/hUDA8NrPtyV9xP6a0n4ZH4NhVD0.jpg"
   },
@@ -832,7 +832,7 @@
     "type": "movie",
     "imdbId": "tt12876132",
     "tmdbId": 703771,
-    "id": "dc_tt12876132",
+    "id": "tt12876132",
     "releaseYear": "2020",
     "poster": "https://image.tmdb.org/t/p/w500/vFIHbiy55smzi50RmF8LQjmpGcx.jpg"
   },
@@ -841,7 +841,7 @@
     "type": "movie",
     "imdbId": "tt11079116",
     "tmdbId": 618354,
-    "id": "dc_tt11079116",
+    "id": "tt11079116",
     "releaseYear": "2020",
     "poster": "https://image.tmdb.org/t/p/w500/n9GtiJiBETVFayQy7YnVdF9AucU.jpg"
   },
@@ -850,7 +850,7 @@
     "type": "movie",
     "imdbId": "tt12794046",
     "tmdbId": 618353,
-    "id": "dc_tt12794046",
+    "id": "tt12794046",
     "releaseYear": "2020",
     "poster": "https://image.tmdb.org/t/p/w500/k8Q9ulyRE8fkvZMkAM9LPYMKctb.jpg"
   },
@@ -859,7 +859,7 @@
     "type": "series",
     "imdbId": "tt10394706",
     "tmdbId": 97456,
-    "id": "dc_tt10394706",
+    "id": "tt10394706",
     "releaseYear": "2020",
     "poster": "https://image.tmdb.org/t/p/w500/7WCsBrznq1RLteXUTsiqP3AYKXt.jpg"
   },
@@ -868,7 +868,7 @@
     "type": "movie",
     "imdbId": "tt12885852",
     "tmdbId": 732450,
-    "id": "dc_tt12885852",
+    "id": "tt12885852",
     "releaseYear": "2021",
     "poster": "https://image.tmdb.org/t/p/w500/uDhnTtSxU5a8DtZdbbin3aZmkmU.jpg"
   },
@@ -877,7 +877,7 @@
     "type": "movie",
     "imdbId": "tt14577038",
     "tmdbId": 791343,
-    "id": "dc_tt14577038",
+    "id": "tt14577038",
     "releaseYear": "2021",
     "poster": "https://image.tmdb.org/t/p/w500/lDebLQqHbrxN6S6wAchaH0GabZT.jpg"
   },
@@ -886,7 +886,7 @@
     "type": "movie",
     "imdbId": "tt13804084",
     "tmdbId": 736069,
-    "id": "dc_tt13804084",
+    "id": "tt13804084",
     "releaseYear": "2021",
     "poster": "https://image.tmdb.org/t/p/w500/e4REOC6CZW8J6FslA4nRvdQXFXR.jpg"
   },
@@ -895,7 +895,7 @@
     "type": "movie",
     "imdbId": "tt14851194",
     "tmdbId": 834404,
-    "id": "dc_tt14851194",
+    "id": "tt14851194",
     "releaseYear": "2021",
     "poster": "https://image.tmdb.org/t/p/w500/9ycZTJORpmD5SxrEawQCs2fepSk.jpg"
   },
@@ -904,7 +904,7 @@
     "type": "movie",
     "imdbId": "tt14324650",
     "tmdbId": 736073,
-    "id": "dc_tt14324650",
+    "id": "tt14324650",
     "releaseYear": "2021",
     "poster": "https://image.tmdb.org/t/p/w500/sR7gppb0YGjwLvE6Vnj6wYv5MnW.jpg"
   },
@@ -913,7 +913,7 @@
     "type": "movie",
     "imdbId": "tt14948338",
     "tmdbId": 791344,
-    "id": "dc_tt14948338",
+    "id": "tt14948338",
     "releaseYear": "2021",
     "poster": "https://image.tmdb.org/t/p/w500/m63tjpijO5bWXIoAm26YKy5xY6c.jpg"
   },
@@ -922,7 +922,7 @@
     "type": "movie",
     "imdbId": "tt14402926",
     "tmdbId": 736074,
-    "id": "dc_tt14402926",
+    "id": "tt14402926",
     "releaseYear": "2021",
     "poster": "https://image.tmdb.org/t/p/w500/5X1n5q08mZ7NpNpxehMFODxfNYq.jpg"
   },
@@ -931,7 +931,7 @@
     "type": "movie",
     "imdbId": "tt15129756",
     "tmdbId": 791346,
-    "id": "dc_tt15129756",
+    "id": "tt15129756",
     "releaseYear": "2021",
     "poster": "https://image.tmdb.org/t/p/w500/6ssj7xaCoDhOekcasPCWbfjLfwR.jpg"
   },
@@ -940,7 +940,7 @@
     "type": "movie",
     "imdbId": "tt5012504",
     "tmdbId": 831405,
-    "id": "dc_tt5012504",
+    "id": "tt5012504",
     "releaseYear": "2021",
     "poster": "https://image.tmdb.org/t/p/w500/rzrSeqqpm1BwJ3tcTznztBtLLSD.jpg"
   },
@@ -949,7 +949,7 @@
     "type": "series",
     "imdbId": "tt11639062",
     "tmdbId": 98137,
-    "id": "dc_tt11639062",
+    "id": "tt11639062",
     "releaseYear": "2021",
     "poster": "https://image.tmdb.org/t/p/w500/zDf9Dv7gmt8qMHnhuiKBldk3q2q.jpg"
   },
@@ -958,7 +958,7 @@
     "type": "movie",
     "imdbId": "tt15248702",
     "tmdbId": 862491,
-    "id": "dc_tt15248702",
+    "id": "tt15248702",
     "releaseYear": "2022",
     "poster": "https://image.tmdb.org/t/p/w500/iu01cvxs3eLQzra3YNF1pbpXIZa.jpg"
   },
@@ -967,7 +967,7 @@
     "type": "movie",
     "imdbId": "tt18305072",
     "tmdbId": 791348,
-    "id": "dc_tt18305072",
+    "id": "tt18305072",
     "releaseYear": "2022",
     "poster": "https://image.tmdb.org/t/p/w500/n3FQYSzptYZJRvp9yGVDxoTfE0L.jpg"
   },
@@ -976,7 +976,7 @@
     "type": "movie",
     "imdbId": "tt20192230",
     "tmdbId": 887357,
-    "id": "dc_tt20192230",
+    "id": "tt20192230",
     "releaseYear": "2022",
     "poster": "https://image.tmdb.org/t/p/w500/fSSvyX9rrdsDyY3oWLxCCyy34qZ.jpg"
   },
@@ -985,7 +985,7 @@
     "type": "movie",
     "imdbId": "tt18250460",
     "tmdbId": 913205,
-    "id": "dc_tt18250460",
+    "id": "tt18250460",
     "releaseYear": "2022",
     "poster": "https://image.tmdb.org/t/p/w500/1u3IB7Tp0kSDaUBr3iHEzPjfKvL.jpg"
   },
@@ -994,7 +994,7 @@
     "type": "movie",
     "imdbId": "tt8912936",
     "tmdbId": 539681,
-    "id": "dc_tt8912936",
+    "id": "tt8912936",
     "releaseYear": "2022",
     "poster": "https://image.tmdb.org/t/p/w500/qpPMewlugFaejXjz4YNDnpTniFX.jpg"
   },
@@ -1003,7 +1003,7 @@
     "type": "movie",
     "imdbId": "tt21197740",
     "tmdbId": 886396,
-    "id": "dc_tt21197740",
+    "id": "tt21197740",
     "releaseYear": "2022",
     "poster": "https://image.tmdb.org/t/p/w500/mvffaexT5kA3chOnGxwBSlRoshh.jpg"
   },
@@ -1012,7 +1012,7 @@
     "type": "series",
     "imdbId": "tt13292830",
     "tmdbId": 155780,
-    "id": "dc_tt13292830",
+    "id": "tt13292830",
     "releaseYear": "2022",
     "poster": "https://image.tmdb.org/t/p/w500/nDNUuNNoFaZFNjSwWCG5XwaOf9f.jpg"
   },
@@ -1021,7 +1021,7 @@
     "type": "movie",
     "imdbId": "tt22769820",
     "tmdbId": 1003580,
-    "id": "dc_tt22769820",
+    "id": "tt22769820",
     "releaseYear": "2023",
     "poster": "https://image.tmdb.org/t/p/w500/8M6bA5t2q5u1nWDTEIXuGDwvboW.jpg"
   },
@@ -1030,7 +1030,7 @@
     "type": "movie",
     "imdbId": "tt24223450",
     "tmdbId": 1003579,
-    "id": "dc_tt24223450",
+    "id": "tt24223450",
     "releaseYear": "2023",
     "poster": "https://image.tmdb.org/t/p/w500/sKWN5ZzDxnfVixUavs09HfBCCA3.jpg"
   },
@@ -1039,7 +1039,7 @@
     "type": "movie",
     "imdbId": "tt24548912",
     "tmdbId": 997776,
-    "id": "dc_tt24548912",
+    "id": "tt24548912",
     "releaseYear": "2023",
     "poster": "https://image.tmdb.org/t/p/w500/n2NRBya6jR1DQ8V4jYRdR6iFDQI.jpg"
   },
@@ -1048,7 +1048,7 @@
     "type": "movie",
     "imdbId": "tt27687527",
     "tmdbId": 1003581,
-    "id": "dc_tt27687527",
+    "id": "tt27687527",
     "releaseYear": "2023",
     "poster": "https://image.tmdb.org/t/p/w500/pHdSS5G3wDwJp6jWgMpbSjNiTbr.jpg"
   },
@@ -1057,7 +1057,7 @@
     "type": "movie",
     "imdbId": "tt28508231",
     "tmdbId": 1146348,
-    "id": "dc_tt28508231",
+    "id": "tt28508231",
     "releaseYear": "2023",
     "poster": "https://image.tmdb.org/t/p/w500/kllOhDl3DyApQZ78pffMH1C2ZIn.jpg"
   },
@@ -1066,7 +1066,7 @@
     "type": "movie",
     "imdbId": "tt28786861",
     "tmdbId": 1150537,
-    "id": "dc_tt28786861",
+    "id": "tt28786861",
     "releaseYear": "2023",
     "poster": "https://image.tmdb.org/t/p/w500/o9qmCvnJLCqMuKsrZ0tWvSCEWTz.jpg"
   },
@@ -1075,7 +1075,7 @@
     "type": "movie",
     "imdbId": "tt15352516",
     "tmdbId": 870358,
-    "id": "dc_tt15352516",
+    "id": "tt15352516",
     "releaseYear": "2023",
     "poster": "https://image.tmdb.org/t/p/w500/2J70guF8wcErbYbRgZUBcvShgI1.jpg"
   },
@@ -1084,7 +1084,7 @@
     "type": "series",
     "imdbId": "tt14681924",
     "tmdbId": 125928,
-    "id": "dc_tt14681924",
+    "id": "tt14681924",
     "releaseYear": "2023",
     "poster": "https://image.tmdb.org/t/p/w500/kocOUpdLnHyqfMW4jSRLxWT0QhM.jpg"
   },
@@ -1093,7 +1093,7 @@
     "type": "movie",
     "imdbId": "tt29195117",
     "tmdbId": 1155089,
-    "id": "dc_tt29195117",
+    "id": "tt29195117",
     "releaseYear": "2024",
     "poster": "https://image.tmdb.org/t/p/w500/zR6C66EDklgTPLHRSmmMt5878MR.jpg"
   },
@@ -1102,7 +1102,7 @@
     "type": "movie",
     "imdbId": "tt30150907",
     "tmdbId": 1209288,
-    "id": "dc_tt30150907",
+    "id": "tt30150907",
     "releaseYear": "2024",
     "poster": "https://image.tmdb.org/t/p/w500/g8ak4QAGLZpqMs3CpnFHWWfIzJQ.jpg"
   },
@@ -1111,7 +1111,7 @@
     "type": "movie",
     "imdbId": "tt30150917",
     "tmdbId": 1209290,
-    "id": "dc_tt30150917",
+    "id": "tt30150917",
     "releaseYear": "2024",
     "poster": "https://image.tmdb.org/t/p/w500/a3q8NkM8uTh9E23VsbUOdDSbBeN.jpg"
   },
@@ -1120,7 +1120,7 @@
     "type": "movie",
     "imdbId": "tt32627540",
     "tmdbId": 1155058,
-    "id": "dc_tt32627540",
+    "id": "tt32627540",
     "releaseYear": "2024",
     "poster": "https://image.tmdb.org/t/p/w500/tE2vZ6HdlmKaBh0wpsvHCf7HJKo.jpg"
   },
@@ -1129,7 +1129,7 @@
     "type": "movie",
     "imdbId": "tt32627545",
     "tmdbId": 1299652,
-    "id": "dc_tt32627545",
+    "id": "tt32627545",
     "releaseYear": "2024",
     "poster": "https://image.tmdb.org/t/p/w500/4rBObJFpiWJOG7aIlRrOUniAkBs.jpg"
   },
@@ -1138,7 +1138,7 @@
     "type": "series",
     "imdbId": "tt19853518",
     "tmdbId": 200753,
-    "id": "dc_tt19853518",
+    "id": "tt19853518",
     "releaseYear": "2024",
     "poster": "https://image.tmdb.org/t/p/w500/egO6MZeQ3CKb8UMVZPYR7fENA6w.jpg"
   },
@@ -1147,7 +1147,7 @@
     "type": "series",
     "imdbId": "tt26545355",
     "tmdbId": 219543,
-    "id": "dc_tt26545355",
+    "id": "tt26545355",
     "releaseYear": "2024",
     "poster": "https://image.tmdb.org/t/p/w500/bB3G6Ug1jfsOUptb0RJsqrgMVta.jpg"
   },
@@ -1156,7 +1156,7 @@
     "type": "movie",
     "imdbId": "tt33549695",
     "tmdbId": 1364797,
-    "id": "dc_tt33549695",
+    "id": "tt33549695",
     "releaseYear": "2028",
     "poster": "https://image.tmdb.org/t/p/w500/byZZQsE933kaBCq6i2yGQnJF6TN.jpg"
   }

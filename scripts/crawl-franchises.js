@@ -37,14 +37,58 @@ if (!fs.existsSync(OUT_DIR)) {
   fs.mkdirSync(OUT_DIR, { recursive: true });
 }
 
+const FRANCHISE_NAME_MAP = {
+  // DC
+  'dc_DCEUMovies': 'DC: DCEU',
+  'dc_DCSeries': 'DC',
+  'dc_everythingbatman': 'DC: Everything Batman',
+  'dc_everythingbatmananimation': 'DC: Everything Batman Animation',
+  'dc_everythingsuperman': 'DC: Everything Superman',
+  'dc_everythingsupermananimation': 'DC: Everything Superman Animation',
+  'dc_chronologicalData': 'DC: Chronological',
+  'dc_releaseData': 'DC: Release Order',
+  'dc_animationsData': 'DC: Animations',
+  'dc_moviesData': 'DC',
+  'dc_seriesData': 'DC',
+
+  // Marvel
+  'marvel_chronologicalData': 'Marvel: Chronological',
+  'marvel_releaseData': 'Marvel: Release Order',
+  'marvel_xmenData': 'Marvel: X-Men',
+  'marvel_animationsData': 'Marvel: Animations',
+  'marvel_moviesData': 'Marvel',
+  'marvel_seriesData': 'Marvel',
+
+  // Star Wars
+  'star_wars_skywalkerSagaData': 'Star Wars: Skywalker Saga',
+  'star_wars_moviesSeriesChronologicalData': 'Star Wars: Chronological',
+  'star_wars_moviesSeriesReleaseData': 'Star Wars: Release Order',
+  'star_wars_animatedSeriesData': 'Star Wars: Animated',
+  'star_wars_liveActionSeriesData': 'Star Wars: Live Action',
+  'star_wars_anthologyFilmsData': 'Star Wars: Anthology',
+  'star_wars_empireEraData': 'Star Wars: Empire Era',
+  'star_wars_highRepublicEraData': 'Star Wars: High Republic Era',
+  'star_wars_newRepublicEraData': 'Star Wars: New Republic Era',
+  'star_wars_jediSithLoreData': 'Star Wars: Jedi Sith Lore',
+  'star_wars_bountyHuntersUnderworldData': 'Star Wars: Bounty Hunters Underworld',
+  'star_wars_droidsCreaturesData': 'Star Wars: Droids Creatures',
+  'star_wars_microSeriesShortsData': 'Star Wars: Shorts'
+};
+
 // Format readable display name
 function formatName(name) {
-  name = name.replace('.json', '');
-  name = name.replace(/^(dc|marvel|star_wars)_/, '');
-  name = name.replace(/Data$/, '');
-  name = name.replace(/([A-Z])/g, ' $1').trim();
-  name = name.charAt(0).toUpperCase() + name.slice(1);
-  return name;
+  const cleanId = name.replace('.json', '');
+  if (FRANCHISE_NAME_MAP[cleanId]) {
+    return FRANCHISE_NAME_MAP[cleanId];
+  }
+  let fallback = cleanId.replace(/^(dc|marvel|star_wars)_/, '').replace(/Data$/, '');
+  fallback = fallback.replace(/([A-Z])/g, ' $1').trim();
+  fallback = fallback.charAt(0).toUpperCase() + fallback.slice(1);
+  let prefix = "";
+  if (name.startsWith('dc_')) prefix = "DC: ";
+  if (name.startsWith('marvel_')) prefix = "Marvel: ";
+  if (name.startsWith('star_wars_')) prefix = "Star Wars: ";
+  return prefix + fallback;
 }
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -320,16 +364,12 @@ function updateRegistration() {
     };
 
     const friendlyName = formatName(file);
-    let prefix = "";
-    if (file.startsWith('dc_')) prefix = "DC: ";
-    if (file.startsWith('marvel_')) prefix = "Marvel: ";
-    if (file.startsWith('star_wars_')) prefix = "Star Wars: ";
 
     if (!translations["en-US"]) translations["en-US"] = {};
-    translations["en-US"][nameKey] = prefix + friendlyName;
+    translations["en-US"][nameKey] = friendlyName;
 
     if (!translations["vi-VN"]) translations["vi-VN"] = {};
-    translations["vi-VN"][nameKey] = prefix + friendlyName;
+    translations["vi-VN"][nameKey] = friendlyName;
 
     let type = 'movie';
     if (file.toLowerCase().includes('series') || file.toLowerCase().includes('animation')) {
@@ -342,7 +382,7 @@ function updateRegistration() {
 
     frontendCatalogs.push({
       id: `franchise.${id}`,
-      name: prefix + friendlyName,
+      name: friendlyName,
       type: type,
       source: 'franchise',
       franchise: franchise

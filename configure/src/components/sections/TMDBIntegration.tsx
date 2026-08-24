@@ -353,7 +353,7 @@ export function TMDBIntegration({ isOpen, onClose }: TMDBIntegrationProps) {
       const movieCatalog: CatalogConfig = {
         id: `tmdb.list.${listId}.movies`,
         type: "movie",
-        name: `${listPreview.name} (Movies)`,
+        name: listPreview.name,
         enabled: true,
         showInHome: true,
         source: "tmdb",
@@ -370,7 +370,7 @@ export function TMDBIntegration({ isOpen, onClose }: TMDBIntegrationProps) {
       const seriesCatalog: CatalogConfig = {
         id: `tmdb.list.${listId}.series`,
         type: "series",
-        name: `${listPreview.name} (Series)`,
+        name: listPreview.name,
         enabled: true,
         showInHome: true,
         source: "tmdb",

@@ -264,7 +264,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
               
             if (!newCatalogs.some(c => c.id === movieCatalogId)) {
               const movieCatalog = createMDBListCatalog({
-                list: { ...list, id: `${list.id}.movies`, name: `${list.name} (Movies)` },
+                list: { ...list, id: `${list.id}.movies`, name: list.name },
                 sort: defaultSort,
                 order: defaultOrder,
                 cacheTTL: defaultCacheTTL,
@@ -280,7 +280,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
             
             if (!newCatalogs.some(c => c.id === seriesCatalogId)) {
               const seriesCatalog = createMDBListCatalog({
-                list: { ...list, id: `${list.id}.series`, name: `${list.name} (Series)` },
+                list: { ...list, id: `${list.id}.series`, name: list.name },
                 sort: defaultSort,
                 order: defaultOrder,
                 cacheTTL: defaultCacheTTL,
@@ -994,7 +994,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
           const movieCatalog: CatalogConfig = {
             id: 'mdblist.watchlist.movies',
             type: 'movie',
-            name: 'Watchlist (Movies)',
+            name: 'Watchlist',
             enabled: true,
             showInHome: true,
             source: 'mdblist',
@@ -1011,7 +1011,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
           const seriesCatalog: CatalogConfig = {
             id: 'mdblist.watchlist.series',
             type: 'series',
-            name: 'Watchlist (Series)',
+            name: 'Watchlist',
             enabled: true,
             showInHome: true,
             source: 'mdblist',

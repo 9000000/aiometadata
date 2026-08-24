@@ -380,8 +380,8 @@ export function createTvdbListCatalogs(options: TvdbListCatalogOptions): Catalog
   }
   if (mode === 'split') {
     return [
-      build(`tvdb.list.${listId}.movies`, 'movie', `${list.name} (Movies)`, list.movieCount),
-      build(`tvdb.list.${listId}.series`, 'series', `${list.name} (Series)`, list.seriesCount),
+      build(`tvdb.list.${listId}.movies`, 'movie', list.name, list.movieCount),
+      build(`tvdb.list.${listId}.series`, 'series', list.name, list.seriesCount),
     ];
   }
   return [build(`tvdb.list.${listId}`, 'all', list.name, list.itemCount)];

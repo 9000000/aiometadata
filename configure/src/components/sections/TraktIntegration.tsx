@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useConfig, CatalogConfig } from '@/contexts/ConfigContext';
+import { applyDisconnectRemovals, persistIntegrationCredential } from '@/lib/integrationCredentials';
+import { useSave } from '@/contexts/SaveContext';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
@@ -86,6 +88,7 @@ export function TraktIntegration({ isOpen, onClose }: TraktIntegrationProps) {
         });
     }, []);
   const { config, setConfig, auth } = useConfig();
+  const { markConfigPersisted, isDirty } = useSave();
   const [tempTokenId, setTempTokenId] = useState(config.apiKeys?.traktTokenId || "");
   const [isConnected, setIsConnected] = useState(!!config.apiKeys?.traktTokenId);
   const [customListUrl, setCustomListUrl] = useState("");
@@ -206,6 +209,11 @@ export function TraktIntegration({ isOpen, onClose }: TraktIntegrationProps) {
             },
           }));
 
+          // Persisted straight away so navigating away cannot lose the connection
+          // and cannot strand the credential row with nothing pointing at it.
+          void persistIntegrationCredential({ provider: 'trakt', tokenId: tempTokenId.trim(), userUUID: auth.userUUID, password: auth.password, authenticated: auth.authenticated })
+            .then(result => { if (result.error) toast.warning(`Connected, but the link was not saved: ${result.error}`); });
+
           setIsConnected(true);
           toast.success(`Connected as @${data.username}`);
         } else {
@@ -258,7 +266,11 @@ export function TraktIntegration({ isOpen, onClose }: TraktIntegrationProps) {
       setUsername(null);
       // Reloading dropped the session, which is held in memory only, so the
       // saved config comes back from the server and is adopted in place.
-      if (data.config) setConfig(data.config);
+      // The server already saved these removals. If nothing else was pending, the page
+      // now matches disk, so the baseline moves with it rather than claiming unsaved work.
+      const next = applyDisconnectRemovals(config, data.removed);
+      setConfig(next);
+      if (isDirty === false) markConfigPersisted(next);
       toast.success("Trakt account disconnected");
     } catch (error) {
       console.error("Disconnect error:", error);

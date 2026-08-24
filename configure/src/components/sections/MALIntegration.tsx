@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useConfig, CatalogConfig } from '@/contexts/ConfigContext';
+import { applyDisconnectRemovals, persistIntegrationCredential } from '@/lib/integrationCredentials';
+import { useSave } from '@/contexts/SaveContext';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -25,6 +27,7 @@ interface MALIntegrationProps {
 
 export function MALIntegration({ isOpen, onClose }: MALIntegrationProps) {
   const { config, setConfig, auth } = useConfig();
+  const { markConfigPersisted, isDirty } = useSave();
   const [tempTokenId, setTempTokenId] = useState(config.apiKeys?.malTokenId || "");
   const [isConnected, setIsConnected] = useState(!!config.apiKeys?.malTokenId);
   const [disconnecting, setDisconnecting] = useState(false);
@@ -89,6 +92,11 @@ export function MALIntegration({ isOpen, onClose }: MALIntegrationProps) {
             },
           }));
 
+          // Persisted straight away so navigating away cannot lose the connection
+          // and cannot strand the credential row with nothing pointing at it.
+          void persistIntegrationCredential({ provider: 'mal', tokenId: tempTokenId.trim(), userUUID: auth.userUUID, password: auth.password, authenticated: auth.authenticated })
+            .then(result => { if (result.error) toast.warning(`Connected, but the link was not saved: ${result.error}`); });
+
           setIsConnected(true);
           toast.success(`Connected as @${data.username}`);
         } else {
@@ -142,14 +150,13 @@ export function MALIntegration({ isOpen, onClose }: MALIntegrationProps) {
       setIsConnected(false);
       setUsername(null);
 
-      setConfig(prev => ({
-        ...prev,
-        malWatchTracking: false,
-        apiKeys: {
-          ...prev.apiKeys,
-          malTokenId: undefined,
-        },
-      }));
+      // The route saved the configuration, so the page takes what it saved rather
+      // than rebuilding it and drifting from disk over the fields it does not know.
+      // The server already saved these removals. If nothing else was pending, the page
+      // now matches disk, so the baseline moves with it rather than claiming unsaved work.
+      const next = applyDisconnectRemovals(config, data.removed);
+      setConfig(next);
+      if (isDirty === false) markConfigPersisted(next);
 
       toast.success("MyAnimeList account disconnected");
     } catch (error: any) {

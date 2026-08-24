@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useConfig } from '@/contexts/ConfigContext';
+import { applyDisconnectRemovals, persistIntegrationCredential } from '@/lib/integrationCredentials';
+import { useSave } from '@/contexts/SaveContext';
 import { CatalogConfig } from '@/contexts/config';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -37,6 +39,7 @@ export function SimklIntegration({ isOpen, onClose }: SimklIntegrationProps) {
   const oauthEnabled = simklAuthMode === 'oauth' || simklAuthMode === 'both';
 
   const { config, setConfig, auth } = useConfig();
+  const { markConfigPersisted, isDirty } = useSave();
   const [tempTokenId, setTempTokenId] = useState(config.apiKeys?.simklTokenId || "");
   const [isConnected, setIsConnected] = useState(!!config.apiKeys?.simklTokenId);
   const [disconnecting, setDisconnecting] = useState(false);
@@ -127,6 +130,12 @@ export function SimklIntegration({ isOpen, onClose }: SimklIntegrationProps) {
         simklTokenId: tokenId,
       },
     }));
+
+    // Persisted straight away so navigating away cannot lose the connection
+    // and cannot strand the credential row with nothing pointing at it.
+    void persistIntegrationCredential({ provider: 'simkl', tokenId, userUUID: auth.userUUID, password: auth.password, authenticated: auth.authenticated })
+      .then(result => { if (result.error) toast.warning(`Connected, but the link was not saved: ${result.error}`); });
+
     setIsConnected(true);
     toast.success(`Connected as @${connectedUsername}`);
   };
@@ -374,7 +383,11 @@ export function SimklIntegration({ isOpen, onClose }: SimklIntegrationProps) {
       setUsername(null);
       // Reloading dropped the session, which is held in memory only, so the
       // saved config comes back from the server and is adopted in place.
-      if (data.config) setConfig(data.config);
+      // The server already saved these removals. If nothing else was pending, the page
+      // now matches disk, so the baseline moves with it rather than claiming unsaved work.
+      const next = applyDisconnectRemovals(config, data.removed);
+      setConfig(next);
+      if (isDirty === false) markConfigPersisted(next);
       toast.success("Simkl account disconnected");
     } catch (error) {
       console.error("Disconnect error:", error);

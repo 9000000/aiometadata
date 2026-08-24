@@ -1208,9 +1208,10 @@ addon.post("/api/auth/trakt/disconnect", async (req, res) => {
     // Invalidate config cache
     configCache.del(userUUID);
     
-    // Returned so the page can take the saved state rather than reloading,
-    // which would drop a session that is only held in memory.
-    res.json({ success: true, config });
+    // `removed` says exactly what this disconnect took out, so a page holding
+    // unsaved edits can apply the same removals instead of adopting the whole
+    // saved document and losing them.
+    res.json({ success: true, config, removed: { apiKeys: ['traktTokenId'], fields: ['traktUser', 'traktWatchTracking'], catalogIdPrefix: 'trakt.' } });
   } catch (error) {
     consola.error("[Trakt] Disconnect error:", error);
     res.status(500).json({ error: "Failed to disconnect Trakt" });
@@ -1378,9 +1379,10 @@ addon.post("/api/auth/simkl/disconnect", async (req, res) => {
     // Invalidate config cache
     configCache.del(userUUID);
     
-    // Returned so the page can take the saved state rather than reloading,
-    // which would drop a session that is only held in memory.
-    res.json({ success: true, config });
+    // `removed` says exactly what this disconnect took out, so a page holding
+    // unsaved edits can apply the same removals instead of adopting the whole
+    // saved document and losing them.
+    res.json({ success: true, config, removed: { apiKeys: ['simklTokenId'], fields: ['simklUser', 'simklWatchTracking'], catalogIdPrefix: 'simkl.' } });
   } catch (error) {
     consola.error("[Simkl] Disconnect error:", error);
     res.status(500).json({ error: "Failed to disconnect Simkl" });
@@ -3271,7 +3273,10 @@ addon.post("/anilist/disconnect", async (req, res) => {
     // Invalidate config cache
     configCache.del(userUUID);
     
-    res.json({ success: true });
+    // `removed` says exactly what this disconnect took out, so a page holding
+    // unsaved edits can apply the same removals instead of adopting the whole
+    // saved document and losing them.
+    res.json({ success: true, config, removed: { apiKeys: ['anilistTokenId'], fields: ['anilistWatchTracking'] } });
   } catch (error) {
     consola.error("[AniList] Disconnect error:", error);
     res.status(500).json({ error: "Failed to disconnect AniList" });
@@ -3518,7 +3523,10 @@ addon.post("/mal/disconnect", async (req, res) => {
     await database.saveUserConfig(userUUID, user.password_hash, config);
     configCache.del(userUUID);
 
-    res.json({ success: true });
+    // `removed` says exactly what this disconnect took out, so a page holding
+    // unsaved edits can apply the same removals instead of adopting the whole
+    // saved document and losing them.
+    res.json({ success: true, config, removed: { apiKeys: ['malTokenId'], fields: ['malWatchTracking'] } });
   } catch (error) {
     consola.error("[MAL] Disconnect error:", error);
     res.status(500).json({ error: "Failed to disconnect MyAnimeList" });
@@ -3693,6 +3701,46 @@ addon.get("/api/publicmetadb/picks", async (req, res) => {
     consola.error("[PublicMetaDB Proxy] Picks error:", error.message);
     const status = error.message?.includes('401') ? 401 : 500;
     res.status(status).json({ error: error.message });
+  }
+});
+
+// POST /api/integrations/credential - Point a configuration at a credential the OAuth
+// callback already stored. Persisting here rather than waiting for Save is what stops a
+// connection being lost by navigating away, and stops the token row being stranded with
+// nothing referencing it. Only the pointer is written, so unsaved edits held in the page
+// are neither read nor overwritten.
+const INTEGRATION_CREDENTIAL_FIELDS = {
+  trakt: { field: 'traktTokenId', provider: 'trakt' },
+  simkl: { field: 'simklTokenId', provider: 'simkl' },
+  anilist: { field: 'anilistTokenId', provider: 'anilist' },
+  mal: { field: 'malTokenId', provider: 'mal' },
+  movielens: { field: 'movieLensCredId', provider: 'movielens' },
+};
+
+addon.post("/api/integrations/credential", async (req, res) => {
+  try {
+    const { userUUID, password, provider, tokenId } = req.body || {};
+    const mapping = INTEGRATION_CREDENTIAL_FIELDS[provider];
+    if (!userUUID || !mapping || !tokenId) {
+      return res.status(400).json({ error: "userUUID, a known provider and tokenId are required" });
+    }
+    const access = await resolveConfigAccess(req, userUUID, password);
+    if (!access || !access.passwordHash) {
+      return res.status(401).json({ error: "Invalid UUID or password" });
+    }
+    // A typo used to be stored and only fail much later, on the first call that needed it.
+    const row = await database.getOAuthToken(tokenId);
+    if (!row || row.provider !== mapping.provider) {
+      return res.status(404).json({ error: `No ${provider} credential with that id` });
+    }
+    const config = access.config;
+    config.apiKeys = { ...(config.apiKeys || {}), [mapping.field]: tokenId };
+    await database.saveUserConfig(userUUID, access.passwordHash, config);
+    configCache.del(userUUID);
+    res.json({ success: true, field: mapping.field, tokenId });
+  } catch (error) {
+    consola.error(`[Integrations] Failed to store credential: ${error.message}`);
+    res.status(500).json({ error: "Failed to store the credential" });
   }
 });
 

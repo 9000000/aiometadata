@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useConfig, CatalogConfig } from '@/contexts/ConfigContext';
+import { applyDisconnectRemovals, persistIntegrationCredential } from '@/lib/integrationCredentials';
+import { useSave } from '@/contexts/SaveContext';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -24,6 +26,7 @@ interface AniListIntegrationProps {
 
 export function AniListIntegration({ isOpen, onClose }: AniListIntegrationProps) {
   const { config, setConfig, auth } = useConfig();
+  const { markConfigPersisted, isDirty } = useSave();
   const [tempTokenId, setTempTokenId] = useState(config.apiKeys?.anilistTokenId || "");
   const [isConnected, setIsConnected] = useState(!!config.apiKeys?.anilistTokenId);
   const [disconnecting, setDisconnecting] = useState(false);
@@ -420,6 +423,11 @@ export function AniListIntegration({ isOpen, onClose }: AniListIntegrationProps)
             },
           }));
 
+          // Persisted straight away so navigating away cannot lose the connection
+          // and cannot strand the credential row with nothing pointing at it.
+          void persistIntegrationCredential({ provider: 'anilist', tokenId: tempTokenId.trim(), userUUID: auth.userUUID, password: auth.password, authenticated: auth.authenticated })
+            .then(result => { if (result.error) toast.warning(`Connected, but the link was not saved: ${result.error}`); });
+
           setIsConnected(true);
           toast.success(`Connected as @${data.username}`);
         } else {
@@ -472,13 +480,13 @@ export function AniListIntegration({ isOpen, onClose }: AniListIntegrationProps)
       setIsConnected(false);
       setUsername(null);
       
-      setConfig(prev => ({
-        ...prev,
-        apiKeys: {
-          ...prev.apiKeys,
-          anilistTokenId: undefined,
-        },
-      }));
+      // The route saved the configuration, so the page takes what it saved rather
+      // than rebuilding it and drifting from disk over the fields it does not know.
+      // The server already saved these removals. If nothing else was pending, the page
+      // now matches disk, so the baseline moves with it rather than claiming unsaved work.
+      const next = applyDisconnectRemovals(config, data.removed);
+      setConfig(next);
+      if (isDirty === false) markConfigPersisted(next);
       
       toast.success("AniList account disconnected");
     } catch (error: any) {

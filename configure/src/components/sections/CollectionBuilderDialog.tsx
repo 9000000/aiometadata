@@ -3,6 +3,7 @@ import { toast } from 'sonner';
 import {
   AlertTriangle,
   Check,
+  ChevronLeft,
   ChevronRight,
   Copy,
   Download,
@@ -209,6 +210,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   );
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState('design');
+  // Only consulted below @2xl, where the panes cannot sit side by side.
+  const [mobilePane, setMobilePane] = useState<'entries' | 'editor' | 'preview'>('entries');
   const [railQuery, setRailQuery] = useState('');
   const [showManifestField, setShowManifestField] = useState(false);
   const [titleFocusId, setTitleFocusId] = useState<string | null>(null);
@@ -417,6 +420,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     setSelectedId(entry.id);
     setActiveTab('design');
     setTitleFocusId(entry.id);
+    setMobilePane('editor');
   };
 
   /**
@@ -548,6 +552,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     });
     setSelectedId(copy.id);
     setTitleFocusId(copy.id);
+    setMobilePane('editor');
   };
 
   const overEntry = (entryId: string, fn: (entry: CollectionDraft) => CollectionDraft) =>
@@ -1269,7 +1274,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           className="@container grid h-[100dvh] max-h-[100dvh] w-screen max-w-none grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden rounded-none p-0 sm:h-[92vh] sm:p-0 sm:max-h-[92vh] sm:w-[min(96vw,120rem)] sm:rounded-2xl"
           onInteractOutside={event => event.preventDefault()}
         >
-          <header className="flex max-h-[40dvh] min-h-0 flex-col gap-3 overflow-y-auto border-b px-5 py-4">
+          <header className="flex max-h-[22dvh] min-h-0 flex-col gap-3 overflow-y-auto border-b px-5 py-4 @2xl:max-h-[40dvh]">
             <div className="flex flex-wrap items-center gap-3">
               <DialogTitle className="flex items-center gap-2 text-lg font-semibold">
                 <Layers className="h-5 w-5" />
@@ -1321,7 +1326,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               rows={statusRows}
               onGoTo={goToProblem}
               trailing={
-                <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span className="hidden flex-wrap items-center gap-2 text-xs text-muted-foreground @2xl:flex">
                   Catalogs read from{' '}
                   {sourceList.origin === 'derived' ? 'your local config' : 'your saved manifest'}
                   <button
@@ -1348,9 +1353,28 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             )}
           </header>
 
-          <div className="@container/panes min-h-0 overflow-hidden px-5 py-4">
-          <div className="grid h-full min-h-0 gap-4 @2xl:grid-cols-[20rem_minmax(0,1fr)] @6xl:grid-cols-[20rem_minmax(0,1fr)_30rem]">
-            <div className="flex min-h-0 flex-col gap-2 overflow-y-auto pr-1">
+          <div className="@container/panes flex min-h-0 flex-col gap-3 overflow-hidden px-5 py-4">
+          <div className="grid shrink-0 grid-cols-3 gap-1 rounded-lg border p-1 @2xl:hidden">
+            {([
+              ['entries', 'Entries'],
+              ['editor', 'Editor'],
+              ['preview', 'Preview'],
+            ] as const).map(([pane, label]) => (
+              <button
+                key={pane}
+                type="button"
+                onClick={() => setMobilePane(pane)}
+                aria-pressed={mobilePane === pane}
+                className={`min-h-[44px] rounded-md px-3 text-sm transition-colors ${
+                  mobilePane === pane ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="grid min-h-0 flex-1 gap-4 @2xl:grid-cols-[20rem_minmax(0,1fr)] @6xl:grid-cols-[20rem_minmax(0,1fr)_30rem]">
+            <div className={`min-h-0 flex-col gap-2 overflow-y-auto pr-1 @2xl:flex ${mobilePane === 'entries' ? 'flex' : 'hidden'}`}>
               <div className="flex gap-2">
                 <Button
                   size="sm"
@@ -1460,7 +1484,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                             canMoveDown={index < entries.length - 1}
                             onMoveTo={position => moveEntryTo(index, position)}
                             onDuplicate={() => duplicateEntry(entry.id)}
-                            onSelect={() => setSelection({ entryId: entry.id, folderId: null })}
+                            onSelect={() => { setSelection({ entryId: entry.id, folderId: null }); setMobilePane('editor'); }}
                             onDelete={() => removeEntry(entry.id)}
                           />
                           {expanded && folders.map(({ folder, folderIndex }) => (
@@ -1483,7 +1507,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                               canMoveDown={folderIndex < folderCount - 1}
                               onMoveTo={position => moveFolderTo(entry.id, folderIndex, position)}
                               onDuplicate={() => duplicateFolderIn(entry.id, folderIndex)}
-                              onSelect={() => setSelection({ entryId: entry.id, folderId: folder.id })}
+                              onSelect={() => { setSelection({ entryId: entry.id, folderId: folder.id }); setMobilePane('editor'); }}
                               onDelete={() => removeFolderIn(entry.id, folderIndex)}
                             />
                           ))}
@@ -1501,9 +1525,17 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
             </div>
 
-            <div className="@container min-h-0 min-w-0 overflow-y-auto">
+            <div className={`@container min-h-0 min-w-0 overflow-y-auto @2xl:block ${mobilePane === 'editor' ? 'block' : 'hidden'}`}>
               {selected && (
                 <div className="sticky top-0 z-10 mb-4 flex items-center gap-1.5 border-b bg-card/95 py-2 text-sm backdrop-blur">
+                  <button
+                    type="button"
+                    onClick={() => setMobilePane('entries')}
+                    aria-label="Back to entries"
+                    className="-ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded hover:bg-accent/60 @2xl:hidden"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
                   <button
                     type="button"
                     onClick={() => setSelection({ entryId: selected.id, folderId: null })}
@@ -1539,9 +1571,14 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   {!selected && (
                     <div className="rounded-md border border-dashed px-3 py-10 text-center text-sm text-muted-foreground">
                       <p>
-                        {entries.length > 0
-                          ? 'Select something on the left to edit it.'
-                          : 'Nothing to edit yet.'}
+                        {entries.length > 0 ? (
+                          <>
+                            Select something{' '}
+                            <span className="@2xl/panes:hidden">in the Entries tab</span>
+                            <span className="hidden @2xl/panes:inline">on the left</span>
+                            {' '}to edit it.
+                          </>
+                        ) : 'Nothing to edit yet.'}
                       </p>
                       <Button
                         variant="outline"
@@ -1724,7 +1761,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               </Tabs>
             </div>
 
-            <div className="hidden min-h-0 min-w-0 overflow-y-auto @6xl/panes:block">
+            <div className={`min-h-0 min-w-0 overflow-y-auto @2xl:hidden @6xl/panes:block ${mobilePane === 'preview' ? 'block' : 'hidden'}`}>
               <div className="sticky top-0 rounded-lg border p-4">
                 <span className="mb-3 block text-sm font-medium text-muted-foreground">Live preview</span>
                 <CollectionPreview
@@ -1737,7 +1774,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
           </div>
           </div>
 
-          <footer className="flex max-h-[30dvh] min-h-0 flex-col gap-3 overflow-y-auto border-t px-5 py-4 @2xl:flex-row @2xl:flex-wrap @2xl:items-center @2xl:justify-end">
+          <footer className="flex max-h-[18dvh] min-h-0 flex-col gap-3 overflow-y-auto border-t px-5 py-4 @2xl:max-h-[30dvh] @2xl:flex-row @2xl:flex-wrap @2xl:items-center @2xl:justify-end">
             <div className="min-w-0 space-y-1 @2xl:mr-auto">
               {overBy > 0 && (
                 <p className="flex items-start gap-1.5 text-xs text-amber-500">
@@ -1785,6 +1822,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 <p className="text-xs text-muted-foreground">{stageCopy.hint}</p>
               )}
             </div>
+            <div className="flex flex-wrap items-center justify-end gap-2 [&>button]:min-h-[44px] @2xl:contents @2xl:[&>button]:min-h-0">
             {totalNative > 0 && (
               <Button
                 variant="outline"
@@ -1817,6 +1855,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             >
               {isSaving ? 'Saving…' : verdict.label}
             </Button>
+            </div>
           </footer>
         </DialogContent>
       </Dialog>

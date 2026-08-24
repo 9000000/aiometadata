@@ -2,7 +2,7 @@ export interface CatalogDefinition {
   id: string;
   name: string;
   type: 'movie' | 'series' | 'anime';
-  source: 'tmdb' | 'tvdb' | 'mal' | 'tvmaze' | 'mdblist' | 'streaming' | 'stremthru' | 'custom' | 'trakt' | 'anilist' | 'letterboxd' | 'simkl' | 'flixpatrol' | 'franchise'; 
+  source: 'tmdb' | 'tvdb' | 'mal' | 'tvmaze' | 'mdblist' | 'streaming' | 'stremthru' | 'custom' | 'trakt' | 'anilist' | 'letterboxd' | 'simkl' | 'flixpatrol' | 'franchise' | 'rottentomatoes'; 
   isEnabledByDefault?: boolean;
   showOnHomeByDefault?: boolean;
 }
@@ -123,12 +123,25 @@ export const allSearchProviders: SearchProviderDefinition[] = [
 import franchiseCatalogsJson from "./franchiseCatalogs.json";
 export const franchiseCatalogs: CatalogDefinition[] = franchiseCatalogsJson as CatalogDefinition[];
 
+// --- Catalogs sourced from Rotten Tomatoes ---
+export const rottenTomatoesCatalogs: CatalogDefinition[] = [
+  { id: 'rt.certified_fresh', name: 'RT: Certified Fresh Movies', type: 'movie', source: 'rottentomatoes', isEnabledByDefault: false, showOnHomeByDefault: false },
+  { id: 'rt.certified_fresh', name: 'RT: Certified Fresh TV Shows', type: 'series', source: 'rottentomatoes', isEnabledByDefault: false, showOnHomeByDefault: false },
+  { id: 'rt.fresh', name: 'RT: Fresh TV Shows', type: 'series', source: 'rottentomatoes', isEnabledByDefault: false, showOnHomeByDefault: false },
+  { id: 'rt.verified_hot', name: 'RT: Verified Hot Movies', type: 'movie', source: 'rottentomatoes', isEnabledByDefault: false, showOnHomeByDefault: false },
+  { id: 'rt.verified_hot', name: 'RT: Verified Hot TV Shows', type: 'series', source: 'rottentomatoes', isEnabledByDefault: false, showOnHomeByDefault: false },
+  { id: 'rt.in_theaters', name: 'RT: In Theaters', type: 'movie', source: 'rottentomatoes', isEnabledByDefault: false, showOnHomeByDefault: false },
+  { id: 'rt.popular', name: 'RT: Popular Movies', type: 'movie', source: 'rottentomatoes', isEnabledByDefault: false, showOnHomeByDefault: false },
+  { id: 'rt.popular', name: 'RT: Popular TV Shows', type: 'series', source: 'rottentomatoes', isEnabledByDefault: false, showOnHomeByDefault: false },
+];
+
 export const allCatalogDefinitions: CatalogDefinition[] = [
   ...baseCatalogs,
   ...animeCatalogs,
   ...authCatalogs,
   ...streamingCatalogs.map(({ regions, icon, ...rest }) => rest),
   ...franchiseCatalogs,
+  ...rottenTomatoesCatalogs,
 ]; 
 
 export type Catalog = CatalogDefinition;

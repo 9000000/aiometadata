@@ -9,6 +9,7 @@ import { fetchLetterboxdList, parseLetterboxdItems, getLetterboxdGenreIdByName }
 import { getFlixPatrolMetas } from "../utils/flixpatrolUtils.js";
 import { fetchResume, parseResumeItems, fetchListItems, parseListItems, fetchPickItems, parsePickItems } from "../utils/publicmetadbUtils.js";
 import { getFranchiseCatalog } from "./franchiseUtils.js";
+import { getRottenTomatoesCatalog } from "./getRottenTomatoes.js";
 import { mapWithLimit } from "../utils/concurrency.js";
 const anilist = require('./anilist');
 import * as jikan from "./mal.js"
@@ -143,6 +144,11 @@ async function getCatalog(type: string, language: string, page: number, id: stri
       logger.debug(`Routing to PublicMetaDB catalog handler for id: ${id}`);
       const pmdbResults = await getPublicMetaDBCatalog(type, id, page, language, config, userUUID);
       return { metas: pmdbResults };
+    }
+    else if (id.startsWith('rt.')) {
+      logger.debug(`Routing to Rotten Tomatoes catalog handler for id: ${id}`);
+      const rtResults = await getRottenTomatoesCatalog(type, id, genre, page, language, config, userUUID, includeVideos);
+      return { metas: rtResults };
     }
     else if (id.startsWith('merged.')) {
       logger.debug(`Routing to Merged catalog handler for id: ${id}`);

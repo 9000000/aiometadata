@@ -212,6 +212,138 @@
       ]
     }
   },
+  "rt": {
+    "certified_fresh": {
+      "nameKey": "rt_certified_fresh",
+      "extraSupported": [
+        "genre",
+        "skip"
+      ],
+      "defaultOptions": [
+        "Action",
+        "Adventure",
+        "Animation",
+        "Anime",
+        "Biography",
+        "Comedy",
+        "Crime",
+        "Documentary",
+        "Drama",
+        "Fantasy",
+        "Horror",
+        "Kids & Family",
+        "Mystery & Thriller",
+        "Romance",
+        "Sci-Fi",
+        "War",
+        "Western"
+      ]
+    },
+    "fresh": {
+      "nameKey": "rt_fresh",
+      "extraSupported": [
+        "genre",
+        "skip"
+      ],
+      "defaultOptions": [
+        "Action",
+        "Adventure",
+        "Animation",
+        "Anime",
+        "Biography",
+        "Comedy",
+        "Crime",
+        "Documentary",
+        "Drama",
+        "Fantasy",
+        "Horror",
+        "Kids & Family",
+        "Mystery & Thriller",
+        "Romance",
+        "Sci-Fi",
+        "War",
+        "Western"
+      ]
+    },
+    "verified_hot": {
+      "nameKey": "rt_verified_hot",
+      "extraSupported": [
+        "genre",
+        "skip"
+      ],
+      "defaultOptions": [
+        "Action",
+        "Adventure",
+        "Animation",
+        "Anime",
+        "Biography",
+        "Comedy",
+        "Crime",
+        "Documentary",
+        "Drama",
+        "Fantasy",
+        "Horror",
+        "Kids & Family",
+        "Mystery & Thriller",
+        "Romance",
+        "Sci-Fi",
+        "War",
+        "Western"
+      ]
+    },
+    "in_theaters": {
+      "nameKey": "rt_in_theaters",
+      "extraSupported": [
+        "genre",
+        "skip"
+      ],
+      "defaultOptions": [
+        "Action",
+        "Adventure",
+        "Animation",
+        "Anime",
+        "Biography",
+        "Comedy",
+        "Crime",
+        "Documentary",
+        "Drama",
+        "Fantasy",
+        "Horror",
+        "Kids & Family",
+        "Mystery & Thriller",
+        "Romance",
+        "Sci-Fi",
+        "War",
+        "Western"
+      ]
+    },
+    "popular": {
+      "nameKey": "rt_popular",
+      "extraSupported": [
+        "genre",
+        "skip"
+      ],
+      "defaultOptions": [
+        "Action",
+        "Adventure",
+        "Animation",
+        "Anime",
+        "Biography",
+        "Comedy",
+        "Crime",
+        "Documentary",
+        "Drama",
+        "Fantasy",
+        "Horror",
+        "Kids & Family",
+        "Mystery & Thriller",
+        "Romance",
+        "Sci-Fi",
+        "War",
+        "Western"
+      ]
+    }
+  },
   "tvmaze": {
     "schedule": {
       "nameKey": "tvmaze_schedule",

@@ -18,6 +18,7 @@ import { AIOMetadataIntegration } from './AIOMetadataIntegration';
 import { QuickAddDialog } from '@/components/QuickAddDialog';
 import { AICatalogDialog } from '@/components/AICatalogDialog';
 import { FranchisePickerDialog } from '@/components/setup/FranchisePickerDialog';
+import { RottenTomatoesPickerDialog } from '@/components/setup/RottenTomatoesPickerDialog';
 import { useConfig } from '@/contexts/ConfigContext';
 import type { CatalogConfig } from '@/contexts/config';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, TouchSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core';
@@ -3982,6 +3983,7 @@ function CatalogsSettingsContent({
   const [isStreamingTop10Open, setIsStreamingTop10Open] = useState(false);
   const [isAIOMetadataOpen, setIsAIOMetadataOpen] = useState(false);
   const [isFranchiseOpen, setIsFranchiseOpen] = useState(false);
+  const [isRottenTomatoesOpen, setIsRottenTomatoesOpen] = useState(false);
   const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
   const [isAICatalogOpen, setIsAICatalogOpen] = useState(false);
   const [streamingDialogOpen, setStreamingDialogOpen] = useState(false);
@@ -5254,6 +5256,21 @@ function CatalogsSettingsContent({
                     <Button
                       variant="ghost"
                       size="icon"
+                      onClick={() => setIsRottenTomatoesOpen(true)}
+                      aria-label="Rotten Tomatoes Catalogs"
+                      className="h-11 w-11"
+                    >
+                      <img src="/rt_icon.png" alt="Rotten Tomatoes" className="h-7 w-7 object-contain rounded" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Rotten Tomatoes Catalogs</TooltipContent>
+                </Tooltip>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() => setIsStreamingTop10Open(true)}
                       aria-label="Streaming Top 10"
                       className="h-11 w-11"
@@ -5534,6 +5551,14 @@ function CatalogsSettingsContent({
         }}
         editingCatalog={editingDiscoverCatalog}
         customizeTemplate={customizeTemplate}
+      />
+      <FranchisePickerDialog
+        open={isFranchiseOpen}
+        onOpenChange={setIsFranchiseOpen}
+      />
+      <RottenTomatoesPickerDialog
+        open={isRottenTomatoesOpen}
+        onOpenChange={setIsRottenTomatoesOpen}
       />
 
       {/* Merge Dialog */}

@@ -3,6 +3,7 @@ const { loadConfigFromDatabase }: any = require('./configApi');
 const consola: any = require('consola');
 const crypto: any = require('crypto');
 const { isMetricsDisabled }: any = require('./metricsConfig');
+const { allowsUnrated, hasAgeRatingCap }: any = require('../utils/ageRating');
 const {
   decodeCachePayload,
   encodeCachePayload,
@@ -61,7 +62,6 @@ const {
 
 function META_TTL() { return parseInt(process.env.META_TTL || String(7 * 24 * 60 * 60), 10); }
 function CATALOG_TTL() { return parseInt(process.env.CATALOG_TTL || String(1 * 24 * 60 * 60), 10); }
-function TMDB_TRENDING_TTL() { return parseInt(process.env.TMDB_TRENDING_TTL || String(3 * 60 * 60), 10); }
 const JIKAN_API_TTL = 30 * 24 * 60 * 60;
 const STATIC_CATALOG_TTL = 30 * 24 * 60 * 60;
 const TVDB_API_TTL = 12 * 60 * 60;
@@ -849,6 +849,26 @@ function buildScopedProviderConfig(config: any, contentScope: string): any {
   return { providers, artProviders };
 }
 
+/**
+ * With the detection override on, a tmdb or imdb id can still be built by the anime
+ * provider, so the anime half of the config decides the result and has to reach the
+ * hash. It is left out when the override is off, so those keys stay where they are.
+ */
+function animeOverrideKeyParts(config: any): any {
+  if (!config.providers?.forceAnimeForDetectedImdb) return {};
+  return {
+    anime: {
+      provider: config.providers?.anime || 'mal',
+      useImdbIdForCatalogAndSearch: config.mal?.useImdbIdForCatalogAndSearch || false,
+      art: {
+        poster: resolveArtProvider('anime', 'poster', config),
+        background: resolveArtProvider('anime', 'background', config),
+        logo: resolveArtProvider('anime', 'logo', config),
+      },
+    },
+  };
+}
+
 function getMetaCacheContext(config: any, metaId: string, type: string | null, useShowPoster: boolean = false): any {
   const [prefix] = metaId.split(':');
   const animePrefixes = ['mal', 'kitsu', 'anilist', 'anidb'];
@@ -905,6 +925,7 @@ function getMetaCacheContext(config: any, metaId: string, type: string | null, u
         scrapeImdb: config.tmdb?.scrapeImdb || false,
         forceLatinCastNames: config.tmdb?.forceLatinCastNames || false,
       },
+      ...animeOverrideKeyParts(config),
     };
   } else if (type === 'series') {
     context.metaProvider = config.providers?.series || 'tvdb';
@@ -919,11 +940,28 @@ function getMetaCacheContext(config: any, metaId: string, type: string | null, u
         forceLatinCastNames: config.tmdb?.forceLatinCastNames || false,
       },
       forceAnimeForDetectedImdb: config.providers?.forceAnimeForDetectedImdb || false,
+      ...animeOverrideKeyParts(config),
     };
     context.videoOptions = {
       tvdbSeasonType: config.tvdbSeasonType || 'default',
       forceAnimeForDetectedImdb: config.providers?.forceAnimeForDetectedImdb || false,
+      ...(config.providers?.forceAnimeForDetectedImdb
+        ? {
+            mal: {
+              skipFiller: config.mal?.skipFiller || false,
+              skipRecap: config.mal?.skipRecap || false,
+              allowEpisodeMarking: config.mal?.allowEpisodeMarking || false,
+            },
+          }
+        : {}),
     };
+  }
+
+  // A cap named by the install URL changes which providers a meta is built from, so it
+  // cannot share a key with the same title built without one. Only set when a URL asks
+  // for it, which leaves every existing key where it is.
+  if (config._ratingOverride) {
+    context.providerOptions = { ...context.providerOptions, ratingOverride: config._ratingOverride };
   }
 
   return context;
@@ -1105,8 +1143,23 @@ function applyCastCountProjection(meta: any, config: any): any {
   return meta;
 }
 
+/**
+ * Clients play a trailer from trailerStreams, and the field is a restatement of
+ * trailers, so it is derived here rather than stored. That keeps the two from
+ * drifting and keeps the cached component's shape unchanged.
+ */
+function applyTrailerStreamsProjection(meta: any): any {
+  if (!Array.isArray(meta?.trailers) || meta.trailers.length === 0) return meta;
+  if (Array.isArray(meta.trailerStreams) && meta.trailerStreams.length > 0) return meta;
+  meta.trailerStreams = meta.trailers
+    .filter((trailer: any) => trailer?.source)
+    .map((trailer: any) => ({ title: trailer.name || 'Trailer', ytId: trailer.source }));
+  return meta;
+}
+
 async function projectMetaForUser(meta: any, config: any): Promise<any> {
   if (!meta) return meta;
+  applyTrailerStreamsProjection(meta);
   applyCastCountProjection(meta, config);
   applyBlurThumbProjection(meta, config);
   applyDisplayAgeRatingProjection(meta, config);
@@ -1163,6 +1216,10 @@ function projectAppExtrasForCatalogCache(appExtras: any): any {
   const projected: any = {};
   const fields = [
     'certification',
+    // The catalog renders this in preference to `certification` when it is set, so
+    // dropping it made a cached row fall back to the US rating while the meta page
+    // kept showing the user's own. Same title, two answers, on a cache hit only.
+    'certificationLocal',
     'ratings',
     'releaseAvailability',
     'cast',
@@ -1263,9 +1320,6 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
 
   const idOnly = catalogKey.split(':')[0];
   const catalogType = catalogKey.split(':')[1];
-  const trendingIds = new Set(['tmdb.trending']);
-  const isTrendingCatalog = trendingIds.has(idOnly);
-
   const isAuthCatalog = idOnly === 'tmdb.watchlist' || idOnly === 'tmdb.favorites';
 
   const isAiringTodayCatalog = idOnly === 'tmdb.airing_today';
@@ -1298,6 +1352,7 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
     sfw: config.sfw || false,
     includeAdult: config.includeAdult || false,
     ageRating: config.ageRating || null,
+    ...(hasAgeRatingCap(config) ? { allowUnratedContent: allowsUnrated(config) } : {}),
     showMetaProviderAttribution: config.showMetaProviderAttribution || false,
   };
 
@@ -1342,7 +1397,9 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
     };
   }
 
-  if (isMALCatalog || contentScope === 'anime') {
+  // Non-anime scopes need it too once the detection override is on, since it then
+  // decides the id of every anime the row happens to carry.
+  if (isMALCatalog || contentScope === 'anime' || config.providers?.forceAnimeForDetectedImdb) {
     catalogConfig.mal = {
       useImdbIdForCatalogAndSearch: config.mal?.useImdbIdForCatalogAndSearch || false
     };
@@ -1361,9 +1418,6 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
   if (isAuthCatalog) {
     cacheTTL = 0;
     cacheLogger.debug(`[Catalog] Not caching auth catalog ${idOnly} (user-specific data changes frequently)`);
-  } else if (isTrendingCatalog) {
-    cacheTTL = TMDB_TRENDING_TTL();
-    cacheLogger.debug(`[Catalog] Using TMDB trending cache TTL for ${idOnly}: ${cacheTTL}s`);
   }
 
   const decadeCatalogs = ['mal.80sDecade', 'mal.90sDecade', 'mal.00sDecade', 'mal.10sDecade'];
@@ -1434,6 +1488,14 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
     if (catCfg?.cacheTTL) {
       cacheTTL = catCfg.cacheTTL;
       cacheLogger.debug(`[Catalog] Using custom cache TTL for AniList catalog ${idOnly}: ${cacheTTL}s`);
+    }
+  }
+
+  if (idOnly.startsWith('publicmetadb.')) {
+    const catCfg = config.catalogs?.find((c: any) => c.id === idOnly);
+    if (catCfg?.cacheTTL) {
+      cacheTTL = catCfg.cacheTTL;
+      cacheLogger.debug(`[Catalog] Using custom cache TTL for PublicMetaDB catalog ${idOnly}: ${cacheTTL}s`);
     }
   }
 
@@ -1574,6 +1636,7 @@ async function cacheWrapSearch(userUUID: string, searchKey: string, method: () =
     sfw: config.sfw || false,
     includeAdult: config.includeAdult || false,
     ageRating: config.ageRating || null,
+    ...(hasAgeRatingCap(config) ? { allowUnratedContent: allowsUnrated(config) } : {}),
     metaProviders: config.providers || {},
     artProviders: config.artProviders || {},
     blurThumbs: config.blurThumbs || false,
@@ -2318,7 +2381,8 @@ function cacheWrapJikanApi(key: string, method: () => Promise<any>, customTTL: n
     return classifyResult(result, error, cacheKey);
   };
 
-  return cacheWrapGlobal(`jikan-api:${subkey}`, method, ttl, {
+  // v2 carries the anime rating, which the pre-v2 payloads dropped on the way in.
+  return cacheWrapGlobal(`jikan-api:v2:${subkey}`, method, ttl, {
     resultClassifier: jikanResultClassifier,
     ...options,
     upstream: true,
@@ -2366,6 +2430,7 @@ async function cacheWrapStaticCatalog(userUUID: string, catalogKey: string, meth
     sfw: config.sfw || false,
     includeAdult: config.includeAdult || false,
     ageRating: config.ageRating || null,
+    ...(hasAgeRatingCap(config) ? { allowUnratedContent: allowsUnrated(config) } : {}),
     showPrefix: config.showPrefix || false,
     showMetaProviderAttribution: config.showMetaProviderAttribution || false,
     displayAgeRating: config.displayAgeRating || false,

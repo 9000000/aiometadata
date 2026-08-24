@@ -11,6 +11,8 @@ import { Copy, Loader2, Save, Key, User, Download, List } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 import { TagChip } from "@/components/TagChip";
+import { AGE_RATING_ORDER } from "@/lib/ageRatings";
+import type { TagDef } from "@/contexts/config";
 import { ManagerSync } from "@/components/ManagerSync";
 import { cn } from "@/lib/utils";
 import { keyStatuses } from "@/lib/configStatus";
@@ -27,6 +29,19 @@ const LazyConfigImportExport = lazy(() =>
   import("@/components/ConfigImportExport").then((module) => ({ default: module.ConfigImportExport }))
 );
 
+
+/** Past this many, names stop being scannable and a count reads better. */
+const MAX_NAMED_TAGS = 4;
+
+function joinTagNames(names: string[]) {
+  return names.map((name, i) => (
+    <span key={name}>
+      {i > 0 && (i === names.length - 1 ? ' or ' : ', ')}
+      <span className="font-medium">{name}</span>
+    </span>
+  ));
+}
+
 function ConfigurationSectionFallback() {
   return (
     <div className="space-y-3 rounded-lg border bg-muted/20 p-5">
@@ -41,7 +56,8 @@ function ConfigurationSectionFallback() {
 export function ConfigurationManager() {
   const { config, setConfig, auth, setAuth, hasBuiltInTvdb, hasBuiltInTmdb, hasBuiltInGemini, isLoading: contextLoading, manifestChangedSinceInstall, markManifestInstalled } = useConfig();
   const { requestSave, isSaving, error, savedConfig, canSave, missingKeys, openInstall } = useSave();
-  const [selectedTag, setSelectedTag] = useState("");
+  const [selectedTagNames, setSelectedTagNames] = useState<string[]>([]);
+
   const [requireAddonPassword, setRequireAddonPassword] = useState(false);
   const [showLoadDialog, setShowLoadDialog] = useState(false);
   const [loadPassword, setLoadPassword] = useState("");
@@ -56,10 +72,13 @@ export function ConfigurationManager() {
     [config, hasBuiltInTmdb, hasBuiltInTvdb, hasBuiltInGemini] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
-  const identity: SavedConfig | null = savedConfig
-    ?? (auth.authenticated && auth.userUUID && auth.installUrl
-      ? { userUUID: auth.userUUID, installUrl: auth.installUrl }
-      : null);
+  const identity: SavedConfig | null = useMemo(
+    () => savedConfig
+      ?? (auth.authenticated && auth.userUUID && auth.installUrl
+        ? { userUUID: auth.userUUID, installUrl: auth.installUrl }
+        : null),
+    [savedConfig, auth.authenticated, auth.userUUID, auth.installUrl],
+  );
 
   useEffect(() => {
     fetch("/api/config/addon-info")
@@ -225,10 +244,64 @@ export function ConfigurationManager() {
     ? "Updates your saved configuration in the database."
     : "You'll create a password, then get a UUID and install URL.";
 
-  const profileTags = config.tags ?? [];
-  const taggedInstallUrl = identity
-    ? (selectedTag ? `${identity.installUrl}?tag=${encodeURIComponent(selectedTag)}` : identity.installUrl)
-    : "";
+  const profileTags = useMemo(() => config.tags ?? [], [config.tags]);
+
+  // Registry order rather than click order, so the URL and the addon name read the
+  // same way the chips do. Renamed or deleted tags drop out on their own.
+  const selectedTags = useMemo(
+    () => profileTags.map(t => t.name).filter(name => selectedTagNames.includes(name)),
+    [profileTags, selectedTagNames],
+  );
+
+  const enabledTagCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const catalog of config.catalogs ?? []) {
+      if (!catalog.enabled) continue;
+      for (const tag of catalog.tags ?? []) {
+        const key = tag.toLowerCase();
+        counts[key] = (counts[key] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [config.catalogs]);
+
+  const emptyTags = selectedTags.filter(name => !enabledTagCounts[name.toLowerCase()]);
+
+  // A limit rides along with the profile that carries it, so the URL never has to name
+  // one. Each catalog answers to the profiles it is in, so a mixed install caps only
+  // part of itself. Rows in no profile, search among them, take the strictest of all.
+  const profileLimit = useMemo(() => {
+    const selected = selectedTags
+      .map(name => profileTags.find(t => t.name === name))
+      .filter((t): t is TagDef => !!t);
+    const capped = selected.filter(t => !!t.ageRating && t.ageRating !== 'None');
+    if (capped.length === 0) return null;
+    const strictest = capped.reduce((a, b) =>
+      AGE_RATING_ORDER.indexOf(a.ageRating as never) <= AGE_RATING_ORDER.indexOf(b.ageRating as never) ? a : b
+    ).ageRating!;
+    const hiding = capped.filter(t => t.allowUnratedContent === false).length;
+    return {
+      strictest,
+      uniform: capped.length === selected.length && capped.every(t => t.ageRating === strictest),
+      hidesUnrated: hiding > 0,
+      allHideUnrated: hiding === capped.length,
+    };
+  }, [selectedTags, profileTags]);
+
+  // One tag per param. A tag name can hold any character, so a separator would be
+  // ambiguous for the addon to split back apart.
+  const taggedInstallUrl = useMemo(() => {
+    if (!identity) return "";
+    const params = selectedTags.map(name => `tag=${encodeURIComponent(name)}`);
+    if (params.length === 0) return identity.installUrl;
+    return `${identity.installUrl}?${params.join('&')}`;
+  }, [identity, selectedTags]);
+
+  const toggleTag = (name: string) => {
+    setSelectedTagNames(prev =>
+      prev.includes(name) ? prev.filter(t => t !== name) : [...prev, name]
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -420,10 +493,11 @@ export function ConfigurationManager() {
                     <span className="text-xs text-muted-foreground mr-1">Profile:</span>
                     <button
                       type="button"
-                      onClick={() => setSelectedTag('')}
+                      onClick={() => setSelectedTagNames([])}
+                      aria-pressed={selectedTags.length === 0}
                       className={cn(
                         'rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors',
-                        selectedTag === ''
+                        selectedTags.length === 0
                           ? 'border-primary bg-primary text-primary-foreground'
                           : 'border-muted-foreground/30 text-muted-foreground hover:text-foreground',
                       )}
@@ -435,8 +509,12 @@ export function ConfigurationManager() {
                         key={t.name}
                         name={t.name}
                         color={t.color}
-                        onClick={() => setSelectedTag(t.name)}
-                        dimmed={selectedTag !== '' && selectedTag !== t.name}
+                        suffix={t.ageRating && t.ageRating !== 'None'
+                          ? <span title={`Content rating ${t.ageRating} and lower`}>{t.ageRating}</span>
+                          : undefined}
+                        onClick={() => toggleTag(t.name)}
+                        pressed={selectedTags.includes(t.name)}
+                        dimmed={selectedTags.length > 0 && !selectedTags.includes(t.name)}
                       />
                     ))}
                   </div>
@@ -455,9 +533,39 @@ export function ConfigurationManager() {
                     <Copy className="h-4 w-4" />
                   </Button>
                 </div>
-                {selectedTag !== '' && (
+                {selectedTags.length > 0 && (
                   <p className="text-xs text-muted-foreground mt-1">
-                    Installs only catalogs tagged <span className="font-medium">{selectedTag}</span> as a separate addon profile.
+                    {selectedTags.length > MAX_NAMED_TAGS ? (
+                      <>Installs only catalogs carrying any of the <span className="font-medium">{selectedTags.length} selected tags</span>, as a separate addon profile.</>
+                    ) : (
+                      <>Installs only catalogs tagged {joinTagNames(selectedTags)} as a separate addon profile.</>
+                    )}
+                  </p>
+                )}
+                {emptyTags.length > 0 && (
+                  <p className="text-xs text-amber-400 mt-1">
+                    {emptyTags.length > MAX_NAMED_TAGS ? (
+                      <><span className="font-medium">{emptyTags.length} of the selected tags</span> have no enabled catalog, so nothing will install from them.</>
+                    ) : (
+                      <>No enabled catalog is tagged {joinTagNames(emptyTags)}, so nothing will install from it.</>
+                    )}
+                  </p>
+                )}
+                {profileLimit && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {profileLimit.uniform ? (
+                      <>Shows only titles rated <span className="font-medium">{profileLimit.strictest}</span> or lower, the content rating this profile installs with.</>
+                    ) : (
+                      <>Each profile shows only titles within the content rating on its chip. Search belongs to no profile, so it uses the strictest of them, <span className="font-medium">{profileLimit.strictest}</span>.</>
+                    )}
+                  </p>
+                )}
+                {profileLimit?.hidesUnrated && (
+                  <p className="text-xs text-amber-400 mt-1">
+                    {profileLimit.allHideUnrated
+                      ? 'It also hides titles with no rating, search included.'
+                      : 'Profiles that hide titles with no rating hide them from search too.'}{' '}
+                    Search results rarely carry a rating, so expect search to return very little.
                   </p>
                 )}
               </div>

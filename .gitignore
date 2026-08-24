@@ -40,6 +40,9 @@ build/Release
 
 # Dependency directories
 node_modules/
+# also catch it when it is a symlink: the trailing-slash form above matches
+# only a directory, which is how a self-referential link got committed once.
+node_modules
 jspm_packages/
 
 # TypeScript v1 declaration files

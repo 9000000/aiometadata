@@ -1,5 +1,9 @@
 const META_CONCURRENCY = parseInt(process.env.META_CONCURRENCY || '0', 10) || 0;
 
+export function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 export async function mapWithConcurrency<T, R>(
   items: readonly T[],
   limit: number,

@@ -8,7 +8,7 @@ import { Switch } from '@/components/ui/switch';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter, DialogClose } from "@/components/ui/dialog";
-import { ChevronDown, Loader2, Plus, Trash2, KeyRound, BarChart3, Settings, PlayCircle, UserSearch, Link2, Bookmark, Sparkles, TrendingUp, Download, Eye, EyeOff, CheckCircle2, ThumbsUp } from 'lucide-react';
+import { ChevronDown, Loader2, Plus, Trash2, KeyRound, BarChart3, Settings, PlayCircle, UserSearch, Link2, Bookmark, Sparkles, TrendingUp, Download, Eye, EyeOff, CheckCircle2, ThumbsUp, Search } from 'lucide-react';
 
 const MDBLIST_RECOMMENDED_SECTIONS = [
   { section: 'recommended', label: 'Recommended For You', description: 'Personalised picks based on your ratings and taste' },
@@ -57,6 +57,11 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
   const [defaultGenreSelection, setDefaultGenreSelection] = useState<GenreSelection>('standard'); // Default to standard genres only
   const [popularLists, setPopularLists] = useState<any[]>([]);
   const [selectedPopularLists, setSelectedPopularLists] = useState<Set<string>>(new Set());
+  const [listSearchQuery, setListSearchQuery] = useState('');
+  const [listSearchResults, setListSearchResults] = useState<any[]>([]);
+  const [isSearchingLists, setIsSearchingLists] = useState(false);
+  const [hasSearchedLists, setHasSearchedLists] = useState(false);
+  const [selectedSearchLists, setSelectedSearchLists] = useState<Set<string>>(new Set());
   const [isLoadingPopularLists, setIsLoadingPopularLists] = useState(false);
   const [topLists, setTopLists] = useState<any[]>([]);
   const [selectedTopLists, setSelectedTopLists] = useState<Set<string>>(new Set());
@@ -538,6 +543,87 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
       });
     }
   }, [selectedCustomLists, customUserLists, customUsername, setConfig, defaultSort, defaultOrder, defaultCacheTTL, defaultGenreSelection]);
+
+  const searchPublicLists = useCallback(async () => {
+    const needle = listSearchQuery.trim();
+    if (!needle) return;
+    if (!canBrowse) {
+      toast.error("Please enter your MDBList API key first.");
+      return;
+    }
+
+    setIsSearchingLists(true);
+    try {
+      const response = await fetch(listsUrl('/api/mdblist/lists/search', { query: needle, limit: '40' }));
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `Search failed (Status: ${response.status})`);
+
+      const results = Array.isArray(data.results) ? data.results : [];
+      setListSearchResults(results);
+      setSelectedSearchLists(new Set());
+      setHasSearchedLists(true);
+      if (results.length === 0) {
+        toast.info("No lists found", { description: `Nothing on MDBList matches "${needle}"` });
+      }
+    } catch (error) {
+      toast.error("List search failed", {
+        description: error instanceof Error ? error.message : "Unknown error occurred"
+      });
+    } finally {
+      setIsSearchingLists(false);
+    }
+  }, [listSearchQuery, canBrowse, listsUrl]);
+
+  const handleSearchListSelection = (listId: string, checked: boolean) => {
+    setSelectedSearchLists(prev => {
+      const next = new Set(prev);
+      if (checked) next.add(listId); else next.delete(listId);
+      return next;
+    });
+  };
+
+  const importSelectedSearchLists = useCallback(async () => {
+    if (selectedSearchLists.size === 0) {
+      toast.error("Please select at least one list to import.");
+      return;
+    }
+
+    try {
+      let added = 0;
+      setConfig(prev => {
+        const newCatalogs = [...prev.catalogs];
+
+        selectedSearchLists.forEach(listId => {
+          const list = listSearchResults.find(l => String(l.id) === String(listId));
+          if (!list) return;
+          if (newCatalogs.some(c => c.id === `mdblist.${list.id}`)) return;
+
+          newCatalogs.push(createMDBListCatalog({
+            list,
+            sort: defaultSort,
+            order: defaultOrder,
+            cacheTTL: defaultCacheTTL,
+            genreSelection: defaultGenreSelection,
+            displayTypeOverrides: prev.displayTypeOverrides,
+          }));
+          added++;
+        });
+
+        return { ...prev, catalogs: newCatalogs };
+      });
+
+      toast.success("Lists imported successfully", {
+        description: added > 0
+          ? `${added} list(s) added to your catalogs`
+          : "Those lists were already in your catalogs"
+      });
+      setSelectedSearchLists(new Set());
+    } catch (error) {
+      toast.error("Failed to import lists", {
+        description: error instanceof Error ? error.message : "Unknown error occurred"
+      });
+    }
+  }, [selectedSearchLists, listSearchResults, setConfig, defaultSort, defaultOrder, defaultCacheTTL, defaultGenreSelection]);
 
   const importSelectedPopularLists = useCallback(async () => {
     if (selectedPopularLists.size === 0) {
@@ -1510,6 +1596,116 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
                   )}
                 </div>
               )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Search Public Lists */}
+          {canBrowse && (
+            <Card className="bg-gradient-to-br from-sky-500/10 via-card/80 to-card/80 border-sky-400/20">
+              <CardHeader className="flex-row items-start gap-3 sm:gap-4 space-y-0 p-4 sm:p-6">
+                <div className="shrink-0 h-10 w-10 rounded-lg bg-sky-500/15 text-sky-300 flex items-center justify-center ring-1 ring-sky-400/20">
+                  <Search className="h-5 w-5" />
+                </div>
+                <div className="flex-1 min-w-0 space-y-1.5">
+                  <CardTitle>Search Public Lists</CardTitle>
+                  <CardDescription>
+                    Search every public list on MDBList by name, when you do not know whose list it is.
+                  </CardDescription>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:space-x-2 sm:gap-0">
+                  <Input
+                    id="mdblistListSearch"
+                    value={listSearchQuery}
+                    onChange={(e) => setListSearchQuery(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') searchPublicLists(); }}
+                    placeholder="Search public MDBList lists"
+                    className="min-w-0"
+                  />
+                  <Button
+                    onClick={searchPublicLists}
+                    variant="outline"
+                    disabled={isSearchingLists || !listSearchQuery.trim()}
+                    className="w-full sm:w-auto"
+                  >
+                    {isSearchingLists ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Search'}
+                  </Button>
+                </div>
+
+                {listSearchResults.length > 0 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center space-x-3 p-3 border rounded-lg bg-muted/30">
+                      <Switch
+                        id="select-all-search"
+                        checked={selectedSearchLists.size === listSearchResults.length && listSearchResults.length > 0}
+                        onCheckedChange={(checked) => {
+                          if (checked) {
+                            setSelectedSearchLists(new Set(listSearchResults.map(l => String(l.id))));
+                          } else {
+                            setSelectedSearchLists(new Set());
+                          }
+                        }}
+                      />
+                      <Label htmlFor="select-all-search" className="font-medium cursor-pointer">
+                        Select all results
+                      </Label>
+                      <Badge variant="outline" className="ml-auto">
+                        {selectedSearchLists.size}/{listSearchResults.length}
+                      </Badge>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 max-h-80 overflow-y-auto border rounded-lg p-3 bg-muted/20">
+                      {listSearchResults.map((list) => (
+                        <div key={list.id} className="flex items-start space-x-3 p-3 border rounded-lg">
+                          <Switch
+                            id={`search-list-${list.id}`}
+                            checked={selectedSearchLists.has(String(list.id))}
+                            onCheckedChange={(checked) => handleSearchListSelection(String(list.id), checked)}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <Label htmlFor={`search-list-${list.id}`} className="font-medium cursor-pointer break-words">
+                              {list.name}
+                            </Label>
+                            <div className="flex flex-wrap items-center gap-2 mt-1">
+                              <Badge variant="outline" className="text-xs">
+                                {getMdbListType(list) === 'all' ? 'Movies and series' : getMdbListType(list) === 'movie' ? 'Movies' : 'Series'}
+                              </Badge>
+                              {(list.user_name || list.user) && (
+                                <Badge variant="secondary" className="text-xs">
+                                  by {list.user_name || list.user}
+                                </Badge>
+                              )}
+                              {list.items ? (
+                                <Badge variant="secondary" className="text-xs">
+                                  {list.items} items
+                                </Badge>
+                              ) : null}
+                            </div>
+                            {list.description && (
+                              <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                                {list.description}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {selectedSearchLists.size > 0 && (
+                      <Button onClick={importSelectedSearchLists} className="w-full">
+                        Import {selectedSearchLists.size} Selected List{selectedSearchLists.size !== 1 ? 's' : ''}
+                      </Button>
+                    )}
+                  </div>
+                )}
+
+                {hasSearchedLists && listSearchResults.length === 0 && !isSearchingLists && (
+                  <p className="text-xs text-muted-foreground">
+                    No lists matched that search.
+                  </p>
+                )}
               </CardContent>
             </Card>
           )}

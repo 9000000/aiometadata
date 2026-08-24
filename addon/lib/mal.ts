@@ -96,9 +96,15 @@ if (!malDispatcher) {
 
 const { envInt }: any = require('../utils/envNumber');
 
-const MAX_CONCURRENT = envInt('JIKAN_MAX_CONCURRENT', 2, 1);
-const MIN_REQUEST_INTERVAL = envInt('JIKAN_MIN_INTERVAL', 350, 0);
-const MAX_REQUESTS_PER_MINUTE = envInt('JIKAN_MAX_PER_MINUTE', 55, 1);
+/**
+ * Read per call rather than at module load. This file is required from the top of
+ * index.js, so the module graph is evaluated well before initializeSettings() copies
+ * the dashboard's stored settings into process.env, and anything captured up here
+ * would only ever see the environment the process started with.
+ */
+const jikanMaxConcurrent = (): number => envInt('JIKAN_MAX_CONCURRENT', 2, 1);
+const jikanMinInterval = (): number => envInt('JIKAN_MIN_INTERVAL', 350, 0);
+const jikanMaxPerMinute = (): number => envInt('JIKAN_MAX_PER_MINUTE', 55, 1);
 const MAX_RETRIES = 3;
 const RATE_LIMIT_DELAY = 2000;
 
@@ -108,7 +114,7 @@ let isProcessing = false;
 let rateLimitHitTimestamps: number[] = [];
 let requestTimestamps: number[] = [];
 let lastDispatchTime = 0;
-let adaptiveConcurrency = MAX_CONCURRENT;
+let adaptiveConcurrency: number | null = null;
 let lastAdaptiveRestore = Date.now();
 
 function onRateLimitHit(): void {
@@ -122,14 +128,23 @@ function onRateLimitHit(): void {
   logger.warn(`[Rate Limiter] Concurrency reduced to 1 (${rateLimitHitTimestamps.length} hits in last 60s)`);
 }
 
+/** The adaptive value, held under whatever ceiling is configured right now. */
+function concurrencyLimit(): number {
+  const ceiling = jikanMaxConcurrent();
+  return adaptiveConcurrency === null ? ceiling : Math.min(adaptiveConcurrency, ceiling);
+}
+
 function maybeRestoreConcurrency(): void {
   const now = Date.now();
   const recentHits = rateLimitHitTimestamps.filter(t => now - t < 60000).length;
 
-  if (recentHits === 0 && now - lastAdaptiveRestore > 30000 && adaptiveConcurrency < MAX_CONCURRENT) {
-    adaptiveConcurrency = Math.min(adaptiveConcurrency + 1, MAX_CONCURRENT);
+  const ceiling = jikanMaxConcurrent();
+  const current = concurrencyLimit();
+
+  if (recentHits === 0 && now - lastAdaptiveRestore > 30000 && current < ceiling) {
+    adaptiveConcurrency = Math.min(current + 1, ceiling);
     lastAdaptiveRestore = now;
-    logger.debug(`[Rate Limiter] Concurrency restored to ${adaptiveConcurrency}/${MAX_CONCURRENT}`);
+    logger.debug(`[Rate Limiter] Concurrency restored to ${adaptiveConcurrency}/${ceiling}`);
   }
 }
 
@@ -137,7 +152,7 @@ function getMinuteWaitTime(): number {
   const now = Date.now();
   requestTimestamps = requestTimestamps.filter(t => now - t < 60000);
 
-  if (requestTimestamps.length >= MAX_REQUESTS_PER_MINUTE) {
+  if (requestTimestamps.length >= jikanMaxPerMinute()) {
     const oldestInWindow = requestTimestamps[0];
     const waitMs = 60000 - (now - oldestInWindow) + 150;
     return Math.max(0, waitMs);
@@ -150,21 +165,21 @@ async function processQueue(): Promise<void> {
   isProcessing = true;
 
   while (requestQueue.length > 0) {
-    if (activeRequests >= adaptiveConcurrency) {
+    if (activeRequests >= concurrencyLimit()) {
       await new Promise(resolve => setTimeout(resolve, 50));
       continue;
     }
 
     const minuteWait = getMinuteWaitTime();
     if (minuteWait > 0) {
-      logger.debug(`[Rate Limiter] Per-minute limit approaching (${requestTimestamps.length}/${MAX_REQUESTS_PER_MINUTE}), waiting ${minuteWait}ms`);
+      logger.debug(`[Rate Limiter] Per-minute limit approaching (${requestTimestamps.length}/${jikanMaxPerMinute()}), waiting ${minuteWait}ms`);
       await new Promise(resolve => setTimeout(resolve, minuteWait));
       continue;
     }
 
     const now = Date.now();
     const timeSinceLast = now - lastDispatchTime;
-    const perSecondWait = Math.max(0, MIN_REQUEST_INTERVAL - timeSinceLast);
+    const perSecondWait = Math.max(0, jikanMinInterval() - timeSinceLast);
     if (perSecondWait > 0) {
       await new Promise(resolve => setTimeout(resolve, perSecondWait));
     }

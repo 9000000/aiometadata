@@ -14,9 +14,10 @@ const { applyCatalogFilters, catalogFiltersActive } = require("./utils/catalogFi
 const { cursorKey, resolveStartPage, writeCursor, fillFilteredPage } = require("./lib/catalogPagination");
 const anilist = require("./lib/anilist");
 const { getSearch } = require("./lib/getSearch");
-const { getManifest, DEFAULT_LANGUAGE } = require("./lib/getManifest");
+const { getManifest, resolveManifestTags, DEFAULT_LANGUAGE } = require("./lib/getManifest");
+const { resolveInstallFilters, uniformTagRating, allowsUnrated, scopeTagsToCatalog } = require("./utils/ageRating");
 const { getMeta } = require("./lib/getMeta");
-const { cacheWrapMetaSmart, cacheWrapCatalog, cacheWrapSearch, cacheWrapJikanApi, cacheWrapStaticCatalog, cacheWrapGlobal, getCacheHealth, clearCacheHealth, logCacheHealth, stableStringify, deleteKeysByPattern, scanKeys } = require("./lib/getCache");
+const { cacheWrapMetaSmart, cacheWrapCatalog, cacheWrapSearch, cacheWrapJikanApi, cacheWrapGlobal, getCacheHealth, clearCacheHealth, logCacheHealth, stableStringify, deleteKeysByPattern, scanKeys } = require("./lib/getCache");
 const { hasPermission } = require("./lib/authSession");
 const { isOidcConfigured } = require("./lib/oidc");
 const { resolveConfigAccess } = require("./lib/configAccess");
@@ -30,34 +31,21 @@ const consola = require('consola');
 const aiCatalogLogger = consola.withTag('AICatalog');
 const { stripReleaseAvailabilityForResponse } = require('./utils/releaseAvailability');
 
-const { getMediaRatingFromMDBList, supportsMdblistScoreFilters } = require("./utils/mdbList");
+const { supportsMdblistScoreFilters } = require("./utils/mdbList");
 
-// Warm user-specific content based on their config
-async function warmUserContent(userUUID, contentType) {
-  try {
-    // Load user config
-    const config = await loadConfigFromDatabase(userUUID);
-    if (!config) return;
-    
-    // Add userUUID to config for per-user token caching
-    config.userUUID = userUUID;
-    
-    // Warm popular content based on user's preferences
-    const language = config.language || DEFAULT_LANGUAGE;
-    
-    // Note: Popular content warming is now handled globally by warmPopularContent()
-    // which runs every 6 hours and caches trending content for all users
-    
-    consola.success(`[Cache Warming] User content warmed for ${userUUID} (${contentType})`);
-  } catch (error) {
-    consola.warn(`[Cache Warming] Failed to warm user content for ${userUUID}:`, error.message);
-  }
-}
 const configApi = require('./lib/configApi');
 const database = require('./lib/database');
 const { loadConfigFromDatabase } = require('./lib/configApi');
 const { getTrending } = require("./lib/getTrending");
-const { resolveProxyRatingPosterUrl, parseAnimeCatalogMeta, parseAnimeCatalogMetaBatch } = require("./utils/parseProps");
+const { resolveProxyRatingPosterUrl, parseAnimeCatalogMetaBatch } = require("./utils/parseProps");
+const { extractIdsFromMeta, extractCanonicalIdFromDynamicUpNextId } = require("./utils/metaIds");
+const { sleep } = require("./utils/concurrency");
+const { resolveMdblistKey, mdblistCacheKey } = require("./utils/mdblistUtils");
+const { normalizeTraktEndpoint, resolveTraktProxyAuthMode } = require("./utils/traktProxyRoutes");
+const { normalizeTvdbListRecord, enrichTvdbListRecords } = require("./utils/tvdbLists");
+const { resolveTmdbDiscoverApiKey, resolveTvdbDiscoverApiKey, normalizeTmdbDiscoverType, normalizeTvdbDiscoverType, toTvdbCountryCode } = require("./utils/discoverParams");
+const { normalizeRedirectUri } = require("./utils/oauthRedirect");
+const { shuffleMetas } = require("./utils/mergedCatalog");
 const { getFavorites, getWatchList } = require("./lib/getPersonalLists");
 const { resolveDynamicTmdbDiscoverParams } = require('./lib/tmdbDiscoverDateTokens');
 const { blurImage, convertBannerToBackground } = require('./utils/imageProcessor');
@@ -77,8 +65,14 @@ const {
 const { renderOAuthPage } = require('./lib/oauthPage');
 const { hasAnyWatchTrackingEnabled } = require('./lib/watchTracking');
 const { SimklClient } = require('./lib/simkl');
-const axios = require('axios');
-const getCountryISO3 = require('country-iso-2-to-3');
+const {
+  createSessionId,
+  deleteDeviceAuthSession,
+  getDeviceAuthSession,
+  registerPoll,
+  saveDeviceAuthSession,
+  widenPollInterval,
+} = require('./lib/deviceAuthSessions');
 const jikan = require('./lib/mal');
 const buildInfo = require('./lib/buildInfo');
 const { clientDistDir, clientIndexPath, publicDir } = require('./lib/runtimePaths');
@@ -88,14 +82,6 @@ const idMapper = require('./lib/id-mapper');
 const wikiMappings = require('./lib/wiki-mapper.js');
 
 // Normalize redirect URIs to always include a scheme
-const normalizeRedirectUri = (uri) => {
-  if (!uri) return uri;
-  const trimmed = uri.trim();
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-    return trimmed;
-  }
-  return `https://${trimmed.replace(/^\/+/, '')}`;
-};
 // Best-effort same-process duplicate handling. Trakt enforces authorization-code
 // single use; this set is not shared across replicas and does not consume state.
 const usedTraktCodes = new Set();
@@ -104,74 +90,27 @@ const usedAnilistCodes = new Set();
 const ANILIST_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const SIMKL_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
+// Which Simkl flows this instance offers. PIN needs only a client id, so it is
+// the default when no secret is set.
+function resolveSimklAuthMode() {
+  const configured = String(getSetting('SIMKL_AUTH_MODE') || '').trim().toLowerCase();
+  if (configured === 'pin' || configured === 'oauth' || configured === 'both') {
+    return configured;
+  }
+  return getSetting('SIMKL_CLIENT_SECRET') ? 'oauth' : 'pin';
+}
+
+function simklPinEnabled() {
+  const mode = resolveSimklAuthMode();
+  return mode === 'pin' || mode === 'both';
+}
+
 const usedMalCodes = new Set();
 const MAL_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
-function extractCanonicalIdFromDynamicUpNextId(type, stremioId) {
-  if (type !== 'series' || typeof stremioId !== 'string') {
-    return null;
-  }
-
-  const prefixes = ['mdblist_upnext_', 'pmdb_resume_', 'upnext_'];
-  const prefix = prefixes.find(p => stremioId.startsWith(p));
-  if (!prefix) {
-    return null;
-  }
-
-  const remainder = stremioId.slice(prefix.length);
-  const episodeSeparatorIndex = remainder.lastIndexOf('_');
-  if (episodeSeparatorIndex <= 0) {
-    return null;
-  }
-
-  const canonicalId = remainder.slice(0, episodeSeparatorIndex);
-  const episodePart = remainder.slice(episodeSeparatorIndex + 1);
-  const isSupportedCanonicalId = /^tt\d+$/.test(canonicalId) ||
-    /^tmdb:\d+$/.test(canonicalId) ||
-    /^tvdb:\d+$/.test(canonicalId);
-  const isSupportedEpisodePart = /^trakt\d+$/.test(episodePart) ||
-    /^S\d+E\d+$/.test(episodePart) ||
-    episodePart === 'unknown';
-
-  return isSupportedCanonicalId && isSupportedEpisodePart ? canonicalId : null;
-}
-
-function shuffleMetas(metas = []) {
-  const shuffled = Array.isArray(metas) ? metas.slice() : [];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  return shuffled;
-}
 
 
-function extractIdsFromMeta(meta) {
-  const ids = {};
-  if (!meta) return ids;
 
-  const id = meta.id || '';
-  if (id) ids.id = id;
-  if (id.startsWith('tmdb:')) ids.tmdbId = id.slice(5);
-  else if (id.startsWith('tvdb:')) ids.tvdbId = id.slice(5);
-  else if (id.startsWith('kitsu:')) ids.kitsuId = id.slice(6);
-  else if (id.startsWith('mal:')) ids.malId = id.slice(4);
-  else if (id.startsWith('anilist:')) ids.anilistId = id.slice(8);
-  else if (id.startsWith('anidb:')) ids.anidbId = id.slice(6);
-  else if (id.startsWith('tt')) ids.imdbId = id;
-
-  // Pick up additional IDs from meta properties
-  if (meta.imdb_id) ids.imdbId = meta.imdb_id;
-  if (meta._tmdbId && !ids.tmdbId) ids.tmdbId = meta._tmdbId;
-  if (meta._tvdbId && !ids.tvdbId) ids.tvdbId = meta._tvdbId;
-  if (meta._imdbId && !ids.imdbId) ids.imdbId = meta._imdbId;
-  if (meta._malId && !ids.malId) ids.malId = meta._malId;
-  if (meta._kitsuId && !ids.kitsuId) ids.kitsuId = meta._kitsuId;
-  if (meta._anilistId && !ids.anilistId) ids.anilistId = meta._anilistId;
-  if (meta._anidbId && !ids.anidbId) ids.anidbId = meta._anidbId;
-
-  return ids;
-}
 
 const { createResponseCompression } = require('./utils/responseCompression');
 addon.use(createResponseCompression());
@@ -245,6 +184,9 @@ addon.use(
     '/api/auth/trakt/callback',
     '/api/auth/simkl/authorize',
     '/api/auth/simkl/callback',
+    '/api/auth/simkl/pin',
+    '/api/auth/simkl/pin/status',
+    '/api/auth/simkl/pin/cancel',
     '/api/auth/movielens/connect',
   ],
   noStoreOAuthHeaders
@@ -273,6 +215,59 @@ async function testKeysRateLimitMiddleware(req, res, next) {
     }
   } catch (error) {
     consola.warn('[Rate Limit] /api/test-keys limiter failed, allowing request:', error.message);
+  }
+
+  next();
+}
+
+const REDIS_LIMITER_TIMEOUT_MS = 500;
+
+function DEVICE_AUTH_POLL_RATE_LIMIT_PER_MIN() {
+  const parsed = parseInt(getSetting('DEVICE_AUTH_POLL_RATE_LIMIT_PER_MIN'), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 240;
+}
+
+// Own bucket: a pending code polls every few seconds and would eat the much
+// tighter /api/test-keys budget.
+async function deviceAuthPollRateLimitMiddleware(req, res, next) {
+  if (!redis) {
+    return next();
+  }
+
+  try {
+    const minuteBucket = Math.floor(Date.now() / 60000);
+    // Keyed per caller, the way the config-load limiter is. A single bucket for
+    // the whole instance would let a handful of concurrent authorizations spend
+    // the budget, and would let anyone spend it deliberately: a pending code
+    // polls every few seconds and these routes need no session.
+    const target = (typeof req.query?.sessionId === 'string' && req.query.sessionId)
+      || (typeof req.body?.sessionId === 'string' && req.body.sessionId)
+      || req.session?.accountId
+      || req.ip
+      || 'unknown';
+    const rateKey = `rate-limit:device-auth-poll:${target}:${minuteBucket}`;
+
+    // Bounded: with no Redis listening, ioredis holds a command for the better
+    // part of a minute, and these routes are polled every few seconds. A count
+    // we can't read in time means the request is allowed through.
+    const currentCount = await Promise.race([
+      redis.incr(rateKey),
+      new Promise(resolve => setTimeout(() => resolve(null), REDIS_LIMITER_TIMEOUT_MS).unref()),
+    ]);
+
+    if (currentCount === null) {
+      return next();
+    }
+
+    if (currentCount === 1) {
+      redis.expire(rateKey, 70).catch(() => undefined);
+    }
+
+    if (currentCount > DEVICE_AUTH_POLL_RATE_LIMIT_PER_MIN()) {
+      return res.status(429).json({ error: 'Too many authorization status requests. Please try again shortly.' });
+    }
+  } catch (error) {
+    consola.warn('[Rate Limit] Device auth poll limiter failed, allowing request:', error.message);
   }
 
   next();
@@ -327,9 +322,10 @@ function applyImageCachePrefix(data) {
   const selfOrigin = posterCacheConfig.getSelfOrigin();
   const metaFieldClasses = posterCacheConfig.META_FIELD_CLASSES;
   const cacheThumbnails = posterCacheConfig.isClassEnabled('thumbnail');
+  const cacheCast = posterCacheConfig.isClassEnabled('cast');
 
   const enabledFields = posterCacheConfig.getCacheableFields();
-  if (enabledFields.length === 0 && !cacheThumbnails) return;
+  if (enabledFields.length === 0 && !cacheThumbnails && !cacheCast) return;
 
   const prefixUrl = (url, imageClass) => {
     if (!url || typeof url !== 'string') return url;
@@ -349,6 +345,11 @@ function applyImageCachePrefix(data) {
         if (video?.thumbnail) video.thumbnail = prefixUrl(video.thumbnail, 'thumbnail');
       }
     }
+    if (cacheCast && Array.isArray(meta.app_extras?.cast)) {
+      for (const member of meta.app_extras.cast) {
+        if (member?.photo) member.photo = prefixUrl(member.photo, 'cast');
+      }
+    }
   };
 
   applyToMeta(data.meta);
@@ -359,9 +360,12 @@ function applyImageCachePrefix(data) {
 
 const isCacheWarmingEnabled = () => !isLiteMode() && process.env.ENABLE_CACHE_WARMING !== 'false';
 
+/** Read at call time so the status route reports a value changed from the dashboard. */
+const cacheWarmingIntervalMinutes = () => parseInt(process.env.CACHE_WARMING_INTERVAL || '720', 10);
+
 /** Called by the startup sequence once settings are loaded. */
 function startEssentialWarmingSchedules() {
-  const CACHE_WARMING_INTERVAL = parseInt(process.env.CACHE_WARMING_INTERVAL || '720', 10);
+  const CACHE_WARMING_INTERVAL = cacheWarmingIntervalMinutes();
 
   if (isCacheWarmingEnabled()) {
     consola.info(`[API Cache Warming] Initializing API cache warming (interval: ${CACHE_WARMING_INTERVAL} minutes)`);
@@ -424,7 +428,45 @@ const getCacheHeaders = function (opts) {
   return headerParts.length > 0 ? headerParts.join(", ") : false;
 };
 
-const respond = function (req, res, data, opts) {
+/**
+ * The filtering an install URL asks for, from the profiles it names and from the raw
+ * parameters. One UUID can then serve both an unrestricted and a family install.
+ * Copied rather than assigned onto the config, because concurrent loads for the same
+ * user are coalesced and hand back the same object.
+ */
+
+function applyRatingOverrides(config, req, userUUID) {
+  const rawRating = req.query.contentrating ?? req.query.contentRating;
+  const rawUnrated = req.query.unrated;
+  const rawTag = req.query.tag;
+  if (rawRating === undefined && rawUnrated === undefined && rawTag === undefined) return config;
+
+  const { tags: urlTags } = resolveManifestTags(config, rawTag);
+  const tags = scopeTagsToCatalog(config, urlTags, req.params.id, req.params.type);
+  const { ageRating, allowUnrated, refused } = resolveInstallFilters(config, {
+    rating: rawRating,
+    unrated: rawUnrated,
+    tags,
+  });
+  if (refused.length > 0) {
+    consola.warn(`[Rating] User ${userUUID} asked for ${refused.join(', ')}, which does not tighten their configured ${config.ageRating || 'None'}`);
+  }
+
+  const hidesUnrated = allowUnrated === false && allowsUnrated(config);
+  const showsUnrated = allowUnrated === true && !allowsUnrated(config);
+  if (!ageRating && !hidesUnrated && !showsUnrated) return config;
+
+  const next = { ...config };
+  if (ageRating) {
+    next.ageRating = ageRating;
+    next._ratingOverride = ageRating;
+  }
+  if (hidesUnrated || showsUnrated) next.allowUnratedContent = !hidesUnrated;
+  consola.debug(`[Rating] User ${userUUID} install capped at ${next.ageRating}${hidesUnrated ? ', unrated hidden' : ''} (configured ${config.ageRating || 'None'}${tags.length ? `, profiles ${tags.join(', ')}` : ''})`);
+  return next;
+}
+
+const respond = function (req, res, data, opts?) {
   // Store minimal tracking data in res.locals for success detection
   if (req.path.includes('/catalog/') && data && data.metas) {
     res.locals.resultCount = data.metas.length;
@@ -451,8 +493,10 @@ const respond = function (req, res, data, opts) {
         etagContent += ':manifest';
       }
 
-      if (typeof req.query.tag === 'string' && req.query.tag.trim()) {
-        etagContent += ':tag:' + req.query.tag.trim().toLowerCase();
+      // Set by the manifest route once the query has been resolved, so the validator
+      // follows the profiles that were actually built rather than the raw query.
+      if (Array.isArray(req.manifestTags) && req.manifestTags.length > 0) {
+        etagContent += ':tags:' + req.manifestTags.map((t) => t.toLowerCase()).join(',');
       }
 
       const etagHash = crypto.createHash('md5').update(etagContent).digest('hex');
@@ -536,6 +580,7 @@ const respond = function (req, res, data, opts) {
       gemini: getSetting('GEMINI_API_KEY'),
       trakt: getSetting('TRAKT_CLIENT_ID'),
       simkl: getSetting('SIMKL_CLIENT_ID'),
+      simklAuthMode: resolveSimklAuthMode(),
       customDescriptionBlurb: getSetting('CUSTOM_DESCRIPTION_BLURB'),
       addonVersion: ADDON_VERSION,
       hasBuiltInTvdb: !!getSetting('BUILT_IN_TVDB_API_KEY'),
@@ -611,11 +656,6 @@ addon.get("/api/auth/trakt/authorize", async (req, res) => {
 // Coalesce duplicate exchanges handled by this process only.
 const pendingTraktExchanges = new Map();
 
-// Helper: sleep with ms
-function sleepMs(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 async function exchangeWithRetry(traktClient, code, maxRetries = 3) {
   let lastError;
 
@@ -647,7 +687,7 @@ async function exchangeWithRetry(traktClient, code, maxRetries = 3) {
           `Waiting ${waitSeconds}s before retry...`
         );
 
-        await sleepMs(waitSeconds * 1000);
+        await sleep(waitSeconds * 1000);
         continue;
       }
 
@@ -864,7 +904,7 @@ addon.post("/api/oauth/token/info", async (req, res) => {
     if (!token) {
       return res.status(404).json({ error: "Token not found" });
     }
-    const response = { provider: token.provider, username: token.user_id, expiresAt: token.expires_at };
+    const response: any = { provider: token.provider, username: token.user_id, expiresAt: token.expires_at };
     if (token.provider === 'trakt') {
       try {
         const { isTokenInvalidated } = require('./utils/traktUtils');
@@ -968,6 +1008,54 @@ addon.post("/api/movielens/lists/:userUUID", async (req, res) => {
   }
 });
 
+// Saves a new Simkl access token and returns the token ID the user pastes into
+// their config. Used by both the OAuth callback and the PIN flow.
+async function persistSimklToken(user, accessToken) {
+  // Check if this Simkl user already has a token in the database
+  const existingTokens = await database.getOAuthTokensByProvider('simkl');
+  const existingToken = existingTokens.find(t => t.user_id.toLowerCase() === user.username.toLowerCase());
+
+  let tokenId;
+  let saved;
+
+  if (existingToken) {
+    // Update existing token
+    tokenId = existingToken.id;
+    consola.info(`[Simkl OAuth] Updating existing token - tokenId: ${tokenId}, user: ${user.username}`);
+
+    // Simkl tokens don't expire, so we don't have expires_at
+    saved = await database.updateOAuthToken(tokenId, accessToken, '', 0);
+  } else {
+    // Create new token
+    tokenId = crypto.randomUUID();
+    consola.info(`[Simkl OAuth] Creating new token - tokenId: ${tokenId}, user: ${user.username}`);
+
+    saved = await database.saveOAuthToken(tokenId, 'simkl', user.username, accessToken, '', 0, '');
+  }
+
+  if (!saved) {
+    return null;
+  }
+
+  try {
+    const userSimklTokens = existingTokens.filter(t => t.user_id.toLowerCase() === user.username.toLowerCase());
+    const oldTokenIds = userSimklTokens.map(t => t.id).filter(id => id !== tokenId);
+    if (oldTokenIds.length > 0) {
+      const affectedUsers = await database.getUsersByOAuthTokenIds('simklTokenId', oldTokenIds);
+      for (const dbUser of affectedUsers) {
+        dbUser.config.apiKeys.simklTokenId = tokenId;
+        await database.saveUserConfig(dbUser.id, dbUser.password_hash, dbUser.config);
+        configCache.del(dbUser.id);
+        consola.info(`[Simkl OAuth] Updated user ${dbUser.id} config to use new token ${tokenId}`);
+      }
+    }
+  } catch (configError) {
+    consola.warn(`[Simkl OAuth] Warning: Could not auto-update user configs - ${configError.message}`);
+  }
+
+  return tokenId;
+}
+
 // --- Simkl OAuth Routes ---
 addon.get("/api/auth/simkl/authorize", async (req, res) => {
   try {
@@ -1039,42 +1127,9 @@ addon.get("/api/auth/simkl/callback", async (req, res) => {
     // Get user info
     const user = await simklClient.getMe(tokens.access_token);
     
-    // Check if this Simkl user already has a token in the database
-    const existingTokens = await database.getOAuthTokensByProvider('simkl');
-    const existingToken = existingTokens.find(t => t.user_id.toLowerCase() === user.username.toLowerCase());
+    const tokenId = await persistSimklToken(user, tokens.access_token);
     
-    let tokenId;
-    let saved;
-    
-    if (existingToken) {
-      // Update existing token
-      tokenId = existingToken.id;
-      consola.info(`[Simkl OAuth] Updating existing token - tokenId: ${tokenId}, user: ${user.username}`);
-      
-      // Simkl tokens don't expire, so we don't have expires_at
-      saved = await database.updateOAuthToken(
-        tokenId,
-        tokens.access_token,
-        '', 
-        0 
-      );
-    } else {
-      // Create new token
-      tokenId = crypto.randomUUID();
-      consola.info(`[Simkl OAuth] Creating new token - tokenId: ${tokenId}, user: ${user.username}`);
-      
-      saved = await database.saveOAuthToken(
-        tokenId,
-        'simkl',
-        user.username,
-        tokens.access_token,
-        '', 
-        0, 
-        '' 
-      );
-    }
-    
-    if (!saved) {
+    if (!tokenId) {
       return res.status(500).send(renderOAuthPage({
         provider: 'simkl',
         status: 'error',
@@ -1082,22 +1137,6 @@ addon.get("/api/auth/simkl/callback", async (req, res) => {
         message: 'Simkl authorized the connection, but this server could not store the token. Please try again.',
         retryHref: '/api/auth/simkl/authorize',
       }));
-    }
-    
-    try {
-      const userSimklTokens = existingTokens.filter(t => t.user_id.toLowerCase() === user.username.toLowerCase());
-      const oldTokenIds = userSimklTokens.map(t => t.id).filter(id => id !== tokenId);
-      if (oldTokenIds.length > 0) {
-        const affectedUsers = await database.getUsersByOAuthTokenIds('simklTokenId', oldTokenIds);
-        for (const dbUser of affectedUsers) {
-          dbUser.config.apiKeys.simklTokenId = tokenId;
-          await database.saveUserConfig(dbUser.id, dbUser.password_hash, dbUser.config);
-          configCache.del(dbUser.id);
-          consola.info(`[Simkl OAuth] Updated user ${dbUser.id} config to use new token ${tokenId}`);
-        }
-      }
-    } catch (configError) {
-      consola.warn(`[Simkl OAuth] Warning: Could not auto-update user configs - ${configError.message}`);
     }
 
     res.send(renderOAuthPage({
@@ -1166,6 +1205,129 @@ addon.post("/api/auth/trakt/disconnect", async (req, res) => {
   }
 });
 
+// Drops a pending session so a cancelled code doesn't linger until it expires.
+// Knowing the session id is the only thing needed, same as polling it.
+async function handleDeviceAuthCancel(req, res, provider) {
+  try {
+    const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId : '';
+    const session = await getDeviceAuthSession(sessionId, provider);
+    if (session) {
+      await deleteDeviceAuthSession(sessionId);
+    }
+    res.json({ cancelled: !!session });
+  } catch (error) {
+    consola.error(`[${provider}] Failed to cancel the authorization session:`, error);
+    res.status(500).json({ error: "Failed to cancel the authorization" });
+  }
+}
+
+// --- Simkl PIN (device) Routes ---
+// No client secret and no reachable callback URL needed, so these work on
+// private instances where the OAuth flow can't.
+addon.post("/api/auth/simkl/pin", deviceAuthPollRateLimitMiddleware, async (req, res) => {
+  try {
+    if (!simklPinEnabled()) {
+      return res.status(404).json({ error: "Simkl PIN authentication is not enabled on this instance." });
+    }
+
+    const clientId = getSetting('SIMKL_CLIENT_ID');
+    if (!clientId) {
+      return res.status(500).json({ error: "Simkl is not configured. Please set the SIMKL_CLIENT_ID environment variable." });
+    }
+
+    const simklClient = new SimklClient(clientId);
+    const pin = await simklClient.requestPin();
+
+    const sessionId = createSessionId();
+    const expiresAt = Date.now() + pin.expires_in * 1000;
+    await saveDeviceAuthSession(sessionId, {
+      provider: 'simkl',
+      userCode: pin.user_code,
+      expiresAt,
+      pollIntervalMs: pin.interval * 1000,
+      lastPolledAt: 0,
+    });
+
+    res.json({
+      sessionId,
+      userCode: pin.user_code,
+      verificationUrl: pin.verification_url,
+      interval: pin.interval,
+      expiresIn: pin.expires_in,
+    });
+  } catch (error) {
+    consola.error("[Simkl PIN] Failed to request a PIN:", error);
+    res.status(500).json({ error: "Failed to request a Simkl PIN" });
+  }
+});
+
+addon.get("/api/auth/simkl/pin/status", deviceAuthPollRateLimitMiddleware, async (req, res) => {
+  try {
+    if (!simklPinEnabled()) {
+      return res.status(404).json({ error: "Simkl PIN authentication is not enabled on this instance." });
+    }
+
+    const clientId = getSetting('SIMKL_CLIENT_ID');
+    if (!clientId) {
+      return res.status(500).json({ error: "Simkl is not configured. Please set the SIMKL_CLIENT_ID environment variable." });
+    }
+
+    const sessionIdParam = Array.isArray(req.query.sessionId) ? req.query.sessionId[0] : req.query.sessionId;
+    const sessionId = typeof sessionIdParam === 'string' ? sessionIdParam : '';
+
+    // The session id stays in the browser that started the flow, so guessing the
+    // short user code isn't enough to claim the token.
+    const session = await getDeviceAuthSession(sessionId, 'simkl');
+    if (!session) {
+      return res.status(404).json({ status: 'expired' });
+    }
+
+    // Simkl asks callers to respect the interval it handed out, so polls that
+    // arrive early are answered without bothering it.
+    if (!await registerPoll(sessionId, session)) {
+      return res.json({ status: 'pending' });
+    }
+
+    const simklClient = new SimklClient(clientId);
+    const poll = await simklClient.pollPin(session.userCode);
+
+    if (poll.status === 'pending') {
+      return res.json({ status: 'pending' });
+    }
+
+    if (poll.status === 'slow_down') {
+      await widenPollInterval(sessionId, session);
+      return res.json({ status: 'slow_down' });
+    }
+
+    if (poll.status === 'expired') {
+      await deleteDeviceAuthSession(sessionId);
+      return res.json({ status: 'expired' });
+    }
+
+    const user = await simklClient.getMe(poll.access_token);
+    const tokenId = await persistSimklToken(user, poll.access_token);
+
+    if (!tokenId) {
+      // Session left in place: storing the token is the only thing that failed,
+      // so the next poll can try again rather than making the user start over.
+      return res.status(500).json({ error: "Simkl authorized the connection, but this server could not store the token." });
+    }
+
+    await deleteDeviceAuthSession(sessionId);
+
+    consola.info(`[Simkl PIN] Connected user ${user.username} - tokenId: ${tokenId}`);
+    res.json({ status: 'authorized', tokenId, username: user.username });
+  } catch (error) {
+    consola.error("[Simkl PIN] Status check failed:", error);
+    res.status(500).json({ error: "Failed to check the Simkl PIN status" });
+  }
+});
+
+addon.post("/api/auth/simkl/pin/cancel", async (req, res) => {
+  await handleDeviceAuthCancel(req, res, 'simkl');
+});
+
 addon.post("/api/auth/simkl/disconnect", async (req, res) => {
   try {
     const { userUUID } = req.body;
@@ -1211,67 +1373,6 @@ addon.post("/api/auth/simkl/disconnect", async (req, res) => {
   }
 });
 
-function normalizeTraktEndpoint(endpoint) {
-  if (typeof endpoint !== 'string') return '';
-  const normalized = endpoint.trim();
-  if (!normalized) return '';
-  return normalized.startsWith('/') ? normalized : `/${normalized}`;
-}
-
-function isOptionalUsersRoute(pathnameLower) {
-  const parts = pathnameLower.split('/').filter(Boolean);
-  // /users/{id}
-  if (parts.length === 2) return true;
-  // /users/{id}/stats
-  if (parts.length === 3 && parts[2] === 'stats') return true;
-  // /users/{id}/lists
-  if (parts.length === 3 && parts[2] === 'lists') return true;
-  // /users/{id}/lists/{list_id}
-  if (parts.length === 4 && parts[2] === 'lists') return true;
-  // /users/{id}/lists/{list_id}/items[...]
-  if (parts.length >= 5 && parts[2] === 'lists' && parts[4] === 'items') return true;
-  return false;
-}
-
-function resolveTraktProxyAuthMode(pathname) {
-  const pathnameLower = pathname.toLowerCase();
-
-  // Auth required routes.
-  if (
-    pathnameLower.startsWith('/calendars/my/') ||
-    pathnameLower.startsWith('/recommendations/') ||
-    pathnameLower.startsWith('/sync/') ||
-    pathnameLower.startsWith('/users/hidden/') ||
-    pathnameLower.includes('/progress/watched')
-  ) {
-    return 'required';
-  }
-
-  // /users/me/* always needs OAuth (Trakt resolves "me" from the token).
-  if (pathnameLower === '/users/me' || pathnameLower.startsWith('/users/me/')) {
-    return 'required';
-  }
-
-  // OAuth optional routes we currently proxy.
-  if (pathnameLower.startsWith('/users/') && isOptionalUsersRoute(pathnameLower)) {
-    return 'optional';
-  }
-
-  // Known public/unauthed route groups we currently proxy.
-  if (
-    pathnameLower.startsWith('/genres/') ||
-    pathnameLower.startsWith('/lists/') ||
-    pathnameLower.startsWith('/movies/') ||
-    pathnameLower.startsWith('/shows/') ||
-    pathnameLower.startsWith('/search/') ||
-    pathnameLower.startsWith('/people/')
-  ) {
-    return 'unauthed';
-  }
-
-  // Default to auth-required for unknown routes.
-  return 'required';
-}
 
 // Proxy endpoint for Trakt API calls with auth-aware routing
 addon.post("/api/trakt/proxy", async (req, res) => {
@@ -1387,16 +1488,6 @@ function mdblistListCacheTtl() {
 
 /** Keyed per key rather than globally: without a username MDBList returns the caller's own lists. */
 /** The instance key stands in when the caller sends none, same as the catalog paths. */
-function resolveMdblistKey(supplied) {
-  const value = String(supplied || '').trim();
-  return value || process.env.MDBLIST_API_KEY || process.env.BUILT_IN_MDBLIST_API_KEY || '';
-}
-
-function mdblistCacheKey(parts, apikey) {
-  const fingerprint = crypto.createHash('sha256').update(String(apikey)).digest('hex').slice(0, 16);
-  return `mdblist:${parts.join(':')}:${fingerprint}`;
-}
-
 addon.get("/api/mdblist/lists/user", async (req, res) => {
   try {
     const { username, sort } = req.query;
@@ -1574,65 +1665,7 @@ const tvdbApi = require('./lib/tvdb');
 const TMDB_DISCOVER_CACHE_TTL = 24 * 60 * 60; // 24h for mostly static discover reference data
 const TVDB_DISCOVER_CACHE_TTL = 24 * 60 * 60; // 24h for mostly static discover reference data
 
-function normalizeTmdbDiscoverType(type) {
-  return type === 'tv' ? 'tv' : 'movie';
-}
 
-function normalizeTvdbDiscoverType(type) {
-  return type === 'series' ? 'series' : 'movies';
-}
-
-function toTvdbCountryCode(regionCode) {
-  const normalized = typeof regionCode === 'string' ? regionCode.trim().toUpperCase() : '';
-  if (!normalized) return 'usa';
-  const countryData = getCountryISO3(normalized);
-  if (!countryData) return 'usa';
-  return String(countryData).toLowerCase();
-}
-
-async function resolveTmdbDiscoverApiKey(req) {
-  const requestApiKey = typeof req.query.apikey === 'string' ? req.query.apikey.trim() : '';
-  if (requestApiKey) {
-    return requestApiKey;
-  }
-
-  const userUUID = typeof req.query.userUUID === 'string' ? req.query.userUUID.trim() : '';
-  if (userUUID) {
-    try {
-      const userConfig = await loadConfigFromDatabase(userUUID);
-      const userConfigKey = userConfig?.apiKeys?.tmdb?.trim() || '';
-      if (userConfigKey) {
-        return userConfigKey;
-      }
-    } catch (error) {
-      consola.debug(`[TMDB Discover] Could not load config for user ${userUUID}: ${error.message}`);
-    }
-  }
-
-  return (process.env.TMDB_API_KEY || process.env.TMDB_API || process.env.BUILT_IN_TMDB_API_KEY || '').trim();
-}
-
-async function resolveTvdbDiscoverApiKey(req) {
-  const requestApiKey = typeof req.query.apikey === 'string' ? req.query.apikey.trim() : '';
-  if (requestApiKey) {
-    return requestApiKey;
-  }
-
-  const userUUID = typeof req.query.userUUID === 'string' ? req.query.userUUID.trim() : '';
-  if (userUUID) {
-    try {
-      const userConfig = await loadConfigFromDatabase(userUUID);
-      const userConfigKey = userConfig?.apiKeys?.tvdb?.trim() || '';
-      if (userConfigKey) {
-        return userConfigKey;
-      }
-    } catch (error) {
-      consola.debug(`[TVDB Discover] Could not load config for user ${userUUID}: ${error.message}`);
-    }
-  }
-
-  return (process.env.TVDB_API_KEY || process.env.BUILT_IN_TVDB_API_KEY || '').trim();
-}
 
 // Proxy: Get TMDB list details
 addon.get("/api/tmdb/list/:listId", async (req, res) => {
@@ -2116,66 +2149,6 @@ addon.get("/api/tvdb/discover/search/:entity", async (req, res) => {
   }
 });
 
-const TVDB_ARTWORK_BASE = 'https://artworks.thetvdb.com';
-
-function tvdbListImageUrl(image) {
-  if (!image || typeof image !== 'string') return '';
-  return image.startsWith('http') ? image : `${TVDB_ARTWORK_BASE}${image.startsWith('/') ? '' : '/'}${image}`;
-}
-
-function normalizeTvdbListRecord(record) {
-  const id = Number(String(record?.tvdb_id ?? record?.id ?? '').replace(/[^0-9]/g, ''));
-  if (!Number.isFinite(id) || id <= 0) return null;
-  const slug = record?.url || record?.slug || '';
-  return {
-    id,
-    name: record?.name || `List ${id}`,
-    overview: record?.overview || record?.overviews?.eng || '',
-    slug,
-    image: tvdbListImageUrl(record?.image || record?.image_url),
-    isOfficial: !!record?.isOfficial,
-    url: `https://thetvdb.com/lists/${slug || id}`
-  };
-}
-
-// Base list records carry no image, and search results carry no slug.
-async function enrichTvdbListRecords(records, config) {
-  const enriched = new Array(records.length);
-  const queue = records.map((record, index) => ({ record, index }));
-  const concurrency = Math.min(
-    parseInt(process.env.TVDB_LIST_ENRICH_CONCURRENCY || '10', 10),
-    queue.length
-  );
-
-  const worker = async () => {
-    while (queue.length) {
-      const { record, index } = queue.shift();
-      let details = null;
-      try {
-        details = await tvdbApi.getCollectionDetails(String(record.id), config);
-      } catch (error) {
-        consola.debug(`[TVDB Lists] Could not enrich list ${record.id}: ${error.message}`);
-      }
-      const entities = Array.isArray(details?.entities) ? details.entities : [];
-      const movieCount = entities.filter(e => e?.movieId).length;
-      const seriesCount = entities.filter(e => e?.seriesId).length;
-      enriched[index] = {
-        ...record,
-        ...(details?.image ? { image: tvdbListImageUrl(details.image) } : {}),
-        ...(details?.url ? { slug: details.url, url: `https://thetvdb.com/lists/${details.url}` } : {}),
-        ...(details?.overview && !record.overview ? { overview: details.overview } : {}),
-        // Search results omit isOfficial entirely, so it only ever arrives here.
-        isOfficial: typeof details?.isOfficial === 'boolean' ? details.isOfficial : !!record.isOfficial,
-        movieCount,
-        seriesCount,
-        itemCount: movieCount + seriesCount,
-      };
-    }
-  };
-
-  await Promise.all(Array.from({ length: Math.max(1, concurrency) }, worker));
-  return enriched.filter(Boolean);
-}
 
 async function buildTvdbListConfig(req, res) {
   const tvdbApiKey = await resolveTvdbDiscoverApiKey(req);
@@ -3882,7 +3855,7 @@ addon.get("/api/cache/status", requireDashboardAdmin, (req, res) => {
   res.json({
     cacheEnabled: true,
     warmingEnabled: isCacheWarmingEnabled(),
-    warmingInterval: CACHE_WARMING_INTERVAL,
+    warmingInterval: cacheWarmingIntervalMinutes(),
     initialWarmingComplete: isInitialWarmingComplete(),
     addonVersion: ADDON_VERSION
   });
@@ -4010,9 +3983,26 @@ addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
             return res.status(404).send({ err: "User configuration not found." });
         }
         
-        const tag = typeof req.query.tag === 'string' ? req.query.tag.trim() : '';
-        consola.debug(`[Manifest] Building fresh manifest for user: ${userUUID}${tag ? ` (tag: ${tag})` : ''}`);
-        const manifest = await getManifest(config, { tag });
+        const { tags, unknown: unknownTags } = resolveManifestTags(config, req.query.tag);
+        req.manifestTags = tags;
+        // The cap itself applies to catalog and search requests, not to the manifest.
+        // It is resolved here anyway so an install URL can be checked before it is used.
+        const installFilters = resolveInstallFilters(config, {
+            rating: req.query.contentrating ?? req.query.contentRating,
+            unrated: req.query.unrated,
+            tags,
+        });
+        const ratingOverride = installFilters.ageRating;
+        const hidesUnrated = installFilters.allowUnrated === false && allowsUnrated(config);
+        const refusedFilters = installFilters.refused;
+        if (refusedFilters.length > 0) {
+            consola.warn(`[Manifest] User ${userUUID} asked for ${refusedFilters.join(', ')}, which does not tighten their configured ${config.ageRating || 'None'}`);
+        }
+        consola.debug(`[Manifest] Building fresh manifest for user: ${userUUID}${tags.length ? ` (tags: ${tags.join(', ')})` : ''}`);
+        if (unknownTags.length > 0) {
+            consola.warn(`[Manifest] User ${userUUID} asked for ${unknownTags.join(', ')}, which no catalog is tagged with`);
+        }
+        const manifest = await getManifest(config, { tags });
             if (!manifest) {
                 res.setHeader('Access-Control-Allow-Origin', '*');
                 res.setHeader('Access-Control-Allow-Headers', '*');
@@ -4041,9 +4031,23 @@ addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
         manifest._debug = {
             language: config.language || DEFAULT_LANGUAGE,
             configVersion: config.configVersion || Date.now(),
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            ...(tags.length > 0 ? { tags } : {}),
+            ...(unknownTags.length > 0 ? { unknownTags } : {}),
+            ...(ratingOverride ? { contentRating: ratingOverride } : {}),
+            ...(hidesUnrated ? { unrated: 'hidden' } : {}),
+            ...(refusedFilters.length > 0 ? { refusedContentRating: refusedFilters } : {})
         };
         
+        // Only when every named profile agrees, so a mixed install is not labelled with
+        // a cap that half its rows do not carry.
+        const labelRating = req.query.contentrating || req.query.contentRating
+            ? ratingOverride
+            : uniformTagRating(config, tags);
+        if (labelRating) {
+            manifest.name = `${manifest.name} · ${labelRating}`;
+        }
+
         // Add a timestamp to force cache invalidation
         manifest._timestamp = Date.now();
         
@@ -4067,11 +4071,12 @@ addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
 // --- Catalog Route under /stremio/:userUUID prefix ---
 addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (req, res) {
   const { userUUID, type, id, extra } = req.params;
-  const config = await loadConfigFromDatabase(userUUID);
+  const storedConfig = await loadConfigFromDatabase(userUUID);
   
-  if (!config) {
+  if (!storedConfig) {
     return res.status(404).send({ error: "User configuration not found" });
   }
+  const config = applyRatingOverrides(storedConfig, req, userUUID);
   config.userUUID = userUUID;
 
   // Handle calendar-videos catalog
@@ -4119,7 +4124,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
               return !isNaN(releaseDate.getTime()) && releaseDate >= now;
             });
             
-            meta.videos.sort((a, b) => new Date(a.released) - new Date(b.released));
+            meta.videos.sort((a, b) => new Date(a.released).getTime() - new Date(b.released).getTime());
           }
           
           if (!meta.videos || meta.videos.length === 0) return null;
@@ -4223,7 +4228,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
 
   // Pass config to req for ETag generation
   req.userConfig = config;
-  let extraArgs = {};
+  let extraArgs: any = {};
   if (extra) {
     extraArgs = Object.fromEntries(new URLSearchParams(req.url.split("/").pop().split("?")[0].slice(0, -5)).entries());
   }
@@ -4286,7 +4291,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
   }
   // MovieLens uses: sortBy, sortDirection, tags, minYear, maxYear, minPop, maxDaysAgo, maxFutureDays
   else if (cleanId.startsWith('movielens.')) {
-    const mlMeta = catalogConfig?.metadata || {};
+    const mlMeta: any = catalogConfig?.metadata || {};
     if (mlMeta.sortBy) extraArgs.sort = mlMeta.sortBy;
     if (mlMeta.sortDirection) extraArgs.sortDirection = mlMeta.sortDirection;
     if (mlMeta.tags) extraArgs.tags = mlMeta.tags;
@@ -4428,8 +4433,6 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
       consola.warn(`[Catalog] MovieLens group tags failed for ${cleanId}: ${e.message}`);
     }
   }
-
-  const catalogKey = `${cleanId}:${actualType}:${stableStringify(cacheExtraArgs)}`;
 
   const cacheOptions = {
     enableErrorCaching: true,
@@ -5200,7 +5203,7 @@ addon.post("/stremio/:userUUID/rating", async function (req, res) {
           
           if (tmdbId || imdbId || tvdbId) {
             // Build IDs object for Trakt (only include non-null values)
-            const ids = {};
+            const ids: any = {};
             if (tmdbId) ids.tmdb = parseInt(tmdbId, 10);
             if (imdbId) ids.imdb = imdbId;
             if (tvdbId) ids.tvdb = parseInt(tvdbId, 10);
@@ -5333,7 +5336,7 @@ addon.post("/stremio/:userUUID/rating", async function (req, res) {
           const mdblistType = type.toLowerCase() === 'series' ? 'shows' : 'movies';
           
           // Build IDs object for MDBList
-          const ids = {};
+          const ids: any = {};
           if (tmdbId) ids.tmdb = parseInt(tmdbId);
           if (imdbId) ids.imdb = imdbId;
           if (tvdbId) ids.tvdb = parseInt(tvdbId);
@@ -5446,7 +5449,7 @@ async function produceProcessedBytes(bareUrl, fetchFallback) {
   return fetchFallback();
 }
 
-async function sendCachedImage(res, result, fallbackContentType) {
+async function sendCachedImage(res, result, fallbackContentType?) {
   const { entry } = result;
   res.setHeader('X-Cache-Status', result.status);
   res.setHeader('Content-Type', entry.contentType || fallbackContentType || 'image/jpeg');
@@ -5556,7 +5559,7 @@ addon.get("/poster/:type/:id", handlePosterProxy);
 
 function streamArtWithFallback(assetName) {
   return async function (req, res) {
-    const { type, id } = req.params;
+    const { id } = req.params;
     const { fallback, url: customUrl, sig } = req.query;
     if (!customUrl) {
       return res.redirect(302, fallback || '');
@@ -5768,7 +5771,6 @@ addon.get("/stremio/:userUUID/rating", async function (req, res) {
       try {
         // Use the type from URL to look up metadata
         const stremioType = metaType.toLowerCase();
-        const contentKey = `${stremioType}:${id}`;
         
         // Try to get metadata from cache using the canonical key
         const canonicalKey = requestTracker.canonicalContentMetadataKey(stremioType, id);
@@ -6177,7 +6179,7 @@ addon.post('/api/cache/test-granular', async (req, res) => {
       return res.status(400).json({ error: 'userUUID, metaId, and type are required' });
     }
     
-    const { cacheWrapMetaSmart, reconstructMetaFromComponents } = require('./lib/getCache');
+    const { reconstructMetaFromComponents } = require('./lib/getCache');
     
     // Test reconstruction
     const reconstructed = await reconstructMetaFromComponents(userUUID, metaId, undefined, {}, type);
@@ -6288,7 +6290,7 @@ addon.get('/api/cache/invalidation-status/:userUUID', requireDashboardAdmin, asy
     // Count cache entries for this user
     const userCachePattern = `*${userUUID}*`;
     // Group by cache type
-    const cacheStats = {
+    const cacheStats: any = {
       total: 0,
       byType: {}
     };
@@ -7066,7 +7068,7 @@ addon.get("/api/dashboard/poster-cache/stats", requireDashboardAdmin, async (req
   try {
     const response = await fetch(`${posterCacheUrl}/stats`);
     if (!response.ok) throw new Error(`Poster cache answered ${response.status}`);
-    const stats = await response.json();
+    const stats: any = await response.json();
     res.json({ ...policyPayload, ...stats, external: 'ok' });
   } catch (error) {
     consola.debug(`[API] Poster cache stats unreachable at ${posterCacheUrl}: ${error.message}`);
@@ -7290,7 +7292,7 @@ addon.get("/api/dashboard/content", requireAuthUnlessGuestMode, (req, res) => {
           missingMetadata: 0, // TODO: Implement real tracking
           failedMappings: 0,  // TODO: Implement real tracking
           correctionRequests: 0, // TODO: Implement real tracking
-          successRate: parseFloat(100 - stats.errorRate)
+          successRate: parseFloat(String(100 - stats.errorRate))
         }
       });
     }).catch(error => {
@@ -7471,7 +7473,7 @@ addon.post("/api/dashboard/maintenance/execute", requireDashboardAdmin, async (r
       return res.status(400).json({ error: 'Task ID and action are required' });
     }
     
-    let result = { success: false, message: '' };
+    let result: any = { success: false, message: '' };
     
     // Handle maintenance tasks
     if (taskId === 1) { // Clear expired cache entries
@@ -7590,6 +7592,9 @@ addon.post("/api/dashboard/maintenance/execute", requireDashboardAdmin, async (r
         const { forceWarmImages } = require('./lib/comprehensiveCatalogWarmer');
         forceWarmImages();
         result = { success: true, message: 'Image warming started, catalog schedule left unchanged' };
+      } else if (action === 'sync-ttl') {
+        const { syncCatalogTtlToSchedule } = require('./lib/comprehensiveCatalogWarmer');
+        result = await syncCatalogTtlToSchedule();
       } else if (action === 'stop') {
         const { stopComprehensiveWarming } = require('./lib/comprehensiveCatalogWarmer');
         result = stopComprehensiveWarming();
@@ -7714,7 +7719,7 @@ async function startServerWithCacheWarming() {
   return addon;
 }
 
-module.exports = {
+export {
   addon, startServerWithCacheWarming, getDashboardAPI, applyImageCachePrefix,
   startEssentialWarmingSchedules, startMovieLensSyncSchedule,
 };

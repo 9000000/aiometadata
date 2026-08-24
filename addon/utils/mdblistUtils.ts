@@ -127,3 +127,18 @@ export async function getMdblistWatchedIds(config: any): Promise<{ movieImdbIds:
     return null;
   }
 }
+
+/**
+ * Instance owners rarely set a key of their own, since MDBList is paid past
+ * 1000 calls a day, so in practice the supplied one is what answers.
+ */
+export function resolveMdblistKey(supplied: unknown): string {
+  const value = String(supplied || '').trim();
+  return value || process.env.MDBLIST_API_KEY || process.env.BUILT_IN_MDBLIST_API_KEY || '';
+}
+
+/** Keyed per api key, so one user's allowance never serves another's request. */
+export function mdblistCacheKey(parts: string[], apikey: string): string {
+  const fingerprint = crypto.createHash('sha256').update(String(apikey)).digest('hex').slice(0, 16);
+  return `mdblist:${parts.join(':')}:${fingerprint}`;
+}

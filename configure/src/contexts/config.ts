@@ -9,6 +9,10 @@ export const MAX_TAG_NAME_LENGTH = 32;
 export interface TagDef {
   name: string;
   color: TagColorKey;
+  /** Cap this profile installs with. Absent or 'None' means it adds no limit. */
+  ageRating?: string;
+  /** Only meaningful alongside ageRating. Absent means unrated titles show. */
+  allowUnratedContent?: boolean;
 }
 
 export interface CatalogConfig {
@@ -225,6 +229,7 @@ export interface AppConfig {
   /** If true, display a "⭐ Rate Me" genre button in meta pages that links to the rating page */
   showRateMeButton?: boolean;
   ageRating: string;
+  allowUnratedContent?: boolean;
   sfw: boolean;
   hideUnreleasedDigital: boolean;
   hideUnreleasedDigitalSearch: boolean;

@@ -824,6 +824,17 @@ async function getSeriesEpisodes(tvdbId: string, language: string = 'en-US', sea
   });
 }
 
+/**
+ * /search/remoteid answers with one object per matched entity, keyed by its kind and
+ * in no set order, so a season can sort ahead of the series it belongs to. Pick the
+ * entity that was asked for rather than whatever landed first.
+ */
+function tvdbIdFromRemoteIdResults(results: any[], type: string): number | null {
+  const key = type === 'movie' ? 'movie' : 'series';
+  const match = (results || []).find((entry: any) => entry?.[key]?.id);
+  return match?.[key]?.id ?? null;
+}
+
 async function findByImdbId(imdbId: string, config: UserConfig): Promise<TvdbSearchResult[]> {
   const token = await getAuthToken(config.apiKeys?.tvdb, config.userUUID);
   if (!token) return [];
@@ -1361,6 +1372,7 @@ async function getCollectionTranslations(collectionId: string, language: string,
 }
 
 export {
+  tvdbIdFromRemoteIdResults,
   searchSeries,
   searchMovies,
   searchPeople,
@@ -1406,6 +1418,7 @@ const __privateTvdbCacheNormalizers = tvdbCacheNormalizers;
 
 // CommonJS compatibility
 module.exports = {
+  tvdbIdFromRemoteIdResults,
   searchSeries,
   searchMovies,
   searchPeople,

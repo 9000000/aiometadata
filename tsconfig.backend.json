@@ -1,5 +1,6 @@
 {
     "compilerOptions": {
+      "composite": true,
       "target": "ES2022",
       "lib": ["ES2023"],
       "module": "CommonJS",
@@ -36,7 +37,8 @@
       "types": ["node"]
     },
     "include": [
-      "addon/**/*"
+      "addon/**/*",
+      "addon/**/*.json"
     ],
     "exclude": [
       "node_modules",

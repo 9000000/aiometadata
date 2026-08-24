@@ -37,6 +37,11 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { toast } from "sonner";
+
+const TASK_ACTION_ICONS: Record<string, typeof Image> = {
+  image: Image,
+  clock: Clock,
+};
 import {
   useDashboardMemory,
   useClearCache,
@@ -1357,18 +1362,22 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
                     >
                       {task.status}
                     </Badge>
-                    {task.secondaryAction && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        title={task.secondaryAction.title}
-                        onClick={() => handleMaintenanceTask(task.id, task.secondaryAction.action)}
-                        disabled={task.status === "error" || executingTasks.has(task.id)}
-                      >
-                        <Image className="h-4 w-4 mr-1" />
-                        {task.secondaryAction.label}
-                      </Button>
-                    )}
+                    {(task.secondaryActions || []).map((secondary: any) => {
+                      const SecondaryIcon = TASK_ACTION_ICONS[secondary.icon] || Image;
+                      return (
+                        <Button
+                          key={secondary.action}
+                          size="sm"
+                          variant="outline"
+                          title={secondary.title}
+                          onClick={() => handleMaintenanceTask(task.id, secondary.action)}
+                          disabled={task.status === "error" || executingTasks.has(task.id)}
+                        >
+                          <SecondaryIcon className="h-4 w-4 mr-1" />
+                          {secondary.label}
+                        </Button>
+                      );
+                    })}
                     {task.action && (
                       <Button
                         size="sm"
@@ -1440,18 +1449,22 @@ export function DashboardOperations({ data, loading, activeTab }: { data: any; l
                       <span>Last: {task.lastRun}</span>
                       <span>Next: {task.nextRun}</span>
                     </div>
-                    {task.secondaryAction && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        title={task.secondaryAction.title}
-                        onClick={() => handleMaintenanceTask(task.id, task.secondaryAction.action)}
-                        disabled={task.status === "error" || executingTasks.has(task.id)}
-                        className="h-7 text-xs mr-2"
-                      >
-                        <Image className="h-3 w-3" />
-                      </Button>
-                    )}
+                    {(task.secondaryActions || []).map((secondary: any) => {
+                      const SecondaryIcon = TASK_ACTION_ICONS[secondary.icon] || Image;
+                      return (
+                        <Button
+                          key={secondary.action}
+                          size="sm"
+                          variant="outline"
+                          title={secondary.title}
+                          onClick={() => handleMaintenanceTask(task.id, secondary.action)}
+                          disabled={task.status === "error" || executingTasks.has(task.id)}
+                          className="h-7 text-xs mr-2"
+                        >
+                          <SecondaryIcon className="h-3 w-3" />
+                        </Button>
+                      );
+                    })}
                     {task.action && (
                       <Button
                         size="sm"

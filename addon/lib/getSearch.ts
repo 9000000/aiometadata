@@ -16,6 +16,7 @@ const { performGeminiSearch, resolveGeminiModel }: any = require('../utils/gemin
 const { performOpenRouterSearch }: any = require('../utils/openrouter-service');
 import consola from 'consola';
 import { tmdbImageUrl, tmdbLogoSize, tmdbBackdropSize, tmdbPosterSize } from '../utils/tmdbImageSize';
+import { hasAgeRatingCap } from '../utils/ageRating';
 const { cacheWrapMetaSmart, cacheWrapGlobal }: any = require('./getCache');
 const { getSetting }: any = require('./settingsService');
 import { fetchImdbSuggestions, type ImdbSuggestion } from '../utils/imdbSuggestions.js';
@@ -79,16 +80,6 @@ function isImdbId(query: string): boolean {
   if (!query || typeof query !== 'string') return false;
   const imdbIdPattern = /^tt\d{7,8}$/i;
   return imdbIdPattern.test(query.trim());
-}
-
-/**
- * The age gate at the end of performTvdbSearch drops every result whose certification is
- * unknown, so the lookup below has to run whenever a rating cap is set, not only when the
- * rating is also displayed. Every other search provider fills certification unconditionally.
- */
-function hasAgeRatingCap(config: { ageRating?: unknown }): boolean {
-  const cap = config?.ageRating;
-  return typeof cap === 'string' && cap !== '' && cap.toLowerCase() !== 'none';
 }
 
 const host = (process.env.HOST_NAME as string).startsWith('http')
@@ -702,37 +693,6 @@ async function performTmdbSearch(type: string, query: string, language: string, 
   const hydratedMetas = keywordFilteredResults.map((result: any) => result.parsed);
 
   let filteredResults = hydratedMetas;
-  if (config.ageRating && config.ageRating.toLowerCase() !== 'none') {
-      const movieRatingHierarchy = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
-      const tvRatingHierarchy = ["TV-Y", "TV-Y7", "TV-G", "TV-PG", "TV-14", "TV-MA"];
-      const movieToTvMap: Record<string, string> = { 'G': 'TV-G', 'PG': 'TV-PG', 'PG-13': 'TV-14', 'R': 'TV-MA', 'NC-17': 'TV-MA' };
-
-      filteredResults = filteredResults.filter((result: any) => {
-          const cert = result.certification;
-
-          const isTvRating = type === 'series';
-          const userRating = isTvRating ? (movieToTvMap[config.ageRating] || config.ageRating) : config.ageRating;
-          const isUserRatingRestrictive = userRating === 'PG-13' ||
-                                         (movieRatingHierarchy.indexOf(userRating) !== -1 &&
-                                          movieRatingHierarchy.indexOf(userRating) <= movieRatingHierarchy.indexOf('PG-13')) ||
-                                         (tvRatingHierarchy.indexOf(userRating) !== -1 &&
-                                          tvRatingHierarchy.indexOf(userRating) <= tvRatingHierarchy.indexOf('TV-14'));
-
-          if (!cert || cert === "" || cert.toLowerCase() === 'nr') {
-              return !isUserRatingRestrictive;
-          }
-
-          const ratingHierarchy = isTvRating ? tvRatingHierarchy : movieRatingHierarchy;
-          const userRatingIndex = ratingHierarchy.indexOf(userRating);
-          const resultRatingIndex = ratingHierarchy.indexOf(cert);
-
-          if (userRatingIndex === -1) return true;
-          if (resultRatingIndex === -1) return true;
-
-          return resultRatingIndex <= userRatingIndex;
-      });
-      logger.debug(`Age rating filter applied: ${hydratedMetas.length} -> ${filteredResults.length} results.`);
-  }
   if (type === 'movie' && config.hideUnreleasedDigitalSearch) {
     const beforeCount = filteredResults.length;
     filteredResults = filteredResults.filter((meta: any) => Utils.isReleasedDigitally(meta));
@@ -872,9 +832,6 @@ async function performSimklAnimeSearch(type: string, query: string, language: st
   return metas;
 }
 
-const MOVIE_RATING_HIERARCHY = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
-const TV_RATING_HIERARCHY = ['TV-Y', 'TV-Y7', 'TV-G', 'TV-PG', 'TV-14', 'TV-MA'];
-const MOVIE_TO_TV_RATING: Record<string, string> = { 'G': 'TV-G', 'PG': 'TV-PG', 'PG-13': 'TV-14', 'R': 'TV-MA', 'NC-17': 'TV-MA' };
 const ADULT_GENRES = new Set(['hentai', 'erotica', 'erotic', 'adult', 'pornographic', 'porn']);
 
 /** TMDB keyword names that mark a title adult when its `adult` flag does not. */
@@ -892,25 +849,6 @@ function isAdultTmdbItem(details: any): boolean {
   if (details?.adult === true) return true;
   const keywords = details?.keywords?.results || details?.keywords?.keywords || [];
   return keywords.some((keyword: any) => ADULT_KEYWORDS.has(String(keyword?.name || '').toLowerCase()));
-}
-
-/** Mirrors the age filter the TMDB and Trakt paths apply inline. */
-function passesAgeRating(certification: string | null | undefined, type: string, ageRating: string): boolean {
-  const isTvRating = type === 'series';
-  const userRating = isTvRating ? (MOVIE_TO_TV_RATING[ageRating] || ageRating) : ageRating;
-  const isUserRatingRestrictive = userRating === 'PG-13'
-    || (MOVIE_RATING_HIERARCHY.indexOf(userRating) !== -1 && MOVIE_RATING_HIERARCHY.indexOf(userRating) <= MOVIE_RATING_HIERARCHY.indexOf('PG-13'))
-    || (TV_RATING_HIERARCHY.indexOf(userRating) !== -1 && TV_RATING_HIERARCHY.indexOf(userRating) <= TV_RATING_HIERARCHY.indexOf('TV-14'));
-
-  if (!certification || certification === '' || certification.toLowerCase() === 'nr') {
-    return !isUserRatingRestrictive;
-  }
-
-  const hierarchy = isTvRating ? TV_RATING_HIERARCHY : MOVIE_RATING_HIERARCHY;
-  const userRatingIndex = hierarchy.indexOf(userRating);
-  const resultRatingIndex = hierarchy.indexOf(certification);
-  if (userRatingIndex === -1 || resultRatingIndex === -1) return true;
-  return resultRatingIndex <= userRatingIndex;
 }
 
 /** `_m` is the largest true 2:3 poster Simkl stores; `_w` is a landscape crop. */
@@ -1047,14 +985,6 @@ async function performSimklSearch(type: string, query: string, language: string,
     if (meta?.id && !seenMetas.has(meta.id)) {
       seenMetas.add(meta.id);
       metas.push(meta);
-    }
-  }
-
-  if (config.ageRating && String(config.ageRating).toLowerCase() !== 'none') {
-    const beforeCount = metas.length;
-    metas = metas.filter((meta: any) => passesAgeRating(meta.certification, type, config.ageRating));
-    if (beforeCount !== metas.length) {
-      logger.info(`Age rating filter (Simkl): filtered out ${beforeCount - metas.length} results`);
     }
   }
 
@@ -1459,42 +1389,6 @@ async function performAiSearch(query: string, language: string, config: any): Pr
 
     let filteredResults = validResults;
 
-    if (config.ageRating && config.ageRating.toLowerCase() !== 'none') {
-      const beforeCount = filteredResults.length;
-      const movieRatingHierarchy = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
-      const tvRatingHierarchy = ["TV-Y", "TV-Y7", "TV-G", "TV-PG", "TV-14", "TV-MA"];
-      const movieToTvMap: Record<string, string> = { 'G': 'TV-G', 'PG': 'TV-PG', 'PG-13': 'TV-14', 'R': 'TV-MA', 'NC-17': 'TV-MA' };
-
-      filteredResults = filteredResults.filter((result: any) => {
-        const cert = result.certification;
-        const isTvRating = result.type === 'series';
-        const userRating = isTvRating ? (movieToTvMap[config.ageRating] || config.ageRating) : config.ageRating;
-        const isUserRatingRestrictive = userRating === 'PG-13' ||
-                                       (movieRatingHierarchy.indexOf(userRating) !== -1 &&
-                                        movieRatingHierarchy.indexOf(userRating) <= movieRatingHierarchy.indexOf('PG-13')) ||
-                                       (tvRatingHierarchy.indexOf(userRating) !== -1 &&
-                                        tvRatingHierarchy.indexOf(userRating) <= tvRatingHierarchy.indexOf('TV-14'));
-
-        if (!cert || cert === "" || cert.toLowerCase() === 'nr') {
-          return !isUserRatingRestrictive;
-        }
-
-        const ratingHierarchy = isTvRating ? tvRatingHierarchy : movieRatingHierarchy;
-        const userRatingIndex = ratingHierarchy.indexOf(userRating);
-        const resultRatingIndex = ratingHierarchy.indexOf(cert);
-
-        if (userRatingIndex === -1) return true;
-        if (resultRatingIndex === -1) return true;
-
-        return resultRatingIndex <= userRatingIndex;
-      });
-
-      const afterCount = filteredResults.length;
-      if (beforeCount !== afterCount) {
-        logger.info(`Age rating filter: ${beforeCount} -> ${afterCount} results`);
-      }
-    }
-
     if (config.hideUnreleasedDigitalSearch) {
       const beforeCount = filteredResults.length;
       filteredResults = filteredResults.filter((meta: any) =>
@@ -1592,9 +1486,7 @@ async function performTvdbSearch(type: string, query: string, language: string, 
         return [];
       }
 
-      const tvdbId = type === 'movie'
-        ? results[0]?.movie?.id
-        : results[0]?.series?.id;
+      const tvdbId = tvdb.tvdbIdFromRemoteIdResults(results, type);
 
       if (!tvdbId) {
         logger.info(`No ${type} found in TVDB for IMDb ID ${imdbId}`);
@@ -1669,39 +1561,7 @@ async function performTvdbSearch(type: string, query: string, language: string, 
 
   const sortedResults = Utils.sortTvdbSearchResults(finalResults, sanitizedQuery);
 
-  let ageFilteredResults = sortedResults;
-  if (config.ageRating && config.ageRating.toLowerCase() !== 'none') {
-    const movieRatingHierarchy = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
-    const tvRatingHierarchy = ["TV-Y", "TV-Y7", "TV-G", "TV-PG", "TV-14", "TV-MA"];
-    const movieToTvMap: Record<string, string> = { 'G': 'TV-G', 'PG': 'TV-PG', 'PG-13': 'TV-14', 'R': 'TV-MA', 'NC-17': 'TV-MA' };
-
-    ageFilteredResults = sortedResults.filter((result: any) => {
-      const cert = result.certification;
-
-      const isTvRating = type === 'series';
-      const userRating = isTvRating ? (movieToTvMap[config.ageRating] || config.ageRating) : config.ageRating;
-      const isUserRatingRestrictive = userRating === 'PG-13' ||
-                                     (movieRatingHierarchy.indexOf(userRating) !== -1 &&
-                                      movieRatingHierarchy.indexOf(userRating) <= movieRatingHierarchy.indexOf('PG-13')) ||
-                                     (tvRatingHierarchy.indexOf(userRating) !== -1 &&
-                                      tvRatingHierarchy.indexOf(userRating) <= tvRatingHierarchy.indexOf('TV-14'));
-
-      if (!cert || cert === "" || cert.toLowerCase() === 'nr') {
-        return !isUserRatingRestrictive;
-      }
-
-      const ratingHierarchy = isTvRating ? tvRatingHierarchy : movieRatingHierarchy;
-      const userRatingIndex = ratingHierarchy.indexOf(userRating);
-      const resultRatingIndex = ratingHierarchy.indexOf(cert);
-
-      if (userRatingIndex === -1) return true;
-      if (resultRatingIndex === -1) return true;
-
-      return resultRatingIndex <= userRatingIndex;
-    });
-
-    logger.debug(`TVDB filtered ${finalResults.length} results to ${ageFilteredResults.length} based on age rating: ${config.ageRating}`);
-  }
+  const ageFilteredResults = sortedResults;
   logger.info(`TVDB search results completed in ${Date.now() - searchStartTime}ms`);
 
   return ageFilteredResults;
@@ -1825,39 +1685,7 @@ async function performTvdbPeopleSearch(type: string, query: string, language: st
   });
 
   const sortedResults = filteredResults.map((p: any) => p.originalItem);
-  let ageFilteredResults = sortedResults;
-  if (config.ageRating && config.ageRating.toLowerCase() !== 'none') {
-    const movieRatingHierarchy = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
-    const tvRatingHierarchy = ["TV-Y", "TV-Y7", "TV-G", "TV-PG", "TV-14", "TV-MA"];
-    const movieToTvMap: Record<string, string> = { 'G': 'TV-G', 'PG': 'TV-PG', 'PG-13': 'TV-14', 'R': 'TV-MA', 'NC-17': 'TV-MA' };
-
-    ageFilteredResults = sortedResults.filter((result: any) => {
-      const cert = result.certification;
-
-      const isTvRating = type === 'series';
-      const userRating = isTvRating ? (movieToTvMap[config.ageRating] || config.ageRating) : config.ageRating;
-      const isUserRatingRestrictive = userRating === 'PG-13' ||
-                                     (movieRatingHierarchy.indexOf(userRating) !== -1 &&
-                                      movieRatingHierarchy.indexOf(userRating) <= movieRatingHierarchy.indexOf('PG-13')) ||
-                                     (tvRatingHierarchy.indexOf(userRating) !== -1 &&
-                                      tvRatingHierarchy.indexOf(userRating) <= tvRatingHierarchy.indexOf('TV-14'));
-
-      if (!cert || cert === "" || cert.toLowerCase() === 'nr') {
-        return !isUserRatingRestrictive;
-      }
-
-      const ratingHierarchy = isTvRating ? tvRatingHierarchy : movieRatingHierarchy;
-      const userRatingIndex = ratingHierarchy.indexOf(userRating);
-      const resultRatingIndex = ratingHierarchy.indexOf(cert);
-
-      if (userRatingIndex === -1) return true;
-      if (resultRatingIndex === -1) return true;
-
-      return resultRatingIndex <= userRatingIndex;
-    });
-
-    logger.debug(`TVDB filtered ${finalResults.length} results to ${ageFilteredResults.length} based on age rating: ${config.ageRating}`);
-  }
+  const ageFilteredResults = sortedResults;
   logger.info(`TVDB people search results completed in ${Date.now() - searchStartTime}ms`);
 
   return ageFilteredResults;
@@ -2150,43 +1978,6 @@ async function performTraktSearch(type: string, query: string, language: string,
 
     let finalMetas = validMetas;
 
-    if (config.ageRating && config.ageRating.toLowerCase() !== 'none') {
-      const beforeCount = finalMetas.length;
-      const movieRatingHierarchy = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
-      const tvRatingHierarchy = ["TV-Y", "TV-Y7", "TV-G", "TV-PG", "TV-14", "TV-MA"];
-      const movieToTvMap: Record<string, string> = { 'G': 'TV-G', 'PG': 'TV-PG', 'PG-13': 'TV-14', 'R': 'TV-MA', 'NC-17': 'TV-MA' };
-
-      finalMetas = finalMetas.filter((result: any) => {
-        const cert = result.certification;
-
-        const isTvRating = type === 'series';
-        const userRating = isTvRating ? (movieToTvMap[config.ageRating] || config.ageRating) : config.ageRating;
-        const isUserRatingRestrictive = userRating === 'PG-13' ||
-                                       (movieRatingHierarchy.indexOf(userRating) !== -1 &&
-                                        movieRatingHierarchy.indexOf(userRating) <= movieRatingHierarchy.indexOf('PG-13')) ||
-                                       (tvRatingHierarchy.indexOf(userRating) !== -1 &&
-                                        tvRatingHierarchy.indexOf(userRating) <= tvRatingHierarchy.indexOf('TV-14'));
-
-        if (!cert || cert === "" || cert.toLowerCase() === 'nr') {
-          return !isUserRatingRestrictive;
-        }
-
-        const ratingHierarchy = isTvRating ? tvRatingHierarchy : movieRatingHierarchy;
-        const userRatingIndex = ratingHierarchy.indexOf(userRating);
-        const resultRatingIndex = ratingHierarchy.indexOf(cert);
-
-        if (userRatingIndex === -1) return true;
-        if (resultRatingIndex === -1) return true;
-
-        return resultRatingIndex <= userRatingIndex;
-      });
-
-      const afterCount = finalMetas.length;
-      if (beforeCount !== afterCount) {
-        logger.info(`Age rating filter (Trakt): filtered out ${beforeCount - afterCount} results`);
-      }
-    }
-
     if (type === 'movie' && config.hideUnreleasedDigitalSearch) {
       const beforeCount = finalMetas.length;
       finalMetas = finalMetas.filter((meta: any) => Utils.isReleasedDigitally(meta));
@@ -2319,43 +2110,6 @@ async function performMdbListSearch(type: string, query: string, language: strin
     const validMetas = metas.filter(Boolean);
 
     let finalMetas = validMetas;
-
-    if (config.ageRating && config.ageRating.toLowerCase() !== 'none') {
-      const beforeCount = finalMetas.length;
-      const movieRatingHierarchy = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
-      const tvRatingHierarchy = ["TV-Y", "TV-Y7", "TV-G", "TV-PG", "TV-14", "TV-MA"];
-      const movieToTvMap: Record<string, string> = { 'G': 'TV-G', 'PG': 'TV-PG', 'PG-13': 'TV-14', 'R': 'TV-MA', 'NC-17': 'TV-MA' };
-
-      finalMetas = finalMetas.filter((result: any) => {
-        const cert = result.certification;
-
-        const isTvRating = type === 'series';
-        const userRating = isTvRating ? (movieToTvMap[config.ageRating] || config.ageRating) : config.ageRating;
-        const isUserRatingRestrictive = userRating === 'PG-13' ||
-                                       (movieRatingHierarchy.indexOf(userRating) !== -1 &&
-                                        movieRatingHierarchy.indexOf(userRating) <= movieRatingHierarchy.indexOf('PG-13')) ||
-                                       (tvRatingHierarchy.indexOf(userRating) !== -1 &&
-                                        tvRatingHierarchy.indexOf(userRating) <= tvRatingHierarchy.indexOf('TV-14'));
-
-        if (!cert || cert === "" || cert.toLowerCase() === 'nr') {
-          return !isUserRatingRestrictive;
-        }
-
-        const ratingHierarchy = isTvRating ? tvRatingHierarchy : movieRatingHierarchy;
-        const userRatingIndex = ratingHierarchy.indexOf(userRating);
-        const resultRatingIndex = ratingHierarchy.indexOf(cert);
-
-        if (userRatingIndex === -1) return true;
-        if (resultRatingIndex === -1) return true;
-
-        return resultRatingIndex <= userRatingIndex;
-      });
-
-      const afterCount = finalMetas.length;
-      if (beforeCount !== afterCount) {
-        logger.info(`Age rating filter (MDBList): filtered out ${beforeCount - afterCount} results`);
-      }
-    }
 
     if (type === 'movie' && config.hideUnreleasedDigitalSearch) {
       const beforeCount = finalMetas.length;
@@ -2575,43 +2329,6 @@ async function performTraktPeopleSearch(type: string, query: string, language: s
     const validMetas = metas.filter(Boolean);
 
     let finalMetas = validMetas.map(({ _matchType, ...meta }: any) => meta);
-
-    if (config.ageRating && config.ageRating.toLowerCase() !== 'none') {
-      const beforeCount = finalMetas.length;
-      const movieRatingHierarchy = ['G', 'PG', 'PG-13', 'R', 'NC-17'];
-      const tvRatingHierarchy = ["TV-Y", "TV-Y7", "TV-G", "TV-PG", "TV-14", "TV-MA"];
-      const movieToTvMap: Record<string, string> = { 'G': 'TV-G', 'PG': 'TV-PG', 'PG-13': 'TV-14', 'R': 'TV-MA', 'NC-17': 'TV-MA' };
-
-      finalMetas = finalMetas.filter((result: any) => {
-        const cert = result.certification;
-
-        const isTvRating = type === 'series';
-        const userRating = isTvRating ? (movieToTvMap[config.ageRating] || config.ageRating) : config.ageRating;
-        const isUserRatingRestrictive = userRating === 'PG-13' ||
-                                       (movieRatingHierarchy.indexOf(userRating) !== -1 &&
-                                        movieRatingHierarchy.indexOf(userRating) <= movieRatingHierarchy.indexOf('PG-13')) ||
-                                       (tvRatingHierarchy.indexOf(userRating) !== -1 &&
-                                        tvRatingHierarchy.indexOf(userRating) <= tvRatingHierarchy.indexOf('TV-14'));
-
-        if (!cert || cert === "" || cert.toLowerCase() === 'nr') {
-          return !isUserRatingRestrictive;
-        }
-
-        const ratingHierarchy = isTvRating ? tvRatingHierarchy : movieRatingHierarchy;
-        const userRatingIndex = ratingHierarchy.indexOf(userRating);
-        const resultRatingIndex = ratingHierarchy.indexOf(cert);
-
-        if (userRatingIndex === -1) return true;
-        if (resultRatingIndex === -1) return true;
-
-        return resultRatingIndex <= userRatingIndex;
-      });
-
-      const afterCount = finalMetas.length;
-      if (beforeCount !== afterCount) {
-        logger.info(`Age rating filter (Trakt): filtered out ${beforeCount - afterCount} results`);
-      }
-    }
 
     if (type === 'movie' && config.hideUnreleasedDigitalSearch) {
       const beforeCount = finalMetas.length;

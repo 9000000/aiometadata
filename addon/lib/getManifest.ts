@@ -811,7 +811,73 @@ async function createSimklCatalog(userCatalog: any, showPrefix: boolean = false,
   }
 }
 
-async function getManifest(config: any, opts: { tag?: string } = {}): Promise<any> {
+/** Every tag a config knows about, lowercase name to the casing it is stored under. */
+function knownTagNames(config: any): Map<string, string> {
+  const known = new Map<string, string>();
+  const add = (value: any) => {
+    const name = typeof value === 'string' ? value : value?.name;
+    if (name) known.set(String(name).toLowerCase(), String(name));
+  };
+  for (const tag of (Array.isArray(config?.tags) ? config.tags : [])) add(tag);
+  for (const catalog of (Array.isArray(config?.catalogs) ? config.catalogs : [])) {
+    for (const tag of (Array.isArray(catalog?.tags) ? catalog.tags : [])) add(tag);
+  }
+  return known;
+}
+
+/**
+ * A tag name may contain any character, so no separator is safe on its own. A value
+ * that names a real tag is taken whole, otherwise it is split on commas, and only
+ * then on spaces, which a raw "+" in a query string decodes to. That last split is a
+ * guess, so it is kept only when every piece names a real tag.
+ */
+function expandTagValue(value: string, known: Map<string, string>): string[] {
+  if (!value) return [];
+  if (known.has(value.toLowerCase())) return [value];
+
+  if (value.includes(',')) {
+    return value.split(',').flatMap((part) => expandTagValue(part.trim(), known));
+  }
+
+  const spaced = value.split(/\s+/).filter(Boolean);
+  if (spaced.length > 1 && spaced.every((part) => known.has(part.toLowerCase()))) return spaced;
+
+  return [value];
+}
+
+/**
+ * Turns whatever arrived as ?tag= into the profiles to build. Repeated params come
+ * through as an array, so they are handled alongside the single-value forms. Tags
+ * that match nothing are reported rather than dropped, since an install URL naming a
+ * renamed tag would otherwise serve a near-empty manifest without saying why.
+ */
+function resolveManifestTags(config: any, raw: unknown): { tags: string[]; unknown: string[] } {
+  const known = knownTagNames(config);
+  const values = (raw === undefined || raw === null ? [] : Array.isArray(raw) ? raw : [raw])
+    .filter((value: any) => typeof value === 'string')
+    .flatMap((value: string) => expandTagValue(value.trim(), known));
+
+  const tags: string[] = [];
+  const unknown: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const lower = value.toLowerCase();
+    if (!value || seen.has(lower)) continue;
+    seen.add(lower);
+    const stored = known.get(lower);
+    tags.push(stored || value);
+    if (!stored) unknown.push(value);
+  }
+  return { tags, unknown };
+}
+
+/** Long selections would run off the end of a client's addon list. */
+function formatTagSuffix(tags: string[]): string {
+  if (tags.length <= 3) return tags.join(' + ');
+  return `${tags.slice(0, 2).join(' + ')} +${tags.length - 2} more`;
+}
+
+async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise<any> {
   const startTime = Date.now();
   logger.start('Starting manifest generation...');
 
@@ -821,18 +887,13 @@ async function getManifest(config: any, opts: { tag?: string } = {}): Promise<an
     const userCatalogs = config.catalogs || getDefaultCatalogs();
     const translatedCatalogs = loadTranslations(language);
 
-  const tag = (opts.tag || '').trim();
-  const tagLower = tag.toLowerCase();
+  // Already resolved to their stored casing by resolveManifestTags. A catalog carrying
+  // any one of them is in, so several profiles install as a single addon.
+  const tags = Array.isArray(opts.tags) ? opts.tags.filter(Boolean) : [];
+  const tagSet = new Set(tags.map((t: string) => t.toLowerCase()));
   const enabledCatalogs = userCatalogs.filter((c: any) =>
-    c.enabled && (!tag || (Array.isArray(c.tags) && c.tags.some((t: any) => String(t).toLowerCase() === tagLower)))
+    c.enabled && (tagSet.size === 0 || (Array.isArray(c.tags) && c.tags.some((t: any) => tagSet.has(String(t).toLowerCase()))))
   );
-
-  // Resolve the tag to its stored casing (install URLs may be hand-typed in any case).
-  const displayTag = tag
-    ? (enabledCatalogs
-        .flatMap((c: any) => (Array.isArray(c.tags) ? c.tags : []))
-        .find((t: any) => String(t).toLowerCase() === tagLower) || tag)
-    : tag;
 
   // Absorbed merge sources must be built (even if disabled) so their genres feed the parent.
   const mergedSourceKeys = new Set<string>();
@@ -1590,7 +1651,7 @@ async function getManifest(config: any, opts: { tag?: string } = {}): Promise<an
     version: buildInfo.version,
     logo: manifestLogoUrl(),
     background: `${host}/background.png`,
-    name: tag ? `${addonName} · ${displayTag}` : addonName,
+    name: tags.length > 0 ? `${addonName} · ${formatTagSuffix(tags)}` : addonName,
     description: "A metadata addon for power users. AIOMetadata uses TMDB, TVDB, TVMaze, MyAnimeList, IMDB and Fanart.tv to provide accurate data for movies, series, and anime. You choose the source.",
     resources,
     types: ["movie", "series", "anime.movie", "anime.series", "anime", "Trakt", "collection"],
@@ -1658,5 +1719,5 @@ function getDefaultCatalogs(): any[] {
   return [...tmdbCatalogs, ...tvdbCatalogs, ...malCatalogs, ...streamingCatalogs];
 }
 
-export { getManifest, DEFAULT_LANGUAGE };
-module.exports = { getManifest, DEFAULT_LANGUAGE };
+export { getManifest, resolveManifestTags, DEFAULT_LANGUAGE };
+module.exports = { getManifest, resolveManifestTags, DEFAULT_LANGUAGE };

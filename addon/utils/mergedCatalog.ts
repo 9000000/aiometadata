@@ -27,9 +27,15 @@ export function roundRobinInterleaveTagged<T>(arrays: T[][]): Array<{ item: T; s
 }
 
 /**
- * Multi-namespace dedup key. Mirrors extractIdsFromMeta logic in addon/index.js.
- * Returns the first available canonical id. Items lacking any usable id pass
- * through (treated as unique by passing null to the caller).
+ * Multi-namespace dedup key. Returns the first available canonical id. Items
+ * lacking any usable id pass through (treated as unique by passing null to the
+ * caller).
+ *
+ * This reads a narrower vocabulary than extractIdsFromMeta in utils/metaIds:
+ * only meta.id and imdb_id, never the `_`-prefixed ids a provider resolved.
+ * Two rows for the same title can therefore dedup apart when one of them
+ * carries its id only in _tmdbId. Widening it changes what merged catalogs
+ * return, so it is left alone rather than quietly unified.
  */
 export function mergedDedupKey(meta: any): string | null {
   if (!meta) return null;
@@ -112,6 +118,16 @@ export function filterMetasByGenre(metas: any[], requestedGenre: string | undefi
     }
     return false;
   });
+}
+
+/** Fisher-Yates on a copy, so the caller's array is left alone. */
+export function shuffleMetas(metas: any[] = []): any[] {
+  const shuffled = Array.isArray(metas) ? metas.slice() : [];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
 }
 
 export { logger as mergedLogger };

@@ -5,7 +5,7 @@ import { parseDurationMs } from './duration';
 const logger = consola.withTag('PosterCache');
 
 
-export type ImageClass = 'poster' | 'background' | 'landscape' | 'logo' | 'thumbnail' | 'processed';
+export type ImageClass = 'poster' | 'background' | 'landscape' | 'logo' | 'thumbnail' | 'cast' | 'processed';
 
 /** Every class the store can hold — used for stats, purging and eviction. */
 export const IMAGE_CLASSES: ImageClass[] = [
@@ -14,6 +14,7 @@ export const IMAGE_CLASSES: ImageClass[] = [
   'landscape',
   'logo',
   'thumbnail',
+  'cast',
   'processed',
 ];
 
@@ -35,6 +36,7 @@ const CLASS_ENV: Record<Exclude<ImageClass, 'poster'>, string> = {
   landscape: 'POSTER_CACHE_LANDSCAPE_POSTERS',
   logo: 'POSTER_CACHE_LOGOS',
   thumbnail: 'POSTER_CACHE_THUMBNAILS',
+  cast: 'POSTER_CACHE_CAST',
   processed: 'POSTER_CACHE_PROCESSED_IMAGES',
 };
 

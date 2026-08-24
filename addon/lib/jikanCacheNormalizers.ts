@@ -67,6 +67,7 @@ const CATALOG_ITEM_KEYS = [
   'year',
   'duration',
   'status',
+  'rating',
   'genres',
 ];
 

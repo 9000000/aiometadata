@@ -56,7 +56,7 @@ async function recoverTvdbIdViaImdb(imdbId, contentType, config, currentTvdbId) 
   if (!imdbId) return null;
   try {
     const results = await tvdb.findByImdbId(imdbId, config);
-    const recovered = contentType === 'movie' ? results?.[0]?.movie?.id : results?.[0]?.series?.id;
+    const recovered = tvdb.tvdbIdFromRemoteIdResults(results, contentType);
     if (recovered && String(recovered) !== String(currentTvdbId)) return String(recovered);
   } catch (e) {
     logger.warn(`[Meta] TVDB recovery by IMDb ${imdbId} failed: ${e.message}`);
@@ -2058,7 +2058,8 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
     url: `stremio:///search?search=${w}`
   }));
   
-  const { trailers } = Utils.parseTvdbTrailers(movieData.trailers, translatedName);
+  const { trailers: allTrailers } = Utils.parseTvdbTrailers(movieData.trailers, translatedName);
+  const trailers = Utils.pickTrailersByLanguage(allTrailers, langCode3);
 
   if(!logoUrl && imdbId && await imdb.metahubImageExists(imdbId, 'logo')){
     logoUrl =  imdb.getLogoFromImdb(imdbId);
@@ -2327,7 +2328,8 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
     url: `stremio:///search?search=${w}`
   }));
 
-  const { trailers } = Utils.parseTvdbTrailers(tvdbShow.trailers, translatedName);
+  const { trailers: allTrailers } = Utils.parseTvdbTrailers(tvdbShow.trailers, translatedName);
+  const trailers = Utils.pickTrailersByLanguage(allTrailers, langCode3);
 
 
 
@@ -3148,7 +3150,8 @@ async function buildAnimeResponse(stremioId, malData, language, characterData, e
         }
       }
     }
-    if(malData.rating && config.displayAgeRating){
+    const malCertification = Utils.malRatingToCertification(malData.rating);
+    if(malData.rating && !malCertification && config.displayAgeRating){
       const ageRatingLink = {
         name: malData.rating,
         category: 'Genres',
@@ -3194,7 +3197,8 @@ async function buildAnimeResponse(stremioId, malData, language, characterData, e
         cast: Utils.parseCast(tmdbLikeCredits, undefined, 'mal'),
         director: [],
         writers: [],
-        watchProviders: watchProviders
+        watchProviders: watchProviders,
+        ...(malCertification ? { certification: malCertification, certificationLocal: malData.rating } : {})
       }
     };
 
@@ -3264,9 +3268,21 @@ async function buildKitsuAnimeResponse(stremioId, kitsuData, genres, includeObje
       }
     });
     links.push(...relatedLinks.filter(Boolean));
-    if(kitsuData.attributes.ageRating && config.displayAgeRating){
+    // Kitsu leaves ageRating empty on most recent seasonal anime; MAL rates them.
+    let kitsuCertification = kitsuData.attributes.ageRating || null;
+    const certMalId = malId || (String(stremioId).startsWith('mal:') ? String(stremioId).slice(4) : null);
+    if (!kitsuCertification && certMalId) {
+      try {
+        const malDetails = await cacheWrapJikanApi(`anime-details-${certMalId}`, () => jikan.getAnimeDetails(certMalId), null);
+        kitsuCertification = Utils.malRatingToCertification(malDetails?.rating) || null;
+      } catch (error) {
+        logger.debug(`Could not read a MAL rating for kitsu:${kitsuData.id}: ${error.message}`);
+      }
+    }
+
+    if(kitsuCertification && config.displayAgeRating){
       const ageRatingLink = {
-        name: kitsuData.attributes.ageRating,
+        name: kitsuCertification,
         category: 'Genres',
         url: imdbId ? `https://www.imdb.com/title/${imdbId}/parentalguide/` : `https://kitsu.app/anime/${kitsuData.attributes.slug}`
       };
@@ -3322,7 +3338,7 @@ async function buildKitsuAnimeResponse(stremioId, kitsuData, genres, includeObje
         director: [],
         writers: [],
         watchProviders: [],
-        certification: kitsuData.attributes.ageRating
+        certification: kitsuCertification
       }
     }
 

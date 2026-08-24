@@ -4,22 +4,19 @@ import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { useConfig } from '@/contexts/ConfigContext';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { AGE_RATING_OPTIONS as ageRatingOptions } from '@/lib/ageRatings';
 
-// Define the options for the age rating select dropdown
-const ageRatingOptions = [
-    { value: 'None', label: 'None (Show All)' },
-    { value: 'G', label: 'G (All Ages)' },
-    { value: 'PG', label: 'PG (Parental Guidance)' },
-    { value: 'PG-13', label: 'PG-13 (Parents Strongly Cautioned)' },
-    { value: 'R', label: 'R (Restricted)' },
-    { value: 'NC-17', label: 'NC-17 (Adults Only)' },
-];
 
 export function FiltersSettings() {
   const { config, setConfig } = useConfig();
+  const hasAgeRatingCap = !!config.ageRating && config.ageRating !== 'None';
 
   const handleAgeRatingChange = (value: string) => {
     setConfig(prev => ({ ...prev, ageRating: value }));
+  };
+
+  const handleAllowUnratedChange = (checked: boolean) => {
+    setConfig(prev => ({ ...prev, allowUnratedContent: checked }));
   };
 
   const handleSfwChange = (checked: boolean) => {
@@ -72,6 +69,7 @@ export function FiltersSettings() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            <div className="flex flex-col space-y-4">
               <Select value={config.ageRating} onValueChange={handleAgeRatingChange}>
                 <SelectTrigger className="w-full" data-setting="age-rating" aria-label="Maximum content rating">
                   <SelectValue placeholder="Select a rating" />
@@ -80,6 +78,31 @@ export function FiltersSettings() {
                   {ageRatingOptions.map(opt => <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>)}
                 </SelectContent>
               </Select>
+              {/* Also shown when it is off with no limit set: an install URL can carry a
+                  limit of its own, and that reads this, so it must not be unreachable. */}
+              {(hasAgeRatingCap || config.allowUnratedContent === false) && (
+                <div className="space-y-2">
+                  <div className="flex items-center space-x-2">
+                    <Switch
+                      id="allow-unrated-content"
+                      data-setting="allow-unrated-content"
+                      checked={config.allowUnratedContent !== false}
+                      onCheckedChange={handleAllowUnratedChange}
+                    />
+                    <Label htmlFor="allow-unrated-content">Show Unrated Titles</Label>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Most catalog rows carry no rating at all, so turning this off leaves them nearly empty.
+                    Turn it off only if you would rather hide anything whose rating cannot be confirmed.
+                  </p>
+                  {!hasAgeRatingCap && (
+                    <p className="text-xs text-muted-foreground">
+                      With no limit set above, this only applies to an install URL that carries one.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
           </CardContent>
         </Card>
 

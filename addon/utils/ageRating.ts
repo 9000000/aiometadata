@@ -59,10 +59,7 @@ export function passesAgeRating(
   const userRating = isTvRating ? (MOVIE_TO_TV_RATING[ageRating] || ageRating) : ageRating;
 
   if (isUnratedCertification(certification)) {
-    if (allowUnrated) return true;
-    return !(userRating === 'PG-13'
-      || (MOVIE_RATING_HIERARCHY.indexOf(userRating) !== -1 && MOVIE_RATING_HIERARCHY.indexOf(userRating) <= MOVIE_RATING_HIERARCHY.indexOf('PG-13'))
-      || (TV_RATING_HIERARCHY.indexOf(userRating) !== -1 && TV_RATING_HIERARCHY.indexOf(userRating) <= TV_RATING_HIERARCHY.indexOf('TV-14')));
+    return allowUnrated;
   }
 
   // A certification does not always use the scale its media type implies: MAL hands back

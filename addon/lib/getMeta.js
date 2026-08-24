@@ -3267,9 +3267,21 @@ async function buildKitsuAnimeResponse(stremioId, kitsuData, genres, includeObje
       }
     });
     links.push(...relatedLinks.filter(Boolean));
-    if(kitsuData.attributes.ageRating && config.displayAgeRating){
+    // Kitsu leaves ageRating empty on most recent seasonal anime; MAL rates them.
+    let kitsuCertification = kitsuData.attributes.ageRating || null;
+    const certMalId = malId || (String(stremioId).startsWith('mal:') ? String(stremioId).slice(4) : null);
+    if (!kitsuCertification && certMalId) {
+      try {
+        const malDetails = await cacheWrapJikanApi(`anime-details-${certMalId}`, () => jikan.getAnimeDetails(certMalId), null);
+        kitsuCertification = Utils.malRatingToCertification(malDetails?.rating) || null;
+      } catch (error) {
+        logger.debug(`Could not read a MAL rating for kitsu:${kitsuData.id}: ${error.message}`);
+      }
+    }
+
+    if(kitsuCertification && config.displayAgeRating){
       const ageRatingLink = {
-        name: kitsuData.attributes.ageRating,
+        name: kitsuCertification,
         category: 'Genres',
         url: imdbId ? `https://www.imdb.com/title/${imdbId}/parentalguide/` : `https://kitsu.app/anime/${kitsuData.attributes.slug}`
       };
@@ -3325,7 +3337,7 @@ async function buildKitsuAnimeResponse(stremioId, kitsuData, genres, includeObje
         director: [],
         writers: [],
         watchProviders: [],
-        certification: kitsuData.attributes.ageRating
+        certification: kitsuCertification
       }
     }
 

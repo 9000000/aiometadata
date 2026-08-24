@@ -1,5 +1,5 @@
 
-export const DEFAULT_CACHE_EPOCH = 1;
+export const DEFAULT_CACHE_EPOCH = 2;
 
 export function getCacheEpoch(): number {
   const raw = (process.env.CACHE_EPOCH || '').trim();

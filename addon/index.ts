@@ -1202,7 +1202,9 @@ addon.post("/api/auth/trakt/disconnect", async (req, res) => {
     // Invalidate config cache
     configCache.del(userUUID);
     
-    res.json({ success: true });
+    // Returned so the page can take the saved state rather than reloading,
+    // which would drop a session that is only held in memory.
+    res.json({ success: true, config });
   } catch (error) {
     consola.error("[Trakt] Disconnect error:", error);
     res.status(500).json({ error: "Failed to disconnect Trakt" });
@@ -1370,7 +1372,9 @@ addon.post("/api/auth/simkl/disconnect", async (req, res) => {
     // Invalidate config cache
     configCache.del(userUUID);
     
-    res.json({ success: true });
+    // Returned so the page can take the saved state rather than reloading,
+    // which would drop a session that is only held in memory.
+    res.json({ success: true, config });
   } catch (error) {
     consola.error("[Simkl] Disconnect error:", error);
     res.status(500).json({ error: "Failed to disconnect Simkl" });

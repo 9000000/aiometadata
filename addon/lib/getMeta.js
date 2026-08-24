@@ -336,7 +336,7 @@ async function getMeta(type, language, stremioId, config = {}, userUUID, include
              detectedAnimeMapping = fribbMapping;
         }
         else {
-            const wikiMap = wikiMappings.getByTvdbId(tvdbId);
+            const wikiMap = wikiMappings.getByTvdbId(tvdbId, 'movie');
             if (wikiMap && wikiMap.imdbId) {
                 const traktMapping = idMapper.getTraktAnimeMovieByImdbId(wikiMap.imdbId);
                 if (traktMapping) {

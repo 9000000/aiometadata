@@ -293,7 +293,7 @@ async function resolveAllIds(stremioId: string, type: string, config: any, prefe
       if (allIds.tmdbId && (type === 'movie' || type === 'series')) {
         wikiMapping = mappings.getByTmdbId(allIds.tmdbId.toString(), type);
       } else if (allIds.tvdbId && (type === 'movie' || type === 'series')) {
-        wikiMapping = mappings.getByTvdbId(allIds.tvdbId.toString());
+        wikiMapping = mappings.getByTvdbId(allIds.tvdbId.toString(), type);
       } else if (allIds.imdbId && (type === 'movie' || type === 'series')) {
         wikiMapping = mappings.getByImdbId(allIds.imdbId, type);
       } else if (allIds.tvmazeId && type === 'series') {
@@ -408,7 +408,7 @@ async function resolveAllIds(stremioId: string, type: string, config: any, prefe
       primaryPromises.push(_fetchFromTmdb(allIds.tmdbId, type, config));
     }
 
-    if (allIds.tvmazeId && ((needsImdb && !allIds.imdbId) || (needsTmdb && !allIds.tmdbId) || (needsTvdb && !allIds.tvdbId))) {
+    if (allIds.tvmazeId && type === 'series' && ((needsImdb && !allIds.imdbId) || (needsTmdb && !allIds.tmdbId) || (needsTvdb && !allIds.tvdbId))) {
       logger.debug(`[Primary API] TVMaze externals - needs: imdb=${needsImdb && !allIds.imdbId}, tmdb=${needsTmdb && !allIds.tmdbId}, tvdb=${needsTvdb && !allIds.tvdbId}`);
       primaryPromises.push(_fetchFromTvmaze(allIds.tvmazeId, config));
     }

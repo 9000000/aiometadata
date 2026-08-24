@@ -37,19 +37,37 @@ class RedisIdCache {
     this.ttl = 90 * 24 * 60 * 60;
   }
 
+  /**
+   * Every pointer carries the content type, because the row it points at is
+   * type-scoped. An untyped pointer lets a series mapping answer a movie lookup
+   * and hand back a TMDB tv id, which the movie namespace then reads as a
+   * different title entirely.
+   */
+  _pointerKeys(contentType: string, tvdbId: string | null, imdbId: string | null, tvmazeId: string | null): string[] {
+    const keys: string[] = [];
+    if (imdbId) keys.push(`${this.ptrPrefix}imdb:${contentType}:${imdbId}`);
+    if (tvdbId) keys.push(`${this.ptrPrefix}tvdb:${contentType}:${tvdbId}`);
+    if (tvmazeId) keys.push(`${this.ptrPrefix}tvmaze:${contentType}:${tvmazeId}`);
+    return keys;
+  }
+
+  /** Untyped shapes written before the above; still read, but type-checked on use. */
+  _legacyPointerKeys(imdbId: string | null, tvmazeId: string | null): string[] {
+    const keys: string[] = [];
+    if (imdbId) keys.push(`${this.ptrPrefix}imdb:${imdbId}`);
+    if (tvmazeId) keys.push(`${this.ptrPrefix}tvmaze:${tvmazeId}`);
+    return keys;
+  }
+
   _getKeys(contentType: string, tmdbId: string | null, tvdbId: string | null, imdbId: string | null, tvmazeId: string | null): KeyInfo | null {
     if (!tmdbId) {
       return null;
     }
 
-    const canonicalKey = `${this.dataPrefix}${contentType}:${tmdbId}`;
-    const pointerKeys: string[] = [];
-
-    if (imdbId) pointerKeys.push(`${this.ptrPrefix}imdb:${imdbId}`);
-    if (tvdbId) pointerKeys.push(`${this.ptrPrefix}tvdb:${contentType}:${tvdbId}`);
-    if (tvmazeId) pointerKeys.push(`${this.ptrPrefix}tvmaze:${tvmazeId}`);
-
-    return { canonicalKey, pointerKeys };
+    return {
+      canonicalKey: `${this.dataPrefix}${contentType}:${tmdbId}`,
+      pointerKeys: this._pointerKeys(contentType, tvdbId, imdbId, tvmazeId),
+    };
   }
 
   async getCachedIdMapping(contentType: string, tmdbId: string | null = null, tvdbId: string | null = null, imdbId: string | null = null, tvmazeId: string | null = null): Promise<IdMapping | null> {
@@ -68,10 +86,10 @@ class RedisIdCache {
       }
     }
 
-    const pointerKeys: string[] = [];
-    if (imdbId) pointerKeys.push(`${this.ptrPrefix}imdb:${imdbId}`);
-    if (tvdbId) pointerKeys.push(`${this.ptrPrefix}tvdb:${contentType}:${tvdbId}`);
-    if (tvmazeId) pointerKeys.push(`${this.ptrPrefix}tvmaze:${tvmazeId}`);
+    const pointerKeys: string[] = [
+      ...this._pointerKeys(contentType, tvdbId, imdbId, tvmazeId),
+      ...this._legacyPointerKeys(imdbId, tvmazeId),
+    ];
 
     if (pointerKeys.length === 0) {
       logger.debug(`[Redis ID Cache] MISS: No TMDB ID for direct lookup and no other IDs for pointer lookup.`);
@@ -80,10 +98,11 @@ class RedisIdCache {
 
     try {
       const pointerResults = await this.redis.mget(...pointerKeys);
+      const expectedPrefix = `${this.dataPrefix}${contentType}:`;
       let canonicalKeyFromPointer: string | null = null;
 
       for (const result of pointerResults) {
-        if (result && typeof result === 'string' && result.startsWith(this.dataPrefix)) {
+        if (result && typeof result === 'string' && result.startsWith(expectedPrefix)) {
           canonicalKeyFromPointer = result;
           break;
         }

@@ -275,7 +275,7 @@ function NuvioCollectionStage({
         </div>
 
         {!asRows && entry.folders.length > 0 && (
-          <div className="flex min-w-0 gap-1.5 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="flex min-w-0 shrink-0 gap-1.5 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {entry.showAllTab !== false && (
               <span className="shrink-0 whitespace-nowrap rounded-full bg-white/90 px-2.5 py-0.5 text-xs font-medium text-black">
                 All
@@ -347,7 +347,7 @@ function FusionCollectionStage({
       {entry.folders.length === 0 ? (
         <p className="py-6 text-center text-xs text-white/50">No items yet.</p>
       ) : (
-        <div className="flex gap-3 overflow-x-auto pb-1">
+        <div className="flex shrink-0 gap-3 overflow-x-auto pb-1">
           {entry.folders.map(folder => (
             <PreviewTile
               key={folder.id}
@@ -402,7 +402,7 @@ function ClassicRowStage({ entry, target }: { entry: ClassicRowDraft; target: Ta
               {entry.title.trim() || 'Untitled row'}
             </p>
           )}
-          <div className="flex items-end gap-3 overflow-x-auto pb-1">
+          <div className="flex shrink-0 items-end gap-3 overflow-x-auto pb-1">
             {Array.from({ length: cards }, (_, index) => (
               <div key={index} className="relative shrink-0" style={{ width: CARD_WIDTH[entry.cardStyle] }}>
                 <div

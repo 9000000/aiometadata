@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef  } from "react";
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
 import { AppConfig, CatalogConfig, SearchConfig } from "./config";
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from 'lz-string';
 import { allCatalogDefinitions, allSearchProviders } from "@/data/catalogs";
@@ -11,6 +11,11 @@ interface AuthState {
   userUUID: string | null;
   password: string | null; // ephemeral, in-memory only
   installUrl?: string | null;
+}
+
+export interface InstanceLimits {
+  maxCatalogs: number | null;
+  collectionImportCatalogCap: number;
 }
 
 interface ConfigContextType {
@@ -29,8 +34,11 @@ interface ConfigContextType {
   catalogTTL: number;
   /** Instance ceiling on enabled catalogs, null when unset. */
   maxCatalogs: number | null;
+
   /** Fallback ceiling for a collection import when maxCatalogs is unset. */
   collectionImportCatalogCap: number;
+  /** Re-reads the instance limits, which the dashboard can change mid-session. */
+  refreshInstanceLimits: () => Promise<InstanceLimits | null>;
   isLoading: boolean;
   sessionId: string;
   setSessionId: (sessionId: string) => void;
@@ -396,7 +404,27 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
   const [simklSearchEnabled, setSimklSearchEnabled] = useState(true);
   const [catalogTTL, setCatalogTTL] = useState(86400); // Default to 24 hours
   const [maxCatalogs, setMaxCatalogs] = useState<number | null>(null);
-  const [collectionImportCatalogCap, setCollectionImportCatalogCap] = useState(300);
+  const [collectionImportCatalogCap, setCollectionImportCatalogCap] = useState(400);
+
+  const refreshInstanceLimits = useCallback(async (): Promise<InstanceLimits | null> => {
+    try {
+      const response = await fetch('/api/config');
+      if (!response.ok) return null;
+      const env = await response.json();
+      const limits: InstanceLimits = {
+        maxCatalogs: env.maxCatalogs ?? null,
+        collectionImportCatalogCap: env.collectionImportCatalogCap || 400,
+      };
+      setCatalogTTL(env.catalogTTL || 86400);
+      setMaxCatalogs(limits.maxCatalogs);
+      setCollectionImportCatalogCap(limits.collectionImportCatalogCap);
+      // Returned as well as stored, so a caller acting on it now is not reading
+      // state that React has not re-rendered yet.
+      return limits;
+    } catch {
+      return null;
+    }
+  }, []);
   const manifestFingerprint = useRef<string | null>(null);
 
   // --- THIS IS THE CORRECTED EFFECT ---
@@ -416,7 +444,7 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
         setSimklSearchEnabled(envApiKeys.simklSearchEnabled ?? true);
         setCatalogTTL(envApiKeys.catalogTTL || 86400);
         setMaxCatalogs(envApiKeys.maxCatalogs ?? null);
-        setCollectionImportCatalogCap(envApiKeys.collectionImportCatalogCap || 300);
+        setCollectionImportCatalogCap(envApiKeys.collectionImportCatalogCap || 400);
 
         // Layer in the server keys with the correct priority.
         // We use `preloadedConfig` because it holds the user's saved data.
@@ -488,7 +516,7 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <ConfigContext.Provider value={{ config, setConfig, addonVersion, resetConfig, auth, setAuth, hasBuiltInTvdb, hasBuiltInTmdb, hasBuiltInMdblist, hasBuiltInGemini, catalogTTL, maxCatalogs, collectionImportCatalogCap, isLoading, sessionId, setSessionId, traktSearchEnabled, simklSearchEnabled, manifestFingerprint, manifestChangedSinceInstall, markManifestInstalled }}>
+    <ConfigContext.Provider value={{ config, setConfig, addonVersion, resetConfig, auth, setAuth, hasBuiltInTvdb, hasBuiltInTmdb, hasBuiltInMdblist, hasBuiltInGemini, catalogTTL, maxCatalogs, collectionImportCatalogCap, refreshInstanceLimits, isLoading, sessionId, setSessionId, traktSearchEnabled, simklSearchEnabled, manifestFingerprint, manifestChangedSinceInstall, markManifestInstalled }}>
       {children}
     </ConfigContext.Provider>
   );

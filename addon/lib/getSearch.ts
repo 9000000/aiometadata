@@ -214,6 +214,13 @@ async function parseTvdbSearchResult(type: string, extendedRecord: any, language
     poster: Utils.isPosterRatingEnabled(config) ? posterProxyUrl : validPosterUrl,
     _rawPosterUrl: rawPosterUrl,
     year: extendedRecord.year,
+    releaseInfo: type === 'movie'
+      ? (extendedRecord.year || '')
+      : Utils.buildReleaseInfo(
+          extendedRecord.firstAired,
+          extendedRecord.lastAired,
+          extendedRecord.status?.name === 'Continuing'
+        ) || extendedRecord.year || '',
     released: released,
     description: Utils.addMetaProviderAttribution(overview, 'TVDB', config),
     certification: certification,

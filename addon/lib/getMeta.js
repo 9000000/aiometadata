@@ -1887,19 +1887,11 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
     seriesData.original_name
   );
 
-  // Build releaseInfo in format "first_year-last_year" or "first_year-" for ongoing series
-  let releaseInfo = "";
-  if (seriesData.first_air_date) {
-    const firstYear = seriesData.first_air_date.substring(0, 4);
-    const isOngoing = seriesData.status === 'Returning Series' || seriesData.status === 'In Production' || seriesData.status === 'Planned';
-    
-    if (isOngoing || !seriesData.last_air_date) {
-      releaseInfo = `${firstYear}-`;
-    } else {
-      const lastYear = seriesData.last_air_date.substring(0, 4);
-      releaseInfo = firstYear === lastYear ? firstYear : `${firstYear}-${lastYear}`;
-    }
-  }
+  const releaseInfo = Utils.buildReleaseInfo(
+    seriesData.first_air_date,
+    seriesData.last_air_date,
+    Utils.isTmdbSeriesOngoing(seriesData.status)
+  );
 
   const certification = Utils.getTmdbTvCertificationForCountry(seriesData.content_ratings);
   const userCountry = language?.split('-')[1];
@@ -2502,19 +2494,11 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
     logoUrl =  imdb.getLogoFromImdb(imdbId);
   }
  
-  // Build releaseInfo in format "first_year-last_year" or "first_year-" for ongoing series
-  let tvdbReleaseInfo = year || "";
-  if (tvdbShow.firstAired) {
-    const firstYear = tvdbShow.firstAired.substring(0, 4);
-    const isOngoing = tvdbShow.status?.name === 'Continuing' || !tvdbShow.lastAired;
-    
-    if (isOngoing) {
-      tvdbReleaseInfo = `${firstYear}-`;
-    } else {
-      const lastYear = tvdbShow.lastAired.substring(0, 4);
-      tvdbReleaseInfo = firstYear === lastYear ? firstYear : `${firstYear}-${lastYear}`;
-    }
-  }
+  const tvdbReleaseInfo = Utils.buildReleaseInfo(
+    tvdbShow.firstAired,
+    tvdbShow.lastAired,
+    tvdbShow.status?.name === 'Continuing'
+  ) || year || "";
 
   let certification = null;
   let certificationLocal = null;

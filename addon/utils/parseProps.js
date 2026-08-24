@@ -688,7 +688,11 @@ function parseMedia(el, type, genreList = [], config = {}) {
     year: type === 'movie' ? (el.release_date?.substring(0, 4) || '') : (el.first_air_date?.substring(0, 4) || ''),
     type: type === 'movie' ? type : 'series',
     released: type === 'movie' ? new Date(el.release_date) : new Date(el.first_air_date),
-    releaseInfo: type === 'movie' ? (el.release_date?.substring(0, 4) || '') : (el.first_air_date?.substring(0, 4) || ''),
+    releaseInfo: type === 'movie'
+      ? (el.release_date?.substring(0, 4) || '')
+      : el.status
+        ? buildReleaseInfo(el.first_air_date, el.last_air_date, isTmdbSeriesOngoing(el.status))
+        : (el.first_air_date?.substring(0, 4) || ''),
     description: addMetaProviderAttribution(el.overview, 'TMDB', config),
     popularity: el.popularity, 
     vote_average: el.vote_average || 0,
@@ -1182,6 +1186,25 @@ function parseCoutry(production_countries) {
 
 function parseGenres(genres) {
   return genres?.map((el) => el.name) || [];
+}
+
+const TMDB_ONGOING_SERIES_STATUSES = new Set(['Returning Series', 'In Production', 'Planned']);
+
+function isTmdbSeriesOngoing(status) {
+  return TMDB_ONGOING_SERIES_STATUSES.has(status);
+}
+
+/**
+ * "2021-2023" for a finished run, "2021-" while it is still going, "2021" when it
+ * began and ended in the same year. Shared so a search row and the meta page it
+ * opens cannot disagree about the same show.
+ */
+function buildReleaseInfo(firstDate, lastDate, isOngoing) {
+  if (!firstDate) return '';
+  const firstYear = String(firstDate).substring(0, 4);
+  if (isOngoing || !lastDate) return `${firstYear}-`;
+  const lastYear = String(lastDate).substring(0, 4);
+  return firstYear === lastYear ? firstYear : `${firstYear}-${lastYear}`;
 }
 
 function parseYear(status, first_air_date, last_air_date) {
@@ -3457,6 +3480,8 @@ module.exports = {
   parseCoutry,
   parseGenres,
   parseYear,
+  buildReleaseInfo,
+  isTmdbSeriesOngoing,
   parseRunTime,
   parseCreatedBy,
   parseConfig,

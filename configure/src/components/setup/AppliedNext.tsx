@@ -12,7 +12,7 @@ const LazyDiscoverBuilder = lazy(() =>
   import('@/components/sections/DiscoverBuilderDialog').then(m => ({ default: m.DiscoverBuilderDialog }))
 );
 
-type ClientId = 'stremio' | 'aurora' | 'realstreams' | 'nuvio' | 'fusion' | 'other';
+type ClientId = 'stremio' | 'aurora' | 'realstreams' | 'nuvio' | 'fusion' | 'omni' | 'other';
 
 const CLIENTS: Array<{ id: ClientId; label: string; collections?: boolean }> = [
   { id: 'stremio', label: 'Stremio' },
@@ -20,6 +20,7 @@ const CLIENTS: Array<{ id: ClientId; label: string; collections?: boolean }> = [
   { id: 'realstreams', label: 'RealStreams' },
   { id: 'nuvio', label: 'Nuvio', collections: true },
   { id: 'fusion', label: 'Fusion', collections: true },
+  { id: 'omni', label: 'Omni' },
   { id: 'other', label: 'Something else' },
 ];
 

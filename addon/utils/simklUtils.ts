@@ -19,6 +19,7 @@ const SIMKL_CLIENT_ID = process.env.SIMKL_CLIENT_ID || '';
 const SIMKL_TRENDING_TTL = 12 * 60 * 60; // 12 hours
 const SIMKL_WATCHLIST_TTL = 24 * 60 * 60; // Cache in Redis for 24h, relies on activity check to invalidate
 const SIMKL_ACTIVITIES_TTL_DEFAULT = 30 * 60; // Simkl asks callers to throttle sync checks to once per 15-30 min
+const SIMKL_LIST_STATUSES = ['plantowatch', 'watching', 'completed', 'hold', 'dropped'];
 
 function getSimklActivitiesTtl(): number {
   const parsed = parseInt(process.env.SIMKL_ACTIVITIES_TTL || '', 10);
@@ -325,36 +326,45 @@ async function fetchSimklUserStats(tokenId: string): Promise<any> {
   );
 }
 
-// Check if any significant timestamp has changed
-function hasActivityChanged(oldActivity: any, newActivity: any, status: string): { changed: boolean, removed: boolean } {
-  if (!oldActivity) return { changed: true, removed: true };
-  if (!newActivity) return { changed: true, removed: true }; // Should not happen if API healthy
+// Check if any significant timestamp has changed.
+// `reconcile` means items may have LEFT this list, which a date_from delta can
+// never tell us: it only carries additions and updates.
+function hasActivityChanged(oldActivity: any, newActivity: any, status: string): { changed: boolean, reconcile: boolean } {
+  if (!oldActivity) return { changed: true, reconcile: true };
+  if (!newActivity) return { changed: true, reconcile: true }; // Should not happen if API healthy
 
   // Check generic "all" first
   if (newActivity.all !== oldActivity.all) {
     // Dig deeper
     const categories = ['movies', 'tv_shows', 'anime'];
     let contentChanged = false;
-    let contentRemoved = false;
+    let contentLeft = false;
 
     for (const cat of categories) {
       if (newActivity[cat]?.all !== oldActivity[cat]?.all) {
         // This category changed. Check specific status.
-        const apiStatus = status === 'plantowatch' ? 'plantowatch' : status; 
-        
-        if (newActivity[cat]?.[apiStatus] !== oldActivity[cat]?.[apiStatus]) {
+        if (newActivity[cat]?.[status] !== oldActivity[cat]?.[status]) {
           contentChanged = true;
         }
 
-        if (newActivity[cat]?.removed_from_list !== oldActivity[cat]?.removed_from_list) {
-          contentRemoved = true;
+        // An item lives in exactly one status, so it leaves this list either by
+        // landing in a sibling one or by leaving the library. This status bumps
+        // on the way out too, but that is indistinguishable from an arrival: the
+        // sibling bump is what actually says something has to be dropped.
+        const movedOut = SIMKL_LIST_STATUSES.some(
+          s => s !== status && newActivity[cat]?.[s] !== oldActivity[cat]?.[s]
+        );
+
+        // removed_from_list is the other exit: gone from the library entirely.
+        if (movedOut || newActivity[cat]?.removed_from_list !== oldActivity[cat]?.removed_from_list) {
+          contentLeft = true;
         }
       }
     }
-    return { changed: contentChanged || contentRemoved, removed: contentRemoved };
+    return { changed: contentChanged, reconcile: contentLeft };
   }
 
-  return { changed: false, removed: false };
+  return { changed: false, reconcile: false };
 }
 
 async function fetchSimklLastActivities(accessToken: string): Promise<any> {
@@ -392,10 +402,72 @@ async function getSimklActivityFingerprint(
     const cat = type === 'shows' ? activities.tv_shows : activities[type];
     const specific = cat?.[status] ?? cat?.all ?? activities.all ?? '';
     const removed = cat?.removed_from_list ?? '';
-    return (specific || removed) ? `${specific}|${removed}` : '';
+    // An item leaving this list shows up as a bump on the status it moved to, so
+    // the siblings belong in the key too or the catalog keeps serving the old page.
+    const siblingParts = SIMKL_LIST_STATUSES.filter(s => s !== status).map(s => cat?.[s] || '');
+    const siblings = siblingParts.join(',');
+    return (specific || removed || siblingParts.some(Boolean)) ? `${specific}|${removed}|${siblings}` : '';
   } catch {
     return '';
   }
+}
+
+/**
+ * Drop the items that have left a list. A date_from delta only carries additions
+ * and updates, so Simkl's documented way to spot a departure is to refetch the
+ * list ids-only and diff: whatever the cached blob still holds and the live list
+ * does not has moved to another status or left the library.
+ * Returns null when the answer could not be trusted, so the caller keeps the
+ * cached list rather than pruning against a body it failed to read.
+ */
+async function reconcileSimklList(
+  accessToken: string,
+  status: string,
+  cached: any
+): Promise<any | null> {
+  let response: any;
+  try {
+    // ids-only: the point is which ids are still here, not their contents, and
+    // this runs often enough that pulling extended=full again would be wasteful.
+    const url = `${SIMKL_BASE_URL}/sync/all-items/${status}?extended=simkl_ids_only`;
+    response = await makeAuthenticatedSimklRequest(url, accessToken, `Simkl Reconcile ${status}`);
+  } catch (e: any) {
+    logger.warn(`Simkl ${status}: reconcile fetch failed (${e.message}), keeping cached list`);
+    return null;
+  }
+
+  const data = response?.data;
+  if (!data || typeof data !== 'object') {
+    logger.warn(`Simkl ${status}: reconcile returned no usable body, keeping cached list`);
+    return null;
+  }
+
+  const result: any = {};
+  let dropped = 0;
+  for (const bucket of ['movies', 'shows', 'anime']) {
+    const live = Array.isArray(data[bucket]) ? data[bucket] : [];
+    const liveIds = new Set<any>();
+    for (const item of live) {
+      const id = simklItemId(item);
+      // An id we cannot read would prune a live item, so give up rather than guess.
+      if (!id) {
+        logger.warn(`Simkl ${status}: reconcile item carried no simkl id, keeping cached list`);
+        return null;
+      }
+      liveIds.add(id);
+    }
+    result[bucket] = (cached?.[bucket] || []).filter((item: any) => {
+      const id = simklItemId(item);
+      // Unidentifiable cached items are left alone, the same way mergeItems skips them.
+      if (!id) return true;
+      if (liveIds.has(id)) return true;
+      dropped++;
+      return false;
+    });
+  }
+
+  if (dropped) logger.debug(`Simkl ${status}: reconcile dropped ${dropped} item(s) that left the list`);
+  return result;
 }
 
 async function fetchSimklWatchlistItems(
@@ -407,8 +479,9 @@ async function fetchSimklWatchlistItems(
   try {
     const tokenHash = crypto.createHash('sha256').update(accessToken).digest('hex').substring(0, 16);
     // Redis keys
-    // v2 carries next_to_watch_info, so v1 blobs have to be refetched rather than merged into.
-    const fullListKey = `simkl-watchlist-full-v2:${tokenHash}:${status}`; // Stores the full object { movies:[], shows:[], anime:[] }
+    // v2 carried next_to_watch_info; v3 drops the blobs that delta syncs left items
+    // stranded in, so both have to be refetched rather than merged into.
+    const fullListKey = `simkl-watchlist-full-v3:${tokenHash}:${status}`; // Stores the full object { movies:[], shows:[], anime:[] }
     const activitiesKey = `simkl-activities:${tokenHash}:${status}`; // Per-status watermark, matching fullListKey granularity
 
     // 1. Get latest activities from Simkl (Cached via fetchSimklLastActivities for 6 hours)
@@ -435,6 +508,7 @@ async function fetchSimklWatchlistItems(
     // 3. Determine Sync Strategy
     let itemsToReturn: any = { movies: [], shows: [], anime: [] };
     let shouldUpdateCache = false;
+    let reconcileFailed = false;
 
     if (!currentActivities) {
       // API failed, return cache if exists
@@ -445,11 +519,11 @@ async function fetchSimklWatchlistItems(
       }
     } else {
       // We have API connection
-      const { changed, removed } = hasActivityChanged(cachedActivities, currentActivities, status);
+      const { changed, reconcile } = hasActivityChanged(cachedActivities, currentActivities, status);
 
-      if (!cachedList || removed) {
-        // Case A: No cache OR items removed -> Full Sync
-        logger.debug(`Simkl ${status}: Performing FULL sync (Reason: ${!cachedList ? 'No cache' : 'Items removed'})`);
+      if (!cachedList) {
+        // Case A: No cache -> Full Sync
+        logger.debug(`Simkl ${status}: Performing FULL sync (Reason: No cache)`);
         
         const url = `${SIMKL_BASE_URL}/sync/all-items/${status}?extended=full&next_watch_info=yes`;
         const response: any = await makeAuthenticatedSimklRequest(url, accessToken, `Simkl Full Sync ${status}`);
@@ -461,30 +535,43 @@ async function fetchSimklWatchlistItems(
         };
         shouldUpdateCache = true;
 
-      } else if (changed) {
+      } else if (changed || reconcile) {
         // Case B: Updates available -> Incremental Sync
-        // Use the main 'all' timestamp from the *cached* activities as date_from
-        const lastSyncDate = cachedActivities?.all || new Date(0).toISOString();
-        logger.debug(`Simkl ${status}: Performing INCREMENTAL sync (Since: ${lastSyncDate})`);
+        itemsToReturn = cachedList;
 
-        const url = `${SIMKL_BASE_URL}/sync/all-items/${status}?extended=full&next_watch_info=yes&date_from=${encodeURIComponent(lastSyncDate)}`;
-        const response: any = await makeAuthenticatedSimklRequest(url, accessToken, `Simkl Incremental Sync ${status}`);
+        if (changed) {
+          // Use the main 'all' timestamp from the *cached* activities as date_from
+          const lastSyncDate = cachedActivities?.all || new Date(0).toISOString();
+          logger.debug(`Simkl ${status}: Performing INCREMENTAL sync (Since: ${lastSyncDate})`);
 
-        const updates = {
-          movies: response.data?.movies || [],
-          shows: response.data?.shows || [],
-          anime: response.data?.anime || []
-        };
+          const url = `${SIMKL_BASE_URL}/sync/all-items/${status}?extended=full&next_watch_info=yes&date_from=${encodeURIComponent(lastSyncDate)}`;
+          const response: any = await makeAuthenticatedSimklRequest(url, accessToken, `Simkl Incremental Sync ${status}`);
 
-        // Merge logic
-        itemsToReturn = {
-          movies: mergeItems(cachedList.movies || [], updates.movies),
-          shows: mergeItems(cachedList.shows || [], updates.shows),
-          anime: mergeItems(cachedList.anime || [], updates.anime)
-        };
+          const updates = {
+            movies: response.data?.movies || [],
+            shows: response.data?.shows || [],
+            anime: response.data?.anime || []
+          };
 
-        const totalUpdates = updates.movies.length + updates.shows.length + updates.anime.length;
-        logger.debug(`Simkl ${status}: Merged ${totalUpdates} updates`);
+          // Merge logic
+          itemsToReturn = {
+            movies: mergeItems(itemsToReturn.movies || [], updates.movies),
+            shows: mergeItems(itemsToReturn.shows || [], updates.shows),
+            anime: mergeItems(itemsToReturn.anime || [], updates.anime)
+          };
+
+          const totalUpdates = updates.movies.length + updates.shows.length + updates.anime.length;
+          logger.debug(`Simkl ${status}: Merged ${totalUpdates} updates`);
+        }
+
+        if (reconcile) {
+          // The merge above can add and update, never drop, so anything that left
+          // the list is still sitting in the blob until this diff removes it.
+          const pruned = await reconcileSimklList(accessToken, status, itemsToReturn);
+          if (pruned) itemsToReturn = pruned;
+          else reconcileFailed = true;
+        }
+
         shouldUpdateCache = true;
 
       } else {
@@ -500,10 +587,13 @@ async function fetchSimklWatchlistItems(
 
     // 4. Update Cache if needed
     if (shouldUpdateCache && redis && currentActivities) {
-      await Promise.all([
-        redis.setex(fullListKey, cacheTTL, JSON.stringify(itemsToReturn)),
-        redis.setex(activitiesKey, cacheTTL, JSON.stringify(currentActivities))
-      ]);
+      const writes: any[] = [redis.setex(fullListKey, cacheTTL, JSON.stringify(itemsToReturn))];
+      // Holding the watermark back on a failed reconcile is what makes the next
+      // call retry the diff instead of trusting a list it could not verify.
+      if (!reconcileFailed) {
+        writes.push(redis.setex(activitiesKey, cacheTTL, JSON.stringify(currentActivities)));
+      }
+      await Promise.all(writes);
     }
 
     // 5. Select items based on requested type
@@ -782,18 +872,22 @@ async function checkinSeries(
 }
 
 
+function simklItemId(item: any): any {
+  return item?.show?.ids?.simkl ?? item?.movie?.ids?.simkl ?? item?.anime?.ids?.simkl ?? item?.ids?.simkl;
+}
+
 function mergeItems(existingItems: any[], newItems: any[]): any[] {
   const itemMap = new Map();
   
   // Index existing items
   existingItems.forEach((item: any) => {
-    const simklId = item.show?.ids?.simkl || item.movie?.ids?.simkl || item.ids?.simkl;
+    const simklId = simklItemId(item);
     if (simklId) itemMap.set(simklId, item);
   });
 
   // Merge new items (overwriting existing ones)
   newItems.forEach((item: any) => {
-    const simklId = item.show?.ids?.simkl || item.movie?.ids?.simkl || item.ids?.simkl;
+    const simklId = simklItemId(item);
     if (simklId) itemMap.set(simklId, item);
   });
 

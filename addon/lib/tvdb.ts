@@ -516,6 +516,16 @@ async function getAuthToken(apiKey: string | undefined, userUUID: string | null 
   return loginPromise;
 }
 
+// A failed login is indistinguishable from "not on TVDB" once it comes back as null,
+// and the meta layer caches that fallback. Throw instead so the caller degrades.
+async function getAuthTokenOrThrow(apiKey: string | undefined, userUUID: string | null = null): Promise<string | null> {
+  const token = await getAuthToken(apiKey, userUUID);
+  if (!token && (apiKey || globalTvdbKey())) {
+    throw new Error('TVDB login failed, no auth token available');
+  }
+  return token;
+}
+
 function _filterTvdbSearchResults(results: TvdbSearchResult[], query: string): TvdbSearchResult[] {
   if (!results || results.length === 0) {
     return [];
@@ -696,7 +706,7 @@ async function searchCollections(query: string, config: UserConfig): Promise<Tvd
 
 async function getSeriesExtended(seriesId: string, config: UserConfig): Promise<TvdbSeriesExtended | null> {
   return cacheWrapTvdbApi(`series-extended:${seriesId}`, async () => {
-    const token = await getAuthToken(config.apiKeys?.tvdb, config.userUUID);
+    const token = await getAuthTokenOrThrow(config.apiKeys?.tvdb, config.userUUID);
     if (!token) return null;
 
     const url = `${TVDB_API_URL}/series/${seriesId}/extended?meta=translations`;
@@ -776,7 +786,7 @@ async function getPersonExtended(personId: string, config: UserConfig): Promise<
 }
 
 async function _fetchEpisodesBySeasonType(tvdbId: string, seasonType: string, language: string, config: UserConfig): Promise<{ episodes: TvdbEpisode[] } | null> {
-  const token = await getAuthToken(config.apiKeys?.tvdb, config.userUUID);
+  const token = await getAuthTokenOrThrow(config.apiKeys?.tvdb, config.userUUID);
   if (!token) return null;
 
   const langCode3 = await to3LetterCode(language, config);

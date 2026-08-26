@@ -27,6 +27,7 @@ interface SaveContextType {
   isSaving: boolean;
   error: string;
   savedConfig: SavedConfig | null;
+  markConfigPersisted: (persisted: AppConfig) => void;
   /** Null until a save target exists, so callers can tell "unknown" from "no changes". */
   isDirty: boolean | null;
   canSave: boolean;
@@ -63,12 +64,24 @@ function reinstallNoticeSuppressed(uuid?: string | null): boolean {
 }
 
 /** The blurb is instance-specific and stripped before saving, so it must not count as a change. */
+/** Credential pointers, written and removed by their own endpoints rather than by Save. */
+const SELF_PERSISTING_KEYS = [
+  'traktTokenId',
+  'simklTokenId',
+  'anilistTokenId',
+  'malTokenId',
+  'movieLensCredId',
+];
+
 function fingerprintConfig(config: AppConfig): string {
-  const { apiKeys, ...rest } = config as any;
+  // Connecting, disconnecting and syncing all persist as they go, so counting what they
+  // touch would report unsaved work for changes already on disk. Save owns the rest.
+  const { apiKeys, managers: _managers, managerAccounts: _managerAccounts, ...rest } = config as any;
   const trimmedApiKeys = Object.fromEntries(
     Object.entries(apiKeys ?? {}).map(([k, v]) => [k, typeof v === 'string' ? v.trim() : v])
   );
   delete (trimmedApiKeys as any).customDescriptionBlurb;
+  for (const key of SELF_PERSISTING_KEYS) delete (trimmedApiKeys as any)[key];
   return stableStringify({ ...rest, apiKeys: trimmedApiKeys });
 }
 
@@ -132,6 +145,12 @@ export function SaveProvider({ children }: { children: ReactNode }) {
 
   // handleSave is declared before openInstall, so the toast action reaches it by ref.
   const openInstallRef = useRef<(manifestUrl?: string) => void>(() => {});
+
+  // A route that saves the configuration itself leaves the page holding exactly what
+  // is on disk, so the baseline moves with it instead of reporting unsaved work.
+  const markConfigPersisted = useCallback((persisted: AppConfig) => {
+    setSavedFingerprint(fingerprintConfig(persisted));
+  }, []);
 
   const currentFingerprint = useMemo(() => fingerprintConfig(config), [config]);
   const isDirty = savedFingerprint === null ? null : currentFingerprint !== savedFingerprint;
@@ -272,6 +291,7 @@ export function SaveProvider({ children }: { children: ReactNode }) {
     error,
     savedConfig,
     isDirty,
+    markConfigPersisted,
     canSave,
     missingKeys,
     openInstall,
@@ -306,7 +326,7 @@ export function SaveProvider({ children }: { children: ReactNode }) {
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
               {defaultInstallUrl ? (
-                <ManagerSync manifestUrl={defaultInstallUrl} onSynced={() => closeReinstallModal(false)} />
+                <ManagerSync baseInstallUrl={defaultInstallUrl} onSynced={() => closeReinstallModal(false)} />
               ) : null}
               <Button variant="outline" onClick={() => closeReinstallModal(false)}>Later</Button>
               <Button onClick={() => closeReinstallModal(true)}>Install</Button>

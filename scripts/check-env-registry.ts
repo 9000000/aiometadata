@@ -13,6 +13,9 @@ const INTERNAL_ALLOWLIST = new Set<string>([
   'HOME',
   'CACHE_WARMUP_UUID',
   'POSTER_CACHE_LOG_PIPE',
+  'FRANCHISE_REMOTE_BASE_URL',
+  'SKIP_CACHE_CLEANUP',
+  'TMDB_POSTER_SIZE',
 ]);
 
 const ENV_RE = /process\.env\.([A-Z_][A-Z0-9_]*)|process\.env\[\s*['"]([A-Z_][A-Z0-9_]*)['"]\s*\]/g;

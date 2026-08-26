@@ -650,7 +650,8 @@ export function ConfigurationManager() {
                 <Download className="h-4 w-4 mr-2" /> Install
               </Button>
               <ManagerSync
-                manifestUrl={taggedInstallUrl}
+                baseInstallUrl={identity.installUrl}
+                currentProfileTags={selectedTags}
                 onSynced={() => { markManifestInstalled(); }}
               />
             </div>

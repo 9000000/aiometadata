@@ -1,3 +1,4 @@
+const { tvdbLanguageChain, pickArtwork }: any = require('../utils/tvdbLanguage');
 import { config } from 'dotenv';
 config();
 import { cacheWrapTvdbApi, stableStringify } from './getCache.js';
@@ -1145,8 +1146,7 @@ const findArtwork = (artworks, type, lang, config) => {
       || artworks?.find(a => a.type === type)?.image;
   }
   // Otherwise use preferred language fallback
-  return artworks?.find(a => a.type === type && a.language === lang)?.image
-    || artworks?.find(a => a.type === type && a.language === 'eng')?.image
+  return pickArtwork(artworks, type, tvdbLanguageChain(lang), 'image')
     || artworks?.find(a => a.type === type)?.image;
 };
 

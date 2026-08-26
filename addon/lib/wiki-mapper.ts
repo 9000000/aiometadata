@@ -357,10 +357,11 @@ export function getSeriesByTvmaze(tvmazeId: string): IdMap | undefined {
 }
 
 // Generic lookup functions that return all IDs at once
-export function getByTvdbId(tvdbId: string): IdMap | undefined {
+export function getByTvdbId(tvdbId: string, type: 'series' | 'movie' = 'series'): IdMap | undefined {
   ensureInitialized();
   const tvdbIdNum = parseInt(tvdbId);
-  return isNaN(tvdbIdNum) ? undefined : seriesTvdbToAll.get(tvdbIdNum);
+  if (isNaN(tvdbIdNum)) return undefined;
+  return type === 'series' ? seriesTvdbToAll.get(tvdbIdNum) : moviesTvdbToAll.get(tvdbIdNum);
 }
 
 export function getByTmdbId(tmdbId: string, type: 'series' | 'movie' = 'series'): IdMap | undefined {

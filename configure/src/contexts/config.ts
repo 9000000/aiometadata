@@ -143,6 +143,24 @@ export type WatchTrackingConfig = Partial<
   Record<WatchTrackingService, WatchTrackingMediaTypes>
 >;
 
+/**
+ * One manager destination. The API key never lives here: keyId points at the row
+ * holding it, the same indirection the OAuth integrations use, so a shared config
+ * export cannot carry someone's credentials.
+ */
+export interface ManagerAccount {
+  id: string;
+  managerId: string;
+  label: string;
+  instanceUrl: string;
+  keyId?: string;
+  /** Tag profile this account receives. Empty or absent means the default install. */
+  profileTags?: string[];
+  /** Included when a manifest change offers to re-sync everything at once. */
+  autoSync?: boolean;
+  lastSyncedAt?: string;
+}
+
 export interface AppConfig {
   language: string;
   addonName: string;
@@ -208,11 +226,17 @@ export interface AppConfig {
     publicmetadb?: string;
     customDescriptionBlurb?: string;
   };
-  /** Addon manager integrations (AIOManager, etc.) for syncing the addon into the user's manager, keyed by manager id */
+  /**
+   * Legacy single-account manager credentials, keyed by manager id, with the API key
+   * stored inline. Read so an existing config migrates, never written.
+   * @deprecated superseded by managerAccounts
+   */
   managers?: Record<string, {
     instanceUrl?: string;
     apiKey?: string;
   }>;
+  /** Addon manager destinations. One entry is one account on one manager instance. */
+  managerAccounts?: ManagerAccount[];
   /** Poster rating provider: 'none' to disable rating posters, 'rpdb' for RatingPosterDB, 'top' for Top Poster API, or 'custom' for custom URL patterns */
   posterRatingProvider?: 'none' | 'rpdb' | 'top' | 'custom';
   usePosterProxy: boolean;

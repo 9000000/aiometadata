@@ -1050,6 +1050,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: 240,
   },
   {
+    key: 'MANAGER_SYNC_HOST_DELAY_MS',
+    envVar: 'MANAGER_SYNC_HOST_DELAY_MS',
+    label: 'Manager Sync Host Delay',
+    description: 'Pause between consecutive syncs to accounts on the same addon manager instance. Hydra rate limits reinstall at 10 per minute, so several accounts on one instance are spaced out rather than sent at once.',
+    category: 'Rate Limits',
+    type: 'number',
+    default: 400,
+  },
+  {
     key: 'JIKAN_MAX_CONCURRENT',
     envVar: 'JIKAN_MAX_CONCURRENT',
     label: 'Jikan Max Concurrent',

@@ -6,6 +6,7 @@ const imdb = require("./imdb");
 const tvmaze = require("./tvmaze");
 const { getImdbRating } = require("./getImdbRating");
 const { to3LetterCode } = require('./language-map');
+const { tvdbLanguageChain, pickTranslation, pickArtwork } = require('../utils/tvdbLanguage');
 const jikan = require('./mal');
 const TVDB_IMAGE_BASE = 'https://artworks.thetvdb.com';
 const idMapper = require('./id-mapper');
@@ -236,8 +237,7 @@ const findArtwork = (artworks, type, lang, config, typeToFind="image") => {
       || artworks?.find(a => a.type === type)?.[typeToFind];
   }
   // Otherwise use preferred language fallback
-  return artworks?.find(a => a.type === type && a.language === lang)?.[typeToFind]
-    || artworks?.find(a => a.type === type && a.language === 'eng')?.[typeToFind]
+  return pickArtwork(artworks, type, tvdbLanguageChain(lang), typeToFind)
     || artworks?.find(a => a.type === type)?.[typeToFind];
 };
 
@@ -336,7 +336,7 @@ async function getMeta(type, language, stremioId, config = {}, userUUID, include
              detectedAnimeMapping = fribbMapping;
         }
         else {
-            const wikiMap = wikiMappings.getByTvdbId(tvdbId);
+            const wikiMap = wikiMappings.getByTvdbId(tvdbId, 'movie');
             if (wikiMap && wikiMap.imdbId) {
                 const traktMapping = idMapper.getTraktAnimeMovieByImdbId(wikiMap.imdbId);
                 if (traktMapping) {
@@ -460,10 +460,11 @@ async function handleTvdbCollection(collectionId, language, config, userUUID) {
 
       const langCode3 = await to3LetterCode(language, config);
 
-      // Get translation with fallback
-      let translation = await tvdb.getCollectionTranslations(collectionId, langCode3, config);
-      if (!translation?.name) {
-        translation = await tvdb.getCollectionTranslations(collectionId, 'eng', config);
+      // Walk the language chain rather than dropping straight to English
+      let translation = null;
+      for (const code of tvdbLanguageChain(langCode3)) {
+        translation = await tvdb.getCollectionTranslations(collectionId, code, config);
+        if (translation?.name) break;
       }
 
       const name = translation?.name || details.name;
@@ -641,12 +642,10 @@ async function processMovieEntity(entity, langCode3, config) {
   const allIds = await resolveAllIds(`tvdb:${entity.movieId}`, 'movie', config, {}, ['imdb']);
 
   const nameTranslations = movie.translations?.nameTranslations || [];
-  const translatedName = nameTranslations.find(t => t.language === langCode3)?.name
-             || nameTranslations.find(t => t.language === 'eng')?.name
+  const translatedName = pickTranslation(nameTranslations, tvdbLanguageChain(langCode3), 'name')
              || movie.name;
   const overviewTranslations = movie.translations?.overviewTranslations || [];
-  const translatedOverview = overviewTranslations.find(t => t.language === langCode3)?.overview
-    || overviewTranslations.find(t => t.language === 'eng')?.overview
+  const translatedOverview = pickTranslation(overviewTranslations, tvdbLanguageChain(langCode3), 'overview')
     || movie.overview;
 
     const tvdbPosterUrl = findArtwork(movie.artworks, 14, langCode3, config, 'thumbnail') || findArtwork(movie.artworks, 14, langCode3, config, 'image') || `${host}/missing_thumbnail.png`;
@@ -677,8 +676,7 @@ async function processSeriesLink(entity, langCode3, config, genreSet) {
   collectGenresFromItems([series]).forEach(g => genreSet.add(g));
 
   const nameTranslations = series.translations?.nameTranslations || [];
-  const translatedName = nameTranslations.find(t => t.language === langCode3)?.name
-    || nameTranslations.find(t => t.language === 'eng')?.name
+  const translatedName = pickTranslation(nameTranslations, tvdbLanguageChain(langCode3), 'name')
     || series.name;
 
   const allIds = await resolveAllIds(`tvdb:${entity.seriesId}`, 'series', config, {}, ['imdb']);
@@ -1886,19 +1884,11 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
     seriesData.original_name
   );
 
-  // Build releaseInfo in format "first_year-last_year" or "first_year-" for ongoing series
-  let releaseInfo = "";
-  if (seriesData.first_air_date) {
-    const firstYear = seriesData.first_air_date.substring(0, 4);
-    const isOngoing = seriesData.status === 'Returning Series' || seriesData.status === 'In Production' || seriesData.status === 'Planned';
-    
-    if (isOngoing || !seriesData.last_air_date) {
-      releaseInfo = `${firstYear}-`;
-    } else {
-      const lastYear = seriesData.last_air_date.substring(0, 4);
-      releaseInfo = firstYear === lastYear ? firstYear : `${firstYear}-${lastYear}`;
-    }
-  }
+  const releaseInfo = Utils.buildReleaseInfo(
+    seriesData.first_air_date,
+    seriesData.last_air_date,
+    Utils.isTmdbSeriesOngoing(seriesData.status)
+  );
 
   const certification = Utils.getTmdbTvCertificationForCountry(seriesData.content_ratings);
   const userCountry = language?.split('-')[1];
@@ -1971,12 +1961,10 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
   const overviewLangCode3 = await to3LetterCode(config.overviewLanguage || language, config);
   const nameTranslations = movieData.translations?.nameTranslations || [];
   const overviewTranslations = movieData.translations?.overviewTranslations || [];
-  const translatedName = nameTranslations.find(t => t.language === langCode3)?.name
-             || nameTranslations.find(t => t.language === 'eng')?.name
+  const translatedName = pickTranslation(nameTranslations, tvdbLanguageChain(langCode3), 'name')
              || movieData.name;
-  const overview = overviewTranslations.find(t => t.language === overviewLangCode3)?.overview
-  || overviewTranslations.find(t => t.language === 'eng')?.overview
-  || movieData.overview;
+  const overview = pickTranslation(overviewTranslations, tvdbLanguageChain(overviewLangCode3), 'overview')
+    || movieData.overview;
   
   let idProvider = config.providers?.anime_id_provider || 'kitsu';
   if (idProvider === 'retain') {
@@ -2230,13 +2218,10 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
   const overviewLangCode3 = await to3LetterCode(config.overviewLanguage || language, config);
   const nameTranslations = tvdbShow.translations?.nameTranslations || [];
   const overviewTranslations = tvdbShow.translations?.overviewTranslations || [];
-  const translatedName = nameTranslations.find(t => t.language === langCode3)?.name
-             || nameTranslations.find(t => t.language === 'eng')?.name
-             || tvdbShow.name;
-             
-  const overview = overviewTranslations.find(t => t.language === overviewLangCode3)?.overview
-                   || overviewTranslations.find(t => t.language === 'eng')?.overview
-                   || tvdbShow.overview;
+  const langChain = tvdbLanguageChain(langCode3);
+  const overviewLangChain = tvdbLanguageChain(overviewLangCode3);
+  const translatedName = pickTranslation(nameTranslations, langChain, 'name') || tvdbShow.name;
+  const overview = pickTranslation(overviewTranslations, overviewLangChain, 'overview') || tvdbShow.overview;
   let imdbId = allIds?.imdbId;
   const tmdbId = allIds?.tmdbId;
   const tvdbId = tvdbShow.id;
@@ -2503,19 +2488,11 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
     logoUrl =  imdb.getLogoFromImdb(imdbId);
   }
  
-  // Build releaseInfo in format "first_year-last_year" or "first_year-" for ongoing series
-  let tvdbReleaseInfo = year || "";
-  if (tvdbShow.firstAired) {
-    const firstYear = tvdbShow.firstAired.substring(0, 4);
-    const isOngoing = tvdbShow.status?.name === 'Continuing' || !tvdbShow.lastAired;
-    
-    if (isOngoing) {
-      tvdbReleaseInfo = `${firstYear}-`;
-    } else {
-      const lastYear = tvdbShow.lastAired.substring(0, 4);
-      tvdbReleaseInfo = firstYear === lastYear ? firstYear : `${firstYear}-${lastYear}`;
-    }
-  }
+  const tvdbReleaseInfo = Utils.buildReleaseInfo(
+    tvdbShow.firstAired,
+    tvdbShow.lastAired,
+    tvdbShow.status?.name === 'Continuing'
+  ) || year || "";
 
   let certification = null;
   let certificationLocal = null;

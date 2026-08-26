@@ -525,7 +525,7 @@ async function fetchSimklWatchlistItems(
         // Case A: No cache -> Full Sync
         logger.debug(`Simkl ${status}: Performing FULL sync (Reason: No cache)`);
         
-        const url = `${SIMKL_BASE_URL}/sync/all-items/${status}?extended=full&next_watch_info=yes`;
+        const url = `${SIMKL_BASE_URL}/sync/all-items/${status}?extended=full&next_watch_info=yes&language=en`;
         const response: any = await makeAuthenticatedSimklRequest(url, accessToken, `Simkl Full Sync ${status}`);
         
         itemsToReturn = {
@@ -544,7 +544,7 @@ async function fetchSimklWatchlistItems(
           const lastSyncDate = cachedActivities?.all || new Date(0).toISOString();
           logger.debug(`Simkl ${status}: Performing INCREMENTAL sync (Since: ${lastSyncDate})`);
 
-          const url = `${SIMKL_BASE_URL}/sync/all-items/${status}?extended=full&next_watch_info=yes&date_from=${encodeURIComponent(lastSyncDate)}`;
+          const url = `${SIMKL_BASE_URL}/sync/all-items/${status}?extended=full&next_watch_info=yes&language=en&date_from=${encodeURIComponent(lastSyncDate)}`;
           const response: any = await makeAuthenticatedSimklRequest(url, accessToken, `Simkl Incremental Sync ${status}`);
 
           const updates = {

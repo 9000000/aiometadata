@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.16.1](https://github.com/cedya77/aiometadata/compare/v2.16.0...v2.16.1) (2026-08-27)
+
+
+### Bug Fixes
+
+* **cache:** stop warmed catalogs from lapsing between warm runs ([c461acf](https://github.com/cedya77/aiometadata/commit/c461acf84e3ad3dc292eb03dac9198600f4f035a))
+
 ## [2.16.0](https://github.com/cedya77/aiometadata/compare/v2.15.0...v2.16.0) (2026-08-27)
 
 

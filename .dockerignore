@@ -8,3 +8,10 @@ dist
 addon/data
 .next
 .cache
+.github
+.vscode
+.agent
+coverage
+*.log
+.DS_Store
+

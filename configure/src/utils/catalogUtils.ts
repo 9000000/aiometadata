@@ -82,7 +82,7 @@ export function createMDBListCatalog(options: MDBListCatalogOptions): CatalogCon
     list,
     sort = 'default',
     order = 'asc',
-    cacheTTL = 86400, // Default 24 hours
+    cacheTTL,
     genreSelection = 'standard',
     displayTypeOverrides,
     sourceUrl,
@@ -110,7 +110,7 @@ export function createMDBListCatalog(options: MDBListCatalogOptions): CatalogCon
     source: 'mdblist',
     sort,
     order,
-    cacheTTL,
+    ...(cacheTTL !== undefined && { cacheTTL }),
     genreSelection,
     enableRatingPosters: true,
     ...(displayType && { displayType }),
@@ -156,7 +156,7 @@ export function createMDBListUnifiedDynamicCatalog(
     lists,
     username,
     listSlug,
-    cacheTTL = 86400,
+    cacheTTL,
     genreSelection = 'standard',
     displayTypeOverrides,
     listUrl,
@@ -177,7 +177,7 @@ export function createMDBListUnifiedDynamicCatalog(
     sourceUrl: `https://api.mdblist.com/lists/${encodeURIComponent(username)}/${encodeURIComponent(listSlug)}/items`,
     sort: 'default',
     order: 'asc',
-    cacheTTL,
+    ...(cacheTTL !== undefined && { cacheTTL }),
     genreSelection,
     enableRatingPosters: true,
     ...(displayType && { displayType }),
@@ -282,7 +282,7 @@ export function createLetterboxdCatalog(options: LetterboxdCatalogOptions): Cata
     itemCount = 0,
     isWatchlist,
     url,
-    cacheTTL = 86400, // Default 24 hours
+    cacheTTL,
     displayTypeOverrides,
   } = options;
 
@@ -295,7 +295,7 @@ export function createLetterboxdCatalog(options: LetterboxdCatalogOptions): Cata
     enabled: true,
     showInHome: true,
     source: 'letterboxd',
-    cacheTTL,
+    ...(cacheTTL !== undefined && { cacheTTL }),
     enableRatingPosters: true,
     ...(displayType && { displayType }),
     metadata: {
@@ -327,7 +327,6 @@ export interface TvdbListPreview {
 export interface TvdbListCatalogOptions {
   list: TvdbListPreview;
   mode?: 'all' | 'split';
-  cacheTTL?: number;
   displayTypeOverrides?: { movie?: string; series?: string };
 }
 
@@ -336,7 +335,7 @@ export interface TvdbListCatalogOptions {
  * collapses to one catalog, whatever the mode asks for.
  */
 export function createTvdbListCatalogs(options: TvdbListCatalogOptions): CatalogConfig[] {
-  const { list, mode = 'all', cacheTTL, displayTypeOverrides } = options;
+  const { list, mode = 'all', displayTypeOverrides } = options;
 
   const listId = String(list.id);
   const listUrl = list.url || `https://thetvdb.com/lists/${list.slug || listId}`;
@@ -361,7 +360,6 @@ export function createTvdbListCatalogs(options: TvdbListCatalogOptions): Catalog
     showInHome: true,
     source: 'tvdb',
     enableRatingPosters: true,
-    ...(cacheTTL ? { cacheTTL } : {}),
     ...(getDisplayTypeOverride(type, displayTypeOverrides)
       ? { displayType: getDisplayTypeOverride(type, displayTypeOverrides) }
       : {}),
@@ -468,7 +466,7 @@ export function createCustomManifestCatalog(options: CustomManifestCatalogOption
     manifest,
     catalog,
     manifestUrl,
-    cacheTTL = 86400, // Default 24 hours
+    cacheTTL,
     displayTypeOverrides,
   } = options;
 
@@ -492,7 +490,7 @@ export function createCustomManifestCatalog(options: CustomManifestCatalogOption
     source: 'custom',
     sourceUrl: catalogUrl,
     genres: catalog.genres || [],
-    cacheTTL,
+    ...(cacheTTL !== undefined && { cacheTTL }),
     enableRatingPosters: true,
     manifestData: {
       ...catalog,

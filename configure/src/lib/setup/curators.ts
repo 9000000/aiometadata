@@ -151,7 +151,6 @@ export function buildCuratorCatalogs(lists: CuratorList[], catalogTTL: number): 
       source: 'mdblist',
       sort: 'default',
       order: 'asc',
-      cacheTTL: catalogTTL,
       genreSelection: 'standard',
       enableRatingPosters: true,
       ...(displayType ? { displayType } : {}),

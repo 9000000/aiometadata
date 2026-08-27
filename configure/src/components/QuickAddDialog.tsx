@@ -221,7 +221,6 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
           if (catalogExists(catalogId) || newCatalogs.some(c => c.id === catalogId)) continue;
           newCatalogs.push(createMDBListCatalog({
             list,
-            cacheTTL: catalogTTL,
             displayTypeOverrides: config.displayTypeOverrides,
             listUrl,
           }));
@@ -324,7 +323,6 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
             items: item?.itemCount,
             user_name: item?.author,
           },
-          cacheTTL: catalogTTL,
           displayTypeOverrides: config.displayTypeOverrides,
         });
 
@@ -572,7 +570,6 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
         itemCount,
         isWatchlist,
         url: parsedUrl.url,
-        cacheTTL: catalogTTL,
         displayTypeOverrides: config.displayTypeOverrides,
       });
 
@@ -618,7 +615,6 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
       const newCatalogs = createTvdbListCatalogs({
         list,
         mode: 'all',
-        cacheTTL: catalogTTL,
         displayTypeOverrides: config.displayTypeOverrides,
       });
 
@@ -674,7 +670,6 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
 
       const newCatalog = createTmdbCollectionCatalog({
         collection,
-        cacheTTL: catalogTTL,
         displayTypeOverrides: config.displayTypeOverrides,
       });
 
@@ -769,7 +764,6 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
           manifest,
           catalog,
           manifestUrl: parsedUrl.url,
-          cacheTTL: catalogTTL,
           displayTypeOverrides: config.displayTypeOverrides,
         });
 
@@ -1098,7 +1092,6 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
                   lists,
                   username,
                   listSlug,
-                  cacheTTL: catalogTTL,
                   displayTypeOverrides: config.displayTypeOverrides,
                   listUrl,
                 });
@@ -1127,7 +1120,6 @@ export function QuickAddDialog({ isOpen, onClose }: QuickAddDialogProps) {
                   if (catalogExists(catalogId) || newCatalogs.some(c => c.id === catalogId)) continue;
                   newCatalogs.push(createMDBListCatalog({
                     list,
-                    cacheTTL: catalogTTL,
                     displayTypeOverrides: config.displayTypeOverrides,
                     listUrl,
                   }));

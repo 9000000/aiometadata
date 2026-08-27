@@ -17,6 +17,7 @@ import { StreamingTop10Integration } from './StreamingTop10Integration';
 import { AIOMetadataIntegration } from './AIOMetadataIntegration';
 import { QuickAddDialog } from '@/components/QuickAddDialog';
 import { AICatalogDialog } from '@/components/AICatalogDialog';
+import { CacheTTLField } from '@/components/CacheTTLField';
 import { useConfig } from '@/contexts/ConfigContext';
 import type { CatalogConfig } from '@/contexts/config';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, TouchSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core';
@@ -37,6 +38,7 @@ import { Switch } from "@/components/ui/switch";
 import { streamingServices, regions } from "@/data/streamings";
 import { consumeCollectionBuilderRequest } from '@/lib/settingsRoute';
 import { allCatalogDefinitions } from '@/data/catalogs';
+import { resolveCatalogTTL, minCacheTTLFor, hasEditableCacheTTL } from '@/lib/catalogTTL';
 import { GenreSelection } from '@/data/genres';
 import { SelectionProvider, useSelection } from '@/contexts/SelectionContext';
 import { BulkActionBar } from '@/components/BulkActionBar';
@@ -353,7 +355,7 @@ const MDBListSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogC
   const { setConfig, catalogTTL, config } = useConfig();
   const [sort, setSort] = useState<'rank' | 'score' | 'usort' | 'score_average' | 'released' | 'releasedigital' | 'imdbrating' | 'imdbvotes' | 'last_air_date' | 'imdbpopular' | 'tmdbpopular' | 'rogerbert' | 'rtomatoes' | 'rtaudience' | 'metacritic' | 'myanimelist' | 'letterrating' | 'lettervotes' | 'budget' | 'revenue' | 'runtime' | 'title' | 'added' | 'random' | 'default'>((catalog.sort as any) || 'default');
   const [order, setOrder] = useState<'asc' | 'desc'>(catalog.order || 'asc');
-  const [cacheTTL, setCacheTTL] = useState<number>(catalog.cacheTTL || catalogTTL);
+  const [cacheTTL, setCacheTTL] = useState<number | null>(catalog.cacheTTL ?? null);
   const [genreSelection, setGenreSelection] = useState<GenreSelection>(catalog.genreSelection || 'standard');
   const [enableRatingPosters, setEnableRatingPosters] = useState<boolean>(catalog.enableRatingPosters !== false);
   const [filterScoreMin, setFilterScoreMin] = useState<number | undefined>(catalog.filter_score_min);
@@ -368,7 +370,7 @@ const MDBListSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogC
   const isUpNext = catalog.id === 'mdblist.upnext';
   const isWatchlist = catalog.id.startsWith('mdblist.watchlist');
   const isDiscover = catalog.id.startsWith('mdblist.discover.');
-  const minCacheTTL = (isUpNext || isWatchlist) ? 0 : 300;
+  const minCacheTTL = minCacheTTLFor(catalog.id);
   const showSortOptions = !isUpNext && !isDiscover;
   const showScoreFilters = supportsMdblistScoreFilters(catalog);
 
@@ -387,7 +389,7 @@ const MDBListSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogC
             ...c,
             sort,
             order,
-            cacheTTL: Math.max(cacheTTL, minCacheTTL),
+            cacheTTL: resolveCatalogTTL(cacheTTL, minCacheTTL),
             genreSelection,
             enableRatingPosters,
             filter_score_min: filterScoreMin,
@@ -527,36 +529,15 @@ const MDBListSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogC
               </p>
             </div>
           ) : (
-            <div className="space-y-2">
-              <Label>Cache TTL (seconds)</Label>
-              <div className="flex items-center space-x-2">
-                <input
-                  type="number"
-                  value={cacheTTL}
-                  onChange={(e) => {
-                    const parsed = parseInt(e.target.value);
-                    setCacheTTL(Number.isNaN(parsed) ? catalogTTL : parsed);
-                  }}
-                  min={minCacheTTL}
-                  max="604800"
-                  step={minCacheTTL === 0 ? 60 : 3600}
-                  className="flex-1 px-3 py-2 border border-input bg-background rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                  placeholder={catalogTTL.toString()}
-                />
-                <span className="text-sm text-muted-foreground whitespace-nowrap">
-                  {cacheTTL === 0
-                    ? '(no cache)'
-                    : cacheTTL < 60
-                      ? `(${cacheTTL}s)`
-                      : `(${Math.floor(cacheTTL / 3600)}h ${Math.floor((cacheTTL % 3600) / 60)}m)`}
-                </span>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {minCacheTTL === 0
-                  ? 'How long to cache this list before refreshing. Up to 7 days, or 0 to disable caching so every load hits MDBList.'
-                  : 'How long to cache this list before refreshing. Range: 5 minutes to 7 days.'}
-              </p>
-            </div>
+            <CacheTTLField
+              value={cacheTTL}
+              onChange={setCacheTTL}
+              min={minCacheTTL}
+              step={minCacheTTL === 0 ? 60 : 3600}
+              help={minCacheTTL === 0
+                ? 'How long to cache this list before refreshing. Up to 7 days, or 0 to disable caching so every load hits MDBList.'
+                : 'How long to cache this list before refreshing. Range: 5 minutes to 7 days.'}
+            />
           )}
           <div className="space-y-2">
             <Label>Genre Selection</Label>
@@ -681,7 +662,7 @@ const TraktSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogCon
   const { setConfig, catalogTTL, config } = useConfig();
   const [sort, setSort] = useState<TraktSortOption>(catalog.sort as TraktSortOption || 'default');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>(catalog.sortDirection as 'asc' | 'desc' || 'asc');
-  const [cacheTTL, setCacheTTL] = useState<number>(catalog.cacheTTL || catalogTTL);
+  const [cacheTTL, setCacheTTL] = useState<number | null>(catalog.cacheTTL ?? null);
   const [useShowPoster, setUseShowPoster] = useState<boolean>(catalog.metadata?.useShowPosterForUpNext || false);
   const [hideWatchedTrakt, setHideWatchedTrakt] = useState<string>(catalog.metadata?.hideWatchedTrakt === true ? 'on' : catalog.metadata?.hideWatchedTrakt === false ? 'off' : 'global');
   const [hideWatchedAnilist, setHideWatchedAnilist] = useState<string>(catalog.metadata?.hideWatchedAnilist === true ? 'on' : catalog.metadata?.hideWatchedAnilist === false ? 'off' : 'global');
@@ -696,7 +677,7 @@ const TraktSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogCon
     return 1;
   });
   
-  const minCacheTTL = 300; // 5 minutes minimum for all Trakt catalogs
+  const minCacheTTL = minCacheTTLFor(catalog.id);
   const isUpNext = catalog.id === 'trakt.upnext';
   const isCalendar = catalog.id === 'trakt.calendar';
   const showSortOptions = !catalog.id.startsWith('trakt.trending.') && !catalog.id.startsWith('trakt.popular.') && !catalog.id.startsWith('trakt.anticipated.') && catalog.id !== 'trakt.upnext';
@@ -714,7 +695,7 @@ const TraktSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogCon
               ...c,
               sort,
               sortDirection,
-              cacheTTL: Math.max(cacheTTL, minCacheTTL),
+              cacheTTL: resolveCatalogTTL(cacheTTL, minCacheTTL),
               metadata: {
                 ...c.metadata,
                 ...(isUpNext && { useShowPosterForUpNext: useShowPoster }),
@@ -792,18 +773,12 @@ const TraktSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogCon
             </>
           )}
 
-          <div className="space-y-2">
-            <Label>Cache TTL (seconds)</Label>
-            <Input
-              type="number"
-              min={5}
-              value={cacheTTL}
-              onChange={(e) => setCacheTTL(Number(e.target.value) || 0)}
-            />
-            <p className="text-xs text-muted-foreground">
-              Minimum 5 minutes to avoid excessive API calls
-            </p>
-          </div>
+          <CacheTTLField
+            value={cacheTTL}
+            onChange={setCacheTTL}
+            min={minCacheTTL}
+            help="Minimum 5 minutes to avoid excessive API calls"
+          />
 
           {isUpNext && (
             <div className="space-y-2">
@@ -929,7 +904,7 @@ const TraktSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogCon
 
 const SimklSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogConfig, isOpen: boolean, onClose: () => void }) => {
   const { setConfig, catalogTTL, config } = useConfig();
-  const [cacheTTL, setCacheTTL] = useState<number>(catalog.cacheTTL || catalogTTL);
+  const [cacheTTL, setCacheTTL] = useState<number | null>(catalog.cacheTTL ?? null);
   const isTrending = catalog.id.startsWith('simkl.trending.');
   const isWatchlist = catalog.id.startsWith('simkl.watchlist.');
   const isCalendar = catalog.id.startsWith('simkl.calendar');
@@ -951,7 +926,7 @@ const SimklSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogCon
     return 1;
   });
 
-  const minCacheTTL = isTrending ? 3600 : 300;
+  const minCacheTTL = minCacheTTLFor(catalog.id);
 
   const handleSave = () => {
     const hideTraktValue = hideWatchedTrakt === 'on' ? true : hideWatchedTrakt === 'off' ? false : undefined;
@@ -964,7 +939,7 @@ const SimklSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogCon
         c.id === catalog.id && c.type === catalog.type
           ? {
               ...c,
-              cacheTTL: Math.max(cacheTTL, minCacheTTL),
+              cacheTTL: resolveCatalogTTL(cacheTTL, minCacheTTL),
               metadata: {
                 ...c.metadata,
                 // Only include pageSize for trending (watchlists use local pagination)
@@ -1001,18 +976,14 @@ const SimklSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogCon
         </DialogHeader>
         <div className="space-y-4 py-4">
           {!isWatchlist && (
-            <div className="space-y-2">
-              <Label>Cache TTL (seconds)</Label>
-              <Input
-                type="number"
-                min={5}
-                value={cacheTTL}
-                onChange={(e) => setCacheTTL(Number(e.target.value) || 0)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Minimum 5 minutes to avoid excessive API calls
-              </p>
-            </div>
+            <CacheTTLField
+              value={cacheTTL}
+              onChange={setCacheTTL}
+              min={minCacheTTL}
+              help={minCacheTTL === 3600
+                ? 'Minimum 1 hour to avoid excessive API calls'
+                : 'Minimum 5 minutes to avoid excessive API calls'}
+            />
           )}
           
           {isTrending && (
@@ -1189,7 +1160,7 @@ const MOVIELENS_SORT_OPTIONS = [
 
 const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogConfig, isOpen: boolean, onClose: () => void }) => {
   const { setConfig, catalogTTL, config } = useConfig();
-  const [cacheTTL, setCacheTTL] = useState<number>(catalog.cacheTTL || catalogTTL);
+  const [cacheTTL, setCacheTTL] = useState<number | null>(catalog.cacheTTL ?? null);
   const isWatchlist = catalog.id === 'movielens.watchlist' || catalog.id.startsWith('movielens.list.');
   const savedSort = catalog.metadata?.sortBy;
   const [sortBy, setSortBy] = useState<string>(
@@ -1222,7 +1193,7 @@ const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catalo
         c.id === catalog.id && c.type === catalog.type
           ? {
               ...c,
-              cacheTTL: Math.max(cacheTTL, 300),
+              cacheTTL: resolveCatalogTTL(cacheTTL, minCacheTTLFor(catalog.id)),
               metadata: {
                 ...c.metadata,
                 ...(!isWatchlist && {
@@ -1318,18 +1289,12 @@ const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catalo
               </div>
             </>
           )}
-          <div className="space-y-2">
-            <Label>Cache TTL (seconds)</Label>
-            <Input
-              type="number"
-              min={300}
-              value={cacheTTL}
-              onChange={(e) => setCacheTTL(Number(e.target.value) || 0)}
-            />
-            <p className="text-xs text-muted-foreground">
-              Minimum 5 minutes ({Math.floor(cacheTTL / 3600)}h {Math.floor((cacheTTL % 3600) / 60)}m)
-            </p>
-          </div>
+          <CacheTTLField
+            value={cacheTTL}
+            onChange={setCacheTTL}
+            min={minCacheTTLFor(catalog.id)}
+            help="Minimum 5 minutes to avoid excessive API calls"
+          />
           {config.apiKeys?.traktTokenId && (
             <div className="space-y-2">
               <Label>Hide Trakt Watched</Label>
@@ -1415,7 +1380,7 @@ const MovieLensSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catalo
 
 const LetterboxdSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogConfig, isOpen: boolean, onClose: () => void }) => {
   const { setConfig, catalogTTL, config } = useConfig();
-  const [cacheTTL, setCacheTTL] = useState<number>(catalog.cacheTTL || catalogTTL);
+  const [cacheTTL, setCacheTTL] = useState<number | null>(catalog.cacheTTL ?? null);
   const [enableRatingPosters, setEnableRatingPosters] = useState<boolean>(catalog.enableRatingPosters !== false);
   const [hideWatchedTrakt, setHideWatchedTrakt] = useState<string>(catalog.metadata?.hideWatchedTrakt === true ? 'on' : catalog.metadata?.hideWatchedTrakt === false ? 'off' : 'global');
   const [hideWatchedAnilist, setHideWatchedAnilist] = useState<string>(catalog.metadata?.hideWatchedAnilist === true ? 'on' : catalog.metadata?.hideWatchedAnilist === false ? 'off' : 'global');
@@ -1433,7 +1398,7 @@ const LetterboxdSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catal
       ...prev,
       catalogs: prev.catalogs.map(c =>
         c.id === catalog.id && c.type === catalog.type
-          ? { ...c, cacheTTL: Math.max(cacheTTL, 7200), enableRatingPosters, metadata: { ...c.metadata, hideWatchedTrakt: hideTraktValue, hideWatchedAnilist: hideAnilistValue, hideWatchedMdblist: hideMdblistValue, hideWatchedSimkl: hideSimklValue, hideUnreleasedDigital: hideUnreleasedDigitalValue } }
+          ? { ...c, cacheTTL: resolveCatalogTTL(cacheTTL, minCacheTTLFor(catalog.id)), enableRatingPosters, metadata: { ...c.metadata, hideWatchedTrakt: hideTraktValue, hideWatchedAnilist: hideAnilistValue, hideWatchedMdblist: hideMdblistValue, hideWatchedSimkl: hideSimklValue, hideUnreleasedDigital: hideUnreleasedDigitalValue } }
           : c
       )
     }));
@@ -1446,23 +1411,13 @@ const LetterboxdSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catal
           <DialogTitle>Letterboxd Catalog Settings</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 py-4">
-          <div className="space-y-2">
-            <Label htmlFor="letterboxd-cache-ttl">Cache TTL (seconds)</Label>
-            <Input
-              id="letterboxd-cache-ttl"
-              type="number"
-              value={cacheTTL}
-              onChange={(e) => setCacheTTL(parseInt(e.target.value) || catalogTTL)}
-              min="7200"
-              max="604800"
-              step="3600"
-              className="flex-1 px-3 py-2 border border-input bg-background rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-              placeholder={catalogTTL.toString()}
-            />
-            <p className="text-xs text-muted-foreground">
-              How long to cache this catalog before refreshing. Range: 2 hours to 7 days.
-            </p>
-          </div>
+          <CacheTTLField
+            id="letterboxd-cache-ttl"
+            value={cacheTTL}
+            onChange={setCacheTTL}
+            min={minCacheTTLFor(catalog.id)}
+            help="How long to cache this catalog before refreshing. Range: 2 hours to 7 days."
+          />
           {(config.apiKeys?.rpdb || config.apiKeys?.topPoster || config.customPosterUrlPattern) && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -1739,7 +1694,7 @@ const TMDBSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogConf
 
 const CustomManifestSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogConfig, isOpen: boolean, onClose: () => void }) => {
   const { setConfig, catalogTTL, config } = useConfig();
-  const [cacheTTL, setCacheTTL] = useState<number>(catalog.cacheTTL || catalogTTL);
+  const [cacheTTL, setCacheTTL] = useState<number | null>(catalog.cacheTTL ?? null);
   const [enableRatingPosters, setEnableRatingPosters] = useState<boolean>(catalog.enableRatingPosters !== false);
   const [hideWatchedTrakt, setHideWatchedTrakt] = useState<string>(catalog.metadata?.hideWatchedTrakt === true ? 'on' : catalog.metadata?.hideWatchedTrakt === false ? 'off' : 'global');
   const [hideWatchedAnilist, setHideWatchedAnilist] = useState<string>(catalog.metadata?.hideWatchedAnilist === true ? 'on' : catalog.metadata?.hideWatchedAnilist === false ? 'off' : 'global');
@@ -1757,7 +1712,7 @@ const CustomManifestSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: C
       ...prev,
       catalogs: prev.catalogs.map(c =>
         c.id === catalog.id && c.type === catalog.type
-          ? { ...c, cacheTTL: Math.max(cacheTTL, 300), enableRatingPosters, metadata: { ...c.metadata, hideWatchedTrakt: hideTraktValue, hideWatchedAnilist: hideAnilistValue, hideWatchedMdblist: hideMdblistValue, hideWatchedSimkl: hideSimklValue, hideUnreleasedDigital: hideUnreleasedDigitalValue } }
+          ? { ...c, cacheTTL: resolveCatalogTTL(cacheTTL, minCacheTTLFor(catalog.id)), enableRatingPosters, metadata: { ...c.metadata, hideWatchedTrakt: hideTraktValue, hideWatchedAnilist: hideAnilistValue, hideWatchedMdblist: hideMdblistValue, hideWatchedSimkl: hideSimklValue, hideUnreleasedDigital: hideUnreleasedDigitalValue } }
           : c
       )
     }));
@@ -1771,28 +1726,13 @@ const CustomManifestSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: C
           <DialogTitle>Custom Manifest Settings</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 py-4">
-          <div className="space-y-2">
-            <Label htmlFor="custom-cache-ttl">Cache TTL (seconds)</Label>
-            <div className="flex items-center space-x-2">
-              <input
-                id="custom-cache-ttl"
-                type="number"
-                value={cacheTTL}
-                onChange={(e) => setCacheTTL(parseInt(e.target.value) || catalogTTL)}
-                min="300"
-                max="604800"
-                step="3600"
-                className="flex-1 px-3 py-2 border border-input bg-background rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                placeholder={catalogTTL.toString()}
-              />
-              <span className="text-sm text-muted-foreground whitespace-nowrap">
-                ({Math.floor(cacheTTL / 3600)}h {Math.floor((cacheTTL % 3600) / 60)}m)
-              </span>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              How long to cache this catalog before refreshing. Range: 5 minutes to 7 days.
-            </p>
-          </div>
+          <CacheTTLField
+            id="custom-cache-ttl"
+            value={cacheTTL}
+            onChange={setCacheTTL}
+            min={minCacheTTLFor(catalog.id)}
+            help="How long to cache this catalog before refreshing. Range: 5 minutes to 7 days."
+          />
           {(config.apiKeys?.rpdb || config.apiKeys?.topPoster || config.customPosterUrlPattern) && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -1897,7 +1837,7 @@ const AniListSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogC
   const { setConfig, catalogTTL, config } = useConfig();
   const [sort, setSort] = useState<AniListSortOption>(catalog.sort as AniListSortOption || 'ADDED_TIME');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>(catalog.sortDirection as 'asc' | 'desc' || 'desc');
-  const [cacheTTL, setCacheTTL] = useState<number>(catalog.cacheTTL || catalogTTL);
+  const [cacheTTL, setCacheTTL] = useState<number | null>(catalog.cacheTTL ?? null);
   const [hideWatchedTrakt, setHideWatchedTrakt] = useState<string>(catalog.metadata?.hideWatchedTrakt === true ? 'on' : catalog.metadata?.hideWatchedTrakt === false ? 'off' : 'global');
   const [hideWatchedAnilist, setHideWatchedAnilist] = useState<string>(catalog.metadata?.hideWatchedAnilist === true ? 'on' : catalog.metadata?.hideWatchedAnilist === false ? 'off' : 'global');
   const [hideWatchedMdblist, setHideWatchedMdblist] = useState<string>(catalog.metadata?.hideWatchedMdblist === true ? 'on' : catalog.metadata?.hideWatchedMdblist === false ? 'off' : 'global');
@@ -1914,7 +1854,7 @@ const AniListSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogC
       ...prev,
       catalogs: prev.catalogs.map(c =>
         c.id === catalog.id && c.type === catalog.type
-          ? { ...c, sort, sortDirection, cacheTTL: Math.max(cacheTTL, 300), metadata: { ...c.metadata, hideWatchedTrakt: hideTraktValue, hideWatchedAnilist: hideAnilistValue, hideWatchedMdblist: hideMdblistValue, hideWatchedSimkl: hideSimklValue, hideUnreleasedDigital: hideUnreleasedDigitalValue } }
+          ? { ...c, sort, sortDirection, cacheTTL: resolveCatalogTTL(cacheTTL, minCacheTTLFor(catalog.id)), metadata: { ...c.metadata, hideWatchedTrakt: hideTraktValue, hideWatchedAnilist: hideAnilistValue, hideWatchedMdblist: hideMdblistValue, hideWatchedSimkl: hideSimklValue, hideUnreleasedDigital: hideUnreleasedDigitalValue } }
           : c
       )
     }));
@@ -1955,28 +1895,13 @@ const AniListSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogC
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="anilist-cache-ttl">Cache TTL (seconds)</Label>
-            <div className="flex items-center space-x-2">
-              <input
-                id="anilist-cache-ttl"
-                type="number"
-                value={cacheTTL}
-                onChange={(e) => setCacheTTL(parseInt(e.target.value) || catalogTTL)}
-                min="300"
-                max="604800"
-                step="3600"
-                className="flex-1 px-3 py-2 border border-input bg-background rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                placeholder={catalogTTL.toString()}
-              />
-              <span className="text-sm text-muted-foreground whitespace-nowrap">
-                ({Math.floor(cacheTTL / 3600)}h {Math.floor((cacheTTL % 3600) / 60)}m)
-              </span>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              How long to cache this catalog before refreshing. Range: 5 minutes to 7 days.
-            </p>
-          </div>
+          <CacheTTLField
+            id="anilist-cache-ttl"
+            value={cacheTTL}
+            onChange={setCacheTTL}
+            min={minCacheTTLFor(catalog.id)}
+            help="How long to cache this catalog before refreshing. Range: 5 minutes to 7 days."
+          />
           {config.apiKeys?.traktTokenId && (
             <div className="space-y-2">
               <Label>Hide Trakt Watched</Label>
@@ -2218,9 +2143,8 @@ const StreamingSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: Catalo
 const PMDBSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogConfig, isOpen: boolean, onClose: () => void }) => {
   const { setConfig, catalogTTL, config } = useConfig();
   const isWatchlist = catalog.id === 'publicmetadb.upnext';
-  const minCacheTTL = isWatchlist ? 900 : 10800;
-  const defaultTTL = isWatchlist ? 900 : Math.max(catalogTTL, minCacheTTL);
-  const [cacheTTL, setCacheTTL] = useState<number>(catalog.cacheTTL || defaultTTL);
+  const minCacheTTL = minCacheTTLFor(catalog.id);
+  const [cacheTTL, setCacheTTL] = useState<number | null>(catalog.cacheTTL ?? null);
   const [hideWatchedTrakt, setHideWatchedTrakt] = useState<string>(catalog.metadata?.hideWatchedTrakt === true ? 'on' : catalog.metadata?.hideWatchedTrakt === false ? 'off' : 'global');
   const [hideWatchedAnilist, setHideWatchedAnilist] = useState<string>(catalog.metadata?.hideWatchedAnilist === true ? 'on' : catalog.metadata?.hideWatchedAnilist === false ? 'off' : 'global');
   const [hideWatchedMdblist, setHideWatchedMdblist] = useState<string>(catalog.metadata?.hideWatchedMdblist === true ? 'on' : catalog.metadata?.hideWatchedMdblist === false ? 'off' : 'global');
@@ -2237,7 +2161,7 @@ const PMDBSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogConf
       ...prev,
       catalogs: prev.catalogs.map(c =>
         c.id === catalog.id && c.type === catalog.type
-          ? { ...c, cacheTTL: Math.max(cacheTTL, minCacheTTL), metadata: { ...c.metadata, hideWatchedTrakt: hideTraktValue, hideWatchedAnilist: hideAnilistValue, hideWatchedMdblist: hideMdblistValue, hideWatchedSimkl: hideSimklValue, hideUnreleasedDigital: hideUnreleasedDigitalValue } }
+          ? { ...c, cacheTTL: resolveCatalogTTL(cacheTTL, minCacheTTL), metadata: { ...c.metadata, hideWatchedTrakt: hideTraktValue, hideWatchedAnilist: hideAnilistValue, hideWatchedMdblist: hideMdblistValue, hideWatchedSimkl: hideSimklValue, hideUnreleasedDigital: hideUnreleasedDigitalValue } }
           : c
       )
     }));
@@ -2251,29 +2175,15 @@ const PMDBSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogConf
           <DialogTitle>PMDB Settings</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 py-4">
-          <div className="space-y-2">
-            <Label>Cache TTL (seconds)</Label>
-            <div className="flex items-center space-x-2">
-              <input
-                type="number"
-                value={cacheTTL}
-                onChange={(e) => setCacheTTL(parseInt(e.target.value) || catalogTTL)}
-                min={minCacheTTL}
-                max="604800"
-                step={isWatchlist ? 900 : 3600}
-                className="flex-1 px-3 py-2 border border-input bg-background rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                placeholder={catalogTTL.toString()}
-              />
-              <span className="text-sm text-muted-foreground whitespace-nowrap">
-                ({Math.floor(cacheTTL / 3600)}h {Math.floor((cacheTTL % 3600) / 60)}m)
-              </span>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {isWatchlist
-                ? 'Minimum 15 minutes for watchlist. Range: 15 minutes to 7 days.'
-                : 'Minimum 3 hours for lists and picks. Range: 3 hours to 7 days.'}
-            </p>
-          </div>
+          <CacheTTLField
+            value={cacheTTL}
+            onChange={setCacheTTL}
+            min={minCacheTTL}
+            step={isWatchlist ? 900 : 3600}
+            help={isWatchlist
+              ? 'Minimum 15 minutes for watchlist. Range: 15 minutes to 7 days.'
+              : 'Minimum 3 hours for lists and picks. Range: 3 hours to 7 days.'}
+          />
           {config.apiKeys?.traktTokenId && (
             <div className="space-y-2">
               <Label>Hide Trakt Watched</Label>
@@ -4660,6 +4570,55 @@ function CatalogsSettingsContent({
     }
   };
 
+  const handleBulkSetCacheTTL = (ttl: number) => {
+    setIsLoading(true);
+    try {
+      const targets = selectedCatalogs.filter(c => hasEditableCacheTTL(c.id));
+      setConfig(prev => ({
+        ...prev,
+        catalogs: prev.catalogs.map(c => {
+          const catalogKey = `${c.id}-${c.type}`;
+          if (targets.some(cat => `${cat.id}-${cat.type}` === catalogKey)) {
+            return { ...c, cacheTTL: Math.max(ttl, minCacheTTLFor(c.id)) };
+          }
+          return c;
+        })
+      }));
+      const skipped = selectedCatalogs.length - targets.length;
+      toast.success(
+        `Cache TTL set for ${targets.length} catalog${targets.length === 1 ? '' : 's'}` +
+        (skipped > 0 ? ` (${skipped} without a custom TTL left alone)` : '')
+      );
+    } catch (error) {
+      showBulkActionError('set cache TTL', error as Error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleBulkResetCacheTTL = () => {
+    setIsLoading(true);
+    try {
+      const count = selectedCatalogs.filter(c => c.cacheTTL !== undefined).length;
+      setConfig(prev => ({
+        ...prev,
+        catalogs: prev.catalogs.map(c => {
+          const catalogKey = `${c.id}-${c.type}`;
+          if (selectedCatalogs.some(cat => `${cat.id}-${cat.type}` === catalogKey)) {
+            const { cacheTTL, ...rest } = c as any;
+            return rest;
+          }
+          return c;
+        })
+      }));
+      toast.success(`Cache TTL reset to the instance default for ${count} catalog${count === 1 ? '' : 's'}`);
+    } catch (error) {
+      showBulkActionError('reset cache TTL', error as Error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleBulkFindReplaceType = (find: string, replace: string) => {
     setIsLoading(true);
     try {
@@ -5348,6 +5307,8 @@ function CatalogsSettingsContent({
           onDisableRandomize={handleBulkDisableRandomize}
           onSetDisplayType={handleBulkSetDisplayType}
           onResetDisplayType={handleBulkResetDisplayType}
+          onSetCacheTTL={handleBulkSetCacheTTL}
+          onResetCacheTTL={handleBulkResetCacheTTL}
           onFindReplaceType={handleBulkFindReplaceType}
           onMergeSelected={openMergeDialog}
           hasRatingPostersKey={config.posterRatingProvider !== 'none' && (!!config.apiKeys?.rpdb || !!config.apiKeys?.topPoster || !!config.customPosterUrlPattern)}

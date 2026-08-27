@@ -139,7 +139,6 @@ export function ProviderListSearch({
           created = [
             createMDBListCatalog({
               list: result.raw,
-              cacheTTL: catalogTTL,
               displayTypeOverrides: config.displayTypeOverrides,
             }),
           ];
@@ -147,7 +146,6 @@ export function ProviderListSearch({
           created = createTvdbListCatalogs({
             list: result.raw,
             mode: 'all',
-            cacheTTL: catalogTTL,
             displayTypeOverrides: config.displayTypeOverrides,
           });
         } else {
@@ -158,7 +156,6 @@ export function ProviderListSearch({
           created = [
             createTmdbCollectionCatalog({
               collection,
-              cacheTTL: catalogTTL,
               displayTypeOverrides: config.displayTypeOverrides,
             }),
           ];

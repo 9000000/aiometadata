@@ -27,6 +27,7 @@ import { apiCache } from '@/utils/apiCache';
 import { getGenresBySelection, GenreSelection } from '@/data/genres';
 import { getMdbListType, createMDBListCatalog, isDynamicMixedList, createMDBListUnifiedDynamicCatalog } from '@/utils/catalogUtils';
 import type { CatalogConfig } from '@/contexts/ConfigContext';
+import { CacheTTLField } from '@/components/CacheTTLField';
 
 const popularUsers = [
   { username: 'tvgeniekodi', name: 'Mr. Professor', description: 'Curated TV and movie lists' },
@@ -53,7 +54,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
   const [isLoadingCustomUser, setIsLoadingCustomUser] = useState(false);
   const [defaultSort, setDefaultSort] = useState<'rank' | 'score' | 'usort' | 'score_average' | 'released' | 'releasedigital' | 'imdbrating' | 'imdbvotes' | 'last_air_date' | 'imdbpopular' | 'tmdbpopular' | 'rogerbert' | 'rtomatoes' | 'rtaudience' | 'metacritic' | 'myanimelist' | 'letterrating' | 'lettervotes' | 'budget' | 'revenue' | 'runtime' | 'title' | 'added' | 'random' | 'default'>('default');
   const [defaultOrder, setDefaultOrder] = useState<'asc' | 'desc'>('asc');
-  const [defaultCacheTTL, setDefaultCacheTTL] = useState<number>(catalogTTL);
+  const [defaultCacheTTL, setDefaultCacheTTL] = useState<number | null>(null);
   const [defaultGenreSelection, setDefaultGenreSelection] = useState<GenreSelection>('standard'); // Default to standard genres only
   const [popularLists, setPopularLists] = useState<any[]>([]);
   const [selectedPopularLists, setSelectedPopularLists] = useState<Set<string>>(new Set());
@@ -153,7 +154,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
               list,
               sort: defaultSort,
               order: defaultOrder,
-              cacheTTL: defaultCacheTTL,
+              cacheTTL: defaultCacheTTL ?? undefined,
               genreSelection: defaultGenreSelection,
               displayTypeOverrides: prev.displayTypeOverrides,
             });
@@ -267,7 +268,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
                 list: { ...list, id: `${list.id}.movies`, name: `${list.name} (Movies)` },
                 sort: defaultSort,
                 order: defaultOrder,
-                cacheTTL: defaultCacheTTL,
+                cacheTTL: defaultCacheTTL ?? undefined,
                 genreSelection: defaultGenreSelection,
                 displayTypeOverrides: prev.displayTypeOverrides,
                 sourceUrl,
@@ -283,7 +284,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
                 list: { ...list, id: `${list.id}.series`, name: `${list.name} (Series)` },
                 sort: defaultSort,
                 order: defaultOrder,
-                cacheTTL: defaultCacheTTL,
+                cacheTTL: defaultCacheTTL ?? undefined,
                 genreSelection: defaultGenreSelection,
                 displayTypeOverrides: prev.displayTypeOverrides,
                 sourceUrl,
@@ -301,7 +302,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
                 list,
                 sort: defaultSort,
                 order: defaultOrder,
-                cacheTTL: defaultCacheTTL,
+                cacheTTL: defaultCacheTTL ?? undefined,
                 genreSelection: defaultGenreSelection,
                 displayTypeOverrides: prev.displayTypeOverrides,
                 sourceUrl,
@@ -514,7 +515,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
               list,
               sort: defaultSort,
               order: defaultOrder,
-              cacheTTL: defaultCacheTTL,
+              cacheTTL: defaultCacheTTL ?? undefined,
               genreSelection: defaultGenreSelection,
               displayTypeOverrides: prev.displayTypeOverrides,
             });
@@ -602,7 +603,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
             list,
             sort: defaultSort,
             order: defaultOrder,
-            cacheTTL: defaultCacheTTL,
+            cacheTTL: defaultCacheTTL ?? undefined,
             genreSelection: defaultGenreSelection,
             displayTypeOverrides: prev.displayTypeOverrides,
           }));
@@ -648,7 +649,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
               list,
               sort: defaultSort,
               order: defaultOrder,
-              cacheTTL: defaultCacheTTL,
+              cacheTTL: defaultCacheTTL ?? undefined,
               genreSelection: defaultGenreSelection,
               displayTypeOverrides: prev.displayTypeOverrides,
             });
@@ -723,7 +724,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
               list,
               sort: defaultSort,
               order: defaultOrder,
-              cacheTTL: defaultCacheTTL,
+              cacheTTL: defaultCacheTTL ?? undefined,
               genreSelection: defaultGenreSelection,
               displayTypeOverrides: prev.displayTypeOverrides,
             });
@@ -808,7 +809,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
           list,
           sort: defaultSort,
           order: defaultOrder,
-          cacheTTL: defaultCacheTTL,
+          cacheTTL: defaultCacheTTL ?? undefined,
           genreSelection: defaultGenreSelection,
           displayTypeOverrides: prev.displayTypeOverrides,
           listUrl,
@@ -840,7 +841,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
         lists,
         username,
         listSlug,
-        cacheTTL: defaultCacheTTL,
+        cacheTTL: defaultCacheTTL ?? undefined,
         genreSelection: defaultGenreSelection,
         displayTypeOverrides: prev.displayTypeOverrides,
         listUrl,
@@ -923,7 +924,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
         enabled: true,
         showInHome: true,
         source: 'mdblist',
-        cacheTTL: defaultCacheTTL,
+        cacheTTL: defaultCacheTTL ?? undefined,
         enableRatingPosters: true,
         metadata: {}
       };
@@ -954,7 +955,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
           sourceUrl: `https://api.mdblist.com/watchlist/items?unified=true`,
           sort: defaultSort,
           order: defaultOrder,
-          cacheTTL: defaultCacheTTL,
+          cacheTTL: defaultCacheTTL ?? undefined,
           genreSelection: defaultGenreSelection,
           enableRatingPosters: true,
           metadata: {}
@@ -1001,7 +1002,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
             sourceUrl: `https://api.mdblist.com/watchlist/items?unified=false`,
             sort: defaultSort,
             order: defaultOrder,
-            cacheTTL: defaultCacheTTL,
+            cacheTTL: defaultCacheTTL ?? undefined,
             genreSelection: defaultGenreSelection,
             enableRatingPosters: true,
             ...(movieDisplayType && { displayType: movieDisplayType }),
@@ -1018,7 +1019,7 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
             sourceUrl: `https://api.mdblist.com/watchlist/items?unified=false`,
             sort: defaultSort,
             order: defaultOrder,
-            cacheTTL: defaultCacheTTL,
+            cacheTTL: defaultCacheTTL ?? undefined,
             genreSelection: defaultGenreSelection,
             enableRatingPosters: true,
             ...(seriesDisplayType && { displayType: seriesDisplayType }),
@@ -1336,28 +1337,14 @@ export function MDBListIntegration({ isOpen, onClose }: MDBListIntegrationProps)
                   )}
                 </div>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="default-cache-ttl">Default Cache TTL (seconds)</Label>
-                <div className="flex items-center space-x-2">
-                  <input
-                    id="default-cache-ttl"
-                    type="number"
-                    value={defaultCacheTTL}
-                    onChange={(e) => setDefaultCacheTTL(parseInt(e.target.value) || catalogTTL)}
-                    min="300"
-                    max="604800"
-                    step="3600"
-                    className="flex-1 px-3 py-2 border border-input bg-background rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                    placeholder={catalogTTL.toString()}
-                  />
-                  <span className="text-sm text-muted-foreground whitespace-nowrap">
-                    ({Math.floor(defaultCacheTTL / 3600)}h {Math.floor((defaultCacheTTL % 3600) / 60)}m)
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  How long to cache newly added lists before refreshing. Range: 5 minutes to 7 days.
-                </p>
-              </div>
+              <CacheTTLField
+                id="default-cache-ttl"
+                label="Default Cache TTL (seconds)"
+                value={defaultCacheTTL}
+                onChange={setDefaultCacheTTL}
+                min={300}
+                help="How long to cache newly added lists before refreshing. Range: 5 minutes to 7 days."
+              />
               <div className="space-y-2">
                 <Label htmlFor="genre-selection">Default Genre Selection</Label>
                 <Select value={defaultGenreSelection} onValueChange={(value: GenreSelection) => setDefaultGenreSelection(value)}>

@@ -456,7 +456,6 @@ export function TMDBIntegration({ isOpen, onClose }: TMDBIntegrationProps) {
       collection: collectionPreview,
       sortDirection: collectionSort,
       hideUnreleased: collectionHideUnreleased,
-      cacheTTL: catalogTTL,
       displayTypeOverrides: config.displayTypeOverrides,
     });
 

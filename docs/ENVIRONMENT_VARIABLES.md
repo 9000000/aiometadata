@@ -423,6 +423,11 @@ This feature warms **ALL** enabled catalogs (TMDB, MAL, MDBList, Custom Manifest
 - **Example**: `CATALOG_WARMUP_INTERVAL_HOURS=48`
 - **Recommended**: 24-72 hours depending on number of catalogs and server resources
 
+### `CATALOG_WARMUP_TTL_LEAD_SECONDS`
+- **Default**: `60` (1 minute)
+- **Description**: How long before the next warming run a warmed catalog is held to expire. Warming anchors its schedule on the moment a run starts, so a slow run can write catalogs that outlive the next run and get read back as hits instead of refreshed. Holding them to lapse just before the run keeps every cycle refreshing. Only ever shortens a TTL, so a catalog set to refresh faster than the warm interval keeps its own.
+- **Example**: `CATALOG_WARMUP_TTL_LEAD_SECONDS=300`
+
 ### `CATALOG_WARMUP_INITIAL_DELAY_SECONDS`
 - **Default**: `300` (5 minutes)
 - **Description**: Delay before first warmup after server start (in seconds)

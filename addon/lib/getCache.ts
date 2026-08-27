@@ -42,6 +42,7 @@ function parsePositiveIntEnv(envValue: any, defaultValue: number, minValue: numb
 
 
 const { withEpoch, withGlobalEpoch }: any = require('./cacheEpoch');
+const { clampTtlToWarmWindow }: any = require('./catalogWarmWindow');
 const {
   isRefreshAheadEnabled,
   isDueForRefresh,
@@ -1478,11 +1479,18 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
       cacheLogger.debug(`[Catalog] HIT detail (${idOnly}) [sig:${catalogSig}] catalogConfig:${catalogConfigString} catalogKey:${catalogKey}`);
     },
   };
+  // The key keeps the configured TTL so it stays stable across runs; only the
+  // lifetime written to Redis is held inside the warm window.
+  const writeTTL = cachingDisabled ? cacheTTL : await clampTtlToWarmWindow(userUUID, cacheTTL);
+  if (writeTTL !== cacheTTL) {
+    cacheLogger.debug(`[Catalog] Holding ${idOnly} to ${writeTTL}s so it lapses before the next warm run (configured ${cacheTTL}s)`);
+  }
+
   const result = cachingDisabled
     ? normalizeReleaseAvailabilityInPayload(await method())
     : await cacheWrap(key, async () => {
         return normalizeReleaseAvailabilityInPayload(await method());
-      }, cacheTTL, options);
+      }, writeTTL, options);
   normalizeReleaseAvailabilityInPayload(result);
 
   if (result?.metas?.length) {

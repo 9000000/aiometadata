@@ -24,7 +24,7 @@ function fixHostnameChecks(dir) {
         // Exclude cases that already have safe checks like process.env.HOST_NAME && process.env.HOST_NAME.startsWith
         
         const original = content;
-        content = content.replace(/(?<!\&\&\s*)process\.env\.HOST_NAME\.startsWith/g, "process.env.HOST_NAME?.startsWith");
+        content = content.replace(/(?<!&&\s*)process\.env\.HOST_NAME\.startsWith/g, "process.env.HOST_NAME?.startsWith");
         
         if (content !== original) {
             fs.writeFileSync(file, content);

@@ -104,6 +104,10 @@ class ConfigCache {
     return pendingLoads.has(redisKey(key));
   }
 
+  getMemoryStats(): { pendingLoads: number } {
+    return { pendingLoads: pendingLoads.size };
+  }
+
   async stats({ countRedisEntries = false } = {}): Promise<{ pendingLoads: number; entries: number | null }> {
     const out: { pendingLoads: number; entries: number | null } = { pendingLoads: pendingLoads.size, entries: null };
     if (!countRedisEntries || !redis || redis.status !== 'ready') return out;

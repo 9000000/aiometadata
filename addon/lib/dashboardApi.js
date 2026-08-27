@@ -1370,7 +1370,7 @@ class DashboardAPI {
     } catch {}
     try {
       const configCache = require('./configCache');
-      caches.configCache = { entries: configCache.cache.size, pendingLoads: configCache.pendingLoads.size };
+      caches.configCache = configCache.getMemoryStats ? configCache.getMemoryStats() : { pendingLoads: 0 };
     } catch {}
 
     const heapLimit = v8.getHeapStatistics().heap_size_limit;

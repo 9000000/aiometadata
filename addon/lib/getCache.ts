@@ -369,6 +369,7 @@ async function attemptSelfHealing(key: string, originalError: any): Promise<bool
     selfHealingLogger.info(`Attempting to repair corrupted cache entry: ${key}`);
 
     await redis.del(key);
+    l1MemoryCache.delete(key);
     cacheHealth.corruptedEntries++;
 
     const errorResult = {
@@ -379,7 +380,9 @@ async function attemptSelfHealing(key: string, originalError: any): Promise<bool
       timestamp: new Date().toISOString()
     };
 
-    await redis.set(key, await encodeCachePayload(errorResult), 'EX', ERROR_TTL_STRATEGIES.CACHE_CORRUPTED);
+    const encodedError = await encodeCachePayload(errorResult);
+    await redis.set(key, encodedError, 'EX', ERROR_TTL_STRATEGIES.CACHE_CORRUPTED);
+    l1MemoryCache.set(key, encodedError);
 
     selfHealingLogger.success(`Successfully repaired corrupted cache entry: ${key}`);
     return true;
@@ -2499,6 +2502,8 @@ function getCacheHealth(): any {
     coldStoreHits: cacheHealth.coldStoreHits,
     coldStoreMisses: cacheHealth.coldStoreMisses,
     coldStoreComponents: cacheHealth.coldStoreComponents,
+    l1Entries: l1MemoryCache.size,
+    l1Bytes: l1MemoryCache.calculatedSize,
     refreshAhead: getRefreshAheadStats(),
     hitRate: total > 0 ? ((cacheHealth.hits / total) * 100).toFixed(2) : '0.00',
     errorRate: total > 0 ? ((cacheHealth.errors / total) * 100).toFixed(2) : '0.00',
@@ -2520,6 +2525,7 @@ function clearCacheHealth(): void {
   cacheHealth.coldStoreMisses = 0;
   cacheHealth.coldStoreComponents = 0;
   resetRefreshAheadStats();
+  l1MemoryCache.clear();
   cacheHealth.errorCounts = {};
   cacheHealth.keyAccessCounts.clear();
   cacheHealthLogger.info('Statistics cleared');
@@ -2622,5 +2628,7 @@ module.exports = {
   getMemoryStats: () => ({
     inFlightRequests: inFlightRequests.size,
     keyAccessCounts: cacheHealth.keyAccessCounts.size,
+    l1Entries: l1MemoryCache.size,
+    l1Bytes: l1MemoryCache.calculatedSize,
   }),
 };

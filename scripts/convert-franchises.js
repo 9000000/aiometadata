@@ -20,7 +20,7 @@ franchises.forEach(franchise => {
       const filePath = path.join(franchise.path, file);
       const content = fs.readFileSync(filePath, 'utf8');
       
-      let jsonStr = '';
+      let jsonStr;
       try {
         if (file.endsWith('.json')) {
           jsonStr = content;

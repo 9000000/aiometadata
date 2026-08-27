@@ -573,7 +573,7 @@ class Database {
   }
 
   async getCachedMappingByAnyId(contentType: string, tmdbId: string | null = null, tvdbId: string | null = null, imdbId: string | null = null, tvmazeId: string | null = null): Promise<any> {
-    const redisCached = await redisIdCache.searchByAnyId(contentType, tmdbId, tvdbId, imdbId, tvmazeId);
+    const redisCached = await redisIdCache.getCachedIdMapping(contentType, tmdbId, tvdbId, imdbId, tvmazeId);
     if (redisCached) {
       return redisCached;
     }

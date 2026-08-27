@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.16.0](https://github.com/cedya77/aiometadata/compare/v2.15.0...v2.16.0) (2026-08-27)
+
+
+### Features
+
+* **catalogs:** set or reset a catalog's cache TTL in bulk ([59857cd](https://github.com/cedya77/aiometadata/commit/59857cd59479842203767c334b41311ef8bd1134))
+* **managers:** sync to several addon manager accounts ([64fa905](https://github.com/cedya77/aiometadata/commit/64fa9050611d3b429f5bff2ac0ca4c6710d71d2d))
+
+
+### Bug Fixes
+
+* **cache:** honour a zero cache TTL for every catalog source ([316276c](https://github.com/cedya77/aiometadata/commit/316276cc33ab407c45178daa60b8f2d5efdc4c15))
+* **cache:** key MDBList discover results by their TTL ([316276c](https://github.com/cedya77/aiometadata/commit/316276cc33ab407c45178daa60b8f2d5efdc4c15))
+* **catalogs:** stop copying the instance cache TTL onto new catalogs ([59857cd](https://github.com/cedya77/aiometadata/commit/59857cd59479842203767c334b41311ef8bd1134))
+* **integrations:** keep a connection without pressing save ([ed389dc](https://github.com/cedya77/aiometadata/commit/ed389dcf210f965fb18cddc5bf59fbd01948600f))
+* **simkl:** drop watchlist items that moved to another status ([07e852b](https://github.com/cedya77/aiometadata/commit/07e852b8196d65d2b60fc6b0678bbb2ba6a390f1))
+* **simkl:** show English titles in the watchlist catalogs ([28c1637](https://github.com/cedya77/aiometadata/commit/28c16374cb6188940be01a30cfe254c0a5e9d4ea)), closes [#688](https://github.com/cedya77/aiometadata/issues/688)
+* **translations:** try the other Portuguese before falling back to English ([fb24fcc](https://github.com/cedya77/aiometadata/commit/fb24fcc4d8651a8f16c5e54b1f75d17484c0e17d))
+* **tvdb:** retry TVDB after a failed login ([999a213](https://github.com/cedya77/aiometadata/commit/999a213bbc3bcaeaf8bef8541ec5b081bb57d5e4))
+
 ## [2.15.0](https://github.com/cedya77/aiometadata/compare/v2.14.1...v2.15.0) (2026-08-24)
 
 

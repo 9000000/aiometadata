@@ -1642,11 +1642,13 @@ async function fetchMDBListCatalog(
   const paramEntries = Object.entries(params).filter(([k]) => k !== 'cursor' && k !== 'limit').sort(([a], [b]) => a.localeCompare(b));
   const paramsHash = crypto.createHash('sha256').update(JSON.stringify(paramEntries)).digest('hex').substring(0, 16);
 
-  const responseCacheKey = `mdblist-api:catalog:${paramsHash}:${mediaType}:page:${page}`;
   // MDBList caches catalog results server-side for 6 hours 
   const maxTtl = 6 * 60 * 60;
   const baseTtl = cacheTTL !== undefined ? cacheTTL : parseInt(process.env.CATALOG_TTL || String(maxTtl), 10);
   const ttl = Math.min(baseTtl, maxTtl);
+
+  const ttlSegment = cacheTTL !== undefined ? `:ttl:${ttl}` : '';
+  const responseCacheKey = `mdblist-api:catalog:${paramsHash}:${mediaType}:page:${page}${ttlSegment}`;
 
   return await cacheWrapGlobal(responseCacheKey, async () => {
     try {

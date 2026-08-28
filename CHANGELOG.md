@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.16.2](https://github.com/cedya77/aiometadata/compare/v2.16.1...v2.16.2) (2026-08-28)
+
+
+### Bug Fixes
+
+* **cache:** give anilist.discover catalogs their discover signature ([c0ef296](https://github.com/cedya77/aiometadata/commit/c0ef296e5b5fb9892b4ba1893c3fa75f8b7a8904))
+* **cache:** keep discover cache keys stable across local midnight ([c0ef296](https://github.com/cedya77/aiometadata/commit/c0ef296e5b5fb9892b4ba1893c3fa75f8b7a8904))
+* **cache:** reuse meta components when a catalog id resolves to another id ([c0ef296](https://github.com/cedya77/aiometadata/commit/c0ef296e5b5fb9892b4ba1893c3fa75f8b7a8904))
+
 ## [2.16.1](https://github.com/cedya77/aiometadata/compare/v2.16.0...v2.16.1) (2026-08-27)
 
 

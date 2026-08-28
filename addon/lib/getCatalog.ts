@@ -18,7 +18,7 @@ import * as tvdb from './tvdb.js';
 import { to3LetterCode, to3LetterCountryCode } from './language-map.js';
 import { resolveAllIds } from './id-resolver.js';
 import { cacheWrapTvdbApi, cacheWrap, cacheWrapCatalog, cacheWrapAniListCatalog, cacheWrapJikanApi, cacheWrapGlobal, classifyResultAllowEmpty, stableStringify } from './getCache.js';
-import crypto from 'crypto';
+import { isDiscoverCatalogId, applyDiscoverSignature } from './discoverCatalogSignature.js';
 import { getTVDBContentRatingId } from '../utils/tvdbContentRating.js';
 import { getMeta } from './getMeta.js';
 import { resolveDynamicTmdbDiscoverParams } from './tmdbDiscoverDateTokens.js';
@@ -3349,7 +3349,10 @@ function buildCatalogCacheArgs(
 
   const catCfg = (config.catalogs as any[])?.find((c: any) => c.id === catalogId && c.type === catalogType);
 
-  if (catalogId.startsWith('trakt.') || catalogId.startsWith('anilist.') || catalogId.startsWith('streaming.') || catalogId.startsWith('tmdb.year') || catalogId.startsWith('tmdb.language')) {
+  // Claimed before the provider prefixes; anilist.discover would otherwise match anilist.
+  if (isDiscoverCatalogId(catalogId)) {
+    applyDiscoverSignature(args, catCfg);
+  } else if (catalogId.startsWith('trakt.') || catalogId.startsWith('anilist.') || catalogId.startsWith('streaming.') || catalogId.startsWith('tmdb.year') || catalogId.startsWith('tmdb.language')) {
     if (catCfg?.sort) args.sort = catCfg.sort;
     if (catCfg?.sortDirection) args.sortDirection = catCfg.sortDirection;
   } else if (catalogId.startsWith('mdblist.')) {
@@ -3358,14 +3361,6 @@ function buildCatalogCacheArgs(
     if (supportsMdblistScoreFilters(catCfg)) {
       if (typeof catCfg.filter_score_min === 'number') args.filter_score_min = catCfg.filter_score_min;
       if (typeof catCfg.filter_score_max === 'number') args.filter_score_max = catCfg.filter_score_max;
-    }
-  } else if (catalogId.startsWith('tmdb.discover.') || catalogId.startsWith('tvdb.discover.') || catalogId.startsWith('simkl.discover.') || catalogId.startsWith('anilist.discover.') || catalogId.startsWith('mal.discover.')) {
-    const discoverParams = catCfg?.metadata?.discover?.params || catCfg?.metadata?.discoverParams || null;
-    if (discoverParams && typeof discoverParams === 'object') {
-      const resolved = catalogId.startsWith('tmdb.discover.')
-        ? resolveDynamicTmdbDiscoverParams(discoverParams, { timezone: (config as any).timezone })
-        : discoverParams;
-      args.discoverSig = crypto.createHash('md5').update(stableStringify(resolved)).digest('hex').substring(0, 8);
     }
   }
 

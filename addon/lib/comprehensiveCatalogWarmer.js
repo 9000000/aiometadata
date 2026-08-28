@@ -20,10 +20,9 @@ const redis = require('./redisClient');
 const EXPIRY_TOLERANCE_MS = 1000;
 const consola = require('consola');
 const { loadConfigFromDatabase } = require('./configApi.js');
-const { resolveDynamicTmdbDiscoverParams } = require('./tmdbDiscoverDateTokens');
+const { isDiscoverCatalogId, applyDiscoverSignature } = require('./discoverCatalogSignature');
 const { supportsMdblistScoreFilters } = require('../utils/mdbList');
 const { getTvmazeScheduleCatalog } = require('./tvmazeScheduleCatalog');
-const crypto = require('crypto');
 const { runWithRequestContext } = require('./logBuffer.js');
 const posterCacheConfig = require('./posterCache/config.js');
 const { collectWarmupTargets, extractIdsFromWarmerMeta } = require('./warmupTargets.js');
@@ -707,7 +706,11 @@ class ComprehensiveCatalogWarmer {
         if (currentPage > 1) extraArgs.page = currentPage;
         if (genreValue) extraArgs.genre = genreValue;
         const catalogConfig = config.catalogs?.find(c => c.id === catalogId);
-        if (catalogId.startsWith('trakt.') || catalogId.startsWith('anilist.') || catalogId.startsWith('streaming.') || catalogId.startsWith('tmdb.year') || catalogId.startsWith('tmdb.language')) {
+        // Claimed before the provider prefixes; anilist.discover would otherwise match anilist.
+        if (isDiscoverCatalogId(catalogId)) {
+          applyDiscoverSignature(extraArgs, catalogConfig);
+        }
+        else if (catalogId.startsWith('trakt.') || catalogId.startsWith('anilist.') || catalogId.startsWith('streaming.') || catalogId.startsWith('tmdb.year') || catalogId.startsWith('tmdb.language')) {
           if (catalogConfig) {
             if (catalogConfig.sort) extraArgs.sort = catalogConfig.sort;
             if (catalogConfig.sortDirection) extraArgs.sortDirection = catalogConfig.sortDirection;
@@ -727,23 +730,6 @@ class ComprehensiveCatalogWarmer {
           if (mlMeta.maxDaysAgo) extraArgs.maxDaysAgo = mlMeta.maxDaysAgo;
           if (mlMeta.maxFutureDays !== undefined) extraArgs.maxFutureDays = mlMeta.maxFutureDays;
           if (mlMeta.includeRated) extraArgs.includeRated = true;
-        }
-        else if (catalogId.startsWith('tmdb.discover.') || catalogId.startsWith('tvdb.discover.') || catalogId.startsWith('simkl.discover.') || catalogId.startsWith('anilist.discover.') || catalogId.startsWith('mal.discover.')) {
-          const discoverParams =
-            catalogConfig?.metadata?.discover?.params ||
-            catalogConfig?.metadata?.discoverParams ||
-            null;
-          if (discoverParams && typeof discoverParams === 'object') {
-            const discoverParamsForSignature = catalogId.startsWith('tmdb.discover.')
-              ? resolveDynamicTmdbDiscoverParams(discoverParams, { timezone: config.timezone })
-              : discoverParams;
-            const discoverSignature = crypto
-              .createHash('md5')
-              .update(stableStringify(discoverParamsForSignature))
-              .digest('hex')
-              .substring(0, 8);
-            extraArgs.discoverSig = discoverSignature;
-          }
         }
         else if (catalogId.startsWith('mdblist.')) {
           if (catalogConfig) {

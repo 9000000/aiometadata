@@ -48,6 +48,7 @@ const { normalizeRedirectUri } = require("./utils/oauthRedirect");
 const { shuffleMetas } = require("./utils/mergedCatalog");
 const { getFavorites, getWatchList } = require("./lib/getPersonalLists");
 const { resolveDynamicTmdbDiscoverParams } = require('./lib/tmdbDiscoverDateTokens');
+const { isDiscoverCatalogId, applyDiscoverSignature } = require('./lib/discoverCatalogSignature');
 const { blurImage, convertBannerToBackground } = require('./utils/imageProcessor');
 const { getAiTriggerKeyword, applyAiTrigger } = require('./utils/aiSearchTrigger');
 const { TraktClient } = require('./lib/trakt');
@@ -4467,8 +4468,12 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
 
   extraArgs = extraArgs || {};
   // Ensure sort options are included in cache key
+  // Claimed before the provider prefixes; anilist.discover would otherwise match anilist.
+  if (isDiscoverCatalogId(cleanId)) {
+    applyDiscoverSignature(extraArgs, catalogConfig);
+  }
   // Trakt uses: sort, sortDirection
-  if (cleanId.startsWith('trakt.')) {
+  else if (cleanId.startsWith('trakt.')) {
     if (catalogConfig?.sort) extraArgs.sort = catalogConfig.sort;
     if (catalogConfig?.sortDirection) extraArgs.sortDirection = catalogConfig.sortDirection;
   }
@@ -4491,24 +4496,6 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
     if (catalogConfig?.sortDirection) extraArgs.sortDirection = catalogConfig.sortDirection;
     if (cleanId.startsWith('tmdb.year') && typeof catalogConfig?.minVotes === 'number') {
       extraArgs.minVotes = catalogConfig.minVotes;
-    }
-  }
-  // Discover custom catalogs use discover params (include hash for safe cache invalidation)
-  else if (cleanId.startsWith('tmdb.discover.') || cleanId.startsWith('tvdb.discover.') || cleanId.startsWith('simkl.discover.') || cleanId.startsWith('anilist.discover.') || cleanId.startsWith('mal.discover.')) {
-    const discoverParams =
-      catalogConfig?.metadata?.discover?.params ||
-      catalogConfig?.metadata?.discoverParams ||
-      null;
-    if (discoverParams && typeof discoverParams === 'object') {
-      const discoverParamsForSignature = cleanId.startsWith('tmdb.discover.')
-        ? resolveDynamicTmdbDiscoverParams(discoverParams, { timezone: config.timezone })
-        : discoverParams;
-      const discoverSignature = crypto
-        .createHash('md5')
-        .update(stableStringify(discoverParamsForSignature))
-        .digest('hex')
-        .substring(0, 8);
-      extraArgs.discoverSig = discoverSignature;
     }
   }
   // AniList uses: sort, sortDirection

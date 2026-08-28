@@ -950,15 +950,39 @@ function getMetaSmartLockContextHash(config: any, metaId: string, type: string |
   });
 }
 
-function buildMetaComponentCacheKeys({ config, metaId, type, useShowPoster = false }: { config: any; metaId: string; type: string | null; useShowPoster?: boolean }): Record<string, string> {
-  const ctx = getMetaCacheContext(config, metaId, type, useShowPoster);
-  const commonProvider = {
+function metaIdentityProfile(ctx: any, config: any): any {
+  return {
     ...ctx.base,
     metaProvider: ctx.metaProvider,
     animeIdProvider: ctx.animeIdProvider,
     providerOptions: ctx.providerOptions,
     showMetaProviderAttribution: config.showMetaProviderAttribution || false,
   };
+}
+
+/**
+ * Components are keyed by the id a meta resolved to, while later reads ask by the
+ * id they started from. The alias records that hop.
+ *
+ * The hash carries idResolution because the anime path leaves
+ * useImdbIdForCatalogAndSearch out of the identity profile. It stays out of the
+ * component keys, where moving commonHash would orphan every stored component.
+ */
+function buildMetaAliasCacheKey({ config, metaId, type, useShowPoster = false }: { config: any; metaId: string; type: string | null; useShowPoster?: boolean }): string {
+  const ctx = getMetaCacheContext(config, metaId, type, useShowPoster);
+  const profile = {
+    ...metaIdentityProfile(ctx, config),
+    idResolution: {
+      useImdbIdForCatalogAndSearch: config.mal?.useImdbIdForCatalogAndSearch || false,
+      forceAnimeForDetectedImdb: config.providers?.forceAnimeForDetectedImdb || false,
+    },
+  };
+  return `meta-alias:${hashProfile(profile)}:${metaId}`;
+}
+
+function buildMetaComponentCacheKeys({ config, metaId, type, useShowPoster = false }: { config: any; metaId: string; type: string | null; useShowPoster?: boolean }): Record<string, string> {
+  const ctx = getMetaCacheContext(config, metaId, type, useShowPoster);
+  const commonProvider = metaIdentityProfile(ctx, config);
   const artCommon = {
     ...ctx.base,
     metaProvider: ctx.metaProvider,
@@ -1876,6 +1900,26 @@ async function writeMetaComponentsBatchWithConfig({ config, metas, ttl = META_TT
   return { written, skipped };
 }
 
+async function readMetaAlias({ config, metaId, type = null, useShowPoster = false }: { config: any; metaId: string; type?: string | null; useShowPoster?: boolean }): Promise<string | null> {
+  if (!redis) return null;
+  try {
+    const aliased = await redis.get(withEpoch(buildMetaAliasCacheKey({ config, metaId, type, useShowPoster })));
+    return typeof aliased === 'string' && aliased ? aliased : null;
+  } catch (error: any) {
+    cacheLogger.warn(`[Meta] Alias read failed for ${metaId}: ${error?.message}`);
+    return null;
+  }
+}
+
+async function writeMetaAlias({ config, metaId, aliasTo, ttl = META_TTL(), type = null, useShowPoster = false }: { config: any; metaId: string; aliasTo: string; ttl?: number; type?: string | null; useShowPoster?: boolean }): Promise<void> {
+  if (!redis || !metaId || !aliasTo || metaId === aliasTo) return;
+  try {
+    await redis.set(withEpoch(buildMetaAliasCacheKey({ config, metaId, type, useShowPoster })), aliasTo, 'EX', ttl);
+  } catch (error: any) {
+    cacheLogger.warn(`[Meta] Alias write failed for ${metaId} -> ${aliasTo}: ${error?.message}`);
+  }
+}
+
 async function reconstructMetaFromComponents(userUUID: string, metaId: string, ttl: number = META_TTL(), options: any = {}, type: string | null = null, includeVideos: boolean = true, useShowPoster: boolean = false): Promise<any> {
    if (!metaId || typeof metaId !== 'string') {
      cacheLogger.warn(`Invalid metaId provided: ${metaId}`);
@@ -1904,7 +1948,7 @@ async function reconstructMetaFromComponents(userUUID: string, metaId: string, t
   });
 }
 
-async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = null, includeVideos = true, useShowPoster = false, countColdStoreMiss = true }: { config: any; metaId: string; type?: string | null; includeVideos?: boolean; useShowPoster?: boolean; countColdStoreMiss?: boolean }): Promise<any> {
+async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = null, includeVideos = true, useShowPoster = false, countColdStoreMiss = true, followAlias = true }: { config: any; metaId: string; type?: string | null; includeVideos?: boolean; useShowPoster?: boolean; countColdStoreMiss?: boolean; followAlias?: boolean }): Promise<any> {
   if (!metaId || typeof metaId !== 'string') {
     cacheLogger.warn(`Invalid metaId provided: ${metaId}`);
     return { errorReason: 'invalid metaId' };
@@ -1982,6 +2026,21 @@ async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = 
   const availableComponents = componentResults.filter((result: any) => result.data !== null);
 
   if (availableComponents.length === 0) {
+    if (followAlias) {
+      const aliasedId = await readMetaAlias({ config, metaId, type, useShowPoster });
+      if (aliasedId && aliasedId !== metaId) {
+        return reconstructMetaFromComponentsWithConfig({
+          config,
+          metaId: aliasedId,
+          type,
+          includeVideos,
+          useShowPoster,
+          countColdStoreMiss,
+          followAlias: false,
+        });
+      }
+    }
+
     const metaReconstructionKey = `meta:reconstructed:${metaId}`;
     updateCacheHealth(metaReconstructionKey, 'miss', true);
     return { errorReason: 'no cached components' };
@@ -2229,6 +2288,8 @@ async function cacheWrapMetaSmart(userUUID: string, metaId: string, method: () =
     if(metaId.startsWith('tun_')){
       idToCache = metaId;
     }
+
+    await writeMetaAlias({ config, metaId, aliasTo: idToCache, ttl, type, useShowPoster });
 
     return writeMetaComponentsWithConfig({
       config,
@@ -2492,6 +2553,7 @@ export {
   cacheWrapMetaComponents,
   reconstructMetaFromComponents,
   buildMetaComponentCacheKeys,
+  buildMetaAliasCacheKey,
   projectMetaForCatalogCache,
   projectCatalogPayloadForCache,
   writeMetaComponentsBatchWithConfig,
@@ -2524,6 +2586,7 @@ module.exports = {
   cacheWrapMetaComponents,
   reconstructMetaFromComponents,
   buildMetaComponentCacheKeys,
+  buildMetaAliasCacheKey,
   projectMetaForCatalogCache,
   projectCatalogPayloadForCache,
   writeMetaComponentsBatchWithConfig,

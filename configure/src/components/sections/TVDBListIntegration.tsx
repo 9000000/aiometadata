@@ -76,7 +76,7 @@ function SavedLists({
 }
 
 export function TVDBListIntegration({ isOpen, onClose }: TVDBListIntegrationProps) {
-  const { config, setConfig, catalogTTL, auth } = useConfig();
+  const { config, setConfig, auth } = useConfig();
 
   const [mode, setMode] = useState<'browse' | 'slug'>('browse');
   const [showDetail, setShowDetail] = useState(false);
@@ -84,7 +84,6 @@ export function TVDBListIntegration({ isOpen, onClose }: TVDBListIntegrationProp
   const [preview, setPreview] = useState<TvdbListPreview | null>(null);
   const [isResolving, setIsResolving] = useState(false);
   const [splitMode, setSplitMode] = useState<'all' | 'split'>('all');
-  const [cacheTTL, setCacheTTL] = useState<number>(catalogTTL);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [browseResults, setBrowseResults] = useState<TvdbListSummary[]>([]);
@@ -172,7 +171,6 @@ export function TVDBListIntegration({ isOpen, onClose }: TVDBListIntegrationProp
     const catalogs = createTvdbListCatalogs({
       list: preview,
       mode: splitMode,
-      cacheTTL,
       displayTypeOverrides: config.displayTypeOverrides,
     });
 
@@ -196,7 +194,7 @@ export function TVDBListIntegration({ isOpen, onClose }: TVDBListIntegrationProp
     setPreview(null);
     setShowDetail(false);
     setListInput('');
-  }, [preview, splitMode, cacheTTL, config.catalogs, config.displayTypeOverrides, setConfig]);
+  }, [preview, splitMode, config.catalogs, config.displayTypeOverrides, setConfig]);
 
   const handleRemove = useCallback((catalogId: string, catalogType: string) => {
     setConfig(prev => ({
@@ -388,23 +386,6 @@ export function TVDBListIntegration({ isOpen, onClose }: TVDBListIntegrationProp
                         </p>
                       </div>
                     )}
-
-                    <div className="space-y-2">
-                      <Label htmlFor="tvdb-list-ttl">Cache TTL (seconds)</Label>
-                      <div className="flex items-center gap-2">
-                        <Input
-                          id="tvdb-list-ttl"
-                          type="number"
-                          min={0}
-                          step={3600}
-                          value={cacheTTL}
-                          onChange={(e) => setCacheTTL(parseInt(e.target.value) || catalogTTL)}
-                        />
-                        <span className="whitespace-nowrap text-sm text-muted-foreground">
-                          ({Math.floor(cacheTTL / 3600)}h {Math.floor((cacheTTL % 3600) / 60)}m)
-                        </span>
-                      </div>
-                    </div>
 
                     <Button className="w-full" onClick={handleAdd}>Add to catalogs</Button>
                   </div>

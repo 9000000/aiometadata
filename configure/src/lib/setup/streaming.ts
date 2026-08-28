@@ -218,7 +218,7 @@ export function buildStreamingServiceCatalogs({
       enabled: true,
       showInHome: true,
       source: 'tmdb',
-      cacheTTL: Math.max(catalogTTL, 300),
+      ...(catalogTTL < 300 ? { cacheTTL: 300 } : {}),
       metadata: {
         description: `TMDB Discover (${tmdbMediaType})`,
         url: buildDiscoverWebUrl(tmdbMediaType, discoverUrlParams),

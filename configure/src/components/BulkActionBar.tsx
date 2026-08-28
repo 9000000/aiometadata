@@ -17,7 +17,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { X, MoreHorizontal, Power, PowerOff, Home, HomeIcon, Trash2, Loader2, Star, Shuffle, ArrowUpToLine, ArrowDownToLine, Move, Type, GitMerge, Tag } from 'lucide-react';
+import { X, MoreHorizontal, Power, PowerOff, Home, HomeIcon, Trash2, Loader2, Star, Shuffle, ArrowUpToLine, ArrowDownToLine, Move, Type, GitMerge, Tag, Timer } from 'lucide-react';
 import { CatalogConfig } from '@/contexts/config';
 import { cn } from '@/lib/utils';
 import { TagEditorDialog } from '@/components/TagEditorDialog';
@@ -36,6 +36,8 @@ type BulkActionType =
   | 'moveToTop'     
   | 'moveToBottom'   
   | 'setDisplayType'
+  | 'setCacheTTL'
+  | 'resetCacheTTL'
   | 'merge'
   | null;
 
@@ -56,6 +58,8 @@ interface BulkActionBarProps {
   onDisableRandomize?: () => void;
   onSetDisplayType?: (type: string) => void;
   onResetDisplayType?: () => void;
+  onSetCacheTTL?: (ttl: number) => void;
+  onResetCacheTTL?: () => void;
   onFindReplaceType?: (find: string, replace: string) => void;
   onMergeSelected?: () => void;
   hasRatingPostersKey?: boolean;
@@ -80,6 +84,8 @@ export function BulkActionBar({
   onDisableRandomize,
   onSetDisplayType,
   onResetDisplayType,
+  onSetCacheTTL,
+  onResetCacheTTL,
   onFindReplaceType,
   onMergeSelected,
   hasRatingPostersKey = false,
@@ -102,6 +108,8 @@ export function BulkActionBar({
   // Count non-removable catalogs for tooltip (merged catalogs are disbanded, not deleted)
   const nonRemovableCount = selectedCatalogs.filter(c => c.source === 'merged').length;
   const [showDisplayTypeDialog, setShowDisplayTypeDialog] = useState(false);
+  const [showCacheTTLDialog, setShowCacheTTLDialog] = useState(false);
+  const [cacheTTLValue, setCacheTTLValue] = useState('');
   const [displayTypeValue, setDisplayTypeValue] = useState('');
   const [showFindReplaceDialog, setShowFindReplaceDialog] = useState(false);
   const [showTagDialog, setShowTagDialog] = useState(false);
@@ -112,6 +120,7 @@ export function BulkActionBar({
   const [findTypeValue, setFindTypeValue] = useState('');
   const [replaceTypeValue, setReplaceTypeValue] = useState('');
   const hasDisplayTypeOverrides = selectedCatalogs.some(c => c.displayType);
+  const hasCacheTTLOverrides = selectedCatalogs.some(c => c.cacheTTL !== undefined);
   const findReplaceMatchCount = findTypeValue.trim()
     ? selectedCatalogs.filter(c => (c.displayType || c.type) === findTypeValue.trim()).length
     : 0;
@@ -218,6 +227,20 @@ export function BulkActionBar({
       show: !!onSetDisplayType && hasDisplayTypeOverrides && !!onResetDisplayType,
     },
     {
+      id: 'setCacheTTL',
+      label: 'Set TTL',
+      icon: <Timer className="h-5 w-5" />,
+      onClick: () => { setCacheTTLValue(''); setShowCacheTTLDialog(true); },
+      show: !!onSetCacheTTL,
+    },
+    {
+      id: 'resetCacheTTL',
+      label: 'Reset TTL',
+      icon: <Timer className="h-5 w-5 text-muted-foreground" />,
+      onClick: () => onResetCacheTTL?.(),
+      show: hasCacheTTLOverrides && !!onResetCacheTTL,
+    },
+    {
       id: 'findReplaceType',
       label: 'Find/Replace',
       icon: <Type className="h-5 w-5" />,
@@ -241,8 +264,52 @@ export function BulkActionBar({
     },
   ];
 
+  const applyCacheTTL = () => {
+    const parsed = parseInt(cacheTTLValue, 10);
+    if (Number.isNaN(parsed) || parsed < 0) return;
+    onSetCacheTTL?.(parsed);
+    setCacheTTLValue('');
+    setShowCacheTTLDialog(false);
+  };
+
+  const cacheTTLDialog = onSetCacheTTL ? (
+    <Dialog open={showCacheTTLDialog} onOpenChange={setShowCacheTTLDialog}>
+      <DialogContent className="sm:max-w-[360px]">
+        <DialogHeader>
+          <DialogTitle>Set Cache TTL</DialogTitle>
+          <DialogDescription>
+            How long to cache {selectionCount} selected catalog{selectionCount === 1 ? '' : 's'}, in seconds. Sources with a longer minimum keep theirs. Use Reset Cache TTL to go back to the instance default.
+          </DialogDescription>
+        </DialogHeader>
+        <Input
+          type="number"
+          min={0}
+          max={604800}
+          step={3600}
+          value={cacheTTLValue}
+          onChange={(e) => setCacheTTLValue(e.target.value)}
+          placeholder="e.g. 43200 for 12 hours"
+          autoFocus
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') applyCacheTTL();
+            else if (e.key === 'Escape') setShowCacheTTLDialog(false);
+          }}
+        />
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={() => setShowCacheTTLDialog(false)}>
+            Cancel
+          </Button>
+          <Button size="sm" disabled={!cacheTTLValue.trim()} onClick={applyCacheTTL}>
+            Apply
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  ) : null;
+
   const dialogs = (
     <>
+      {cacheTTLDialog}
       <TagEditorDialog
         open={showTagDialog}
         onOpenChange={setShowTagDialog}
@@ -788,12 +855,28 @@ export function BulkActionBar({
                     <DropdownMenuSeparator />
                   </>
                 )}
+                {onSetCacheTTL && (
+                  <DropdownMenuItem onClick={() => { setCacheTTLValue(''); setShowCacheTTLDialog(true); }} disabled={isLoading}>
+                    <Timer className="h-4 w-4 mr-2" />
+                    Set Cache TTL
+                  </DropdownMenuItem>
+                )}
+                {hasCacheTTLOverrides && onResetCacheTTL && (
+                  <>
+                    <DropdownMenuItem onClick={onResetCacheTTL} disabled={isLoading}>
+                      <Timer className="h-4 w-4 mr-2 text-muted-foreground" />
+                      Reset Cache TTL
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
                 <DropdownMenuItem onClick={onInvertSelection} disabled={isLoading}>
                   {loadingAction === 'invert' && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
                   Invert Selection
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            {cacheTTLDialog}
             {onSetDisplayType && (
               <Dialog open={showDisplayTypeDialog} onOpenChange={setShowDisplayTypeDialog}>
                 <DialogContent className="sm:max-w-[320px]">

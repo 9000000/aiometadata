@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { createCustomManifestCatalog } from '@/utils/catalogUtils';
+import { CacheTTLField } from '@/components/CacheTTLField';
 
 interface CustomManifestIntegrationProps {
   isOpen: boolean;
@@ -38,7 +39,7 @@ export function CustomManifestIntegration({ isOpen, onClose }: CustomManifestInt
   const [isLoading, setIsLoading] = useState(false);
   const [manifest, setManifest] = useState<CustomManifest | null>(null);
   const [selectedCatalogs, setSelectedCatalogs] = useState<Set<string>>(new Set());
-  const [defaultCacheTTL, setDefaultCacheTTL] = useState<number>(catalogTTL);
+  const [defaultCacheTTL, setDefaultCacheTTL] = useState<number | null>(null);
 
   // Get currently imported custom manifests
   const currentCustomCatalogs = config.catalogs.filter(c => c.id.startsWith("custom."));
@@ -150,7 +151,7 @@ export function CustomManifestIntegration({ isOpen, onClose }: CustomManifestInt
               manifest,
               catalog,
               manifestUrl,
-              cacheTTL: defaultCacheTTL,
+              cacheTTL: defaultCacheTTL ?? undefined,
               displayTypeOverrides: prev.displayTypeOverrides,
             });
             newCatalogs.push(newCatalog);
@@ -238,28 +239,14 @@ export function CustomManifestIntegration({ isOpen, onClose }: CustomManifestInt
               </div>
 
               {/* TTL Configuration */}
-              <div className="space-y-2">
-                <Label htmlFor="default-cache-ttl">Default Cache TTL (seconds)</Label>
-                <div className="flex items-center space-x-2">
-                  <input
-                    id="default-cache-ttl"
-                    type="number"
-                    value={defaultCacheTTL}
-                    onChange={(e) => setDefaultCacheTTL(parseInt(e.target.value) || catalogTTL)}
-                    min="300"
-                    max="604800"
-                    step="3600"
-                    className="flex-1 px-3 py-2 border border-input bg-background rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                    placeholder={catalogTTL.toString()}
-                  />
-                  <span className="text-sm text-muted-foreground whitespace-nowrap">
-                    ({Math.floor(defaultCacheTTL / 3600)}h {Math.floor((defaultCacheTTL % 3600) / 60)}m)
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  How long to cache newly added catalogs before refreshing. Range: 5 minutes to 7 days.
-                </p>
-              </div>
+              <CacheTTLField
+                id="default-cache-ttl"
+                label="Default Cache TTL (seconds)"
+                value={defaultCacheTTL}
+                onChange={setDefaultCacheTTL}
+                min={300}
+                help="How long to cache newly added catalogs before refreshing. Range: 5 minutes to 7 days."
+              />
 
 
               {/* Manifest Info */}

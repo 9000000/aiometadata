@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Loader2, ExternalLink, AlertCircle } from 'lucide-react';
 import { toast } from "sonner";
 import { createLetterboxdCatalog } from '@/utils/catalogUtils';
+import { CacheTTLField } from '@/components/CacheTTLField';
 
 interface LetterboxdIntegrationProps {
   isOpen: boolean;
@@ -18,7 +19,7 @@ export function LetterboxdIntegration({ isOpen, onClose }: LetterboxdIntegration
   const { config, setConfig, catalogTTL } = useConfig();
   const [listUrl, setListUrl] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
-  const [defaultCacheTTL, setDefaultCacheTTL] = useState<number>(catalogTTL);
+  const [defaultCacheTTL, setDefaultCacheTTL] = useState<number | null>(null);
 
   const validateUrl = (url: string): { valid: boolean; isWatchlist: boolean; error?: string } => {
     try {
@@ -111,7 +112,7 @@ export function LetterboxdIntegration({ isOpen, onClose }: LetterboxdIntegration
         itemCount,
         isWatchlist,
         url: listUrl,
-        cacheTTL: defaultCacheTTL,
+        cacheTTL: defaultCacheTTL ?? undefined,
         displayTypeOverrides: config.displayTypeOverrides,
       });
 
@@ -189,28 +190,13 @@ export function LetterboxdIntegration({ isOpen, onClose }: LetterboxdIntegration
                 </ul>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="cache-ttl">Cache TTL (seconds)</Label>
-                <div className="flex items-center space-x-2">
-                  <input
-                    id="cache-ttl"
-                    type="number"
-                    value={defaultCacheTTL}
-                    onChange={(e) => setDefaultCacheTTL(parseInt(e.target.value) || catalogTTL)}
-                    min="7200"
-                    max="604800"
-                    step="3600"
-                    className="flex-1 px-3 py-2 border border-input bg-background rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                    placeholder={catalogTTL.toString()}
-                  />
-                  <span className="text-sm text-muted-foreground whitespace-nowrap">
-                    ({Math.floor(defaultCacheTTL / 3600)}h {Math.floor((defaultCacheTTL % 3600) / 60)}m)
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  How long to cache the list before refreshing. Range: 2 hours to 7 days.
-                </p>
-              </div>
+              <CacheTTLField
+                id="cache-ttl"
+                value={defaultCacheTTL}
+                onChange={setDefaultCacheTTL}
+                min={7200}
+                help="How long to cache the list before refreshing. Range: 2 hours to 7 days."
+              />
 
               <Button
                 onClick={handleAddList}

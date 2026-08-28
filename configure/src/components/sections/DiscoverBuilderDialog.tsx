@@ -13,6 +13,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { AlertCircle, AlertTriangle, CircleHelp, Loader2, Search, Trash2, Wand2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiCache } from '@/utils/apiCache';
+import { CacheTTLField } from '@/components/CacheTTLField';
+import { resolveCatalogTTL } from '@/lib/catalogTTL';
 
 interface DiscoverBuilderDialogProps {
   isOpen: boolean;
@@ -814,7 +816,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
   const [tmdbTvStatuses, setTmdbTvStatuses] = useState<string[]>([]);
   const [tmdbMovieReleaseTypes, setTmdbMovieReleaseTypes] = useState<string[]>([]);
   const [tmdbTvTypes, setTmdbTvTypes] = useState<string[]>([]);
-  const [cacheTTL, setCacheTTL] = useState<number>(Math.max(catalogTTL, 300));
+  const [cacheTTL, setCacheTTL] = useState<number | null>(null);
 
   const [references, setReferences] = useState<TmdbDiscoverReferenceResponse | null>(null);
   const [isLoadingReferences, setIsLoadingReferences] = useState(false);
@@ -1221,7 +1223,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     setIncludeAdult(config.includeAdult);
     setReleasedOnly(false);
     setTmdbTvStatuses([]);
-    setCacheTTL(Math.max(catalogTTL, 300));
+    setCacheTTL(null);
 
     setReferences(null);
     setIncludeGenres([]);
@@ -1355,7 +1357,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     if (fs.catalogName) setCatalogName(fs.catalogName);
     if (fs.discoverSource) setDiscoverSource(fs.discoverSource);
     if (fs.sortBy) setSortBy(fs.sortBy);
-    if (fs.cacheTTL) setCacheTTL(fs.cacheTTL);
+    setCacheTTL(fs.cacheTTL ?? null);
     if (fs.catalogType) setCatalogType(fs.catalogType);
   
     // TMDB / TVDB shared
@@ -2719,7 +2721,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
         enabled: editingCatalog?.enabled ?? true,
         showInHome: editingCatalog?.showInHome ?? true,
         source: discoverSource,
-        cacheTTL: Math.max(cacheTTL, 300),
+        cacheTTL: resolveCatalogTTL(cacheTTL, 300),
         // Preserve existing settings when editing
         ...(editingCatalog?.enableRatingPosters !== undefined && {
           enableRatingPosters: editingCatalog.enableRatingPosters
@@ -3632,20 +3634,13 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
                     </CardContent>
                   </Card>
                   )}
-                  <div className="space-y-2">
-                    <Label htmlFor="discover-cache-ttl">Cache TTL (seconds)</Label>
-                    <Input
-                      id="discover-cache-ttl"
-                      type="number"
-                      min={300}
-                      max={604800}
-                      value={cacheTTL}
-                      onChange={(event) => setCacheTTL(parseInt(event.target.value, 10) || catalogTTL)}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Minimum: 300 seconds (5 minutes)
-                    </p>
-                  </div>
+                  <CacheTTLField
+                    id="discover-cache-ttl"
+                    value={cacheTTL}
+                    onChange={setCacheTTL}
+                    min={300}
+                    help="Minimum: 300 seconds (5 minutes)"
+                  />
                 </div>
 
                 {discoverSource === 'tmdb' ? (

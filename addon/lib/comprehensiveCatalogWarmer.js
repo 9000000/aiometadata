@@ -21,6 +21,7 @@ const EXPIRY_TOLERANCE_MS = 1000;
 const consola = require('consola');
 const { loadConfigFromDatabase } = require('./configApi.js');
 const { isDiscoverCatalogId, applyDiscoverSignature } = require('./discoverCatalogSignature');
+const { markWarmRunStarted, markWarmRunFinished } = require('./catalogWarmWindow');
 const { supportsMdblistScoreFilters } = require('../utils/mdbList');
 const { getTvmazeScheduleCatalog } = require('./tvmazeScheduleCatalog');
 const { runWithRequestContext } = require('./logBuffer.js');
@@ -1086,9 +1087,14 @@ class ComprehensiveCatalogWarmer {
         const config = freshConfig;
 
         await runWithRequestContext(uuid, async () => {
+        const stampSchedule = !imagesOnly;
+        const uuidStartTime = Date.now();
+        // Published before the first catalog so the run's own writes anchor on it.
+        if (stampSchedule) {
+          await markWarmRunStarted(uuid, uuidStartTime);
+        }
         try {
           this.log('info', `Processing UUID: ${uuid} (${enabledCatalogs.length} catalogs)`);
-          const uuidStartTime = Date.now();
 
           let uuidWarmingInterrupted = false;
           for (const catalog of enabledCatalogs) {
@@ -1125,7 +1131,6 @@ class ComprehensiveCatalogWarmer {
           this.stats.uuidStats[uuid].duration = `${Math.floor(uuidDuration / 60000)}m ${Math.floor((uuidDuration % 60000) / 1000)}s`;
 
           if (!uuidWarmingInterrupted) {
-            const stampSchedule = !imagesOnly;
             await this.markWarmed(uuid, uuidStartTime, stampSchedule);
             this.log('success', `UUID ${uuid} complete: ${this.stats.uuidStats[uuid].catalogsWarmed}/${this.stats.uuidStats[uuid].totalCatalogs} catalogs, ${this.stats.uuidStats[uuid].totalPages} pages, ${this.stats.uuidStats[uuid].totalItems} items in ${this.stats.uuidStats[uuid].duration}`);
           } else {
@@ -1134,6 +1139,10 @@ class ComprehensiveCatalogWarmer {
         } catch (error) {
           this.log('error', `Failed to process UUID ${uuid}: ${error.message}`);
           this.stats.errors.push({ uuid, error: error.message });
+        } finally {
+          if (stampSchedule) {
+            await markWarmRunFinished(uuid);
+          }
         }
         });
       }

@@ -680,18 +680,6 @@
     }
   },
   "franchise": {
-    "dc_animationsData": {
-      "nameKey": "franchise_dc_animationsData",
-      "extraSupported": [
-        "skip"
-      ]
-    },
-    "dc_chronologicalData": {
-      "nameKey": "franchise_dc_chronologicalData",
-      "extraSupported": [
-        "skip"
-      ]
-    },
     "dc_DCEUMovies": {
       "nameKey": "franchise_dc_DCEUMovies",
       "extraSupported": [
@@ -700,6 +688,18 @@
     },
     "dc_DCSeries": {
       "nameKey": "franchise_dc_DCSeries",
+      "extraSupported": [
+        "skip"
+      ]
+    },
+    "dc_animationsData": {
+      "nameKey": "franchise_dc_animationsData",
+      "extraSupported": [
+        "skip"
+      ]
+    },
+    "dc_chronologicalData": {
+      "nameKey": "franchise_dc_chronologicalData",
       "extraSupported": [
         "skip"
       ]

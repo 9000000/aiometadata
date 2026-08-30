@@ -1,19 +1,5 @@
 [
   {
-    "id": "franchise.dc_animationsData",
-    "name": "DC: Animations",
-    "type": "series",
-    "source": "franchise",
-    "franchise": "dc"
-  },
-  {
-    "id": "franchise.dc_chronologicalData",
-    "name": "DC: Chronological",
-    "type": "movie",
-    "source": "franchise",
-    "franchise": "dc"
-  },
-  {
     "id": "franchise.dc_DCEUMovies",
     "name": "DC: DCEU",
     "type": "movie",
@@ -24,6 +10,20 @@
     "id": "franchise.dc_DCSeries",
     "name": "DC",
     "type": "series",
+    "source": "franchise",
+    "franchise": "dc"
+  },
+  {
+    "id": "franchise.dc_animationsData",
+    "name": "DC: Animations",
+    "type": "series",
+    "source": "franchise",
+    "franchise": "dc"
+  },
+  {
+    "id": "franchise.dc_chronologicalData",
+    "name": "DC: Chronological",
+    "type": "movie",
     "source": "franchise",
     "franchise": "dc"
   },

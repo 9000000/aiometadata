@@ -9,7 +9,32 @@ const buildInfo = require('../lib/buildInfo');
 
 const logger = consola.withTag('Letterboxd');
 
-const letterboxdDispatcher = new Agent({ allowH2: false, connect: { timeout: 30000 } });
+// Letterboxd challenges Node's default TLS cipher order outright, so the
+// connection offers the list a browser sends. The navigation headers on the
+// identifier request are the second margin: once the ciphers match, the only
+// combination still refused is default headers over HTTP/2.
+const BROWSER_CIPHERS = [
+  'TLS_AES_128_GCM_SHA256',
+  'TLS_AES_256_GCM_SHA384',
+  'TLS_CHACHA20_POLY1305_SHA256',
+  'ECDHE-ECDSA-AES128-GCM-SHA256',
+  'ECDHE-RSA-AES128-GCM-SHA256',
+  'ECDHE-ECDSA-AES256-GCM-SHA384',
+  'ECDHE-RSA-AES256-GCM-SHA384',
+  'ECDHE-ECDSA-CHACHA20-POLY1305',
+  'ECDHE-RSA-CHACHA20-POLY1305',
+  'ECDHE-RSA-AES128-SHA',
+  'ECDHE-RSA-AES256-SHA',
+  'AES128-GCM-SHA256',
+  'AES256-GCM-SHA384',
+  'AES128-SHA',
+  'AES256-SHA',
+].join(':');
+
+const letterboxdDispatcher = new Agent({
+  allowH2: false,
+  connect: { timeout: 30000, ciphers: BROWSER_CIPHERS },
+});
 
 // Rate limiting configuration for Letterboxd API (through StremThru)
 const RATE_LIMIT_CONFIG = {
@@ -137,11 +162,22 @@ export async function extractLetterboxdIdentifier(url: string): Promise<string> 
       requestUrl += '/';
     }
 
+    // Removed once as redundant; they are not. See BROWSER_CIPHERS above.
     const requestOpts = {
       dispatcher: letterboxdDispatcher,
       headers: {
         'User-Agent': `AIOMetadata/${buildInfo.version}`,
-        'Accept-Language': 'en-US,en;q=0.9'
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://letterboxd.com/',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'same-origin',
+        'Sec-Fetch-User': '?1',
+        'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"'
       }
     };
 

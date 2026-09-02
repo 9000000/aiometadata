@@ -1389,7 +1389,11 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
     }
 
     if (id === 'tmdb.top') {
-      res.results.sort((a: any, b: any) => new Date(b.release_date).getTime() - new Date(a.release_date).getTime());
+      res.results.sort((a: any, b: any) => {
+        const dateA = new Date(type === 'series' ? (a.first_air_date || 0) : (a.release_date || 0)).getTime();
+        const dateB = new Date(type === 'series' ? (b.first_air_date || 0) : (b.release_date || 0)).getTime();
+        return dateB - dateA;
+      });
     }
     const metas = await Promise.all(res.results.map(async (item: any) => {
     let stremioId = `tmdb:${item.id}`;
@@ -1499,14 +1503,10 @@ async function buildParameters(type: string, language: string, page: number, id:
     
     switch (id) {
       case "tmdb.top":
-        parameters.sort_by = 'primary_release_date.desc'
+        parameters.sort_by = type === "series" ? 'first_air_date.desc' : 'primary_release_date.desc';
         if(genre && genre.toLowerCase() !== 'none') {
           logger.debug(`Found genre: ${genre}, genre ID: ${findGenreId(genre, genreList)}`);
           parameters.with_genres = findGenreId(genre, genreList);
-        }
-        if (type === "series") {
-          parameters.watch_region = language.split("-")[1];
-          parameters.with_watch_monetization_types = "flatrate|free|ads|rent|buy";
         }
         break;
       case "tmdb.year":

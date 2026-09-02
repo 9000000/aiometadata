@@ -38,6 +38,7 @@ class RequestTracker {
     this.dailyKey = `requests:${new Date().toISOString().split("T")[0]}`;
     this.hourlyKey = `requests:${new Date().toISOString().substring(0, 13)}`;
     this.errorKey = `errors:${new Date().toISOString().split("T")[0]}`;
+    this._chartMemoryCache = new Map();
 
     // Let it run in LITE_MODE because it only checks a few specific keys
     this.cleanupCorruptedKeys().catch((error) => {
@@ -46,6 +47,19 @@ class RequestTracker {
         error.message,
       );
     });
+  }
+
+  _getCachedChartData(key, ttlMs) {
+    const entry = this._chartMemoryCache?.get(key);
+    if (entry && (Date.now() - entry.timestamp < ttlMs)) {
+      return entry.data;
+    }
+    return null;
+  }
+
+  _setCachedChartData(key, data) {
+    if (!this._chartMemoryCache) this._chartMemoryCache = new Map();
+    this._chartMemoryCache.set(key, { data, timestamp: Date.now() });
   }
 
   // Middleware to track all requests
@@ -1138,6 +1152,10 @@ class RequestTracker {
 
   // Get hourly request data for charts
   async getHourlyStats(hours = 24, tz = null) {
+    const cacheKey = `hourly:${hours}:${tz || 'default'}`;
+    const cached = this._getCachedChartData(cacheKey, 60_000); // 60s cache
+    if (cached) return cached;
+
     try {
       const hourlyData = [];
       const now = new Date();
@@ -1168,6 +1186,7 @@ class RequestTracker {
         });
       }
 
+      this._setCachedChartData(cacheKey, hourlyData);
       return hourlyData;
     } catch (error) {
       logger.error("[Request Tracker] Failed to get hourly stats:", error);
@@ -1176,6 +1195,10 @@ class RequestTracker {
   }
 
   async getActivityHeatmap(days = 7, tz = null) {
+    const cacheKey = `heatmap:${days}:${tz || 'default'}`;
+    const cached = this._getCachedChartData(cacheKey, 120_000); // 120s cache
+    if (cached) return cached;
+
     try {
       const totalHours = days * 24;
       const now = new Date();
@@ -1220,7 +1243,9 @@ class RequestTracker {
         if (grid[day][hour] > peak) peak = grid[day][hour];
       }
 
-      return { grid, peak };
+      const result = { grid, peak };
+      this._setCachedChartData(cacheKey, result);
+      return result;
     } catch (error) {
       logger.error("[Request Tracker] Failed to get activity heatmap:", error);
       return { grid: Array.from({ length: 7 }, () => new Array(24).fill(0)), peak: 0 };
@@ -1229,6 +1254,10 @@ class RequestTracker {
 
   // Get hourly provider response time data for charts
   async getHourlyProviderStats(hours = 24, tz = null) {
+    const cacheKey = `provider:${hours}:${tz || 'default'}`;
+    const cached = this._getCachedChartData(cacheKey, 60_000); // 60s cache
+    if (cached) return cached;
+
     try {
       const providers = [
         "tmdb",
@@ -1277,6 +1306,7 @@ class RequestTracker {
         hourlyData.push(hourStats);
       }
 
+      this._setCachedChartData(cacheKey, hourlyData);
       return hourlyData;
     } catch (error) {
       logger.error(

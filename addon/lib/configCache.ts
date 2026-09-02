@@ -2,6 +2,8 @@ const consola: any = require('consola');
 const redis: any = require('./redisClient');
 const { encodeCachePayload, decodeCachePayload }: any = require('./cacheCodec');
 
+const { LRUCache } = require('lru-cache');
+
 const logger: any = consola.withTag('ConfigCache');
 
 function parsePositiveIntEnv(envValue: string | undefined, defaultValue: number, minValue: number = 1): number {
@@ -22,12 +24,26 @@ function redisKey(id: string): string {
 
 const pendingLoads = new Map<string, Promise<any>>();
 
+// L1 Memory Cache: Caches user config in RAM for 60s to prevent dozens of duplicate Redis queries per catalog
+const l1ConfigCache = new LRUCache({
+  max: 1000,
+  ttl: 60 * 1000, // 60 seconds
+});
+
 class ConfigCache {
   async get(key: string): Promise<any> {
+    const rKey = redisKey(key);
+    const inMem = l1ConfigCache.get(rKey);
+    if (inMem !== undefined) return inMem;
+
     if (!redis || redis.status !== 'ready') return null;
     try {
-      const raw = await redis.getBuffer(redisKey(key));
-      return raw ? await decodeCachePayload(raw) : null;
+      const raw = await redis.getBuffer(rKey);
+      const decoded = raw ? await decodeCachePayload(raw) : null;
+      if (decoded !== null && decoded !== undefined) {
+        l1ConfigCache.set(rKey, decoded);
+      }
+      return decoded;
     } catch (err: any) {
       logger.warn(`get failed for ${String(key).substring(0, 8)}...: ${err.message}`);
       return null;
@@ -35,22 +51,28 @@ class ConfigCache {
   }
 
   async set(key: string, value: any): Promise<void> {
-    if (!redis || redis.status !== 'ready' || value === undefined) return;
+    if (value === undefined) return;
+    const rKey = redisKey(key);
+    l1ConfigCache.set(rKey, value);
+
+    if (!redis || redis.status !== 'ready') return;
     try {
       const payload = await encodeCachePayload(value, {
         compressionEnabled: isConfigCacheCompressionEnabled(),
       });
-      await redis.set(redisKey(key), payload, 'EX', CONFIG_CACHE_TTL_SEC());
+      await redis.set(rKey, payload, 'EX', CONFIG_CACHE_TTL_SEC());
     } catch (err: any) {
       logger.warn(`set failed for ${String(key).substring(0, 8)}...: ${err.message}`);
     }
   }
 
   async del(key: string): Promise<void> {
-    pendingLoads.delete(redisKey(key));
+    const rKey = redisKey(key);
+    pendingLoads.delete(rKey);
+    l1ConfigCache.delete(rKey);
     if (!redis || redis.status !== 'ready') return;
     try {
-      await redis.del(redisKey(key));
+      await redis.del(rKey);
     } catch (err: any) {
       logger.warn(`del failed for ${String(key).substring(0, 8)}...: ${err.message}`);
     }
@@ -58,6 +80,7 @@ class ConfigCache {
 
   async clear(): Promise<void> {
     pendingLoads.clear();
+    l1ConfigCache.clear();
     if (!redis || redis.status !== 'ready') return;
     try {
       let cursor = '0';

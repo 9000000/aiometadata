@@ -55,6 +55,11 @@ const l1MemoryCache = new LRUCache({
   },
   ttl: 1000 * 60 * 60 * 24 // 24h
 });
+
+const metaAliasMemoryCache = new LRUCache({
+  max: 5000,
+  ttl: 1000 * 60 * 30 // 30m in-memory cache for meta aliases
+});
 const { clampTtlToWarmWindow }: any = require('./catalogWarmWindow');
 const { clampMetaTtlToAirWindow }: any = require('./metaAirWindow');
 const {
@@ -695,7 +700,14 @@ async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, 
 
   while (retries <= maxRetries) {
     try {
-      const cached = await redis.getBuffer(versionedKey);
+      let cached: any = l1MemoryCache.get(versionedKey);
+      if (!cached) {
+        cached = await redis.getBuffer(versionedKey);
+        if (cached) {
+          l1MemoryCache.set(versionedKey, cached);
+        }
+      }
+
       if (cached) {
         try {
           const parsed = await decodeCachePayload(cached);
@@ -704,6 +716,7 @@ async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, 
             const errorAge = Date.now() - new Date(parsed.timestamp).getTime();
             if (errorAge > ERROR_TTL_STRATEGIES.TEMPORARY_ERROR * 1000) {
               globalCacheLogger.debug(`[Global-Cache] Retrying expired temporary error for ${truncateCacheKey(versionedKey)}`);
+              l1MemoryCache.delete(versionedKey);
               await redis.del(versionedKey);
             } else {
               globalCacheLogger.debug(`[Global-Cache] Cached error returned for ${truncateCacheKey(versionedKey)}`);
@@ -721,6 +734,7 @@ async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, 
           }
         } catch (parseError: any) {
           globalCacheLogger.warn(`Corrupted cache entry for ${versionedKey}, attempting self-healing`);
+          l1MemoryCache.delete(versionedKey);
           await attemptSelfHealing(versionedKey, parseError);
         }
       }
@@ -747,7 +761,9 @@ async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, 
         }
 
         if (result !== null && result !== undefined) {
-          await redis.set(versionedKey, await encodeCachePayload(result), 'EX', finalTtl);
+          const encodedPayload = await encodeCachePayload(result);
+          await redis.set(versionedKey, encodedPayload, 'EX', finalTtl);
+          l1MemoryCache.set(versionedKey, encodedPayload);
         }
       } else {
         globalCacheLogger.debug(`[Global-Cache] Skipping cache for ${versionedKey} (TTL: 0)`);
@@ -771,7 +787,9 @@ async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, 
               message: error.message,
               timestamp: new Date().toISOString()
             };
-            await redis.set(versionedKey, await encodeCachePayload(errorResult), 'EX', errorTtl);
+            const encodedError = await encodeCachePayload(errorResult);
+            await redis.set(versionedKey, encodedError, 'EX', errorTtl);
+            l1MemoryCache.set(versionedKey, encodedError);
             globalCacheLogger.warn(`Cached ${classification.type} error for ${versionedKey} for ${errorTtl}s`);
           } catch (err: any) {
             globalCacheLogger.warn(`Failed to cache error for key ${versionedKey}:`, err);
@@ -1949,10 +1967,16 @@ async function writeMetaComponentsBatchWithConfig({ config, metas, ttl = META_TT
 }
 
 async function readMetaAlias({ config, metaId, type = null, useShowPoster = false }: { config: any; metaId: string; type?: string | null; useShowPoster?: boolean }): Promise<string | null> {
+  const cacheKey = withEpoch(buildMetaAliasCacheKey({ config, metaId, type, useShowPoster }));
+  const inMem = metaAliasMemoryCache.get(cacheKey);
+  if (inMem !== undefined) return inMem;
+
   if (!redis) return null;
   try {
-    const aliased = await redis.get(withEpoch(buildMetaAliasCacheKey({ config, metaId, type, useShowPoster })));
-    return typeof aliased === 'string' && aliased ? aliased : null;
+    const aliased = await redis.get(cacheKey);
+    const result = typeof aliased === 'string' && aliased ? aliased : null;
+    metaAliasMemoryCache.set(cacheKey, result);
+    return result;
   } catch (error: any) {
     cacheLogger.warn(`[Meta] Alias read failed for ${metaId}: ${error?.message}`);
     return null;
@@ -1960,9 +1984,12 @@ async function readMetaAlias({ config, metaId, type = null, useShowPoster = fals
 }
 
 async function writeMetaAlias({ config, metaId, aliasTo, ttl = META_TTL(), type = null, useShowPoster = false }: { config: any; metaId: string; aliasTo: string; ttl?: number; type?: string | null; useShowPoster?: boolean }): Promise<void> {
-  if (!redis || !metaId || !aliasTo || metaId === aliasTo) return;
+  if (!metaId || !aliasTo || metaId === aliasTo) return;
+  const cacheKey = withEpoch(buildMetaAliasCacheKey({ config, metaId, type, useShowPoster }));
+  metaAliasMemoryCache.set(cacheKey, aliasTo);
+  if (!redis) return;
   try {
-    await redis.set(withEpoch(buildMetaAliasCacheKey({ config, metaId, type, useShowPoster })), aliasTo, 'EX', ttl);
+    await redis.set(cacheKey, aliasTo, 'EX', ttl);
   } catch (error: any) {
     cacheLogger.warn(`[Meta] Alias write failed for ${metaId} -> ${aliasTo}: ${error?.message}`);
   }

@@ -3,6 +3,7 @@ import { createInterface } from 'readline';
 import { Readable } from 'stream';
 import { request } from 'undici';
 import consola from 'consola';
+import { LRUCache } from 'lru-cache';
 import redis from './redisClient';
 const buildInfo = require('./buildInfo');
 
@@ -20,6 +21,12 @@ export interface ImdbRating {
   rating: number;
   votes: number;
 }
+
+// L1 Memory Cache: Caches IMDb ratings in RAM for 1 hour to prevent duplicate HGET/HMGET calls
+const imdbRatingMemoryCache = new LRUCache<string, ImdbRating | null>({
+  max: 10000,
+  ttl: 1000 * 60 * 60, // 1 hour
+});
 
 // State tracking
 let ratingsLoaded = false;
@@ -185,6 +192,9 @@ export async function downloadAndCacheIMDbRatings(): Promise<boolean> {
 export async function getImdbRating(imdbId: string): Promise<ImdbRating | null> {
   if (!imdbId) return null;
 
+  const inMem = imdbRatingMemoryCache.get(imdbId);
+  if (inMem !== undefined) return inMem;
+
   try {
     totalRequests++;
     
@@ -195,12 +205,14 @@ export async function getImdbRating(imdbId: string): Promise<ImdbRating | null> 
         const rating = parseRedisRating(result);
         if (rating) {
           cacheHits++;
+          imdbRatingMemoryCache.set(imdbId, rating);
           return rating;
         }
       }
     }
 
     cacheMisses++;
+    imdbRatingMemoryCache.set(imdbId, null);
     return null;
 
   } catch (error) {
@@ -218,24 +230,39 @@ export async function getImdbRatingStrings(imdbIds: string[]): Promise<Map<strin
   const ids = [...new Set(imdbIds.filter(Boolean))];
   if (ids.length === 0) return found;
 
+  const missingIds: string[] = [];
+  for (const id of ids) {
+    const inMem = imdbRatingMemoryCache.get(id);
+    if (inMem !== undefined) {
+      if (inMem !== null) found.set(id, String(inMem.rating));
+    } else {
+      missingIds.push(id);
+    }
+  }
+
+  if (missingIds.length === 0) return found;
+
   try {
     if (!redis) return found;
 
-    totalRequests += ids.length;
-    const values: Array<string | null> = await redis.hmget(REDIS_RATINGS_HASH, ...ids);
+    totalRequests += missingIds.length;
+    const values: Array<string | null> = await redis.hmget(REDIS_RATINGS_HASH, ...missingIds);
 
-    ids.forEach((id, index) => {
+    missingIds.forEach((id, index) => {
       const raw = values?.[index];
       if (!raw) {
         cacheMisses++;
+        imdbRatingMemoryCache.set(id, null);
         return;
       }
       const rating = parseRedisRating(raw);
       if (!rating) {
         cacheMisses++;
+        imdbRatingMemoryCache.set(id, null);
         return;
       }
       cacheHits++;
+      imdbRatingMemoryCache.set(id, rating);
       found.set(id, String(rating.rating));
     });
   } catch (error) {

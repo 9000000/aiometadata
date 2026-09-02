@@ -122,3 +122,4 @@ addon/data/poster-cache/
 addon/lib/buildInfo.js
 
 .agent/
+log.txt

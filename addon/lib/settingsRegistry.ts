@@ -1283,6 +1283,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: true,
   },
   {
+    key: 'ENABLE_USER_REQUEST_TRACKING',
+    envVar: 'ENABLE_USER_REQUEST_TRACKING',
+    label: 'Track User Requests & Activity',
+    description: 'Track request counts and last active timestamp per user for the User Management dashboard',
+    category: 'Diagnostics',
+    type: 'boolean',
+    default: true,
+  },
+  {
     key: 'ENABLE_REDIS_PERIODIC_REPORT',
     envVar: 'ENABLE_REDIS_PERIODIC_REPORT',
     label: 'Enable Redis Periodic Summary',

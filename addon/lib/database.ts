@@ -266,7 +266,13 @@ class Database {
         PRIMARY KEY (account_id, user_uuid),
         FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
       )`,
-      `CREATE INDEX IF NOT EXISTS idx_account_configs_uuid ON account_configs(user_uuid)`
+      `CREATE INDEX IF NOT EXISTS idx_account_configs_uuid ON account_configs(user_uuid)`,
+      `CREATE TABLE IF NOT EXISTS user_stats (
+        user_uuid TEXT PRIMARY KEY,
+        total_requests INTEGER NOT NULL DEFAULT 0,
+        last_active_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_user_stats_last_active ON user_stats(last_active_at)`
     ];
 
     for (const query of queries) {
@@ -348,7 +354,13 @@ class Database {
         last_opened_at TIMESTAMP,
         PRIMARY KEY (account_id, user_uuid)
       )`,
-      `CREATE INDEX IF NOT EXISTS idx_account_configs_uuid ON account_configs(user_uuid)`
+      `CREATE INDEX IF NOT EXISTS idx_account_configs_uuid ON account_configs(user_uuid)`,
+      `CREATE TABLE IF NOT EXISTS user_stats (
+        user_uuid VARCHAR(255) PRIMARY KEY,
+        total_requests BIGINT NOT NULL DEFAULT 0,
+        last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_user_stats_last_active ON user_stats(last_active_at)`
     ];
 
     for (const query of queries) {
@@ -635,6 +647,10 @@ class Database {
       ? 'DELETE FROM user_configs WHERE user_uuid = ?'
       : 'DELETE FROM user_configs WHERE user_uuid = $1';
     await this.runQuery(query, [userUUID]);
+    const deleteStatsQuery = this.type === 'sqlite'
+      ? 'DELETE FROM user_stats WHERE user_uuid = ?'
+      : 'DELETE FROM user_stats WHERE user_uuid = $1';
+    await this.runQuery(deleteStatsQuery, [userUUID]);
     await this.unlinkConfigFromAllAccounts(userUUID);
   }
 
@@ -655,6 +671,12 @@ class Database {
         ? 'DELETE FROM user_aliases WHERE user_uuid = ?'
         : 'DELETE FROM user_aliases WHERE user_uuid = $1';
       await this.runAliasCleanup(deleteAliasQuery, [userUUID]);
+
+      const deleteStatsQuery = this.type === 'sqlite'
+        ? 'DELETE FROM user_stats WHERE user_uuid = ?'
+        : 'DELETE FROM user_stats WHERE user_uuid = $1';
+      await this.runQuery(deleteStatsQuery, [userUUID]);
+
       await this.unlinkConfigFromAllAccounts(userUUID);
 
       logger.info(`Successfully deleted user ${userUUID} and all associated data`);
@@ -880,33 +902,77 @@ class Database {
     }
   }
 
+  async recordUserStatsBatch(batch: Array<{ userUUID: string; requests: number; lastActive: string }>): Promise<void> {
+    if (!batch || batch.length === 0) return;
+    if (!this.initialized) await this.initialize();
+    try {
+      if (this.type === 'sqlite') {
+        const stmt = this.db.prepare(`
+          INSERT INTO user_stats (user_uuid, total_requests, last_active_at)
+          VALUES (?, ?, ?)
+          ON CONFLICT(user_uuid) DO UPDATE SET
+            total_requests = user_stats.total_requests + excluded.total_requests,
+            last_active_at = excluded.last_active_at
+        `);
+        const insertMany = this.db.transaction((items: Array<{ userUUID: string; requests: number; lastActive: string }>) => {
+          for (const item of items) {
+            stmt.run(item.userUUID, item.requests, item.lastActive);
+          }
+        });
+        insertMany(batch);
+      } else {
+        for (const item of batch) {
+          await this.runQuery(`
+            INSERT INTO user_stats (user_uuid, total_requests, last_active_at)
+            VALUES ($1, $2, $3)
+            ON CONFLICT(user_uuid) DO UPDATE SET
+              total_requests = user_stats.total_requests + EXCLUDED.total_requests,
+              last_active_at = EXCLUDED.last_active_at
+          `, [item.userUUID, item.requests, item.lastActive]);
+        }
+      }
+    } catch (error: any) {
+      logger.warn('Failed to record user stats batch:', error?.message);
+    }
+  }
+
   async getAllUsersWithStats(): Promise<any[]> {
     try {
       const query = this.type === 'sqlite'
         ? `SELECT
-             user_uuid,
-             created_at,
-             updated_at,
-             CASE WHEN json_extract(config_data, '$.apiKeys.tmdb') IS NOT NULL
-                    OR json_extract(config_data, '$.apiKeys.tvdb') IS NOT NULL
-                    OR json_extract(config_data, '$.apiKeys.imdb') IS NOT NULL
-                    OR json_extract(config_data, '$.apiKeys.kitsu') IS NOT NULL
+             uc.user_uuid,
+             uc.created_at,
+             uc.updated_at,
+             COALESCE(us.total_requests, 0) AS total_requests,
+             us.last_active_at,
+             CASE WHEN json_extract(uc.config_data, '$.apiKeys.tmdb') IS NOT NULL
+                    OR json_extract(uc.config_data, '$.apiKeys.tvdb') IS NOT NULL
+                    OR json_extract(uc.config_data, '$.apiKeys.imdb') IS NOT NULL
+                    OR json_extract(uc.config_data, '$.apiKeys.kitsu') IS NOT NULL
                THEN 1 ELSE 0 END AS has_api_keys,
-             CASE WHEN updated_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END AS is_active
-           FROM user_configs
-           ORDER BY created_at DESC`
+             CASE WHEN (us.last_active_at IS NOT NULL AND us.last_active_at >= datetime('now', '-7 days'))
+                    OR uc.updated_at >= datetime('now', '-7 days')
+               THEN 1 ELSE 0 END AS is_active
+           FROM user_configs uc
+           LEFT JOIN user_stats us ON us.user_uuid = uc.user_uuid
+           ORDER BY COALESCE(us.last_active_at, uc.updated_at, uc.created_at) DESC`
         : `SELECT
-             user_uuid,
-             created_at,
-             updated_at,
-             CASE WHEN (config_data::jsonb->'apiKeys'->>'tmdb') IS NOT NULL
-                    OR (config_data::jsonb->'apiKeys'->>'tvdb') IS NOT NULL
-                    OR (config_data::jsonb->'apiKeys'->>'imdb') IS NOT NULL
-                    OR (config_data::jsonb->'apiKeys'->>'kitsu') IS NOT NULL
+             uc.user_uuid,
+             uc.created_at,
+             uc.updated_at,
+             COALESCE(us.total_requests, 0) AS total_requests,
+             us.last_active_at,
+             CASE WHEN (uc.config_data::jsonb->'apiKeys'->>'tmdb') IS NOT NULL
+                    OR (uc.config_data::jsonb->'apiKeys'->>'tvdb') IS NOT NULL
+                    OR (uc.config_data::jsonb->'apiKeys'->>'imdb') IS NOT NULL
+                    OR (uc.config_data::jsonb->'apiKeys'->>'kitsu') IS NOT NULL
                THEN true ELSE false END AS has_api_keys,
-             CASE WHEN updated_at >= NOW() - INTERVAL '7 days' THEN true ELSE false END AS is_active
-           FROM user_configs
-           ORDER BY created_at DESC`;
+             CASE WHEN (us.last_active_at IS NOT NULL AND us.last_active_at >= NOW() - INTERVAL '7 days')
+                    OR uc.updated_at >= NOW() - INTERVAL '7 days'
+               THEN true ELSE false END AS is_active
+           FROM user_configs uc
+           LEFT JOIN user_stats us ON us.user_uuid = uc.user_uuid
+           ORDER BY COALESCE(us.last_active_at, uc.updated_at, uc.created_at) DESC`;
 
       const rows = await this.allQuery(query);
 
@@ -918,8 +984,8 @@ class Database {
         alias: aliasByUuid.get(row.user_uuid) || null,
         created_at: row.created_at,
         last_updated: row.updated_at,
-        last_activity: null,
-        total_requests: 0,
+        last_activity: row.last_active_at || null,
+        total_requests: Number(row.total_requests) || 0,
         has_api_keys: !!row.has_api_keys,
         config_status: 'configured',
         is_active: !!row.is_active
@@ -933,8 +999,14 @@ class Database {
   async getUserDetails(userUUID: string): Promise<any> {
     try {
       const query = this.type === 'sqlite'
-        ? 'SELECT * FROM user_configs WHERE user_uuid = ?'
-        : 'SELECT * FROM user_configs WHERE user_uuid = $1';
+        ? `SELECT uc.*, COALESCE(us.total_requests, 0) AS total_requests, us.last_active_at
+           FROM user_configs uc
+           LEFT JOIN user_stats us ON us.user_uuid = uc.user_uuid
+           WHERE uc.user_uuid = ?`
+        : `SELECT uc.*, COALESCE(us.total_requests, 0) AS total_requests, us.last_active_at
+           FROM user_configs uc
+           LEFT JOIN user_stats us ON us.user_uuid = uc.user_uuid
+           WHERE uc.user_uuid = $1`;
 
       const row = await this.getQuery(query, [userUUID]);
 
@@ -954,8 +1026,8 @@ class Database {
         uuid: row.user_uuid,
         created_at: row.created_at,
         last_updated: row.updated_at,
-        last_activity: null,
-        total_requests: 0,
+        last_activity: row.last_active_at || null,
+        total_requests: Number(row.total_requests) || 0,
         api_keys: {
           tmdb: !!configData?.apiKeys?.tmdb,
           tvdb: !!configData?.apiKeys?.tvdb,
@@ -1048,13 +1120,27 @@ class Database {
       const cutoffDateStr = cutoffDate.toISOString();
 
       const query = this.type === 'sqlite'
-        ? 'DELETE FROM user_configs WHERE updated_at < ?'
-        : 'DELETE FROM user_configs WHERE updated_at < $1';
+        ? `DELETE FROM user_configs
+           WHERE updated_at < ?
+             AND (
+               user_uuid NOT IN (SELECT user_uuid FROM user_stats)
+               OR user_uuid IN (SELECT user_uuid FROM user_stats WHERE last_active_at < ?)
+             )`
+        : `DELETE FROM user_configs
+           WHERE updated_at < $1
+             AND (
+               user_uuid NOT IN (SELECT user_uuid FROM user_stats)
+               OR user_uuid IN (SELECT user_uuid FROM user_stats WHERE last_active_at < $1)
+             )`;
 
-      const result = await this.runQuery(query, [cutoffDateStr]);
+      const params = this.type === 'sqlite' ? [cutoffDateStr, cutoffDateStr] : [cutoffDateStr];
+      const result = await this.runQuery(query, params);
 
       await this.runAliasCleanup(
         'DELETE FROM user_aliases WHERE user_uuid NOT IN (SELECT user_uuid FROM user_configs)'
+      );
+      await this.runQuery(
+        'DELETE FROM user_stats WHERE user_uuid NOT IN (SELECT user_uuid FROM user_configs)'
       );
 
       return this.type === 'sqlite' ? result.changes : result.rowCount;

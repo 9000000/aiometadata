@@ -427,7 +427,7 @@ export function UserManagementModal({ isOpen, onClose, adminKey }: UserManagemen
                     <TableHead>UUID</TableHead>
                     {aliasesEnabled && <TableHead>Alias</TableHead>}
                     <TableHead>Created</TableHead>
-                    <TableHead>Last Updated</TableHead>
+                    <TableHead>Last Active</TableHead>
                     <TableHead>Requests</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>API Keys</TableHead>
@@ -470,7 +470,7 @@ export function UserManagementModal({ isOpen, onClose, adminKey }: UserManagemen
                         <TableCell>
                           <div className="flex items-center gap-2">
                             <Activity className="h-3 w-3 text-muted-foreground" />
-                            {formatRelativeTime(user.last_updated)}
+                            {formatRelativeTime(user.last_activity || user.last_updated)}
                           </div>
                         </TableCell>
                         <TableCell>{user.total_requests.toLocaleString()}</TableCell>
@@ -599,8 +599,8 @@ export function UserManagementModal({ isOpen, onClose, adminKey }: UserManagemen
                       <span>{formatDate(user.created_at)}</span>
                     </div>
                     <div className="flex justify-between text-sm mb-1">
-                      <span className="text-muted-foreground">Last Updated</span>
-                      <span>{formatRelativeTime(user.last_updated)}</span>
+                      <span className="text-muted-foreground">Last Active</span>
+                      <span>{formatRelativeTime(user.last_activity || user.last_updated)}</span>
                     </div>
                     <div className="flex justify-between text-sm mb-2">
                       <span className="text-muted-foreground">Requests</span>
@@ -651,7 +651,11 @@ export function UserManagementModal({ isOpen, onClose, adminKey }: UserManagemen
                   <p className="text-sm text-muted-foreground">{formatDate(selectedUser.created_at)}</p>
                 </div>
                 <div>
-                  <label className="text-sm font-medium">Last Updated</label>
+                  <label className="text-sm font-medium">Last Active</label>
+                  <p className="text-sm text-muted-foreground">{selectedUser.last_activity ? formatRelativeTime(selectedUser.last_activity) : 'Never'}</p>
+                </div>
+                <div>
+                  <label className="text-sm font-medium">Last Updated (Config)</label>
                   <p className="text-sm text-muted-foreground">{formatRelativeTime(selectedUser.last_updated)}</p>
                 </div>
                 <div>

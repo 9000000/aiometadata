@@ -26,6 +26,7 @@ const redis = require("./lib/redisClient");
 const { warmEssentialContent, warmPopularContent, scheduleEssentialWarming } = require("./lib/cacheWarmer");
 const requestTracker = require("./lib/requestTracker");
 const { runWithRequestContext } = require('./lib/logBuffer.js');
+const { userActivityTracker } = require('./lib/userActivityTracker');
 const { getSetting } = require('./lib/settingsService');
 const { isLiteMode } = require('./lib/metricsConfig');
 const consola = require('consola');
@@ -203,7 +204,13 @@ if (!isLiteMode()) {
 
 addon.use((req, res, next) => {
   const m = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i.exec(req.path);
-  if (m) return runWithRequestContext(m[1], () => next());
+  if (m) {
+    const userUUID = m[1];
+    if (req.path.startsWith('/stremio/') || req.path.includes('/manifest.json') || req.path.includes('/catalog/') || req.path.includes('/meta/') || req.path.includes('/stream/') || req.path.includes('/subtitles/')) {
+      userActivityTracker.record(userUUID);
+    }
+    return runWithRequestContext(userUUID, () => next());
+  }
   next();
 });
 
@@ -6170,6 +6177,7 @@ addon.post('/api/admin/prune-id-mappings', requireDashboardAdmin, async (req, re
 addon.get('/api/admin/users', requireDashboardAdmin, async (req, res) => {
   
   try {
+    await userActivityTracker.flush();
     const users = await database.getAllUsersWithStats();
     res.json({ users });
   } catch (error) {
@@ -6196,6 +6204,7 @@ addon.get('/api/admin/users/export', requireDashboardAdmin, async (req, res) => 
 addon.get('/api/admin/users/:userUUID', requireDashboardAdmin, async (req, res) => {
   
   try {
+    await userActivityTracker.flush();
     const { userUUID } = req.params;
     const userDetails = await database.getUserDetails(userUUID);
     

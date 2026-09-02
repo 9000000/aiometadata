@@ -2473,18 +2473,18 @@ class DashboardAPI {
         }
       }
 
-      // Check request tracker for active users (if Redis has real-time online in 15min)
-      if (this.requestTracker) {
+      // Check request tracker for active users / requests only if metrics are active (skip in LITE_MODE to save Redis quota)
+      const { isLiteMode, isMetricsDisabled } = require('./metricsConfig');
+      const metricsActive = !isLiteMode() && !isMetricsDisabled();
+
+      if (metricsActive && this.requestTracker) {
         try {
           const rtActive = await this.requestTracker.getActiveUsers("15min");
           if (rtActive > 0) {
             activeUsers = rtActive;
           }
         } catch {}
-      }
 
-      // Check request tracker for total requests (take max of redis and db)
-      if (this.requestTracker) {
         try {
           const requestStats = await this.requestTracker.getStats();
           if (requestStats?.totalRequests && requestStats.totalRequests > totalRequests) {
@@ -2493,8 +2493,8 @@ class DashboardAPI {
         } catch {}
       }
 
-      // Get recent user activity (first try Redis, fallback to DB users)
-      let userActivity = await this.getRecentUserActivity();
+      // Get recent user activity (first try Redis if metrics active, fallback to DB users)
+      let userActivity = metricsActive ? await this.getRecentUserActivity() : [];
       if ((!userActivity || userActivity.length === 0) && this.database) {
         try {
           const allUsers = await this.database.getAllUsersWithStats();

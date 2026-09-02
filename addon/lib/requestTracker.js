@@ -1195,6 +1195,11 @@ class RequestTracker {
   }
 
   async getActivityHeatmap(days = 7, tz = null) {
+    const { isLiteMode } = require('./metricsConfig');
+    if (isMetricsDisabled() || isLiteMode()) {
+      return { grid: Array.from({ length: 7 }, () => new Array(24).fill(0)), peak: 0 };
+    }
+
     const cacheKey = `heatmap:${days}:${tz || 'default'}`;
     const cached = this._getCachedChartData(cacheKey, 120_000); // 120s cache
     if (cached) return cached;

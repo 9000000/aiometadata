@@ -2449,39 +2449,72 @@ class DashboardAPI {
   // Get user statistics and activity data with simplified methodology
   async getUserStats() {
     try {
-      // Use database as primary source for total users (most accurate)
+      try {
+        const { userActivityTracker } = require('./userActivityTracker');
+        if (userActivityTracker) {
+          await userActivityTracker.flush().catch(() => {});
+        }
+      } catch {}
+
       let totalUsers = 0;
       let activeUsers = 0;
       let newUsersToday = 0;
+      let totalRequests = 0;
 
       if (this.database) {
         try {
-          // Total users = non-deleted users in database
-          const userUUIDs = await this.database.getAllUserUUIDs();
-          totalUsers = userUUIDs.length;
-
-          // New users today from database
-          newUsersToday = await this.database.getUsersCreatedToday();
+          const dbOverview = await this.database.getUserStatsOverview();
+          totalUsers = dbOverview.totalUsers || 0;
+          activeUsers = dbOverview.activeUsers || 0;
+          newUsersToday = dbOverview.newUsersToday || 0;
+          totalRequests = dbOverview.totalRequests || 0;
         } catch (dbError) {
-          logger.warn(
-            "Database query failed:",
-            dbError.message,
-          );
+          logger.warn("Database getUserStatsOverview failed:", dbError.message);
         }
       }
 
-      // Use request tracker only for active users (better for real-time activity)
+      // Check request tracker for active users (if Redis has real-time online in 15min)
       if (this.requestTracker) {
-        activeUsers = await this.requestTracker.getActiveUsers("15min"); // Active in last 15 minutes
+        try {
+          const rtActive = await this.requestTracker.getActiveUsers("15min");
+          if (rtActive > 0) {
+            activeUsers = rtActive;
+          }
+        } catch {}
       }
 
-      // Get total requests from request tracker
-      const requestStats = this.requestTracker
-        ? await this.requestTracker.getStats()
-        : { totalRequests: 0 };
+      // Check request tracker for total requests (take max of redis and db)
+      if (this.requestTracker) {
+        try {
+          const requestStats = await this.requestTracker.getStats();
+          if (requestStats?.totalRequests && requestStats.totalRequests > totalRequests) {
+            totalRequests = requestStats.totalRequests;
+          }
+        } catch {}
+      }
 
-      // Get recent user activity (last 24 hours of requests)
-      const userActivity = await this.getRecentUserActivity();
+      // Get recent user activity (first try Redis, fallback to DB users)
+      let userActivity = await this.getRecentUserActivity();
+      if ((!userActivity || userActivity.length === 0) && this.database) {
+        try {
+          const allUsers = await this.database.getAllUsersWithStats();
+          userActivity = allUsers
+            .filter(u => u.total_requests > 0 || u.last_activity)
+            .slice(0, 10)
+            .map(u => ({
+              id: u.uuid,
+              username: u.alias ? `${u.alias} (${u.uuid.substring(0, 8)})` : `User ${u.uuid.substring(0, 8)}`,
+              lastSeen: this.formatTimeAgo(u.last_activity || u.last_updated),
+              requests: u.total_requests || 0,
+              status: u.is_active ? "active" : "offline",
+              userAgent: "Stremio Addon",
+              lastEndpoint: "/stremio/manifest.json",
+              anonymizedIP: "Local/Stored",
+            }));
+        } catch (actErr) {
+          logger.warn("Failed to get fallback user activity from DB:", actErr.message);
+        }
+      }
 
       // Access control stats (simplified - in a real system you'd track these)
       const accessControl = {
@@ -2492,15 +2525,15 @@ class DashboardAPI {
       };
 
       logger.debug(
-        `User Stats - Total: ${totalUsers}, Active: ${activeUsers}, New Today: ${newUsersToday}`,
+        `User Stats - Total: ${totalUsers}, Active: ${activeUsers}, New Today: ${newUsersToday}, Requests: ${totalRequests}`,
       );
 
       return {
         totalUsers,
         activeUsers,
         newUsersToday,
-        totalRequests: requestStats.totalRequests || 0,
-        userActivity,
+        totalRequests,
+        userActivity: userActivity || [],
         accessControl,
       };
     } catch (error) {

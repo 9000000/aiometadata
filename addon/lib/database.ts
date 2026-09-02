@@ -521,6 +521,47 @@ class Database {
     return row ? parseInt(row.count) : 0;
   }
 
+  async getUserStatsOverview(): Promise<{ totalUsers: number; activeUsers: number; newUsersToday: number; totalRequests: number }> {
+    try {
+      if (!this.initialized) await this.initialize();
+      const userUUIDs = await this.getAllUserUUIDs();
+      const totalUsers = userUUIDs.length;
+      const newUsersToday = await this.getUsersCreatedToday();
+
+      let activeUsers = 0;
+      let totalRequests = 0;
+
+      if (this.type === 'sqlite') {
+        const activeRow = await this.getQuery(`
+          SELECT COUNT(DISTINCT user_uuid) as count FROM user_stats
+          WHERE last_active_at >= datetime('now', '-7 days')
+        `);
+        activeUsers = activeRow?.count ? Number(activeRow.count) : 0;
+
+        const reqRow = await this.getQuery(`
+          SELECT COALESCE(SUM(total_requests), 0) as total FROM user_stats
+        `);
+        totalRequests = reqRow?.total ? Number(reqRow.total) : 0;
+      } else {
+        const activeRow = await this.getQuery(`
+          SELECT COUNT(DISTINCT user_uuid) as count FROM user_stats
+          WHERE last_active_at >= NOW() - INTERVAL '7 days'
+        `);
+        activeUsers = activeRow?.count ? Number(activeRow.count) : 0;
+
+        const reqRow = await this.getQuery(`
+          SELECT COALESCE(SUM(total_requests), 0) as total FROM user_stats
+        `);
+        totalRequests = reqRow?.total ? Number(reqRow.total) : 0;
+      }
+
+      return { totalUsers, activeUsers, newUsersToday, totalRequests };
+    } catch (error: any) {
+      logger.error('Error getting user stats overview from database:', error?.message);
+      return { totalUsers: 0, activeUsers: 0, newUsersToday: 0, totalRequests: 0 };
+    }
+  }
+
   async getCachedIdMapping(contentType: string, tmdbId: string | null = null, tvdbId: string | null = null, imdbId: string | null = null, tvmazeId: string | null = null): Promise<any> {
     const conditions: string[] = [];
     const params: any[] = [];

@@ -630,7 +630,7 @@ export function Dashboard() {
             {ssoEnabled && <DashboardAccounts activeTab={activeTab} />}
             <DashboardUsers
               data={dashboardData.users}
-              loading={dashboardData.loading}
+              loading={usersQuery.isLoading && !usersQuery.data}
               activeTab={activeTab}
             />
           </div>
@@ -871,7 +871,7 @@ export function Dashboard() {
               {ssoEnabled && <DashboardAccounts activeTab={activeTab} />}
               <DashboardUsers
                 data={dashboardData.users}
-                loading={dashboardData.loading}
+                loading={usersQuery.isLoading && !usersQuery.data}
                 activeTab={activeTab}
               />
             </TabsContent>

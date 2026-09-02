@@ -21,6 +21,10 @@ const {
   normalizeMetaReleaseAvailability,
   normalizeReleaseAvailabilityInPayload,
 }: any = require('../utils/releaseAvailability');
+const {
+  normalizeMetaCredits,
+  normalizeCreditsInPayload,
+}: any = require('../utils/metaCredits');
 
 function hashConfig(configObj: any): string {
   const str = typeof configObj === 'string' ? configObj : stableStringify(configObj);
@@ -52,6 +56,7 @@ const l1MemoryCache = new LRUCache({
   ttl: 1000 * 60 * 60 * 24 // 24h
 });
 const { clampTtlToWarmWindow }: any = require('./catalogWarmWindow');
+const { clampMetaTtlToAirWindow }: any = require('./metaAirWindow');
 const {
   isRefreshAheadEnabled,
   isDueForRefresh,
@@ -1187,6 +1192,7 @@ function applyTrailerStreamsProjection(meta: any): any {
 
 async function projectMetaForUser(meta: any, config: any): Promise<any> {
   if (!meta) return meta;
+  normalizeMetaCredits(meta);
   applyTrailerStreamsProjection(meta);
   applyCastCountProjection(meta, config);
   applyBlurThumbProjection(meta, config);
@@ -1552,6 +1558,7 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
         return normalizeReleaseAvailabilityInPayload(await method());
       }, writeTTL, options);
   normalizeReleaseAvailabilityInPayload(result);
+  normalizeCreditsInPayload(result);
 
   if (result?.metas?.length) {
     const displayAgeRating = config.displayAgeRating || false;
@@ -1888,7 +1895,12 @@ async function writeMetaComponentsWithConfig({ config, metaId, result, ttl = MET
     queueComponentCache(componentsToCache, componentCacheKeys.extras, { app_extras: extrasForCache });
   }
 
-  await cacheComponentsPipeline(componentsToCache, ttl, { overwrite });
+  const airWindowTtl = clampMetaTtlToAirWindow(meta, ttl);
+  if (airWindowTtl !== ttl) {
+    cacheLogger.debug(`[Meta] Holding ${metaId} to ${airWindowTtl}s so it lapses after the next episode airs (base ${ttl}s)`);
+  }
+
+  await cacheComponentsPipeline(componentsToCache, airWindowTtl, { overwrite });
 
   try {
     const coldStore = require('./metaColdStore');

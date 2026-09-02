@@ -1274,6 +1274,24 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
 
   // --- Diagnostics ---
   {
+    key: 'ENABLE_REDIS_LOG',
+    envVar: 'ENABLE_REDIS_LOG',
+    label: 'Enable Redis Request Logging',
+    description: 'Log every Redis command, target key, and calling file in real-time to monitor background queries',
+    category: 'Diagnostics',
+    type: 'boolean',
+    default: true,
+  },
+  {
+    key: 'ENABLE_REDIS_PERIODIC_REPORT',
+    envVar: 'ENABLE_REDIS_PERIODIC_REPORT',
+    label: 'Enable Redis Periodic Summary',
+    description: 'Print periodic summary report of Redis commands and top background callers every 60s',
+    category: 'Diagnostics',
+    type: 'boolean',
+    default: true,
+  },
+  {
     key: 'LOG_BUFFER_SIZE',
     envVar: 'LOG_BUFFER_SIZE',
     label: 'Log Buffer Size',

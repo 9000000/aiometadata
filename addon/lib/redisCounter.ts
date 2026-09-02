@@ -58,6 +58,28 @@ function extractKey(cmd: string, args: any[]): string {
   return String(first);
 }
 
+function isRealtimeLogEnabled(): boolean {
+  try {
+    const { getSetting } = require('./settingsService.js');
+    const val = getSetting('ENABLE_REDIS_LOG');
+    if (val !== undefined && val !== '') {
+      return val === 'true' || val === true;
+    }
+  } catch {}
+  return process.env.ENABLE_REDIS_LOG !== 'false';
+}
+
+function isPeriodicReportEnabled(): boolean {
+  try {
+    const { getSetting } = require('./settingsService.js');
+    const val = getSetting('ENABLE_REDIS_PERIODIC_REPORT');
+    if (val !== undefined && val !== '') {
+      return val === 'true' || val === true;
+    }
+  } catch {}
+  return process.env.ENABLE_REDIS_PERIODIC_REPORT !== 'false';
+}
+
 function trackCommand(command: string, args: any[] = []): void {
   if (!isTracking) return;
   totalCommands++;
@@ -65,9 +87,8 @@ function trackCommand(command: string, args: any[] = []): void {
   const caller = getCallerInfo();
   const key = extractKey(command, args);
 
-  // Real-time trace logging (enabled by default, can be silenced via SILENT_REDIS_TRACE=true)
-  const isRealtimeLogEnabled = process.env.SILENT_REDIS_TRACE !== 'true';
-  if (isRealtimeLogEnabled) {
+  // Real-time trace logging (controlled via Admin Settings -> Diagnostics)
+  if (isRealtimeLogEnabled()) {
     const keyPreview = key ? (key.length > 80 ? key.substring(0, 77) + '...' : key) : '<no-key>';
     logger.info(`[CMD] ${command.toUpperCase().padEnd(8)} ${keyPreview} (caller: ${caller})`);
   }
@@ -139,7 +160,9 @@ export function installRedisCounter(): void {
   }
 }
 
-export function printRedisReport(): void {
+export function printRedisReport(force: boolean = false): void {
+  if (!force && !isPeriodicReportEnabled()) return;
+
   logger.info('');
   logger.info('════════════════════════════════════════════════════════════════════════════════');
   logger.info(`  REDIS COMMAND REPORT — Total: ${totalCommands} commands`);

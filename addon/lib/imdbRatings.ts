@@ -6,6 +6,11 @@ import consola from 'consola';
 import { LRUCache } from 'lru-cache';
 import redis from './redisClient';
 const buildInfo = require('./buildInfo');
+const { isLiteMode } = require('./metricsConfig');
+
+function isImdbRatingsDisabled(): boolean {
+  return isLiteMode() || process.env.DISABLE_IMDB_RATINGS === 'true';
+}
 
 const logger = consola.withTag('IMDB Ratings');
 
@@ -55,6 +60,11 @@ function parseRedisRating(value: string): ImdbRating | null {
  * Stores ratings in Redis hash for persistence.
  */
 export async function downloadAndCacheIMDbRatings(): Promise<boolean> {
+  if (isImdbRatingsDisabled()) {
+    logger.info('IMDb ratings download and cache skipped (LITE_MODE or DISABLE_IMDB_RATINGS enabled)');
+    return false;
+  }
+
   const isRedisReady = redis?.status === 'ready';
   let tempRatingsHashKey: string | null = null;
 
@@ -191,6 +201,7 @@ export async function downloadAndCacheIMDbRatings(): Promise<boolean> {
  */
 export async function getImdbRating(imdbId: string): Promise<ImdbRating | null> {
   if (!imdbId) return null;
+  if (isImdbRatingsDisabled()) return null;
 
   const inMem = imdbRatingMemoryCache.get(imdbId);
   if (inMem !== undefined) return inMem;
@@ -227,6 +238,8 @@ export async function getImdbRating(imdbId: string): Promise<ImdbRating | null> 
  */
 export async function getImdbRatingStrings(imdbIds: string[]): Promise<Map<string, string>> {
   const found = new Map<string, string>();
+  if (isImdbRatingsDisabled()) return found;
+
   const ids = [...new Set(imdbIds.filter(Boolean))];
   if (ids.length === 0) return found;
 
@@ -277,11 +290,13 @@ export async function getImdbRatingStrings(imdbIds: string[]): Promise<Map<strin
  * Gets the IMDb rating as a formatted string
  */
 export async function getImdbRatingString(imdbId: string): Promise<string | undefined> {
+  if (isImdbRatingsDisabled()) return undefined;
   const result = await getImdbRating(imdbId);
   return result ? String(result.rating) : undefined;
 }
 
 export async function ratingsAvailable(): Promise<boolean> {
+  if (isImdbRatingsDisabled()) return false;
   try {
     if (redis?.status !== 'ready') return false;
     return (await redis.hlen(REDIS_RATINGS_HASH)) > 0;

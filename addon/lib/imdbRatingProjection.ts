@@ -1,4 +1,9 @@
 const { getImdbRatingString, getImdbRatingStrings }: any = require('./imdbRatings');
+const { isLiteMode }: any = require('./metricsConfig');
+
+function isImdbRatingsDisabled(): boolean {
+  return isLiteMode() || process.env.DISABLE_IMDB_RATINGS === 'true';
+}
 
 const NO_RATING = 'N/A';
 
@@ -24,18 +29,19 @@ function setRating(meta: any, rating: string): void {
  * otherwise serve the old figure until META_TTL expires.
  */
 async function applyImdbRatingProjection(meta: any): Promise<any> {
-  if (!meta) return meta;
+  if (!meta || isImdbRatingsDisabled()) return meta;
 
   const imdbId = imdbIdOf(meta);
   if (!imdbId) return meta;
 
-  setRating(meta, (await getImdbRatingString(imdbId)) || NO_RATING);
+  const rating = await getImdbRatingString(imdbId);
+  setRating(meta, rating || meta.imdbRating || NO_RATING);
   return meta;
 }
 
 /** One HMGET for the page rather than a lookup per tile. */
 async function applyImdbRatingProjectionToList(metas: any[]): Promise<any[]> {
-  if (!Array.isArray(metas) || metas.length === 0) return metas;
+  if (!Array.isArray(metas) || metas.length === 0 || isImdbRatingsDisabled()) return metas;
 
   const ids = new Map<any, string>();
   for (const meta of metas) {
@@ -47,7 +53,7 @@ async function applyImdbRatingProjectionToList(metas: any[]): Promise<any[]> {
 
   const ratings = await getImdbRatingStrings([...ids.values()]);
   for (const [meta, imdbId] of ids) {
-    setRating(meta, ratings.get(imdbId) || NO_RATING);
+    setRating(meta, ratings.get(imdbId) || meta.imdbRating || NO_RATING);
   }
 
   return metas;

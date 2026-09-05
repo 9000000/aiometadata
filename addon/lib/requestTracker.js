@@ -609,9 +609,12 @@ class RequestTracker {
     }
   }
   // Capture metadata from complete meta components
-  // NOTE: This function intentionally runs even when DISABLE_METRICS=true because it stores
-  // content_metadata for the rating page functionality, not just telemetry/analytics metrics.
   async captureMetadataFromComponents(metaId, meta, metaType, buildLanguage = null) {
+    const { isLiteMode, isMetricsDisabled } = require('./metricsConfig');
+    if (isLiteMode() || isMetricsDisabled() || process.env.DISABLE_CONTENT_METADATA === 'true') {
+      return;
+    }
+
     try {
       if (!meta || !meta.name) return;
 

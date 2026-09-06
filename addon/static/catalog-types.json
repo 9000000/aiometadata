@@ -677,6 +677,96 @@
         "genre",
         "skip"
       ]
+    },
+    "vik": {
+      "nameKey": "vik",
+      "watchProviderId": 344,
+      "country": "US",
+      "extraSupported": [
+        "genre",
+        "skip"
+      ]
+    },
+    "mp9": {
+      "nameKey": "mp9",
+      "watchProviderId": 149,
+      "country": "ES",
+      "extraSupported": [
+        "genre",
+        "skip"
+      ]
+    },
+    "shd": {
+      "nameKey": "shd",
+      "watchProviderId": 99,
+      "country": "US",
+      "extraSupported": [
+        "genre",
+        "skip"
+      ]
+    },
+    "bbo": {
+      "nameKey": "bbo",
+      "watchProviderId": 380,
+      "country": "GB",
+      "extraSupported": [
+        "genre",
+        "skip"
+      ]
+    },
+    "act": {
+      "nameKey": "act",
+      "watchProviderId": 87,
+      "country": "US",
+      "extraSupported": [
+        "genre",
+        "skip"
+      ]
+    },
+    "itv": {
+      "nameKey": "itv",
+      "watchProviderId": 41,
+      "country": "GB",
+      "extraSupported": [
+        "genre",
+        "skip"
+      ]
+    },
+    "bbc": {
+      "nameKey": "bbc",
+      "watchProviderId": 38,
+      "country": "GB",
+      "extraSupported": [
+        "genre",
+        "skip"
+      ]
+    },
+    "al4": {
+      "nameKey": "al4",
+      "watchProviderId": 103,
+      "country": "GB",
+      "extraSupported": [
+        "genre",
+        "skip"
+      ]
+    },
+    "iqi": {
+      "nameKey": "iqi",
+      "watchProviderId": 581,
+      "country": "US",
+      "extraSupported": [
+        "genre",
+        "skip"
+      ]
+    },
+    "sha": {
+      "nameKey": "sha",
+      "watchProviderId": 1715,
+      "country": "SA",
+      "extraSupported": [
+        "genre",
+        "skip"
+      ]
     }
   },
   "franchise": {

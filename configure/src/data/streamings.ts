@@ -29,19 +29,35 @@ export const streamingServices = [
     { id: "bet", name: "Bet+", icon: "/betp.jpg" },
     { id: "mub", name: "MUBI", icon: "/mubi.jpg" },
     { id: "sta", name: "Starz", icon: "/starz.jpg" },
-    { id: "crc", name: "Criterion Channel", icon: "/criterionchannel.jpg"},
-    { id: "hid", name: "HIDIVE", icon: "/HIDIVE.png"}
+    { id: "crc", name: "Criterion Channel", icon: "/criterionchannel.jpg" },
+    { id: "hid", name: "HIDIVE", icon: "/HIDIVE.png" },
+    { id: "vik", name: "Rakuten Viki", icon: "/viki.webp" },
+    { id: "mp9", name: "Movistar+", icon: "/movistar.webp" },
+    { id: "shd", name: "Shudder", icon: "/shudder.webp" },
+    { id: "bbo", name: "BritBox", icon: "/britbox.webp" },
+    { id: "act", name: "Acorn TV", icon: "/acorntv.webp" },
+    { id: "itv", name: "ITVX", icon: "/itvx.webp" },
+    { id: "bbc", name: "BBC iPlayer", icon: "/bbciplayer.webp" },
+    { id: "al4", name: "Channel 4", icon: "/channel4.webp" },
+    { id: "iqi", name: "iQIYI", icon: "/iqiyi.webp" },
+    { id: "sha", name: "Shahid VIP", icon: "/shahid.webp" }
   ];
   
   export const regions = {
     'United States': [
-      'nfx', 'nfk', 'dnp', 'amp', 'atp', 'hbm', 'cru', 'pmp', 'mgl', 'cts', 'hlu', 'pcp', 'dpe', 'bet', 'mub', 'sta', 'crc'
+      'nfx', 'nfk', 'dnp', 'amp', 'atp', 'hbm', 'cru', 'pmp', 'mgl', 'cts', 'hlu', 'pcp', 'dpe', 'bet', 'mub', 'sta', 'crc', 'hid', 'vik', 'shd', 'bbo', 'act', 'iqi', 'sha'
+    ],
+    'United Kingdom': [
+      'nfx', 'nfk', 'dnp', 'amp', 'atp', 'hbm', 'cru', 'mgl', 'cts', 'mub', 'itv', 'bbc', 'al4', 'bbo', 'act', 'hay', 'dpe'
+    ],
+    'Spain': [
+      'nfx', 'nfk', 'dnp', 'amp', 'atp', 'hbm', 'cru', 'mp9'
     ],
     'Brazil': [
       'nfx', 'nfk', 'dnp', 'atp', 'amp', 'pmp', 'hbm', 'cru', 'clv', 'gop', 'mgl', 'cts', 'mub'
     ],
     'India': [
-      'hay', 'nfx', 'nfk', 'atp', 'amp', 'cru', 'zee', 'hst', 'slv', 'mgl', 'cts', 'dpe', 'mub'
+      'hay', 'nfx', 'nfk', 'atp', 'amp', 'cru', 'zee', 'hst', 'slv', 'mgl', 'cts', 'dpe', 'mub', 'vik'
     ],
     'Turkey': [
       'nfx', 'nfk', 'dnp', 'atp', 'amp', 'cru', 'blv', 'mgl', 'cts', 'mub'
@@ -55,6 +71,6 @@ export const streamingServices = [
     'Any': [
       'nfx', 'nfk', 'dnp', 'amp', 'atp', 'hbm', 'pmp', 'hlu', 'pcp', 'clv', 'gop', 'blv', 'bet', 'mub', 'sta',
       'zee', 'hst', 'slv', 'hay', 'vil', 'sst', 'sky', 'wow', 'mgl', 'cts', 'cru', 'nlz', 'cpd', 'crv', 'dpe',
-      'crc', 'hid'
+      'crc', 'hid', 'vik', 'mp9', 'shd', 'bbo', 'act', 'itv', 'bbc', 'al4', 'iqi', 'sha'
     ]
   };

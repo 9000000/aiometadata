@@ -15,9 +15,137 @@
             content="Configure your AIOMetadata Addon for Stremio"
         />
     </head>
-
     <body>
         <div id="root"></div>
+
+        <!-- Google Translate React Safety Patch -->
+        <script>
+            if (typeof Node === 'function' && Node.prototype) {
+                const originalRemoveChild = Node.prototype.removeChild;
+                Node.prototype.removeChild = function (child) {
+                    if (child.parentNode !== this) {
+                        if (console) console.warn('Google Translate DOM patch: prevented removeChild crash');
+                        return child;
+                    }
+                    return originalRemoveChild.apply(this, arguments);
+                };
+                const originalInsertBefore = Node.prototype.insertBefore;
+                Node.prototype.insertBefore = function (newNode, referenceNode) {
+                    if (referenceNode && referenceNode.parentNode !== this) {
+                        if (console) console.warn('Google Translate DOM patch: prevented insertBefore crash');
+                        return newNode;
+                    }
+                    return originalInsertBefore.apply(this, arguments);
+                };
+            }
+        </script>
+
+        <!-- Google Translate Floating Widget -->
+        <div id="gt-floating-widget" class="notranslate" translate="no">
+            <div class="gt-widget-inner">
+                <svg class="gt-icon" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="2" y1="12" x2="22" y2="12"></line>
+                    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                </svg>
+                <div id="google_translate_element"></div>
+            </div>
+        </div>
+
+        <style>
+            /* Hide Google Translate top banner & restore body position */
+            .goog-te-banner-frame.skiptranslate,
+            .goog-te-banner-frame,
+            iframe.goog-te-banner-frame {
+                display: none !important;
+                visibility: hidden !important;
+                height: 0 !important;
+            }
+            body {
+                top: 0px !important;
+                position: static !important;
+            }
+            #goog-gt-tt,
+            .goog-te-balloon-frame {
+                display: none !important;
+            }
+            .goog-text-highlight {
+                background: none !important;
+                box-shadow: none !important;
+            }
+            /* Styling the floating translate pill */
+            #gt-floating-widget {
+                position: fixed;
+                bottom: 24px;
+                left: 24px;
+                z-index: 99999;
+                font-family: inherit;
+            }
+            .gt-widget-inner {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                background: rgba(24, 24, 27, 0.92);
+                backdrop-filter: blur(12px);
+                -webkit-backdrop-filter: blur(12px);
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 9999px;
+                padding: 4px 10px;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+                transition: all 0.2s ease-in-out;
+            }
+            .gt-widget-inner:hover {
+                border-color: rgba(56, 189, 248, 0.5);
+                box-shadow: 0 4px 24px rgba(56, 189, 248, 0.2);
+            }
+            .gt-icon {
+                color: #38bdf8;
+                flex-shrink: 0;
+            }
+            .goog-te-gadget {
+                font-size: 0px !important;
+                color: transparent !important;
+                display: flex !important;
+                align-items: center !important;
+                line-height: 1 !important;
+            }
+            .goog-te-gadget .goog-te-combo {
+                background: transparent !important;
+                color: #f4f4f5 !important;
+                border: none !important;
+                font-size: 13px !important;
+                font-weight: 500 !important;
+                font-family: inherit !important;
+                outline: none !important;
+                cursor: pointer !important;
+                padding: 2px 2px !important;
+            }
+            .goog-te-gadget .goog-te-combo option {
+                background: #18181b !important;
+                color: #f4f4f5 !important;
+            }
+            .goog-te-gadget span,
+            .goog-logo-link {
+                display: none !important;
+            }
+            @media (max-width: 640px) {
+                #gt-floating-widget {
+                    bottom: calc(75px + env(safe-area-inset-bottom, 0px));
+                    left: 12px;
+                }
+            }
+        </style>
+
+        <script type="text/javascript">
+            function googleTranslateElementInit() {
+                new google.translate.TranslateElement({
+                    pageLanguage: 'en',
+                    layout: google.translate.TranslateElement.InlineLayout.SIMPLE,
+                    autoDisplay: false
+                }, 'google_translate_element');
+            }
+        </script>
+        <script type="text/javascript" src="https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>
         <script type="module" src="/configure/src/main.tsx"></script>
     </body>
 </html>

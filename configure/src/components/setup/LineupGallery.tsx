@@ -21,7 +21,7 @@ function posterSourcesFor(
   if (kind === 'everything' && includesAnime(content)) {
     return [{
       endpoint: 'mal',
-      params: { order_by: 'score', sort: 'desc', ...malPreviewParams(config) },
+      params: { ...malPreviewParams(config) },
     }];
   }
 

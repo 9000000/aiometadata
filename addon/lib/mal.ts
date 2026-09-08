@@ -864,7 +864,15 @@ async function fetchDiscover(params: Record<string, any> = {}, page: number = 1)
   }
 
   const urlParams = new URLSearchParams(queryParams);
-  const url = `${jikanApiBase()}/anime?${urlParams.toString()}`;
+  let url = `${jikanApiBase()}/anime?${urlParams.toString()}`;
+
+  if (
+    url === `${jikanApiBase()}/anime?page=1&limit=25&order_by=score&sort=desc` ||
+    url === `${jikanApiBase()}/anime?page=1&limit=25` ||
+    (page === 1 && params.order_by === 'score' && params.sort === 'desc' && !params.genres && !params.type && !params.status && !params.rating && !params.producers && !params.season && !params.start_date && !params.end_date)
+  ) {
+    url = `${jikanApiBase()}/anime`;
+  }
 
   try {
     const response = await enqueueRequest(() => _makeJikanRequest(url), url);

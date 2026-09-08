@@ -30,7 +30,7 @@ import {
 import { getTagColor } from '@/lib/tagColors';
 import { catalogKey, type ManifestCatalog } from '@/lib/collectionBuilder/manifestSources';
 import { aliasHint, TERMS, type Target } from '@/lib/collectionBuilder/terms';
-import { hasNuvioFolderArt, type FolderDraft } from '@shared/types';
+import { hasNuvioFolderArt, type FolderDraft, type SourceDraft } from '@shared/types';
 
 import { ImageUrlField } from './ImageUrlField';
 import { ScopeChip } from './ScopeChip';
@@ -47,6 +47,7 @@ export function FolderCard({
   onRemove,
   onAddSource,
   onReplaceSource,
+  onRenameCatalog,
   tagOptions,
   onAddByTag,
   focusTitle,
@@ -66,6 +67,8 @@ export function FolderCard({
   onRemove: () => void;
   onAddSource: () => void;
   onReplaceSource: (index: number) => void;
+  /** Renames the catalog itself, everywhere it appears. */
+  onRenameCatalog?: (source: SourceDraft, name: string) => void;
   tagOptions: TagOption[];
   onAddByTag: (tag: string) => void;
   focusTitle?: boolean;
@@ -110,7 +113,7 @@ export function FolderCard({
   };
 
   return (
-    <div className="@container space-y-5 rounded-lg border p-4">
+    <div className="@container space-y-5 rounded-xl border border-white/[0.06] bg-card/80 p-4">
       <div className="flex items-center gap-2">
         <Label htmlFor={`${uid}-title`} className="sr-only">{terms.childTitle}</Label>
         <Input
@@ -140,7 +143,7 @@ export function FolderCard({
               <span className="text-xs text-muted-foreground">{aliasHint('shape')}</span>
             )}
           </div>
-          <div role="group" aria-labelledby={`${uid}-shape`} className="flex gap-1 rounded-lg border p-1">
+          <div role="group" aria-labelledby={`${uid}-shape`} className="flex gap-1 rounded-xl bg-white/[0.03] p-1">
             {SHAPE_ORDER.map(shape => {
               const active = folder.shape === shape;
               return (
@@ -215,7 +218,7 @@ export function FolderCard({
           <button
             type="button"
             onClick={onAddSource}
-            className="w-full rounded-md border border-dashed px-2 py-3 text-center text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent/40 hover:text-foreground"
+            className="w-full rounded-xl border border-dashed border-white/[0.08] px-2 py-3 text-center text-xs text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground active:bg-white/[0.06]"
           >
             No catalogs yet. The tile still exports, with its artwork, and comes up empty.
             <span className="mt-0.5 block font-medium">Add one</span>
@@ -253,6 +256,16 @@ export function FolderCard({
                     else onChange(apply(folder));
                   }}
                   onReplace={() => onReplaceSource(index)}
+                  onRename={
+                    onRenameCatalog
+                      ? name => {
+                          onRenameCatalog(source, name);
+                          update({
+                            sources: folder.sources.map((s, i) => (i === index ? { ...s, name } : s)),
+                          });
+                        }
+                      : undefined
+                  }
                 />
               ))}
             </div>
@@ -272,7 +285,7 @@ export function FolderCard({
         </button>
       )}
       {nuvioArtVisible && showExtras && (
-        <div className="grid gap-4 rounded-lg border border-cyan-800/40 bg-cyan-950/20 p-4 @2xl:grid-cols-2 @4xl:grid-cols-3">
+        <div className="grid gap-4 rounded-xl border border-cyan-400/20 bg-cyan-500/10 p-4 @2xl:grid-cols-2 @4xl:grid-cols-3">
           <div className="space-y-1.5">
             <Label htmlFor={`${uid}-emoji`} className="text-sm font-medium">Cover emoji</Label>
             <Input

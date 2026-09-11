@@ -31,6 +31,7 @@ interface ConfigContextType {
   hasBuiltInGemini: boolean;
   traktSearchEnabled: boolean;
   simklSearchEnabled: boolean;
+  anilistRequiresAuth: boolean;
   catalogTTL: number;
   /** Instance ceiling on enabled catalogs, null when unset. */
   maxCatalogs: number | null;
@@ -401,6 +402,7 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
   const [hasBuiltInTmdb, setHasBuiltInTmdb] = useState(false);
   const [hasBuiltInMdblist, setHasBuiltInMdblist] = useState(false);
   const [hasBuiltInGemini, setHasBuiltInGemini] = useState(false);
+  const [anilistRequiresAuth, setAnilistRequiresAuth] = useState(true);
   const [traktSearchEnabled, setTraktSearchEnabled] = useState(true);
   const [simklSearchEnabled, setSimklSearchEnabled] = useState(true);
   const [catalogTTL, setCatalogTTL] = useState(86400); // Default to 24 hours
@@ -441,6 +443,7 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
         setHasBuiltInTmdb(!!envApiKeys.hasBuiltInTmdb);
         setHasBuiltInMdblist(!!envApiKeys.hasBuiltInMdblist);
         setHasBuiltInGemini(!!envApiKeys.hasBuiltInGemini);
+        setAnilistRequiresAuth(envApiKeys.anilistRequiresAuth ?? true);
         setTraktSearchEnabled(envApiKeys.traktSearchEnabled ?? true);
         setSimklSearchEnabled(envApiKeys.simklSearchEnabled ?? true);
         setCatalogTTL(envApiKeys.catalogTTL || 86400);
@@ -517,7 +520,7 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <ConfigContext.Provider value={{ config, setConfig, addonVersion, resetConfig, auth, setAuth, hasBuiltInTvdb, hasBuiltInTmdb, hasBuiltInMdblist, hasBuiltInGemini, catalogTTL, maxCatalogs, collectionImportCatalogCap, refreshInstanceLimits, isLoading, sessionId, setSessionId, traktSearchEnabled, simklSearchEnabled, manifestFingerprint, manifestChangedSinceInstall, markManifestInstalled }}>
+    <ConfigContext.Provider value={{ config, setConfig, addonVersion, resetConfig, auth, setAuth, hasBuiltInTvdb, hasBuiltInTmdb, hasBuiltInMdblist, hasBuiltInGemini, catalogTTL, maxCatalogs, collectionImportCatalogCap, refreshInstanceLimits, isLoading, sessionId, setSessionId, anilistRequiresAuth, traktSearchEnabled, simklSearchEnabled, manifestFingerprint, manifestChangedSinceInstall, markManifestInstalled }}>
       {children}
     </ConfigContext.Provider>
   );

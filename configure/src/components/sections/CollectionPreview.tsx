@@ -53,7 +53,6 @@ export interface PendingCatalog {
   type: string;
   [key: string]: unknown;
 }
-
 /**
  * Which config the page is editing. `auth.userUUID` is only set once a config has
  * been explicitly loaded or saved, so on a configure URL it is usually null even

@@ -177,12 +177,32 @@ addon.get('/health/live', (req, res) => {
   });
 });
 
-addon.get('/health/ready', (req, res) => {
+// Startup readiness latches once a component reports ready, so the live
+// dependency probes below are what a monitor watches after boot.
+addon.get('/health/ready', async (req, res) => {
   const snapshot = readiness.snapshot();
-  res.status(snapshot.ready ? 200 : 503).json({
-    status: snapshot.ready ? 'ready' : 'starting',
+  const { deepHealth }: any = require('./lib/lifecycle/deepHealth');
+
+  let dependencies: any = null;
+  let counters: any = null;
+  let dependenciesOk = true;
+  try {
+    const report = await deepHealth();
+    dependencies = report.dependencies;
+    counters = report.counters;
+    dependenciesOk = report.status === 'healthy';
+  } catch (error: any) {
+    dependencies = { probe: { state: 'failed', latencyMs: 0, detail: error?.message || String(error) } };
+    dependenciesOk = false;
+  }
+
+  const healthy = snapshot.ready && dependenciesOk;
+  res.status(healthy ? 200 : 503).json({
+    status: !snapshot.ready ? 'starting' : (healthy ? 'ready' : 'degraded'),
     ready: snapshot.ready,
     components: snapshot.components,
+    dependencies,
+    counters,
     timestamp: new Date().toISOString(),
     version: ADDON_VERSION,
   });
@@ -638,6 +658,7 @@ const respond = function (req, res, data, opts?) {
       maxCatalogs: parseInt(getSetting('MAX_CATALOGS') || '', 10) || null,
       collectionImportCatalogCap: parseInt(getSetting('COLLECTION_IMPORT_CATALOG_CAP') || '', 10) || 400,
       simklTrendingPageSizeOptions: resolvedOptions,
+      anilistRequiresAuth: require('./utils/anilistAccess').anilistRequiresAuth(),
       traktSearchEnabled: getSetting('DISABLE_TRAKT_SEARCH') !== 'true',
       simklSearchEnabled: getSetting('DISABLE_SIMKL_SEARCH') !== 'true',
     };
@@ -2086,7 +2107,12 @@ addon.get("/api/anilist/discover/search/studio", async (req, res) => {
     }
 
     const anilist = require('./lib/anilist');
-    const results = await anilist.searchStudios(query);
+    const { resolveAnilistAccessToken }: any = require('./utils/anilistUtils');
+    const accessToken = await resolveAnilistAccessToken({
+      tokenId: String(req.query.tokenId || '').trim(),
+      userUUID: String(req.query.userUUID || '').trim(),
+    });
+    const results = await anilist.searchStudios(query, accessToken);
     res.json({ results });
   } catch (error) {
     console.error('[AniList Discover] Failed to search studios:', error.message);
@@ -2786,7 +2812,12 @@ addon.post("/api/anilist/discover/preview", async (req, res) => {
   try {
     const params = req.body?.params || {};
     const anilist = require('./lib/anilist');
-    const response = await anilist.fetchDiscover(params, 1, 20);
+    const { resolveAnilistAccessToken }: any = require('./utils/anilistUtils');
+    const accessToken = await resolveAnilistAccessToken({
+      tokenId: String(req.body?.tokenId || '').trim(),
+      userUUID: String(req.body?.userUUID || '').trim(),
+    });
+    const response = await anilist.fetchDiscover(params, 1, 20, accessToken);
     const results = (response?.items || []).map(item => ({
       id: item.media.id,
       title: item.media.title?.english || item.media.title?.romaji || '',
@@ -3730,7 +3761,7 @@ addon.post("/api/anilist/lists", async (req, res) => {
     consola.info(`[AniList Lists] Fetching lists for user: ${username}`);
     
     // Fetch user's lists from AniList API
-    const result = await anilist.fetchUserLists(username);
+    const result = await anilist.fetchUserLists(username, token.access_token);
     
     res.json({
       success: true,
@@ -3755,8 +3786,11 @@ addon.get("/api/anilist/lists/by-username/:username", async (req, res) => {
     const trimmedUsername = username.trim();
     consola.info(`[AniList Lists] Fetching available lists for username: ${trimmedUsername}`);
     
-    // Fetch user's lists from AniList API (public endpoint, doesn't require auth)
-    const result = await anilist.fetchUserLists(trimmedUsername);
+    const { resolveAnilistAccessToken }: any = require('./utils/anilistUtils');
+    const result = await anilist.fetchUserLists(trimmedUsername, await resolveAnilistAccessToken({
+      tokenId: String(req.query.tokenId || '').trim(),
+      userUUID: String(req.query.userUUID || '').trim(),
+    }));
     
     res.json({
       success: true,
@@ -5435,6 +5469,42 @@ addon.get("/stremio/:userUUID/stream/:type/:id.json", async function (req, res) 
     streamUrl = `${host}/stremio/${userUUID}/rating?id=${encodeURIComponent(cleanId)}&type=${type}`;
   }
   return respond(req, res, { streams: streamUrl ? [{ externalUrl: streamUrl, name: `⭐ Rate Me` }] : [] }, { cacheMaxAge: 0 });
+});
+
+// --- Playback Route (real playback events, Jellyfin front-ends) ---
+// The counterpart to the subtitle trigger: a front-end that knows when playback
+// actually started and stopped posts it here instead of us inferring it.
+addon.post("/stremio/:userUUID/playback/:type/:id.json", async function (req, res) {
+  const { userUUID, type, id } = req.params;
+
+  // A missing configuration has to read as a dropped event, not a server fault:
+  // a 5xx would have the sender retrying it for a day.
+  let config;
+  try {
+    config = await loadConfigFromDatabase(userUUID);
+  } catch {
+    config = null;
+  }
+  if (!config) {
+    return res.status(404).json({ error: "User configuration not found" });
+  }
+
+  if (!config.playbackReporting) {
+    consola.debug(`[Playback] Reporting is off for ${userUUID}, dropping ${type}/${id}`);
+    return res.status(404).json({ error: "Playback reporting is not enabled" });
+  }
+
+  try {
+    const { handlePlaybackReport } = require('./lib/playbackHandler');
+    const outcome = await handlePlaybackReport(type, id, req.body, config, userUUID);
+    if (outcome.status === 204) {
+      return res.status(204).end();
+    }
+    return res.status(outcome.status).json({ error: outcome.reason || 'Rejected' });
+  } catch (error) {
+    consola.error(`[Playback] Failed to handle ${type}/${id}: ${error.message}`);
+    return res.status(500).json({ error: "Failed to record playback" });
+  }
 });
 
 // --- Subtitle Route (for watch tracking) ---

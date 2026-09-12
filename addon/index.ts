@@ -5467,10 +5467,11 @@ addon.get("/stremio/:userUUID/stream/:type/:id.json", async function (req, res) 
   return respond(req, res, { streams: streamUrl ? [{ externalUrl: streamUrl, name: `⭐ Rate Me` }] : [] }, { cacheMaxAge: 0 });
 });
 
-// --- Playback Route (real playback events, Jellyfin front-ends) ---
+// --- Watch state (real playback events, Jellyfin front-ends) ---
 // The counterpart to the subtitle trigger: a front-end that knows when playback
-// actually started and stopped posts it here instead of us inferring it.
-addon.post("/stremio/:userUUID/playback/:type/:id.json", async function (req, res) {
+// actually started and stopped posts it here instead of us inferring it. The
+// first spelling is the v1 contract, still sent by older front-ends.
+addon.post(["/stremio/:userUUID/watch_state/push/:type/:id.json", "/stremio/:userUUID/playback/:type/:id.json"], async function (req, res) {
   const { userUUID, type, id } = req.params;
 
   // A missing configuration has to read as a dropped event, not a server fault:

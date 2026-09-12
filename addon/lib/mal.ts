@@ -217,7 +217,8 @@ async function processRequest(requestTask: RequestTask): Promise<void> {
     requestTracker.trackProviderCall('mal', responseTime, true);
     requestTask.resolve(result);
   } catch (error: any) {
-    const isRateLimit = error.response?.status === 429;
+    // MAL answers a blocked scraper with 405, which a self-hosted Jikan passes on.
+    const isRateLimit = error.response?.status === 429 || error.response?.status === 405;
     const isServerError = error.response?.status && [500, 502, 503, 504].includes(error.response.status);
     const isTimeout = error.code && (
         error.code.includes('TIMEOUT') ||

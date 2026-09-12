@@ -286,6 +286,27 @@ const host = process.env.HOST_NAME?.startsWith('http')
     : `https://${process.env.HOST_NAME}`;
 
 // --- Main Orchestrator ---
+// The art a builder would have chosen for this configuration. Mirrors the builders' dispatch.
+async function resolveArtworkForProfile({ type, ids, metaProvider, providerArt }, config) {
+  const mediaType = type === 'movie' ? 'movie' : 'series';
+  if (providerArt.anime) {
+    const art = await getAnimeArtwork(ids, config, providerArt.poster, providerArt.background, mediaType);
+    return { poster: art.poster, background: art.background, logo: art.logo, landscapePosterUrl: art.landscapePosterUrl };
+  }
+
+  const base = { tmdbId: ids.tmdbId, tvdbId: ids.tvdbId, imdbId: ids.imdbId, metaProvider, originalLanguage: providerArt.originalLanguage };
+  const get = mediaType === 'movie'
+    ? { poster: Utils.getMoviePoster, background: Utils.getMovieBackground, logo: Utils.getMovieLogo }
+    : { poster: Utils.getSeriesPoster, background: Utils.getSeriesBackground, logo: Utils.getSeriesLogo };
+  const [poster, background, logo, landscapePosterUrl] = await Promise.all([
+    get.poster({ ...base, fallbackPosterUrl: providerArt.poster }, config),
+    get.background({ ...base, fallbackBackgroundUrl: providerArt.background }, config),
+    get.logo({ ...base, fallbackLogoUrl: providerArt.logo }, config),
+    get.background({ ...base, fallbackBackgroundUrl: providerArt.landscape }, config, true),
+  ]);
+  return { poster, background, logo, landscapePosterUrl };
+}
+
 async function getMeta(type, language, stremioId, config = {}, userUUID, includeVideos = true) {
   try {
     // Validate inputs
@@ -1214,6 +1235,7 @@ async function buildImdbSeriesResponse(stremioId, imdbData, enrichmentData = {},
   imdbData.background = background;
   imdbData.logo = logoUrl;
   imdbData._rawPosterUrl = _rawPosterUrl;
+  imdbData._providerArt = { poster: imdbPosterUrl, background: imdbBackgroundUrl, logo: imdbLogoUrl, anime: isAnime };
   if (imdbData.description) {
     imdbData.description = Utils.addMetaProviderAttribution(imdbData.description, 'IMDB', config);
   }
@@ -1303,6 +1325,7 @@ async function buildImdbMovieResponse(stremioId, imdbData, enrichmentData = {}, 
   imdbData.background = background;
   imdbData.logo = logoUrl;
   imdbData._rawPosterUrl = _rawPosterUrl;
+  imdbData._providerArt = { poster: imdbPosterUrl, background: imdbBackgroundUrl, logo: imdbLogoUrl, anime: isAnime };
   if (imdbData.description) {
     imdbData.description = Utils.addMetaProviderAttribution(imdbData.description, 'IMDB', config);
   }
@@ -1494,6 +1517,7 @@ async function buildTmdbMovieResponse(stremioId, movieData, language, config, us
     imdbRating,
     poster: Utils.isPosterRatingEnabled(config) ? posterProxyUrl : poster,
     _rawPosterUrl: _rawPosterUrl,
+    _providerArt: { poster: tmdbPosterUrl, background: tmdbBackgroundUrl, logo: tmdbLogoUrl, landscape: tmdbLandscapePosterUrl, originalLanguage, anime: isAnime },
     background: background,
     landscapePoster: landscapePosterUrl,
     logo: processLogo(logoUrl),
@@ -1929,6 +1953,7 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
     imdbRating,
     poster: Utils.isPosterRatingEnabled(config) ? posterProxyUrl : poster,
     _rawPosterUrl: _rawPosterUrl,
+    _providerArt: { poster: tmdbPosterUrl, background: tmdbBackgroundUrl, logo: tmdbLogoUrl, landscape: tmdbLandscapePosterUrl, originalLanguage, anime: isAnime },
     background: background,
     landscapePoster: landscapePosterUrl,
     logo: logoUrl,
@@ -2115,6 +2140,7 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
     imdbRating,
     poster: Utils.isPosterRatingEnabled(config) ? posterProxyUrl : poster,
     _rawPosterUrl: _rawPosterUrl,
+    _providerArt: { poster: tvdbPosterUrl, background: tvdbBackgroundUrl, logo: tvdbLogoUrl, landscape: tvdbLandscapePosterUrl, anime: isAnime },
     background: background,
     landscapePoster: landscapePosterUrl,
     logo: processLogo(logoUrl),
@@ -2564,6 +2590,7 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
     imdbRating,
     poster: Utils.isPosterRatingEnabled(config) ? posterProxyUrl : poster,
     _rawPosterUrl: _rawPosterUrl,
+    _providerArt: { poster: tvdbPosterUrl, background: tvdbBackgroundUrl, logo: tvdbLogoUrl, landscape: tvdbLandscapePosterUrl, anime: isAnime },
     background: background, 
     landscapePoster: landscapePosterUrl,
     logo: logoUrl,
@@ -2824,6 +2851,7 @@ async function buildSeriesResponseFromTvmaze(stremioId, tvmazeShow, episodes, la
     imdbRating,
     poster: Utils.isPosterRatingEnabled(config) ? posterProxyUrl : poster, 
     _rawPosterUrl: _rawPosterUrl,
+    _providerArt: { poster: tvmazePosterUrl, background: tvmazeBackgroundUrl, logo: tvmazeLogoUrl, landscape: null, anime: isAnime },
     background: background,
     landscapePoster: landscapePosterUrl,
     logo: processLogo(logoUrl), 
@@ -2882,6 +2910,12 @@ async function buildAnimeResponse(stremioId, malData, language, characterData, e
     }
     
     
+    // MAL has no episode list for some older titles but still knows the count.
+    if (stremioType === 'series' && malData.status === 'Finished Airing' && (!episodeData || episodeData.length === 0) && Number(malData.episodes) > 0) {
+      const aired = malData.aired?.from || null;
+      episodeData = Array.from({ length: Number(malData.episodes) }, (_, i) => ({ mal_id: i + 1, title: null, synopsis: '', aired }));
+    }
+
     // Process episodes while API calls are running
     if (stremioType === 'series' && malData.status !== 'Not yet aired' && episodeData && episodeData.length > 0) {      // Filter episodes once
       
@@ -3174,6 +3208,7 @@ async function buildAnimeResponse(stremioId, malData, language, characterData, e
       imdbRating,
       poster: finalPosterUrl,
       _rawPosterUrl: _rawPosterUrl,
+      _providerArt: { poster: malData.images?.jpg?.large_image_url, background: malData.images?.jpg?.large_image_url, anime: true },
       background: bestBackgroundUrl,
       landscapePoster: bestLandscapePosterUrl,
       logo: enrichmentData.bestLogoUrl,
@@ -3313,6 +3348,7 @@ async function buildKitsuAnimeResponse(stremioId, kitsuData, genres, includeObje
         kitsuData.attributes.posterImage?.original ||
         `${config.host}/missing_poster.png`,
       _rawPosterUrl: _rawPosterUrl,
+      _providerArt: { poster: kitsuData.attributes?.posterImage?.original, background: kitsuData.attributes?.coverImage?.original, anime: true },
       background:
         bestBackgroundUrl ||
         kitsuData.attributes.coverImage?.original,
@@ -3526,4 +3562,4 @@ async function buildKitsuAnimeResponse(stremioId, kitsuData, genres, includeObje
   }
 }
 
-module.exports = { getMeta };
+module.exports = { getMeta, resolveArtworkForProfile };

@@ -4,6 +4,8 @@ export interface UserConfig {
   language?: string;
   /** Playback is reported by the client, so the subtitle trigger is not used. */
   playbackReporting?: boolean;
+  /** Serve the collection layout's images through this instance's image cache. */
+  collectionImagesViaCache?: boolean;
   providers?: {
     movie?: string;
     series?: string;

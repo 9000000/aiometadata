@@ -5,6 +5,8 @@ export interface UserConfig {
   overviewLanguage?: string;
   /** Playback is reported by the client, so the subtitle trigger is not used. */
   playbackReporting?: boolean;
+  /** Serve the collection layout's images through this instance's image cache. */
+  collectionImagesViaCache?: boolean;
   providers?: {
     movie?: string;
     series?: string;
@@ -49,6 +51,8 @@ export interface UserConfig {
     { movie?: boolean; series?: boolean }
   >>;
   /** Poster rating provider: 'rpdb' for RatingPosterDB, 'top' for Top Poster API, or 'custom' for custom URL patterns */
+  trailerProvider?: 'default' | 'addon';
+  trailerAddonUrl?: string;
   posterRatingProvider?: 'rpdb' | 'top' | 'custom';
   catalogs?: Catalog[];
   streaming?: StreamingConfig[];

@@ -1,3 +1,4 @@
+import { LRUCache } from 'lru-cache';
 const redis: any = require('./redisClient');
 const { loadConfigFromDatabase }: any = require('./configApi');
 const consola: any = require('consola');
@@ -16,6 +17,7 @@ const {
   applyImdbRatingProjection,
   applyImdbRatingProjectionToList,
 }: any = require('./imdbRatingProjection');
+const { applyTrailerAddonProjection }: any = require('./trailerProjection');
 const {
   RELEASE_AVAILABILITY_FIELD,
   normalizeMetaReleaseAvailability,
@@ -26,9 +28,16 @@ const {
   normalizeCreditsInPayload,
 }: any = require('../utils/metaCredits');
 
+// The same few profiles are hashed for every component of every meta.
+const hashedProfiles = new LRUCache<string, string>({ max: 2000 });
+
 function hashConfig(configObj: any): string {
   const str = typeof configObj === 'string' ? configObj : stableStringify(configObj);
-  return crypto.createHash('md5').update(str).digest('hex').substring(0, 10);
+  const held = hashedProfiles.get(str);
+  if (held) return held;
+  const hash = crypto.createHash('md5').update(str).digest('hex').substring(0, 10);
+  hashedProfiles.set(str, hash);
+  return hash;
 }
 
 const cacheLogger = consola.withTag('Cache');
@@ -46,17 +55,16 @@ function parsePositiveIntEnv(envValue: any, defaultValue: number, minValue: numb
 
 
 const { withEpoch, withGlobalEpoch }: any = require('./cacheEpoch');
-const { LRUCache } = require('lru-cache');
 
-const l1MemoryCache = new LRUCache({
+const l1MemoryCache = new LRUCache<string, Buffer>({
   maxSize: 50 * 1024 * 1024, // 100MB max L1 cache for node memory
   sizeCalculation: (value: Buffer, key: string) => {
-    return value.length || 1024;
+    return value?.length || 1024;
   },
   ttl: 1000 * 60 * 60 * 24 // 24h
 });
 
-const metaAliasMemoryCache = new LRUCache({
+const metaAliasMemoryCache = new LRUCache<string, string | null>({
   max: 5000,
   ttl: 1000 * 60 * 30 // 30m in-memory cache for meta aliases
 });
@@ -1245,6 +1253,7 @@ async function projectMetaForUser(meta: any, config: any): Promise<any> {
   if (!meta) return meta;
   normalizeMetaCredits(meta);
   applyTrailerStreamsProjection(meta);
+  await applyTrailerAddonProjection(meta, config);
   applyCastCountProjection(meta, config);
   applyBlurThumbProjection(meta, config);
   applyDisplayAgeRatingProjection(meta, config);

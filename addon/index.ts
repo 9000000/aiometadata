@@ -1792,7 +1792,12 @@ addon.get("/api/tmdb/discover/reference", async (req, res) => {
           moviedb.makeTmdbRequest('/watch/providers/regions', tmdbApiKey, {}, 'GET', null, config),
         ]);
 
-        const genres = Array.isArray(genresData?.genres) ? genresData.genres : [];
+        let genres = Array.isArray(genresData?.genres) ? genresData.genres : [];
+        if (genres.some(genre => !genre?.name) && lang !== 'en-US') {
+          const english = await moviedb.makeTmdbRequest(`/genre/${mediaType}/list`, tmdbApiKey, { language: 'en-US' }, 'GET', null, config);
+          const names = new Map((Array.isArray(english?.genres) ? english.genres : []).map(genre => [genre.id, genre.name]));
+          genres = genres.map(genre => (genre?.name ? genre : { ...genre, name: names.get(genre?.id) ?? '' }));
+        }
         const languages = Array.isArray(languagesData)
           ? languagesData.filter(langItem => !!langItem?.iso_639_1)
           : [];
@@ -2998,6 +3003,11 @@ async function collectionPreviewHandler(req: any, res: any) {
     return res.status(500).json({ error: "Could not read that catalog" });
   }
 }
+
+// Where a layout's images are served from when routed through the cache; empty without one.
+addon.get("/api/collections/image-prefix", (_req, res) => {
+  res.json({ prefix: require('./lib/posterCache/config').getCollectionImagePrefix() });
+});
 
 addon.get("/api/collections/preview", collectionPreviewHandler);
 // POST carries the definition of a catalog that is staged but not yet saved.
@@ -5471,10 +5481,11 @@ addon.get("/stremio/:userUUID/stream/:type/:id.json", async function (req, res) 
   return respond(req, res, { streams: streamUrl ? [{ externalUrl: streamUrl, name: `⭐ Rate Me` }] : [] }, { cacheMaxAge: 0 });
 });
 
-// --- Playback Route (real playback events, Jellyfin front-ends) ---
+// --- Watch state (real playback events, Jellyfin front-ends) ---
 // The counterpart to the subtitle trigger: a front-end that knows when playback
-// actually started and stopped posts it here instead of us inferring it.
-addon.post("/stremio/:userUUID/playback/:type/:id.json", async function (req, res) {
+// actually started and stopped posts it here instead of us inferring it. The
+// first spelling is the v1 contract, still sent by older front-ends.
+addon.post(["/stremio/:userUUID/watch_state/push/:type/:id.json", "/stremio/:userUUID/playback/:type/:id.json"], async function (req, res) {
   const { userUUID, type, id } = req.params;
 
   // A missing configuration has to read as a dropped event, not a server fault:
@@ -8112,6 +8123,9 @@ addon.post('/api/dashboard/restart', requireDashboardAdmin, (req, res) => {
 
 addon.use((err, req, res, next) => {
   if (respondIfSigninRequired(err, res)) return;
+  if (err?.code === 'CONFIG_NOT_FOUND' && !res.headersSent) {
+    return res.status(404).json({ error: 'User configuration not found' });
+  }
   next(err);
 });
 

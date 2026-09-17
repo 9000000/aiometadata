@@ -1,8 +1,7 @@
+import { LRUCache } from 'lru-cache';
 const consola: any = require('consola');
 const redis: any = require('./redisClient');
 const { encodeCachePayload, decodeCachePayload }: any = require('./cacheCodec');
-
-const { LRUCache } = require('lru-cache');
 
 const logger: any = consola.withTag('ConfigCache');
 
@@ -23,64 +22,65 @@ function redisKey(id: string): string {
 }
 
 const pendingLoads = new Map<string, Promise<any>>();
-
-// L1 Memory Cache: Caches user config in RAM for 60s to prevent dozens of duplicate Redis queries per catalog
-const l1ConfigCache = new LRUCache({
-  max: 1000,
-  ttl: 60 * 1000, // 60 seconds
-});
+// Decoded once per short window; every request otherwise reads and parses it from Redis.
+const decoded = new LRUCache<string, any>({ max: 2000, ttl: parsePositiveIntEnv(process.env.CONFIG_MEMORY_TTL_SEC, 30, 1) * 1000 });
+const missing = new LRUCache<string, true>({ max: 5000, ttl: parsePositiveIntEnv(process.env.CONFIG_MISSING_TTL_SEC, 60, 1) * 1000 });
 
 class ConfigCache {
   async get(key: string): Promise<any> {
-    const rKey = redisKey(key);
-    const inMem = l1ConfigCache.get(rKey);
-    if (inMem !== undefined) return inMem;
-
+    const held = decoded.get(key);
+    if (held !== undefined) return held;
     if (!redis || redis.status !== 'ready') return null;
     try {
-      const raw = await redis.getBuffer(rKey);
-      const decoded = raw ? await decodeCachePayload(raw) : null;
-      if (decoded !== null && decoded !== undefined) {
-        l1ConfigCache.set(rKey, decoded);
-      }
-      return decoded;
+      const raw = await redis.getBuffer(redisKey(key));
+      const value = raw ? await decodeCachePayload(raw) : null;
+      if (value !== null) decoded.set(key, value);
+      return value;
     } catch (err: any) {
       logger.warn(`get failed for ${String(key).substring(0, 8)}...: ${err.message}`);
       return null;
     }
   }
 
-  async set(key: string, value: any): Promise<void> {
-    if (value === undefined) return;
-    const rKey = redisKey(key);
-    l1ConfigCache.set(rKey, value);
+  /** A key the loader found nothing for; asked again only after the window, without a load. */
+  rememberMissing(key: string): void {
+    missing.set(key, true);
+  }
 
-    if (!redis || redis.status !== 'ready') return;
+  isMissing(key: string): boolean {
+    return missing.has(key);
+  }
+
+  async set(key: string, value: any): Promise<void> {
+    missing.delete(key);
+    if (value === undefined || value === null) decoded.delete(key);
+    else decoded.set(key, value);
+    if (!redis || redis.status !== 'ready' || value === undefined) return;
     try {
       const payload = await encodeCachePayload(value, {
         compressionEnabled: isConfigCacheCompressionEnabled(),
       });
-      await redis.set(rKey, payload, 'EX', CONFIG_CACHE_TTL_SEC());
+      await redis.set(redisKey(key), payload, 'EX', CONFIG_CACHE_TTL_SEC());
     } catch (err: any) {
       logger.warn(`set failed for ${String(key).substring(0, 8)}...: ${err.message}`);
     }
   }
 
   async del(key: string): Promise<void> {
-    const rKey = redisKey(key);
-    pendingLoads.delete(rKey);
-    l1ConfigCache.delete(rKey);
+    missing.delete(key);
+    decoded.delete(key);
+    pendingLoads.delete(redisKey(key));
     if (!redis || redis.status !== 'ready') return;
     try {
-      await redis.del(rKey);
+      await redis.del(redisKey(key));
     } catch (err: any) {
       logger.warn(`del failed for ${String(key).substring(0, 8)}...: ${err.message}`);
     }
   }
 
   async clear(): Promise<void> {
+    decoded.clear();
     pendingLoads.clear();
-    l1ConfigCache.clear();
     if (!redis || redis.status !== 'ready') return;
     try {
       let cursor = '0';
@@ -127,8 +127,12 @@ class ConfigCache {
     return pendingLoads.has(redisKey(key));
   }
 
-  getMemoryStats(): { pendingLoads: number } {
-    return { pendingLoads: pendingLoads.size };
+  getMemoryStats(): { pendingLoads: number; decodedSize: number; missingSize: number } {
+    return {
+      pendingLoads: pendingLoads.size,
+      decodedSize: decoded.size,
+      missingSize: missing.size,
+    };
   }
 
   async stats({ countRedisEntries = false } = {}): Promise<{ pendingLoads: number; entries: number | null }> {

@@ -8,7 +8,7 @@ import { getGenresBySelection } from "../static/genres";
 import buildInfo from "./buildInfo";
 import catalogsTranslationsJson from "../static/translations.json";
 import catalogTypesJson from "../static/catalog-types.json";
-import { PLAYBACK_ID_PREFIXES } from "./playbackHandler";
+import { PLAYBACK_MANIFEST_EVENTS, WATCH_STATE_VERSION } from "./playbackHandler";
 const jikan: any = require('./mal');
 const DEFAULT_LANGUAGE = "en-US";
 const catalogsTranslations: Record<string, Record<string, string>> = catalogsTranslationsJson;
@@ -1562,6 +1562,16 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
       }
     ];
 
+    // Search catalogs follow tags only once one of them is tagged, so an
+    // install naming tags keeps its search until the owner sorts search too.
+    const searchTags: Record<string, string[]> = config.search?.tags && typeof config.search.tags === 'object' ? config.search.tags : {};
+    const searchIsTagged = Object.values(searchTags).some((list) => Array.isArray(list) && list.length > 0);
+    const searchCarriesTag = (searchId: string): boolean => {
+      if (tagSet.size === 0 || !searchIsTagged) return true;
+      const own = Array.isArray(searchTags[searchId]) ? searchTags[searchId] : [];
+      return own.some((t) => tagSet.has(String(t).toLowerCase()));
+    };
+
     searchCatalogConfigs
       .sort((a, b) => {
         const aIndex = searchOrder.indexOf(a.id);
@@ -1570,7 +1580,7 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
         const bPos = bIndex === -1 ? Infinity : bIndex;
         return aPos - bPos;
       })
-      .filter(config => config.enabled)
+      .filter(config => config.enabled && searchCarriesTag(config.id))
       .forEach(config => {
         let catalogId: string;
         if (config.provider === 'gemini.search') {
@@ -1593,7 +1603,7 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
         providerId.startsWith('mal.search') &&
         engineEnabled[providerId] !== false
     );
-    if (isMalSearchInUse) {
+    if (isMalSearchInUse && (searchCarriesTag('anime_series') || searchCarriesTag('anime_movie'))) {
       const searchVAAnime = {
         id: "mal.va_search",
         type: "anime",
@@ -1650,13 +1660,11 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
   // Declared only when the user has opted in, since declaring it is what makes
   // a front-end start delivering. The prefixes are the ones the tracker can
   // actually parse, so nothing arrives that would only be discarded.
+  // Named as strings: a reader validates object resources against the names it
+  // knows, and one that has never heard of these would reject the manifest whole.
   const playbackReporting = watchTrackingEnabled && config.playbackReporting === true;
   if (playbackReporting) {
-    resources.push({
-      name: "playback",
-      types: ["movie", "series"],
-      idPrefixes: PLAYBACK_ID_PREFIXES,
-    });
+    resources.push("watch_state", "playback");
   }
 
   const manifest = {
@@ -1668,7 +1676,10 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
     description: "A metadata addon for power users. AIOMetadata uses TMDB, TVDB, TVMaze, MyAnimeList, IMDB and Fanart.tv to provide accurate data for movies, series, and anime. You choose the source.",
     resources,
     ...(playbackReporting
-      ? { playback: { version: 1, events: ["start", "stop", "played", "unplayed"] } }
+      ? {
+          watchState: { version: WATCH_STATE_VERSION, push: { events: PLAYBACK_MANIFEST_EVENTS } },
+          playback: { version: 1, events: PLAYBACK_MANIFEST_EVENTS },
+        }
       : {}),
     types: ["movie", "series", "anime.movie", "anime.series", "anime", "Trakt", "collection"],
     idPrefixes: ["tmdb:", "tt", "tvdb:", "mal:", "tvmaze:", "kitsu:", "anidb:", "anilist:", "tvdbc:", "upnext_", "unwatched_", "mdblist_upnext_", "pmdb_resume_", "simkl_upnext_"],

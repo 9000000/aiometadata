@@ -240,6 +240,8 @@ export interface AppConfig {
   managerAccounts?: ManagerAccount[];
   /** Poster rating provider: 'none' to disable rating posters, 'rpdb' for RatingPosterDB, 'top' for Top Poster API, or 'custom' for custom URL patterns */
   posterRatingProvider?: 'none' | 'rpdb' | 'top' | 'custom';
+  trailerProvider?: 'default' | 'addon';
+  trailerAddonUrl?: string;
   usePosterProxy: boolean;
   mdblistWatchTracking: boolean;
   anilistWatchTracking: boolean;
@@ -281,6 +283,8 @@ export interface AppConfig {
   deletedCatalogs?: string[];
   /** Collections and rows built in the Collections editor, exported as Nuvio or Fusion JSON */
   collections?: BuilderEntry[];
+  /** Serve the collection layout's images through this instance's image cache. */
+  collectionImagesViaCache?: boolean;
   search: {
     enabled: boolean; 
     // This is the switch for the AI layer.
@@ -322,6 +326,10 @@ export interface AppConfig {
     };
     // Order of search catalogs
     searchOrder?: string[];
+    /** Tags per search catalog; an install naming tags carries only the search catalogs tagged with one. */
+    tags?: {
+      [searchType: string]: string[];
+    };
   };
   streaming: string[];
   displayTypeOverrides?: {

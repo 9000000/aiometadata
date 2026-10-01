@@ -214,8 +214,7 @@ class RequestTracker {
               /\/catalog\/[^/]+\/[^/]+\/(.*)\.(json|xml)$/i,
             );
             if (extrasMatch && extrasMatch[1]) {
-              const extrasPart = extrasMatch[1];
-              const segments = extrasPart.split("/");
+              const segments = extrasMatch[1].split(/[/&]/);
               for (const segment of segments) {
                 if (segment.toLowerCase().startsWith("search=")) {
                   const val = segment.substring("search=".length);
@@ -283,6 +282,33 @@ class RequestTracker {
     return `content_metadata:${type}:${this.normalizeContentId(rawId)}`;
   }
 
+  async readContentMetadata(type, rawId) {
+    const read = async (key) => {
+      try {
+        const str = await redis.get(key);
+        return str ? JSON.parse(str) : null;
+      } catch (_) {
+        return null;
+      }
+    };
+    const id = this.normalizeContentId(rawId);
+    const direct = await read(this.canonicalContentMetadataKey(type, id));
+    if (direct) return direct;
+
+    const match = /^(tmdb|tvdb):(\d+)$/.exec(id);
+    if (!match) return null;
+    let dataKey = `id_map:data:${type}:${match[2]}`;
+    if (match[1] === 'tvdb') {
+      try {
+        dataKey = await redis.get(`id_map:ptr:tvdb:${type}:${match[2]}`);
+      } catch (_) {
+        dataKey = null;
+      }
+    }
+    const mapping = dataKey ? await read(dataKey) : null;
+    return mapping?.imdb_id ? read(this.canonicalContentMetadataKey(type, mapping.imdb_id)) : null;
+  }
+
   // Track content requests (meta, search, catalog)
   async trackContentRequest(req) {
     // Skip metrics collection if disabled
@@ -329,8 +355,7 @@ class RequestTracker {
               /\/catalog\/[^/]+\/[^/]+\/(.*)\.(json|xml)$/i,
             );
             if (extrasMatch && extrasMatch[1]) {
-              const extrasPart = extrasMatch[1];
-              const segments = extrasPart.split("/");
+              const segments = extrasMatch[1].split(/[/&]/);
               for (const segment of segments) {
                 if (segment.toLowerCase().startsWith("search=")) {
                   const val = segment.substring("search=".length);
@@ -398,8 +423,8 @@ class RequestTracker {
       // Convert to array and enrich with metadata
       const contentEntries = Array.from(contentMap.entries())
         .map(([contentKey, requests]) => {
-          const [type, id] = contentKey.split(":");
-          return { contentKey, type, id, requests };
+          const separator = contentKey.indexOf(":");
+          return { contentKey, type: contentKey.slice(0, separator), id: contentKey.slice(separator + 1), requests };
         })
         .sort((a, b) => b.requests - a.requests)
         .slice(0, limit);
@@ -414,14 +439,8 @@ class RequestTracker {
             const keyType = parts[0];
             const rawId = parts.slice(1).join(":");
             
-            const canonicalKey = this.canonicalContentMetadataKey(keyType, rawId);
-            let metadataStr = null;
-            try {
-              metadataStr = await redis.get(canonicalKey);
-            } catch (_) {}
-
-            if (metadataStr) {
-              const metadata = JSON.parse(metadataStr);
+            const metadata = await this.readContentMetadata(keyType, rawId);
+            if (metadata) {
               return {
                 id,
                 type: metadata.type || type,
@@ -506,11 +525,7 @@ class RequestTracker {
           const keyType = parts[0];
           const id = parts.slice(1).join(":");
 
-          let meta = null;
-          try {
-            const str = await redis.get(this.canonicalContentMetadataKey(keyType, id));
-            if (str) meta = JSON.parse(str);
-          } catch (_) {}
+          const meta = await this.readContentMetadata(keyType, id);
 
           return {
             id,

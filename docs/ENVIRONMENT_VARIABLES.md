@@ -92,8 +92,13 @@ cp .env.example .env
 
 ### `REDIS_URL`
 - **Required**: Yes
-- **Description**: Redis connection URL for caching (required for the app to function)
+- **Description**: Redis connection URL for caching (required for the app to function). Redis 8.0 or newer is required: each title's metadata is kept in one hash whose fields expire individually, which needs `HSETEX` (Redis 8.0) and `HTTL` (Redis 7.4). Startup asks the server for those commands and refuses to boot without them.
 - **Example**: `REDIS_URL=redis://localhost:6379`
+
+### `REDIS_AUTOTUNE`
+- **Default**: `true`
+- **Description**: Set the Redis server's own settings to suit this addon on every startup, since `CONFIG SET` does not survive a restart. Changes `maxmemory-policy` to `volatile-lfu` (any `volatile-*` already in place is kept), turns on `lazyfree-lazy-eviction`, `lazyfree-lazy-expire`, `lazyfree-lazy-server-del` and `activedefrag`, and turns off `stop-writes-on-bgsave-error`. Turn this off when Redis is shared with other applications, since these are server-wide. `maxmemory` is never set and stays yours to choose; until you set one, nothing is evicted whatever the policy says. A Redis that refuses `CONFIG` is reported once on the boot line and otherwise left alone.
+- **Example**: `REDIS_AUTOTUNE=false`
 
 ### `CATALOG_REFRESH_AHEAD_ENABLED`
 - **Default**: `true`
@@ -162,7 +167,7 @@ to every visitor, so which one you reach for depends on who uses the instance.
 > authorization URL the browser opens. Their secrets are never published. The one
 > thing to know is that both APIs accept a client id alone for public endpoints,
 > so a copied id lets someone else's traffic count against your app's rate limit.
-> `TRAKT_CLIENT_SECRET` and `SIMKL_CLIENT_SECRET` are what must stay private.
+> `TRAKT_CLIENT_SECRET`, `SIMKL_CLIENT_SECRET` and `SIMKL_V2_CLIENT_SECRET` are what must stay private.
 
 #### `TMDB_API_KEY`
 - **Required**: Yes
@@ -222,9 +227,26 @@ to every visitor, so which one you reach for depends on who uses the instance.
 - **Description**: SimKL API client secret for enabling SimKL account integration
 - **Get it**: https://simkl.com/oauth/applications
 
+#### `SIMKL_V2_CLIENT_ID`
+- **Required**: No, but Simkl retires the V1 sign-in (`SIMKL_CLIENT_ID`) around April 2027
+- **Description**: Client ID of a Simkl AUTH V2 app, registered at https://simkl.com/settings/developer/. A V1 client ID cannot be upgraded, so this is a second registration. Once it is set, every new Simkl connection, by code or through the browser, is made on the V2 app, and V2 tokens are refreshed before their seven days run out. Accounts connected on the V1 app keep working until the user disconnects and reconnects Simkl, and `SIMKL_CLIENT_ID` stays in use for them and for anonymous lookups such as search and trending. Requests made with a V2 token count against that user's own daily Simkl allowance (500 on a free account, 1,000 on PRO, 10,000 on VIP, shared with every other app the user has connected) instead of the app's, so a V2 app needs no limit increase from Simkl. When a user's allowance runs out, their Simkl calls stop until it resets at midnight New York time and catalogs serve what is cached; the configure page shows how much is left.
+- **Get it**: https://simkl.com/settings/developer/. Register it as **Server apps & services** to offer both sign-ins, with `${HOST_NAME}/api/auth/simkl/callback` (or `SIMKL_REDIRECT_URI`) as its redirect URI. A registration without a secret can only offer the code sign-in.
+
+#### `SIMKL_V2_CLIENT_SECRET`
+- **Required**: For the browser sign-in on V2, and sent on every token refresh when set
+- **Description**: The secret of a **Server apps & services** V2 registration. Without it only the code sign-in is offered.
+
+#### `SIMKL_TOKEN_REFRESH_AHEAD`
+- **Default**: `86400` (one day)
+- **Description**: How many seconds before a Simkl V2 access token expires it is refreshed.
+
+#### `SIMKL_TOKEN_REFRESH_RETRY`
+- **Default**: `300`
+- **Description**: How many seconds a Simkl token whose refresh failed is left before the refresh is tried again. A refresh the user revoked on Simkl keeps failing until they reconnect.
+
 #### `SIMKL_AUTH_MODE`
 - **Required**: No
-- **Default**: `pin` when `SIMKL_CLIENT_SECRET` is unset, otherwise `oauth`
+- **Default**: `pin` when `SIMKL_CLIENT_SECRET` is unset, otherwise `oauth`. With `SIMKL_V2_CLIENT_ID` set, `SIMKL_V2_CLIENT_SECRET` decides instead.
 - **Values**: `oauth`, `pin`, `both`
 - **Description**: Which SimKL connection flow(s) the configure page offers.
   - `oauth` - the browser-redirect flow. Needs `SIMKL_CLIENT_SECRET` plus a publicly reachable `HOST_NAME`/`SIMKL_REDIRECT_URI` registered with SimKL.
@@ -244,8 +266,12 @@ to every visitor, so which one you reach for depends on who uses the instance.
 
 #### `SIMKL_ACTIVITIES_TTL`
 - **Default**: `1800` (30 minutes)
-- **Description**: Time-to-live (in seconds) for caching SimKL activity checks. Reduces API spam when paginating. Also caps how long Up Next keeps showing an episode you just watched, and how long a completed item can still appear when Hide Simkl Watched is on. Simkl asks callers not to check more often than every 15 minutes.
+- **Description**: Time-to-live (in seconds) for caching SimKL activity checks. Reduces API spam when paginating. Also caps how long Up Next keeps showing an episode you just watched, and how long a completed item can still appear when Hide Simkl Watched is on. This is the default: users on a V2 connection can set their own interval in the Simkl integration, since their checks count against their own Simkl allowance. V1 connections always use this value, since their checks share the app allowance.
 - **Example**: `SIMKL_ACTIVITIES_TTL=3600` (1 hour)
+
+#### `SIMKL_LIST_MIN_TTL`
+- **Default**: `300` (5 minutes)
+- **Description**: The shortest cache lifetime (in seconds) a Simkl custom list catalog can have. A lower TTL set on a catalog, or a lower instance default, is raised to this. Custom list reads count against the user's daily Simkl allowance.
 
 #### `SIMKL_TRENDING_PAGE_SIZE_OPTIONS`
 - **Default**: `50,100`
@@ -844,6 +870,11 @@ Art the addon **passes through without storing** is decided by a chain of its ow
 - **Description**: Also cache cast/actor headshots. Numerous, at roughly ten to twenty per title, and each one is a separate image, so expect this to take a real bite out of `POSTER_CACHE_MAX_SIZE` on a large library.
 - **Example**: `POSTER_CACHE_CAST=true`
 
+### `POSTER_CACHE_COLLECTIONS`
+- **Default**: `true` (when `ENABLE_BUILTIN_POSTER_CACHE` is on)
+- **Description**: Caches the images of collections served through the image cache: folder covers, backdrops, title logos and focus GIFs, for the collection export and the Jellyfin server alike. They are stored as they are, never reshaped to 2:3 the way posters are, and a collection's images are pinned so eviction leaves them alone. Set to `false` to proxy them without storing them.
+- **Example**: `POSTER_CACHE_COLLECTIONS=false`
+
 ### `POSTER_CACHE_PROCESSED_IMAGES`
 - **Default**: `true` (when `ENABLE_BUILTIN_POSTER_CACHE` is on)
 - **Description**: Caches the images the addon renders itself — rating-overlaid posters from the `/poster` route (active when **Proxy Rating & Custom Art** is on) plus the `/api/image/blur` and `/api/image/banner-to-background` transforms. Enabled by default with the cache; without it those requests re-render on every view. Total volume is still bounded by `POSTER_CACHE_MAX_SIZE`.
@@ -1124,6 +1155,26 @@ un-cancelled show eventually refreshes on its own.
 - **Description**: Disk TTL for the `stable` tier — titles that are finished but more recently so. Shorter than the frozen TTL because late data corrections are more likely.
 - **Example**: `COLD_TTL_STABLE=90d`
 
+### `COLD_TTL_PARTIAL`
+- **Default**: `14d`
+- **Description**: Disk TTL for the `partial` tier — titles stored while known to be incomplete, because the title or description was served from a language fallback rather than being available in the user's own language. Short on purpose: the missing piece is exactly what a provider contributor is most likely to add next, so the entry is re-checked within two weeks instead of being frozen for months.
+
+  Deliberately longer than `META_TTL` (7d), so a partial entry outlives its Redis counterpart and still absorbs evictions. Titles are re-promoted automatically — once a later fetch finds the data complete, the entry is rewritten at its full `stable`/`frozen` TTL with no operator action.
+
+  Requires `META_COLD_STORE_STRICT`.
+- **Example**: `COLD_TTL_PARTIAL=30d`
+
+### `META_COLD_STORE_STRICT`
+- **Default**: `true`
+- **Description**: Apply completeness gating on the cold-store write path. When on, titles whose name or description came from a language fallback land in the `partial` tier (see `COLD_TTL_PARTIAL`) instead of `stable`/`frozen`, and titles whose language could not be resolved at all are not persisted to disk.
+
+  **Only language is judged, not artwork.** Most cached bytes live in rows shared between users who differ only in their artwork source, so demoting on a missing logo would shorten the TTL of that shared data on one user's behalf. Setting this to `false` reproduces the previous behaviour exactly: every stable title is stored at its full tier TTL regardless of completeness.
+
+  Incompleteness shortens the TTL rather than preventing storage. For obscure titles a missing translation is usually permanent rather than pending, so refusing to store them would remove the cold store's benefit for exactly the users who gain most from it.
+
+  Watch the `partial` share of the tier breakdown in `GET /api/admin/cold-store/stats` after enabling. If `partial` dominates, the gating is too aggressive for your provider mix.
+- **Example**: `META_COLD_STORE_STRICT=false`
+
 ### `SETTLE_MOVIE`
 - **Default**: `180d`
 - **Description**: Minimum age since release before a movie becomes disk-eligible. Guards against caching a film while its metadata is still being corrected post-release.
@@ -1225,6 +1276,8 @@ TRAKT_CLIENT_ID=your_key_here  # Optional
 TRAKT_CLIENT_SECRET=your_key_here  # Optional
 SIMKL_CLIENT_ID=your_key_here  # Optional
 SIMKL_CLIENT_SECRET=your_key_here  # Optional
+SIMKL_V2_CLIENT_ID=your_key_here  # Optional
+SIMKL_V2_CLIENT_SECRET=your_key_here  # Optional
 
 # Cache Warmup Configuration
 CACHE_WARMUP_UUIDS=your-user-uuid-here,another-user-uuid  # Multiple UUIDs (up to 3)

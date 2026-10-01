@@ -10,10 +10,12 @@
 import consola from 'consola';
 import crypto from 'crypto';
 import { request } from 'undici';
+import { noteTrackerCall } from '../utils/trackerCalls';
 
 const database: any = require('./database');
 const idMapper: any = require('./id-mapper');
 const { resolveAnidbEpisodeFromTvdbEpisode } = require('./anime-list-mapper');
+import { ownTokenId } from './accounts';
 
 const logger = consola.withTag('MALTracker');
 
@@ -96,15 +98,23 @@ async function malRequest(url: string, options: { method?: string; form?: Record
     headers['Content-Type'] = 'application/x-www-form-urlencoded';
   }
 
-  const { statusCode, body: responseBody } = await request(url, {
-    method: method as any,
-    headers,
-    body,
-    bodyTimeout: REQUEST_TIMEOUT_MS,
-    headersTimeout: REQUEST_TIMEOUT_MS
-  });
+  let response: any;
+  try {
+    response = await request(url, {
+      method: method as any,
+      headers,
+      body,
+      bodyTimeout: REQUEST_TIMEOUT_MS,
+      headersTimeout: REQUEST_TIMEOUT_MS
+    });
+  } catch (error) {
+    noteTrackerCall(url, 0);
+    throw error;
+  }
+  const { statusCode, body: responseBody } = response;
 
   const text = await responseBody.text();
+  noteTrackerCall(url, statusCode, text, response.headers?.['retry-after']);
   let data: any = null;
   try {
     data = text ? JSON.parse(text) : null;
@@ -308,17 +318,33 @@ async function fetchMalSuggestions(
 const refreshLocks = new Map<string, Promise<string | null>>();
 
 /**
- * Get a valid access token for a user, refreshing if necessary
+ * Get a valid access token for a user, refreshing if necessary.
+ * tokenId === null means this user has no MAL account of their own.
  */
-async function getValidAccessToken(userUUID: string): Promise<string | null> {
+async function getValidAccessToken(userUUID: string, tokenId?: string | null): Promise<string | null> {
+  if (tokenId === null) {
+    logger.debug(`[MAL Tracker] No MAL account of their own for user ${userUUID}`);
+    return null;
+  }
   try {
-    const config = await database.getUserConfig(userUUID);
-    const malTokenId = config?.apiKeys?.malTokenId;
-    if (!config || !malTokenId) {
+    let malTokenId = tokenId;
+    if (!malTokenId) {
+      const config = await database.getUserConfig(userUUID);
+      malTokenId = config?.apiKeys?.malTokenId;
+    }
+    if (!malTokenId) {
       logger.debug(`[MAL Tracker] No MAL token ID found for user ${userUUID}`);
       return null;
     }
+    return await getAccessTokenById(malTokenId);
+  } catch (error: any) {
+    logger.error(`[MAL Tracker] Error getting valid access token for user ${userUUID}:`, error.message || error);
+    return null;
+  }
+}
 
+async function getAccessTokenById(malTokenId: string): Promise<string | null> {
+  try {
     const tokenData = await database.getOAuthToken(malTokenId);
     if (!tokenData) {
       logger.debug(`[MAL Tracker] No OAuth token found for token ID ${malTokenId}`);
@@ -330,7 +356,7 @@ async function getValidAccessToken(userUUID: string): Promise<string | null> {
     }
 
     if (!tokenData.refresh_token) {
-      logger.warn(`[MAL Tracker] Token expired for user ${userUUID} and no refresh token available. User must re-authenticate.`);
+      logger.warn(`[MAL Tracker] Token ${malTokenId} expired and no refresh token available. User must re-authenticate.`);
       return null;
     }
 
@@ -356,9 +382,45 @@ async function getValidAccessToken(userUUID: string): Promise<string | null> {
       refreshLocks.delete(malTokenId);
     }
   } catch (error: any) {
-    logger.error(`[MAL Tracker] Error getting valid access token for user ${userUUID}:`, error.message || error);
+    logger.error(`[MAL Tracker] Error getting valid access token for token ${malTokenId}:`, error.message || error);
     return null;
   }
+}
+
+const MAL_LIST_STATUSES: Record<string, string> = {
+  watching: 'watching',
+  completed: 'completed',
+  dropped: 'dropped',
+  on_hold: 'paused',
+  plan_to_watch: 'planning',
+};
+
+async function fetchAnimeList(accessToken: string): Promise<any[]> {
+  const entries: any[] = [];
+  const params = new URLSearchParams({
+    fields: 'list_status{status,num_episodes_watched,is_rewatching,updated_at},num_episodes,media_type',
+    limit: '1000',
+    nsfw: 'true',
+  });
+  let url: string | null = `${MAL_API_BASE}/users/@me/animelist?${params.toString()}`;
+  for (let page = 0; url && page < 20; page += 1) {
+    const data: any = await makeRateLimitedRequest(() => malRequest(url as string, { accessToken }));
+    for (const item of Array.isArray(data?.data) ? data.data : []) {
+      const node = item?.node;
+      const list = item?.list_status ?? node?.my_list_status;
+      if (!node?.id || !list) continue;
+      entries.push({
+        mal: Number(node.id),
+        status: list.is_rewatching ? 'watching' : MAL_LIST_STATUSES[list.status] || 'planning',
+        progress: Number(list.num_episodes_watched) || 0,
+        episodes: Number(node.num_episodes) || null,
+        movie: node.media_type === 'movie',
+        updatedAt: Date.parse(list.updated_at ?? '') || 0,
+      });
+    }
+    url = data?.paging?.next ?? null;
+  }
+  return entries;
 }
 
 /**
@@ -521,6 +583,43 @@ function shouldTrackMal(config: any): boolean {
 /**
  * Main tracking function - tracks anime watch progress on MAL
  */
+async function fetchPlanToWatchIds(accessToken: string): Promise<number[]> {
+  const ids: number[] = [];
+  let offset = 0;
+  for (let page = 0; page < 20; page += 1) {
+    const params = new URLSearchParams({ status: 'plan_to_watch', limit: '500', offset: String(offset), fields: 'id' });
+    const data = await makeRateLimitedRequest(() =>
+      malRequest(`${MAL_API_BASE}/users/@me/animelist?${params.toString()}`, { accessToken })
+    );
+    const rows = Array.isArray(data?.data) ? data.data : [];
+    for (const row of rows) if (row?.node?.id) ids.push(Number(row.node.id));
+    if (!data?.paging?.next || rows.length < 500) break;
+    offset += rows.length;
+  }
+  return ids;
+}
+
+async function setPlanToWatch(malId: number, listed: boolean, accessToken: string): Promise<boolean> {
+  try {
+    if (listed) {
+      await makeRateLimitedRequest(() =>
+        malRequest(`${MAL_API_BASE}/anime/${malId}/my_list_status`, { method: 'PUT', form: { status: 'plan_to_watch' }, accessToken })
+      );
+      return true;
+    }
+    // A title with progress is history, not a watchlist entry.
+    const current = await getAnimeStatus(malId, accessToken);
+    if (current?.listStatus && current.listStatus.status !== 'plan_to_watch') return false;
+    await makeRateLimitedRequest(() =>
+      malRequest(`${MAL_API_BASE}/anime/${malId}/my_list_status`, { method: 'DELETE', accessToken })
+    );
+    return true;
+  } catch (error: any) {
+    logger.error(`[MAL Tracker] Watchlist ${listed ? 'add' : 'remove'} failed for MAL ID ${malId}: ${error.message}`);
+    return false;
+  }
+}
+
 async function trackAnimeProgress(parsedId: ParsedMediaId, config: any, userUUID: string): Promise<{ success: boolean; reason?: string; updated?: boolean }> {
   const startTime = Date.now();
 
@@ -550,7 +649,7 @@ async function trackAnimeProgress(parsedId: ParsedMediaId, config: any, userUUID
     const { malId, episode: episodeNumber } = resolution;
     logger.debug(`[MAL Tracker] Resolved ${parsedId.provider}:${parsedId.id} to MAL ID ${malId}, episode ${episodeNumber}`);
 
-    const accessToken = await getValidAccessToken(userUUID);
+    const accessToken = await getValidAccessToken(userUUID, ownTokenId(config, 'mal'));
     if (!accessToken) {
       logger.warn(`[MAL Tracker] No valid access token available for user ${userUUID}`);
       return { success: false, reason: 'no_valid_token', updated: false };
@@ -593,6 +692,8 @@ async function trackAnimeProgress(parsedId: ParsedMediaId, config: any, userUUID
 export {
   isTokenExpired,
   getValidAccessToken,
+  getAccessTokenById,
+  fetchAnimeList,
   fetchMalUserList,
   fetchMalSuggestions,
   MAL_USERLIST_STATUSES,
@@ -603,6 +704,8 @@ export {
   getAuthenticatedUser,
   resolveMalId,
   getAnimeStatus,
+  fetchPlanToWatchIds,
+  setPlanToWatch,
   determineStatus,
   updateProgress,
   shouldTrackMal,

@@ -1,5 +1,6 @@
 import consola from 'consola';
 import { allowsUnrated, hasAgeRatingCap, passesAgeRating } from './ageRating';
+import { trackerConfig } from '../lib/accounts';
 const logger = consola.withTag('CatalogFilters');
 
 function isHideWatchedExcluded(cleanId: string): boolean {
@@ -48,6 +49,11 @@ const WATCHED_FILTERS: [string, string][] = [
   ['simklTokenId', 'hideWatchedSimkl'],
 ];
 
+function watchedConfig(config: any): any {
+  const own = trackerConfig(config);
+  return config?.jellyfinAccounts ? { ...own, apiKeys: { ...own.apiKeys, traktTokenId: undefined } } : own;
+}
+
 function catalogFiltersActive({ config, catalogConfig, cleanId }: Omit<CatalogFilterOptions, 'type'>): boolean {
   const isSearch = ['search', 'people_search', 'gemini.search'].includes(cleanId);
 
@@ -66,14 +72,20 @@ function catalogFiltersActive({ config, catalogConfig, cleanId }: Omit<CatalogFi
   if (hideUnreleasedShows) return true;
 
   if (!isHideWatchedExcluded(cleanId)) {
+    const tracked = watchedConfig(config);
     for (const [credential, flag] of WATCHED_FILTERS) {
-      if (!config.apiKeys?.[credential]) continue;
+      if (!tracked.apiKeys?.[credential]) continue;
       const catalogHide = catalogConfig?.metadata?.[flag];
       if (catalogHide !== undefined ? catalogHide : !!config[flag]) return true;
     }
   }
 
-  return Boolean(config.exclusionKeywords || config.regexExclusionFilter || config.exclusionGenres);
+  return Boolean(config.exclusionKeywords || config.regexExclusionFilter || config.exclusionGenres || excludedTmdbKeywords(config).size);
+}
+
+function excludedTmdbKeywords(config: any): Set<string> {
+  const list = Array.isArray(config?.exclusionTmdbKeywords) ? config.exclusionTmdbKeywords : [];
+  return new Set(list.map((keyword: unknown) => String(keyword).trim().toLowerCase()).filter(Boolean));
 }
 
 async function applyCatalogFilters(metas: any[], { type, config, catalogConfig, cleanId }: CatalogFilterOptions): Promise<any[]> {
@@ -83,6 +95,8 @@ async function applyCatalogFilters(metas: any[], { type, config, catalogConfig, 
 
   metas = applyAgeRatingFilter(metas, type, config);
   const hideWatchedExcluded = isHideWatchedExcluded(cleanId);
+  // A Jellyfin user with accounts of their own hides what they watched, not what you did.
+  const tracked = watchedConfig(config);
 
   const catalogHideDigital = catalogConfig?.metadata?.hideUnreleasedDigital;
   const hideUnreleasedDigital = isSearch
@@ -117,14 +131,14 @@ async function applyCatalogFilters(metas: any[], { type, config, catalogConfig, 
     }
   }
 
-  if (metas.length > 0 && config.apiKeys?.traktTokenId) {
+  if (metas.length > 0 && tracked.apiKeys?.traktTokenId) {
     const globalHide = !!config.hideWatchedTrakt;
     const catalogHide = catalogConfig?.metadata?.hideWatchedTrakt;
     const shouldHide = catalogHide !== undefined ? catalogHide : globalHide;
     if (shouldHide && !hideWatchedExcluded) {
       try {
         const { getTraktWatchedIds } = require('./traktUtils');
-        const watchedIds = await getTraktWatchedIds(config);
+        const watchedIds = await getTraktWatchedIds(tracked);
         if (watchedIds) {
           const actualType = catalogConfig?.type || type;
           const before = metas.length;
@@ -146,7 +160,7 @@ async function applyCatalogFilters(metas: any[], { type, config, catalogConfig, 
     }
   }
 
-  if (metas.length > 0 && config.apiKeys?.anilistTokenId) {
+  if (metas.length > 0 && tracked.apiKeys?.anilistTokenId) {
     const globalHide = !!config.hideWatchedAnilist;
     const catalogHide = catalogConfig?.metadata?.hideWatchedAnilist;
     const shouldHide = catalogHide !== undefined ? catalogHide : globalHide;
@@ -154,7 +168,7 @@ async function applyCatalogFilters(metas: any[], { type, config, catalogConfig, 
       try {
         const { getAnilistWatchedIds } = require('./anilistUtils');
         const idMapper = require('../lib/id-mapper');
-        const watchedIds = await getAnilistWatchedIds(config);
+        const watchedIds = await getAnilistWatchedIds(tracked);
         if (watchedIds) {
           const before = metas.length;
           metas = metas.filter(meta => {
@@ -192,14 +206,14 @@ async function applyCatalogFilters(metas: any[], { type, config, catalogConfig, 
     }
   }
 
-  if (metas.length > 0 && config.apiKeys?.mdblist) {
+  if (metas.length > 0 && tracked.apiKeys?.mdblist) {
     const globalHide = !!config.hideWatchedMdblist;
     const catalogHide = catalogConfig?.metadata?.hideWatchedMdblist;
     const shouldHide = catalogHide !== undefined ? catalogHide : globalHide;
     if (shouldHide && !hideWatchedExcluded) {
       try {
         const { getMdblistWatchedIds } = require('./mdblistUtils');
-        const watchedIds = await getMdblistWatchedIds(config);
+        const watchedIds = await getMdblistWatchedIds(tracked);
         if (watchedIds) {
           const actualType = catalogConfig?.type || type;
           const before = metas.length;
@@ -221,7 +235,7 @@ async function applyCatalogFilters(metas: any[], { type, config, catalogConfig, 
     }
   }
 
-  if (metas.length > 0 && config.apiKeys?.simklTokenId) {
+  if (metas.length > 0 && tracked.apiKeys?.simklTokenId) {
     const globalHide = !!config.hideWatchedSimkl;
     const catalogHide = catalogConfig?.metadata?.hideWatchedSimkl;
     const shouldHide = catalogHide !== undefined ? catalogHide : globalHide;
@@ -229,7 +243,7 @@ async function applyCatalogFilters(metas: any[], { type, config, catalogConfig, 
       try {
         const { getSimklWatchedIds } = require('./simklUtils');
         const idMapper = require('../lib/id-mapper');
-        const watchedIds = await getSimklWatchedIds(config);
+        const watchedIds = await getSimklWatchedIds(tracked);
         if (watchedIds) {
           const actualType = catalogConfig?.type || type;
           const before = metas.length;
@@ -270,6 +284,17 @@ async function applyCatalogFilters(metas: any[], { type, config, catalogConfig, 
       } catch (err: any) {
         logger.warn(`Hide Simkl watched filter error: ${err.message}`);
       }
+    }
+  }
+
+  const blockedKeywords = excludedTmdbKeywords(config);
+  if (blockedKeywords.size) {
+    const before = metas.length;
+    metas = metas.filter((meta: any) =>
+      !(Array.isArray(meta?.keywords) && meta.keywords.some((keyword: unknown) => blockedKeywords.has(String(keyword).toLowerCase())))
+    );
+    if (before !== metas.length) {
+      logger.debug(`TMDB keyword filter: removed ${before - metas.length} items`);
     }
   }
 

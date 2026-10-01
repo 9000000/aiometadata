@@ -4,7 +4,6 @@ const consola: any = require('consola');
 
 const logger: any = consola.withTag('AISearch');
 
-const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
 
 interface GeminiModel {
   id: string;
@@ -18,21 +17,50 @@ interface Suggestion {
   year: number;
 }
 
+/**
+ * The `-latest` entries are aliases Google repoints at its newest release in that
+ * tier. They are listed because they are the way to stop having to revisit this
+ * file, but they move without warning, and a tier's price can move with them,
+ * so a pinned id remains the predictable choice.
+ */
+/**
+ * `gemini-flash-latest` is an alias Google repoints at its newest flash release.
+ * It is here so a retirement does not silently break every config again, at the
+ * cost of the model moving under you without warning.
+ */
 const GEMINI_MODELS: GeminiModel[] = [
-  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', grounding: true },
-  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', grounding: false },
-  { id: 'gemini-3-flash', name: 'Gemini 3 Flash', grounding: false },
-  { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', grounding: false },
-  { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', grounding: false },
-  { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash Lite', grounding: false },
-  { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', grounding: false },
-  { id: 'gemini-3.6-flash', name: 'Gemini 3.6 Flash', grounding: false },
+  { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', grounding: true },
+  { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash Lite', grounding: true },
+  { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', grounding: true },
+  { id: 'gemini-3.6-flash', name: 'Gemini 3.6 Flash', grounding: true },
+  { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', grounding: true },
+  { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', grounding: true },
+  { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (Preview)', grounding: true },
+  { id: 'gemini-flash-latest', name: 'Gemini Flash (latest)', grounding: true },
 ];
 
-// Retired by Google — rejected for API keys created after retirement.
+const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash-lite';
+/**
+ * Retired by Google, or never a real id.
+ *
+ * `gemini-2.5-flash` and `-pro` still answer for keys created before they were
+ * withdrawn, which is why the failure only shows up for new users: Google
+ * returns "no longer available to new users" and names a replacement.
+ * `gemini-3-flash` and `gemini-3.1-pro` never existed under those names at all
+ * (the API serves them as `-preview`), so they failed for everyone.
+ *
+ * The replacement is priced like what it replaces: `gemini-3.5-flash-lite` costs
+ * the same $0.30/$2.50 per 1M tokens the old default did, where `gemini-3.6-flash`
+ * is $0.75/$3.75. Users bring their own key, so the default should not quietly
+ * cost them more than the one it stands in for.
+ */
 const RETIRED_GEMINI_MODELS: Record<string, string> = {
+  'gemini-2.5-flash': DEFAULT_GEMINI_MODEL,
+  'gemini-2.5-pro': 'gemini-3.1-pro-preview',
   'gemini-2.5-flash-lite': DEFAULT_GEMINI_MODEL,
   'gemini-2.5-flash-lite-preview-09-2025': DEFAULT_GEMINI_MODEL,
+  'gemini-3-flash': DEFAULT_GEMINI_MODEL,
+  'gemini-3.1-pro': 'gemini-3.1-pro-preview',
 };
 
 function resolveGeminiModel(model?: string | null): string {
@@ -45,85 +73,93 @@ function supportsGrounding(model: string): boolean {
   return entry?.grounding ?? false;
 }
 
-async function performGeminiSearch(apiKey: string, query: string, type: string, language: string, model: string, forceGrounding: boolean = false): Promise<Suggestion[]> {
-  const startTime = Date.now();
+function groundingRefused(error: any): boolean {
+  const status = Number(error?.statusCode);
+  const message = String(error?.message || '').toLowerCase();
+  if (status === 429 || status === 403) return true;
+  return /quota|billing|not available|not supported|permission|grounding/.test(message);
+}
 
+async function performGeminiSearch(apiKey: string, query: string, type: string, language: string, model: string, forceGrounding: boolean = false): Promise<Suggestion[]> {
   if (!apiKey) {
     logger.warn("Search failed: no API key provided.");
     return [];
   }
 
   const selectedModel = resolveGeminiModel(model);
-  const useGrounding = forceGrounding || supportsGrounding(selectedModel);
+  const wantsGrounding = forceGrounding && supportsGrounding(selectedModel);
+
+  try {
+    return await geminiSearch(apiKey, query, type, selectedModel, wantsGrounding);
+  } catch (error: any) {
+    if (wantsGrounding && groundingRefused(error)) {
+      logger.warn(`Gemini refused web search on ${selectedModel} (${error?.message || error}); retrying without it`);
+      return geminiSearch(apiKey, query, type, selectedModel, false);
+    }
+    throw error;
+  }
+}
+
+async function geminiSearch(apiKey: string, query: string, type: string, selectedModel: string, useGrounding: boolean): Promise<Suggestion[]> {
+  const startTime = Date.now();
   const timeout = useGrounding ? 45000 : 30000;
 
   logger.debug(`Using model: ${selectedModel}, grounding: ${useGrounding}, timeout: ${timeout}ms`);
 
-  try {
-    const generationStart = Date.now();
+  const generationStart = Date.now();
 
-    const prompt = buildPrompt(query, type, 20, useGrounding ? 'gemini' : false);
+  const prompt = buildPrompt(query, type, 20, useGrounding ? 'gemini' : false);
 
-    const response = await generateContent({
-      apiKey,
-      model: selectedModel,
-      prompt,
-      useGrounding,
-      timeout,
-    });
+  const response = await generateContent({
+    apiKey,
+    model: selectedModel,
+    prompt,
+    useGrounding,
+    timeout,
+  });
 
-    const rawText = response.text;
+  const rawText = response.text;
 
-    if (!rawText) {
-      logger.debug(`Gemini returned no text. Response details:`);
-      if (response.finishReason) {
-        logger.debug(`Finish reason: ${response.finishReason}`);
-      }
-      if (response.safetyRatings) {
-        logger.debug(`Safety ratings: ${JSON.stringify(response.safetyRatings)}`);
-      }
-      if (response.finishReason === 'SAFETY') {
-        logger.warn('Response blocked due to safety filters');
-      }
-      if (response.promptFeedback) {
-        logger.debug(`Prompt feedback: ${JSON.stringify(response.promptFeedback)}`);
-      }
+  if (!rawText) {
+    logger.debug(`Gemini returned no text. Response details:`);
+    if (response.finishReason) {
+      logger.debug(`Finish reason: ${response.finishReason}`);
     }
-
-    const searchQueries = response.groundingMetadata?.webSearchQueries;
-    if (searchQueries && searchQueries.length > 0) {
-      logger.debug(`Gemini utilized Google Search grounding with ${searchQueries.length} queries: ${searchQueries.join(', ')}`);
+    if (response.safetyRatings) {
+      logger.debug(`Safety ratings: ${JSON.stringify(response.safetyRatings)}`);
     }
-
-    const generationTime = Date.now() - generationStart;
-    logger.debug(`AI generation completed in ${generationTime}ms`);
-    logger.debug(`Gemini raw response: ${rawText}`);
-
-    const parsingStart = Date.now();
-
-    const suggestions = parseAIResponse(rawText, type);
-
-    const parsingTime = Date.now() - parsingStart;
-    logger.debug(`Parsing completed in ${parsingTime}ms`);
-
-    const totalTime = Date.now() - startTime;
-    logger.debug(`Total search time: ${totalTime}ms, returned ${suggestions.length} suggestions`);
-
-    if (totalTime > 10000) {
-      logger.warn(`WARNING: AI search took longer than 10 seconds (${totalTime}ms)`);
+    if (response.finishReason === 'SAFETY') {
+      logger.warn('Response blocked due to safety filters');
     }
-
-    return suggestions;
-
-  } catch (error: any) {
-    const keyHint = apiKey ? `...${apiKey.slice(-4)}` : 'none';
-    logger.error(`Error during AI search (model: ${selectedModel}, grounding: ${useGrounding}, key: ${keyHint}):`, error.message);
-    if (error.statusCode) {
-      logger.error(`HTTP status: ${error.statusCode}`);
+    if (response.promptFeedback) {
+      logger.debug(`Prompt feedback: ${JSON.stringify(response.promptFeedback)}`);
     }
-    logger.debug("Stack trace:", error.stack);
-    return [];
   }
+
+  const searchQueries = response.groundingMetadata?.webSearchQueries;
+  if (searchQueries && searchQueries.length > 0) {
+    logger.debug(`Gemini utilized Google Search grounding with ${searchQueries.length} queries: ${searchQueries.join(', ')}`);
+  }
+
+  const generationTime = Date.now() - generationStart;
+  logger.debug(`AI generation completed in ${generationTime}ms`);
+  logger.debug(`Gemini raw response: ${rawText}`);
+
+  const parsingStart = Date.now();
+
+  const suggestions = parseAIResponse(rawText, type);
+
+  const parsingTime = Date.now() - parsingStart;
+  logger.debug(`Parsing completed in ${parsingTime}ms`);
+
+  const totalTime = Date.now() - startTime;
+  logger.debug(`Total search time: ${totalTime}ms, returned ${suggestions.length} suggestions`);
+
+  if (totalTime > 10000) {
+    logger.warn(`WARNING: AI search took longer than 10 seconds (${totalTime}ms)`);
+  }
+
+  return suggestions;
 }
 
 function buildPrompt(query: string, type: string, numResults: number = 10, searchMode: string | false = false): string {

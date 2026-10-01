@@ -114,6 +114,24 @@ class ConfigApi {
     return { cleaned: false };
   }
 
+  async sanitizeCardAccounts(config) {
+    const { ACCOUNT_SERVICES } = require('./accounts');
+    for (const card of Array.isArray(config?.jellyfinUsers) ? config.jellyfinUsers : []) {
+      const keys = card?.accounts?.apiKeys;
+      if (!keys) continue;
+      for (const provider of ['simkl', 'anilist', 'mal']) {
+        const field = ACCOUNT_SERVICES[provider].key;
+        if (!keys[field]) continue;
+        const token = await database.getOAuthToken(keys[field]).catch(() => null);
+        if (token && token.provider === provider && token.access_token) continue;
+        logger.warn(`[Config Protection] Removing an unknown ${provider} token from Jellyfin user ${card.id}`);
+        delete keys[field];
+        if (card.accounts.labels) delete card.accounts.labels[provider];
+        if (provider === 'simkl') delete card.accounts.simklUser;
+      }
+    }
+  }
+
   // Validate required API keys
   validateRequiredKeys(config) {
     const requiredKeys = ['tmdb'];
@@ -165,6 +183,19 @@ class ConfigApi {
     }
     
     return { valid: true };
+  }
+
+  validateEpisodeOrders(config) {
+    const { countEpisodeOrders } = require('../utils/episodeOrder');
+    const max = Math.max(1, parseInt(require('./settingsService').getSetting('TVDB_EPISODE_ORDER_MAX') || '', 10) || 100);
+    const count = countEpisodeOrders(config);
+    if (count <= max) return { valid: true };
+    return {
+      valid: false,
+      count,
+      max,
+      message: `Too many shows with their own episode order (${count}); the maximum on this instance is ${max}. Remove some and try again.`,
+    };
   }
 
   validateCatalogCount(config) {
@@ -249,6 +280,21 @@ class ConfigApi {
     return { valid: true };
   }
 
+  newerThanBase(req, stored) {
+    const base = Number(req.body?.baseVersion);
+    if (!Number.isFinite(base) || req.body?.force === true) return null;
+    const current = Number(stored?.configVersion) || 0;
+    return current > base ? current : null;
+  }
+
+  rejectStaleSave(res, newer) {
+    return res.status(409).json({
+      error: 'This configuration was changed in another tab or device after this page loaded.',
+      code: 'CONFIG_CHANGED',
+      configVersion: newer,
+    });
+  }
+
   // Save configuration with password
   async saveConfig(req, res) {
     logger.debug('saveConfig called - starting function');
@@ -306,6 +352,15 @@ class ConfigApi {
         });
       }
 
+      const episodeOrderCheck = this.validateEpisodeOrders(config);
+      if (!episodeOrderCheck.valid) {
+        return res.status(400).json({
+          error: episodeOrderCheck.message,
+          episodeOrderCount: episodeOrderCheck.count,
+          maxEpisodeOrders: episodeOrderCheck.max,
+        });
+      }
+
       const tagCheck = this.validateTagNames(config);
       if (!tagCheck.valid) {
         return res.status(400).json({
@@ -325,6 +380,7 @@ class ConfigApi {
 
       await this.sanitizeTraktToken(config);
       await this.sanitizeSimklToken(config);
+      await this.sanitizeCardAccounts(config);
 
       // Use existing UUID if provided, otherwise generate a new one
       const userUUID = existingUUID || database.generateUserUUID();
@@ -347,6 +403,9 @@ class ConfigApi {
         // User might not exist yet, that's fine
         logger.debug(`No existing config found for user ${userUUID}, treating as new config`);
       }
+
+      const newerInSave = this.newerThanBase(req, oldConfig);
+      if (newerInSave) return this.rejectStaleSave(res, newerInSave);
       
       // Add a config version that changes when config is updated
       // This helps with cache invalidation
@@ -359,6 +418,12 @@ class ConfigApi {
         await configCache.set(userUUID, persistedConfig);
       } else {
         await configCache.del(userUUID);
+      }
+
+      try {
+        require('./jellyfin/watched').warmChangedSources(userUUID, oldConfig, persistedConfig || configWithTimestamp);
+      } catch (error) {
+        logger.debug(`Could not start reading new tracker accounts for ${userUUID}: ${error.message}`);
       }
 
       require('./collectionImageCacheSync')
@@ -547,10 +612,25 @@ class ConfigApi {
       
       const installUrl = buildInstallUrl(process.env.HOST_NAME, req.get('host'), manifestIdentifier(userUUID));
 
+      // Recommendations take a large model a minute or more to write, so they
+      // are built now rather than when somebody opens the row. Deliberately not
+      // awaited: the save is done, and a slow model must not hold up its reply.
+      try {
+        const { warmRecommendations } = require('../utils/recommendations/catalog');
+        setImmediate(() => {
+          warmRecommendations(config, userUUID).catch(error => {
+            logger.warn(`Recommendation warm failed for ${userUUID}: ${error.message}`);
+          });
+        });
+      } catch (warmError) {
+        logger.warn(`Could not start recommendation warm: ${warmError.message}`);
+      }
+
       res.json({
         success: true,
         userUUID,
         installUrl,
+        configVersion: persistedConfig?.configVersion ?? configWithTimestamp.configVersion,
         message: existingUUID ? 'Configuration updated successfully' : 'Configuration saved successfully'
       });
     } catch (error) {
@@ -691,6 +771,15 @@ class ConfigApi {
         });
       }
 
+      const episodeOrderCheck = this.validateEpisodeOrders(config);
+      if (!episodeOrderCheck.valid) {
+        return res.status(400).json({
+          error: episodeOrderCheck.message,
+          episodeOrderCount: episodeOrderCheck.count,
+          maxEpisodeOrders: episodeOrderCheck.max,
+        });
+      }
+
       const tagCheck = this.validateTagNames(config);
       if (!tagCheck.valid) {
         return res.status(400).json({
@@ -710,6 +799,7 @@ class ConfigApi {
 
       await this.sanitizeTraktToken(config);
       await this.sanitizeSimklToken(config);
+      await this.sanitizeCardAccounts(config);
 
       // Verify existing config exists
       let passwordHash;
@@ -737,6 +827,9 @@ class ConfigApi {
         logger.debug(`Could not retrieve old config for user ${userUUID}:`, error.message);
       }
 
+      const newerInUpdate = this.newerThanBase(req, oldConfig);
+      if (newerInUpdate) return this.rejectStaleSave(res, newerInUpdate);
+
       // Add timestamp to track config changes
       // Use a slightly higher timestamp to ensure it's always different
       const newConfigVersion = Date.now() + 1;
@@ -755,6 +848,12 @@ class ConfigApi {
         await configCache.set(userUUID, persistedConfig);
       } else {
         await configCache.del(userUUID);
+      }
+
+      try {
+        require('./jellyfin/watched').warmChangedSources(userUUID, oldConfig, persistedConfig || configWithTimestamp);
+      } catch (error) {
+        logger.debug(`Could not start reading new tracker accounts for ${userUUID}: ${error.message}`);
       }
 
       require('./collectionImageCacheSync')
@@ -950,6 +1049,7 @@ class ConfigApi {
         success: true,
         userUUID,
         installUrl: buildInstallUrl(process.env.HOST_NAME, req.get('host'), manifestIdentifier(userUUID)),
+        configVersion: persistedConfig?.configVersion ?? configWithTimestamp.configVersion,
         message: 'Configuration updated successfully'
       });
     } catch (error) {
@@ -1048,7 +1148,11 @@ class ConfigApi {
   }
 
   // Load configuration from database by UUID (for internal use)
-  async loadConfigFromDatabase(userUUID) {
+  /**
+   * The cached configuration itself, shared by every caller, so it is read and
+   * never changed. loadConfigFromDatabase hands out a copy a route may change.
+   */
+  async loadSharedConfig(userUUID) {
     try {
       await this.initialize();
       
@@ -1121,7 +1225,7 @@ class ConfigApi {
         return sanitizedConfig;
       });
 
-      return JSON.parse(JSON.stringify(cachedConfig));
+      return cachedConfig;
     } catch (error) {
       if (error?.code === 'CONFIG_NOT_FOUND') {
         logger.debug(`No configuration for ${String(userUUID).substring(0, 8)}...`);
@@ -1130,6 +1234,10 @@ class ConfigApi {
       }
       throw error;
     }
+  }
+
+  async loadConfigFromDatabase(userUUID) {
+    return JSON.parse(JSON.stringify(await this.loadSharedConfig(userUUID)));
   }
 
   buildApiKeyValidationSummary(details) {
@@ -1544,5 +1652,6 @@ module.exports = {
   getAddonInfo: configApi.getAddonInfo.bind(configApi),
   isTrusted: configApi.isTrusted.bind(configApi),
   loadConfigFromDatabase: configApi.loadConfigFromDatabase.bind(configApi),
+  loadSharedConfig: configApi.loadSharedConfig.bind(configApi),
   testApiKeys: configApi.testApiKeys.bind(configApi)
 };

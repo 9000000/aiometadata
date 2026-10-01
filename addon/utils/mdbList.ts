@@ -1,3 +1,4 @@
+import { historyPayload, type EpisodeRef } from './historyPayload';
 import { httpGet, httpPost } from "./httpClient.js";
 import { resolveAllIds } from "../lib/id-resolver.js";
 const buildInfo = require('../lib/buildInfo');
@@ -5,6 +6,8 @@ import { getMeta } from "../lib/getMeta.js";
 import { mapWithLimit } from "./concurrency.js";
 import { cacheWrapMetaSmart, cacheWrapMDBListGenres, cacheWrapGlobal } from "../lib/getCache.js";
 import { UserConfig } from "../types/index.js";
+import { getSetting } from "../lib/settingsService.js";
+import { envInt } from "./envNumber.js";
 const consola = require('consola');
 const crypto = require('crypto');
 const { socksDispatcher } = require('fetch-socks');
@@ -307,6 +310,68 @@ async function makeRateLimitedRequest<T>(
   throw new Error(`[${context}] All ${retries} attempts failed.`);
 }
 
+/** MDBList meters requests, not rows. 1000 is the endpoint ceiling; the page size restores one request per page. */
+function listBlockSize(pageSize: number): number {
+  const configured = parseInt(getSetting('MDBLIST_LIST_BLOCK_SIZE'), 10);
+  const size = Number.isFinite(configured) && configured > 0 ? configured : 500;
+  return Math.max(pageSize, Math.min(size, 1000));
+}
+
+function buildListItemsUrl(opts: { listId: string; apiKey: string; limit: number; offset: number; sort?: string; order?: string; genre?: string; unified?: boolean; filterScoreMin?: number; filterScoreMax?: number; mediaTypeFilter?: string }): string {
+  const { listId, apiKey, limit, offset } = opts;
+  const base = listId === 'watchlist'
+    ? 'https://api.mdblist.com/watchlist/items'
+    : `https://api.mdblist.com/lists/${listId}/items`;
+  let url = `${base}?limit=${limit}&offset=${offset}&apikey=${apiKey}&append_to_response=genre,poster&unified=${opts.unified !== false}`;
+
+  if (opts.sort && opts.sort.trim() !== '') url += `&sort=${opts.sort}`;
+  if (opts.order && opts.order.trim() !== '') url += `&order=${opts.order}`;
+  if (opts.genre && opts.genre.toLowerCase() !== 'none') url += `&filter_genre=${encodeURIComponent(opts.genre)}`;
+  if (typeof opts.filterScoreMin === 'number') url += `&filter_score_min=${opts.filterScoreMin}`;
+  if (typeof opts.filterScoreMax === 'number') url += `&filter_score_max=${opts.filterScoreMax}`;
+  // MDBList spells series "show".
+  if (opts.mediaTypeFilter) url += `&mediatype=${opts.mediaTypeFilter}`;
+
+  return url;
+}
+
+/**
+ * Read unified, the only form that says where each entry sits in the list.
+ * Neither `unified` nor `catalogType` is keyed, so one fetch serves both.
+ */
+/** Rebuilds what `unified=false` would have answered for the same window. */
+function splitWindowByType(window: any[], catalogType?: string): any[] {
+  if (catalogType === 'series') return window.filter((r) => r?.mediatype === 'show');
+  if (catalogType === 'movie') return window.filter((r) => r?.mediatype === 'movie');
+  return [
+    ...window.filter((r) => r?.mediatype === 'movie'),
+    ...window.filter((r) => r?.mediatype === 'show'),
+  ];
+}
+
+async function fetchListBlock(opts: { listId: string; apiKey: string; keyScope: string; blockOffset: number; blockSize: number; sort?: string; order?: string; genre?: string; filterScoreMin?: number; filterScoreMax?: number; mediaTypeFilter?: string; ttl: number; ttlSegment: string }): Promise<{ rows: any[]; totalItems?: number; hasMore: boolean }> {
+  const { listId, keyScope, blockOffset, blockSize } = opts;
+  const cacheKey = `mdblist-api:block:${keyScope}:${listId}:${blockOffset}:${blockSize}:${opts.sort || ''}:${opts.order || ''}:${opts.genre || ''}:${opts.filterScoreMin ?? ''}:${opts.filterScoreMax ?? ''}:${opts.mediaTypeFilter || ''}${opts.ttlSegment}`;
+
+  return cacheWrapGlobal(cacheKey, async () => {
+    const url = buildListItemsUrl({ ...opts, unified: true, limit: blockSize, offset: blockOffset });
+    logger.debug(`MDBList block request URL: ${sanitizeUrlForLogging(url)}`);
+
+    const response: any = await makeRateLimitedRequest(
+      () => httpGet(url, { dispatcher: mdblistDispatcher }),
+      opts.apiKey,
+      `MDBList fetchListBlock (listId: ${listId}, offset: ${blockOffset}, blockSize: ${blockSize})`
+    );
+
+    const rows: any[] = Array.isArray(response.data) ? response.data : [];
+    return {
+      rows,
+      totalItems: response.headers?.['x-total-items'] ? parseInt(response.headers['x-total-items']) : undefined,
+      hasMore: response.headers?.['x-has-more'] === 'true',
+    };
+  }, opts.ttl, { upstream: true, sourceList: true });
+}
+
 async function fetchMDBListItems(listId: string, apiKey: string, language: string, page: number, sort?: string, order?: string, genre?: string, unified?: boolean, catalogType?: string, cacheTTL?: number, filterScoreMin?: number, filterScoreMax?: number, mediaTypeFilter?: string): Promise<{items: any[], totalItems?: number, hasMore?: boolean, totalPages?: number}> {
   // Use configurable page size (supports CATALOG_LIST_ITEMS_SIZE env var)
   const pageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE as string) || 20;
@@ -323,49 +388,78 @@ async function fetchMDBListItems(listId: string, apiKey: string, language: strin
   try {
     return await cacheWrapGlobal(cacheKey, async () => {
       const offset = (page * pageSize) - pageSize;
-      let url: string;
-      
-      // Special handling for watchlist
-      if (listId === 'watchlist') {
-        url = `https://api.mdblist.com/watchlist/items?limit=${pageSize}&offset=${offset}&apikey=${apiKey}&append_to_response=genre,poster&unified=${unified !== false}`;
+
+      let items: any[];
+      let totalItems: number | undefined;
+      let hasMore: boolean;
+
+      // x-total-items counts the whole list, ignoring these.
+      const filtered = !!mediaTypeFilter
+        || (!!genre && genre.toLowerCase() !== 'none')
+        || typeof filterScoreMin === 'number'
+        || typeof filterScoreMax === 'number';
+
+      const blockSize = listBlockSize(pageSize);
+      if (blockSize > pageSize) {
+        const blockOffset = Math.floor(offset / blockSize) * blockSize;
+        const block = await fetchListBlock({
+          listId, apiKey, keyScope, blockOffset, blockSize,
+          sort, order, genre, filterScoreMin, filterScoreMax, mediaTypeFilter,
+          ttl, ttlSegment,
+        });
+        const within = offset - blockOffset;
+        const window = block.rows.slice(within, within + pageSize);
+        // Both forms page the same merged list; the split one only buckets its window.
+        items = unified !== false ? window : splitWindowByType(window, catalogType);
+        // Rows left in this block, else the block's word on what follows.
+        hasMore = within + pageSize < block.rows.length ? true : block.hasMore;
+        // Offsets run over the filtered sequence, so a final block counts exactly.
+        totalItems = !block.hasMore
+          ? blockOffset + block.rows.length
+          : (filtered ? undefined : block.totalItems);
       } else {
-        url = `https://api.mdblist.com/lists/${listId}/items?limit=${pageSize}&offset=${offset}&apikey=${apiKey}&append_to_response=genre,poster&unified=${unified !== false}`;
-      }
-      
-      // Add sort and order parameters if provided and not empty
-      if (sort && sort.trim() !== '') {
-        url += `&sort=${sort}`;
-      }
-      if (order && order.trim() !== '') {
-        url += `&order=${order}`;
-      }
-      if (genre && genre.toLowerCase() !== 'none') {
-        url += `&filter_genre=${encodeURIComponent(genre)}`;
-      }
-      if (typeof filterScoreMin === 'number') {
-        url += `&filter_score_min=${filterScoreMin}`;
-      }
-      if (typeof filterScoreMax === 'number') {
-        url += `&filter_score_max=${filterScoreMax}`;
-      }
-      // MDBList spells series "show", and filtering here keeps pages full and the totals honest.
-      if (mediaTypeFilter) {
-        url += `&mediatype=${mediaTypeFilter}`;
+        const url = buildListItemsUrl({
+          listId, apiKey, limit: pageSize, offset,
+          sort, order, genre, unified, filterScoreMin, filterScoreMax, mediaTypeFilter,
+        });
+        logger.debug(`MDBList request URL: ${sanitizeUrlForLogging(url)}`);
+
+        const response: any = await makeRateLimitedRequest(
+          () => httpGet(url, { dispatcher: mdblistDispatcher }),
+          apiKey,
+          `MDBList fetchMDBListItems (listId: ${listId}, page: ${page}, pageSize: ${pageSize}, sort: ${sort}, order: ${order}, genre: ${genre})`
+        );
+
+        hasMore = response.headers?.['x-has-more'] === 'true';
+        const reported = response.headers?.['x-total-items'] ? parseInt(response.headers['x-total-items']) : undefined;
+        totalItems = filtered ? undefined : reported;
+
+        const hasMoviesShowsStructure = response.data &&
+                                        typeof response.data === 'object' &&
+                                        !Array.isArray(response.data) &&
+                                        ('movies' in response.data || 'shows' in response.data);
+
+        if (hasMoviesShowsStructure) {
+          if (catalogType === 'series') {
+            items = response.data.shows || [];
+          } else if (catalogType === 'movie') {
+            items = response.data.movies || [];
+          } else {
+            items = [
+              ...(response.data?.movies || []),
+              ...(response.data?.shows || [])
+            ];
+          }
+        } else if (Array.isArray(response.data)) {
+          items = response.data;
+        } else {
+          items = [
+            ...(response.data?.movies || []),
+            ...(response.data?.shows || [])
+          ];
+        }
       }
 
-      // Log the final URL for debugging (with API key sanitized)
-      logger.debug(`MDBList request URL: ${sanitizeUrlForLogging(url)}`);
-      
-      const response: any = await makeRateLimitedRequest(
-        () => httpGet(url, { dispatcher: mdblistDispatcher }),
-        apiKey,
-        `MDBList fetchMDBListItems (listId: ${listId}, page: ${page}, pageSize: ${pageSize}, sort: ${sort}, order: ${order}, genre: ${genre})`
-      );
-      
-      // Extract pagination metadata from headers
-      let totalItems = response.headers?.['x-total-items'] ? parseInt(response.headers['x-total-items']) : undefined;
-      const hasMore = response.headers?.['x-has-more'] === 'true';
-      
       // For watchlist, we can only rely on X-Has-More header
       let totalPages: number | undefined;
       if (listId === 'watchlist') {
@@ -374,33 +468,6 @@ async function fetchMDBListItems(listId: string, apiKey: string, language: strin
       } else {
         // Calculate total pages from headers for regular lists
         totalPages = totalItems ? Math.ceil(totalItems / pageSize) : undefined;
-      }
-      
-      let items: any[];
-      
-      const hasMoviesShowsStructure = response.data && 
-                                      typeof response.data === 'object' && 
-                                      !Array.isArray(response.data) &&
-                                      ('movies' in response.data || 'shows' in response.data);
-      
-      if (hasMoviesShowsStructure) {
-        if (catalogType === 'series') {
-          items = response.data.shows || [];
-        } else if (catalogType === 'movie') {
-          items = response.data.movies || [];
-        } else {
-          items = [
-            ...(response.data?.movies || []),
-            ...(response.data?.shows || [])
-          ];
-        }
-      } else if (Array.isArray(response.data)) {
-        items = response.data;
-      } else {
-        items = [
-          ...(response.data?.movies || []),
-          ...(response.data?.shows || [])
-        ];
       }
       
       // Smart pagination validation and logging
@@ -423,9 +490,7 @@ async function fetchMDBListItems(listId: string, apiKey: string, language: strin
         
         logger.debug(`Smart pagination - listId: ${listId}, page: ${page}/${totalPages}, items: ${itemsReturned}/${expectedItems}, offset: ${offset}, totalItems: ${totalItems}, hasMore: ${hasMore}${genre && genre.toLowerCase() !== 'none' ? ` (filtered by: ${genre})` : ''}`);
         
-        // Validate response consistency (but skip when genre filter is active as totalItems is unfiltered count)
-        const isFiltered = genre && genre.toLowerCase() !== 'none';
-        if (!hasMore && itemsReturned > 0 && offset + itemsReturned < totalItems && !isFiltered) {
+        if (!hasMore && itemsReturned > 0 && offset + itemsReturned < totalItems) {
           logger.warn(`Inconsistent pagination: hasMore=false but ${offset + itemsReturned} < ${totalItems}`);
         }
         
@@ -641,6 +706,47 @@ function supportsMdblistScoreFilters(catalogConfig: any): boolean {
     && !id.startsWith('mdblist.recommended.');
 }
 
+async function fetchCursorBlock(opts: { baseUrl: string; apiKey: string; blockIndex: number; blockSize: number; sort?: string; order?: string; genre?: string; filterScoreMin?: number; filterScoreMax?: number; mediaTypeFilter?: string; ttl: number; ttlSegment: string }): Promise<{ rows: any[]; hasMore: boolean; nextCursor: string | null }> {
+  const { baseUrl, blockIndex, blockSize } = opts;
+  const cacheKey = `mdblist-api:cursor-block:${baseUrl}:${blockIndex}:${blockSize}:${opts.sort || ''}:${opts.order || ''}:${opts.genre || ''}:${opts.filterScoreMin ?? ''}:${opts.filterScoreMax ?? ''}:${opts.mediaTypeFilter || ''}${opts.ttlSegment}`;
+
+  return cacheWrapGlobal(cacheKey, async () => {
+    let cursor: string | null = null;
+    if (blockIndex > 0) {
+      const previous = await fetchCursorBlock({ ...opts, blockIndex: blockIndex - 1 });
+      if (!previous.hasMore || !previous.nextCursor) return { rows: [], hasMore: false, nextCursor: null };
+      cursor = previous.nextCursor;
+    }
+
+    const url = new URL(baseUrl);
+    url.searchParams.set('apikey', opts.apiKey);
+    url.searchParams.set('limit', String(blockSize));
+    url.searchParams.set('unified', 'true');
+    url.searchParams.set('append_to_response', 'genre,poster');
+    if (cursor) url.searchParams.set('cursor', cursor);
+    if (opts.sort && opts.sort.trim() !== '') url.searchParams.set('sort', opts.sort);
+    if (opts.order && opts.order.trim() !== '') url.searchParams.set('order', opts.order);
+    if (opts.genre && opts.genre.toLowerCase() !== 'none') url.searchParams.set('filter_genre', opts.genre);
+    if (typeof opts.filterScoreMin === 'number') url.searchParams.set('filter_score_min', String(opts.filterScoreMin));
+    if (typeof opts.filterScoreMax === 'number') url.searchParams.set('filter_score_max', String(opts.filterScoreMax));
+    if (opts.mediaTypeFilter) url.searchParams.set('mediatype', opts.mediaTypeFilter);
+
+    logger.debug(`MDBList cursor block request URL: ${sanitizeUrlForLogging(url.toString())}`);
+    const response: any = await makeRateLimitedRequest(
+      () => httpGet(url.toString(), { dispatcher: mdblistDispatcher }),
+      opts.apiKey,
+      `MDBList fetchCursorBlock (url: ${sanitizeUrlForLogging(baseUrl)}, block: ${blockIndex}, blockSize: ${blockSize})`
+    );
+
+    const hasMore = response.headers?.['x-has-more'] === 'true';
+    return {
+      rows: Array.isArray(response.data) ? response.data : [],
+      hasMore,
+      nextCursor: hasMore ? (response.headers?.['x-next-cursor'] || null) : null,
+    };
+  }, opts.ttl, { upstream: true, sourceList: true });
+}
+
 async function fetchMDBListExternalItems(
   url: string,
   apiKey: string,
@@ -658,89 +764,33 @@ async function fetchMDBListExternalItems(
   const pageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE as string) || 20;
 
   const normalizedUrl = new URL(url);
-  normalizedUrl.searchParams.delete('apikey');
-  normalizedUrl.searchParams.delete('limit');
-  normalizedUrl.searchParams.delete('offset');
-  normalizedUrl.searchParams.delete('language');
-  normalizedUrl.searchParams.delete('append_to_response');
-  normalizedUrl.searchParams.delete('unified');
-  normalizedUrl.searchParams.delete('sort');
-  normalizedUrl.searchParams.delete('order');
-  normalizedUrl.searchParams.delete('filter_genre');
-  normalizedUrl.searchParams.delete('filter_score_min');
-  normalizedUrl.searchParams.delete('filter_score_max');
+  for (const param of ['apikey', 'limit', 'offset', 'cursor', 'language', 'append_to_response', 'unified', 'sort', 'order', 'filter_genre', 'filter_score_min', 'filter_score_max', 'mediatype']) {
+    normalizedUrl.searchParams.delete(param);
+  }
   const urlBase = normalizedUrl.toString();
 
+  const mediaTypeFilter = unified === false
+    ? (catalogType === 'movie' ? 'movie' : catalogType === 'series' ? 'show' : undefined)
+    : undefined;
   const ttlSegment = cacheTTL !== undefined ? `:ttl:${cacheTTL}` : '';
-  const cacheKey = `mdblist-api:external:shared:${urlBase}:${page}:${sort || ''}:${order || ''}:${genre || ''}:${catalogType || ''}:${unified !== false}:${filterScoreMin ?? ''}:${filterScoreMax ?? ''}:${pageSize}${ttlSegment}`;
+  const cacheKey = `mdblist-api:external:v2:shared:${urlBase}:${page}:${sort || ''}:${order || ''}:${genre || ''}:${catalogType || ''}:${unified !== false}:${filterScoreMin ?? ''}:${filterScoreMax ?? ''}:${pageSize}${ttlSegment}`;
 
   const ttl = cacheTTL !== undefined ? cacheTTL : parseInt(process.env.CATALOG_TTL || String(1 * 24 * 60 * 60), 10);
 
   try {
     return await cacheWrapGlobal(cacheKey, async () => {
       const offset = (page * pageSize) - pageSize;
-      const urlWithParams = new URL(url);
-      urlWithParams.searchParams.set('apikey', apiKey);
-      urlWithParams.searchParams.set('limit', pageSize.toString());
-      urlWithParams.searchParams.set('offset', offset.toString());
-      urlWithParams.searchParams.set('append_to_response', 'genre,poster');
-      urlWithParams.searchParams.set('unified', String(unified));
-
-      if (sort && sort.trim() !== '') {
-        urlWithParams.searchParams.set('sort', sort);
-      }
-      if (order && order.trim() !== '') {
-        urlWithParams.searchParams.set('order', order);
-      }
-      if (genre && genre.toLowerCase() !== 'none') {
-        urlWithParams.searchParams.set('filter_genre', genre);
-      }
-      if (typeof filterScoreMin === 'number') {
-        urlWithParams.searchParams.set('filter_score_min', String(filterScoreMin));
-      }
-      if (typeof filterScoreMax === 'number') {
-        urlWithParams.searchParams.set('filter_score_max', String(filterScoreMax));
-      }
-
-      const fullUrl = urlWithParams.toString();
-
-      logger.debug(`MDBList external request URL: ${sanitizeUrlForLogging(fullUrl)}`);
-
-      const response: any = await makeRateLimitedRequest(
-        () => httpGet(fullUrl, { dispatcher: mdblistDispatcher }),
-        apiKey,
-        `MDBList fetchMDBListExternalItems (url: ${sanitizeUrlForLogging(url)}, page: ${page})`
-      );
-
-      const hasMore = response.headers?.['x-has-more'] === 'true';
-
-      let items: any[];
-
-      const hasMoviesShowsStructure = response.data && 
-                                      typeof response.data === 'object' && 
-                                      !Array.isArray(response.data) &&
-                                      ('movies' in response.data || 'shows' in response.data);
-      
-      if (hasMoviesShowsStructure) {
-        if (catalogType === 'series') {
-          items = response.data.shows || [];
-        } else if (catalogType === 'movie') {
-          items = response.data.movies || [];
-        } else {
-          items = [
-            ...(response.data?.movies || []),
-            ...(response.data?.shows || [])
-          ];
-        }
-      } else if (Array.isArray(response.data)) {
-        items = response.data;
-      } else {
-        items = [
-          ...(response.data?.movies || []),
-          ...(response.data?.shows || [])
-        ];
-      }
-
+      const blockSize = listBlockSize(pageSize);
+      const blockIndex = Math.floor(offset / blockSize);
+      const block = await fetchCursorBlock({
+        baseUrl: urlBase, apiKey, blockIndex, blockSize,
+        sort, order, genre, filterScoreMin, filterScoreMax, mediaTypeFilter,
+        ttl, ttlSegment,
+      });
+      const within = offset - blockIndex * blockSize;
+      const window = block.rows.slice(within, within + pageSize);
+      const items = unified !== false ? window : splitWindowByType(window, catalogType);
+      const hasMore = within + pageSize < block.rows.length ? true : block.hasMore;
       return { items, hasMore };
     }, ttl, { upstream: true, sourceList: true });
   } catch (err: any) {
@@ -748,7 +798,6 @@ async function fetchMDBListExternalItems(
     return { items: [] };
   }
 }
-
 async function parseMDBListItems(items: any[], type: string, language: string, config: UserConfig, includeVideos: boolean = false): Promise<any[]> {
   let filteredItems = items;
   //console.log(`[MDBList] Filtered items: ${JSON.stringify(filteredItems)}`);
@@ -909,60 +958,6 @@ type EpisodeIdInput =
     tvdb?: number | string;
   };
 
-// Watch history types
-interface WatchHistoryMovieEntry {
-  last_watched_at: string;
-  movie: {
-    title: string;
-    year: number;
-    ids: {
-      trakt?: number;
-      imdb?: string;
-      tmdb?: number;
-      kitsu?: number;
-      mdblist?: string;
-    };
-  };
-}
-
-interface WatchHistoryEpisodeEntry {
-  last_watched_at: string;
-  episode: {
-    season: number;
-    number: number;
-    name: string;
-    ids: {
-      tmdb?: number;
-    };
-    show: {
-      title: string;
-      year: number;
-      ids: {
-        tmdb?: number;
-        trakt?: number;
-        imdb?: string;
-        mdblist?: string;
-      };
-    };
-  };
-}
-
-interface WatchHistoryResponse {
-  movies: WatchHistoryMovieEntry[];
-  seasons: any[];
-  episodes: WatchHistoryEpisodeEntry[];
-  pagination: {
-    offset?: number;
-    limit?: number;
-    total_movies?: number;
-    total_shows?: number;
-    total_seasons?: number;
-    total_episodes?: number;
-    has_more?: boolean;
-    next_cursor?: string;
-  };
-}
-
 function formatIdSummary(ids: Record<string, string | number>) {
   return Object.entries(ids)
     .map(([key, value]) => `${key}:${value}`)
@@ -1035,313 +1030,19 @@ function normalizeEpisodeIdInput(input: EpisodeIdInput | null | undefined) {
 }
 
 /**
- * Fetch user's watch history from MDBList API
- */
-/** Bounded so a very large library cannot spend the whole rate limit on one read. */
-const MAX_WATCH_HISTORY_PAGES = parseInt(process.env.MDBLIST_WATCH_HISTORY_PAGES || '6', 10);
-
-async function fetchWatchHistory(apiKey: string): Promise<WatchHistoryResponse | null> {
-  if (!apiKey) {
-    logger.debug('[Watch Tracking] Missing API key for fetchWatchHistory');
-    return null;
-  }
-
-  try {
-    // Without `offset` the endpoint answers in cursor mode, capped at 100 rows,
-    // and reports no totals — which silently truncated a library of hundreds to
-    // whatever fitted in the first page. Passing an offset switches it to the
-    // paged mode, which returns 1000 at a time and says how many there are.
-    const merged: WatchHistoryResponse = {
-      movies: [], seasons: [], episodes: [], pagination: {},
-    };
-
-    let offset = 0;
-    for (let page = 0; page < MAX_WATCH_HISTORY_PAGES; page += 1) {
-      const url = `https://api.mdblist.com/sync/watched?apikey=${apiKey}&offset=${offset}`;
-      const response: any = await makeRateLimitedRequest(
-        () => httpGet(url, { dispatcher: mdblistDispatcher }),
-        apiKey,
-        `MDBList fetchWatchHistory (offset ${offset})`
-      );
-
-      const body = response.data as WatchHistoryResponse;
-      if (!body) break;
-
-      merged.movies.push(...(body.movies || []));
-      merged.seasons.push(...(body.seasons || []));
-      merged.episodes.push(...(body.episodes || []));
-      merged.pagination = body.pagination || {};
-
-      const returned = (body.movies?.length || 0) + (body.seasons?.length || 0) + (body.episodes?.length || 0);
-      if (!body.pagination?.has_more || returned === 0) break;
-      offset += body.pagination.limit || returned;
-    }
-
-    logger.debug(
-      `[Watch Tracking] Read ${merged.movies.length} movies and ${merged.episodes.length} episodes `
-      + `of ${merged.pagination.total_movies ?? '?'} / ${merged.pagination.total_episodes ?? '?'}`
-    );
-    return merged;
-  } catch (error: any) {
-    logger.error(`[Watch Tracking] Failed to fetch watch history: ${error.message}`);
-    return null;
-  }
-}
-
-/**
- * Check if a movie was recently watched (within the last 30 days)
- */
-function isMovieRecentlyWatched(
-  normalizedIds: Record<string, string | number>,
-  watchHistory: WatchHistoryResponse
-): boolean {
-  const ONE_MONTH_MS = 30 * 24 * 60 * 60 * 1000;
-  const now = Date.now();
-
-  for (const entry of watchHistory.movies) {
-    const movieIds = entry.movie.ids;
-
-    // Check if any of our normalized IDs match any ID in the history entry
-    for (const [key, value] of Object.entries(normalizedIds)) {
-      const historyValue = (movieIds as any)[key];
-      if (historyValue !== undefined && String(historyValue) === String(value)) {
-        // Found a match - check if watched within the last month
-        const watchedAt = new Date(entry.last_watched_at).getTime();
-        if (now - watchedAt < ONE_MONTH_MS) {
-          return true;
-        }
-      }
-    }
-  }
-
-  return false;
-}
-
-/**
- * Check if an episode was recently watched (within the last 30 days)
- */
-function isEpisodeRecentlyWatched(
-  normalizedIds: Record<string, string | number>,
-  season: number,
-  episode: number,
-  watchHistory: WatchHistoryResponse
-): boolean {
-  const ONE_MONTH_MS = 30 * 24 * 60 * 60 * 1000;
-  const now = Date.now();
-
-  for (const entry of watchHistory.episodes) {
-    const showIds = entry.episode.show.ids;
-    const episodeSeason = entry.episode.season;
-    const episodeNumber = entry.episode.number;
-
-    // Check if any of our normalized IDs match any ID in the show's history entry
-    for (const [key, value] of Object.entries(normalizedIds)) {
-      const historyValue = (showIds as any)[key];
-      if (historyValue !== undefined && String(historyValue) === String(value)) {
-        // Found a match - check if season and episode also match
-        if (episodeSeason === season && episodeNumber === episode) {
-          // Check if watched within the last month
-          const watchedAt = new Date(entry.last_watched_at).getTime();
-          if (now - watchedAt < ONE_MONTH_MS) {
-            return true;
-          }
-        }
-      }
-    }
-  }
-
-  return false;
-}
-
-async function markMovieAsWatched(idInput: MovieIdInput, apiKey: string): Promise<boolean> {
-  const normalizedIds = normalizeMovieIdInput(idInput);
-
-  if (!normalizedIds || !apiKey) {
-    logger.debug('[Watch Tracking] Missing ID or API key for markMovieAsWatched', {
-      id: idInput,
-      hasApiKey: !!apiKey
-    });
-    return false;
-  }
-
-  try {
-    // Check if movie was recently watched before sending the request
-    const watchHistory = await fetchWatchHistory(apiKey);
-    if (watchHistory && isMovieRecentlyWatched(normalizedIds, watchHistory)) {
-      logger.debug(
-        `[Watch Tracking] Skipped marking ${formatIdSummary(normalizedIds)} because it's already watched`
-      );
-      return true; // Return true since the movie is already marked as watched
-    }
-
-    const url = `https://api.mdblist.com/sync/watched?apikey=${apiKey}`;
-    const watchedAt = new Date().toISOString();
-
-    const payload = {
-      movies: [
-        {
-          ids: normalizedIds,
-          watched_at: watchedAt
-        }
-      ]
-    };
-
-    logger.debug(
-      `[Watch Tracking] Marking movie as watched - ids: ${formatIdSummary(normalizedIds)}, timestamp: ${watchedAt}`
-    );
-
-    await makeRateLimitedRequest(
-      () =>
-        httpPost(url, payload, {
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          timeout: 10000,
-          dispatcher: mdblistDispatcher
-        }),
-      apiKey,
-      `MDBList markMovieAsWatched (${formatIdSummary(normalizedIds)})`
-    );
-
-    logger.info('[Watch Tracking] Movie marked as watched', {
-      ids: normalizedIds
-    });
-    return true;
-  } catch (error: any) {
-    logger.error(
-      `[Watch Tracking] Failed to mark movie as watched - ids: ${formatIdSummary(normalizedIds)}, error: ${error.message}`,
-      {
-        stack: error.stack
-      }
-    );
-
-    if (error.response) {
-      logger.error(
-        `[Watch Tracking] MDBList API error response - status: ${error.response.status}, statusText: ${
-          error.response.statusText || 'N/A'
-        }`,
-        {
-          responseData: error.response.data,
-          headers: error.response.headers
-        }
-      );
-    } else if (error.code) {
-      logger.error(`[Watch Tracking] Network error - code: ${error.code}`, {
-        errno: error.errno,
-        syscall: error.syscall
-      });
-    }
-
-    return false;
-  }
-}
-
-async function markEpisodeAsWatched(
-  idInput: EpisodeIdInput,
-  season: number,
-  episode: number,
-  apiKey: string
-): Promise<boolean> {
-  const normalizedIds = normalizeEpisodeIdInput(idInput);
-
-  if (!normalizedIds || !apiKey || season < 1 || episode < 1) {
-    logger.warn('[Watch Tracking] Invalid parameters for markEpisodeAsWatched', {
-      id: idInput,
-      season,
-      episode,
-      hasApiKey: !!apiKey
-    });
-    return false;
-  }
-
-  try {
-    // Check if episode was recently watched before sending the request
-    const watchHistory = await fetchWatchHistory(apiKey);
-    if (watchHistory && isEpisodeRecentlyWatched(normalizedIds, season, episode, watchHistory)) {
-      logger.debug(
-        `[Watch Tracking] Skipped marking ${formatIdSummary(normalizedIds)} S${season}E${episode} because it's already watched`
-      );
-      return true; // Return true since the episode is already marked as watched
-    }
-
-    const url = `https://api.mdblist.com/sync/watched?apikey=${apiKey}`;
-    const watchedAt = new Date().toISOString();
-
-    const payload = {
-      shows: [
-        {
-          ids: normalizedIds,
-          seasons: [
-            {
-              number: season,
-              episodes: [
-                {
-                  number: episode,
-                  watched_at: watchedAt
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    };
-
-    logger.debug(
-      `[Mdblist Watch Tracking] Marking episode as watched - ids: ${formatIdSummary(normalizedIds)}, S${season}E${episode}, timestamp: ${watchedAt}`
-    );
-
-    await makeRateLimitedRequest(
-      () =>
-        httpPost(url, payload, {
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          timeout: 10000,
-          dispatcher: mdblistDispatcher
-        }),
-      apiKey,
-      `MDBList markEpisodeAsWatched (${formatIdSummary(normalizedIds)}, S${season}E${episode})`
-    );
-
-    logger.info('[Watch Tracking] Episode marked as watched', {
-      ids: normalizedIds,
-      season,
-      episode
-    });
-    return true;
-  } catch (error: any) {
-    logger.error(
-      `[Watch Tracking] Failed to mark episode as watched - ids: ${formatIdSummary(normalizedIds)}, S${season}E${episode}, error: ${error.message}`,
-      {
-        stack: error.stack
-      }
-    );
-
-    if (error.response) {
-      logger.error(
-        `[Watch Tracking] MDBList API error response - status: ${error.response.status}, statusText: ${error.response.statusText || 'N/A'}`,
-        {
-          responseData: error.response.data,
-          headers: error.response.headers
-        }
-      );
-    } else if (error.code) {
-      logger.error(`[Watch Tracking] Network error - code: ${error.code}`, {
-        errno: error.errno,
-        syscall: error.syscall
-      });
-    }
-
-    return false;
-  }
-}
-
-/**
  * Wrapper for proxy endpoints - makes a rate-limited GET request to MDBList
  */
 async function makeRateLimitedMDBListRequest(url: string, apiKey: string, context: string = 'MDBList Proxy'): Promise<any> {
   return await makeRateLimitedRequest(
     () => httpGet(url, { dispatcher: mdblistDispatcher }),
+    apiKey,
+    context
+  );
+}
+
+async function makeRateLimitedMDBListPost(url: string, body: any, apiKey: string, context: string = 'MDBList Proxy'): Promise<any> {
+  return await makeRateLimitedRequest(
+    () => httpPost(url, body, { headers: { 'Content-Type': 'application/json' }, timeout: 10000, dispatcher: mdblistDispatcher }),
     apiKey,
     context
   );
@@ -1436,22 +1137,33 @@ async function fetchMDBListUpNext(
   }
 }
 
-/** Caught-up shows with an episode airing within `days` (MDBList caps it at 90). */
+/**
+ * The next future episode of every show the user follows, airing within `days` (MDBList
+ * caps it at 90): watchlisted, in progress or caught up. Callers decide which count as
+ * upcoming. `instant` gives next_episode.air_date as a UTC timestamp, not a bare date.
+ */
 async function fetchMDBListUpcoming(apiKey: string, days: number, limit: number = 100): Promise<any[]> {
   if (!apiKey) return [];
   const window = Math.min(Math.max(1, Math.round(days)), 90);
-  const url = `https://api.mdblist.com/upnext/upcoming?apikey=${apiKey}&days=${window}&limit=${Math.min(Math.max(1, limit), 100)}`;
+  const pageSize = Math.min(Math.max(1, limit), 100);
+  const maxPages = envInt('JELLYFIN_UPCOMING_MAX_PAGES', 10, 1);
+  const items: any[] = [];
   try {
-    const response: any = await makeRateLimitedRequest(
-      () => httpGet(url, { dispatcher: mdblistDispatcher }),
-      apiKey,
-      `MDBList fetchMDBListUpcoming (days: ${window})`
-    );
-    return Array.isArray(response.data?.items) ? response.data.items : [];
+    for (let page = 0; page < maxPages; page += 1) {
+      const url = `https://api.mdblist.com/upnext/upcoming/episodes?apikey=${apiKey}&days=${window}&limit=${pageSize}&offset=${page * pageSize}&air_date_format=instant`;
+      const response: any = await makeRateLimitedRequest(
+        () => httpGet(url, { dispatcher: mdblistDispatcher }),
+        apiKey,
+        `MDBList fetchMDBListUpcoming (days: ${window}, page: ${page + 1})`
+      );
+      const pageItems = Array.isArray(response.data?.items) ? response.data.items : [];
+      items.push(...pageItems);
+      if (!response.data?.has_more || pageItems.length === 0) break;
+    }
   } catch (error: any) {
-    logger.error(`[MDBList Upcoming] Error fetching upcoming shows: ${error.message}`);
-    return [];
+    logger.error(`[MDBList Upcoming] Error fetching upcoming episodes: ${error.message}`);
   }
+  return items;
 }
 
 /**
@@ -1591,15 +1303,13 @@ async function historySync(
   idInput: Record<string, string | number>,
   apiKey: string,
   season?: number,
-  episode?: number
+  episode?: number,
+  episodes?: EpisodeRef[]
 ): Promise<boolean> {
-  const payload =
-    season != null && episode != null
-      ? { shows: [{ ids: idInput, seasons: [{ number: season, episodes: [{ number: episode }] }] }] }
-      : { movies: [{ ids: idInput }] };
+  const payload = historyPayload(idInput, season, episode, episodes);
 
   try {
-    await makeRateLimitedRequest(
+    const response: any = await makeRateLimitedRequest(
       () => httpPost(`https://api.mdblist.com/sync/${path}?apikey=${apiKey}`, payload, {
         headers: { 'Content-Type': 'application/json' },
         timeout: 10000,
@@ -1608,6 +1318,13 @@ async function historySync(
       apiKey,
       `MDBList /sync/${path} (${formatIdSummary(idInput)})`
     );
+    // A miss comes back inside a 200.
+    const missed = response?.data?.not_found;
+    const missing = ['movies', 'shows', 'episodes'].reduce((n, key) => n + (Array.isArray(missed?.[key]) ? missed[key].length : 0), 0);
+    if (missing > 0) {
+      logger.warn(`[MDBList] /sync/${path} did not find the title`, { ids: idInput, season, episode, not_found: missed });
+      return false;
+    }
     logger.info(`[MDBList] ${path === 'watched' ? 'Added to' : 'Removed from'} history`, { ids: idInput, season, episode });
     return true;
   } catch (error: any) {
@@ -1620,18 +1337,20 @@ async function addToHistory(
   idInput: Record<string, string | number>,
   apiKey: string,
   season?: number,
-  episode?: number
+  episode?: number,
+  episodes?: EpisodeRef[]
 ): Promise<boolean> {
-  return historySync('watched', idInput, apiKey, season, episode);
+  return historySync('watched', idInput, apiKey, season, episode, episodes);
 }
 
 async function removeFromHistory(
   idInput: Record<string, string | number>,
   apiKey: string,
   season?: number,
-  episode?: number
+  episode?: number,
+  episodes?: EpisodeRef[]
 ): Promise<boolean> {
-  return historySync('watched/remove', idInput, apiKey, season, episode);
+  return historySync('watched/remove', idInput, apiKey, season, episode, episodes);
 }
 
 // A resume point is held separately from watched status, so clearing a watch
@@ -1674,9 +1393,18 @@ export interface MdblistScrobbleOptions {
   progress?: number;
 }
 
+function responseDetail(error: any): string {
+  const data = error?.response?.data;
+  const text = typeof data === 'string' ? data : data ? JSON.stringify(data) : '';
+  return text ? ` (${text.slice(0, 300)})` : '';
+}
+
+function scrobblePath(action: string): string {
+  return action === 'checkin' ? 'checkin' : `scrobble/${action}`;
+}
+
 function scrobbleUrl(action: string, apiKey: string): string {
-  const path = action === 'checkin' ? 'checkin' : `scrobble/${action}`;
-  return `https://api.mdblist.com/${path}?apikey=${apiKey}`;
+  return `https://api.mdblist.com/${scrobblePath(action)}?apikey=${apiKey}`;
 }
 
 async function checkinMovie(
@@ -1707,17 +1435,17 @@ async function checkinMovie(
         dispatcher: mdblistDispatcher
       }),
       apiKey,
-      `MDBList checkinMovie (${formatIdSummary(idInput)})`
+      `MDBList ${scrobblePath(action)} (${formatIdSummary(idInput)})`
     );
 
-    logger.info('[MDBList Checkin] Movie check-in successful', { ids: idInput });
+    logger.info(`[MDBList ${action}] Movie reported`, { ids: idInput });
     return true;
   } catch (error: any) {
     if (error.response?.status === 409) {
-      logger.info('[MDBList Checkin] Session already managed by another API (409 Conflict)');
+      logger.info(`[MDBList ${action}] Session already managed by another API (409 Conflict)`);
       return true;
     }
-    logger.error(`[MDBList Checkin] Movie check-in failed: ${error.message}`);
+    logger.error(`[MDBList ${action}] Movie report failed: ${error.message}${responseDetail(error)}`);
     return false;
   }
 }
@@ -1763,17 +1491,17 @@ async function checkinEpisode(
         dispatcher: mdblistDispatcher
       }),
       apiKey,
-      `MDBList checkinEpisode (${formatIdSummary(idInput)} S${season}E${episode})`
+      `MDBList ${scrobblePath(action)} (${formatIdSummary(idInput)} S${season}E${episode})`
     );
 
-    logger.info('[MDBList Checkin] Episode check-in successful', { ids: idInput, season, episode });
+    logger.info(`[MDBList ${action}] Episode reported`, { ids: idInput, season, episode });
     return true;
   } catch (error: any) {
     if (error.response?.status === 409) {
-      logger.info('[MDBList Checkin] Session already managed by another API (409 Conflict)');
+      logger.info(`[MDBList ${action}] Session already managed by another API (409 Conflict)`);
       return true;
     }
-    logger.error(`[MDBList Checkin] Episode check-in failed: ${error.message}`);
+    logger.error(`[MDBList ${action}] Episode report failed: ${error.message}${responseDetail(error)}`);
     return false;
   }
 }
@@ -1869,8 +1597,26 @@ async function fetchMDBListCatalog(
   }, ttl, { upstream: true, sourceList: true });
 }
 
+/**
+ * MDBList's activity digest for one key, shared by everything that asks whether the
+ * key's library moved: the watch mirror, the paused-titles gate and the hide-watched
+ * filter. A watch recorded here clears it.
+ */
+async function fetchMdblistLastActivities(apiKey: string): Promise<any> {
+  const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex').substring(0, 16);
+  return cacheWrapGlobal(
+    `mdblist_last_activities:${keyHash}`,
+    async () => {
+      const response = await makeRateLimitedMDBListRequest(`https://api.mdblist.com/sync/last_activities?apikey=${apiKey}`, apiKey, 'MDBList activities');
+      return response?.data ?? {};
+    },
+    envInt('MDBLIST_ACTIVITIES_TTL', 300, 30),
+    { upstream: true }
+  );
+}
+
 export {
-  fetchWatchHistory,
+  fetchMdblistLastActivities,
   fetchMDBListItems,
   fetchMDBListExternalItems,
   usesMdblistExternalItemsEndpoint,
@@ -1883,6 +1629,7 @@ export {
   fetchMDBListGenres,
   convertGenreToSlug,
   makeRateLimitedMDBListRequest,
+  makeRateLimitedMDBListPost,
   testMdblistKey,
   fetchMDBListUpNext,
   parseMDBListUpNextItems,

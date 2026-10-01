@@ -21,6 +21,8 @@ import { hasAgeRatingCap } from '../utils/ageRating';
 const { cacheWrapMetaSmart, cacheWrapGlobal }: any = require('./getCache');
 const { getSetting }: any = require('./settingsService');
 import { fetchImdbSuggestions, type ImdbSuggestion } from '../utils/imdbSuggestions.js';
+import { fetchLumiereSearch, fetchLumierePeopleSearch, type LumiereResult } from '../utils/lumiereSearch.js';
+import { lumiereApiBase } from '../utils/lumiereLists.js';
 import { mapWithLimit } from '../utils/concurrency.js';
 const wikiMappings: any = require('./wiki-mapper');
 
@@ -247,7 +249,7 @@ async function performAnimeSearch(type: string, query: string, language: string,
 
   logger.debug(`Found ${searchResults.length} anime results for query: "${query}"`);
 
-  const metas = await Utils.parseAnimeCatalogMetaBatch(searchResults, config, language);
+  const metas = await Utils.parseAnimeCatalogMetaBatch(searchResults, config, language, false, { light: config._searchLight === true });
   return metas;
 }
 
@@ -315,7 +317,8 @@ async function performKitsuSearch(type: string, query: string, language: string,
           } else if(preferredProvider === 'mal') {
             id = `mal:${mapping?.mal_id}`;
           }
-          if((config.mal?.useImdbIdForCatalogAndSearch && !isMovie)){
+          const light = config._searchLight === true;
+          if((config.mal?.useImdbIdForCatalogAndSearch && !isMovie) && !light){
             return (await cacheWrapMetaSmart(config.userUUID, id, async () => {
               const { getMeta } = await import("../lib/getMeta");
               return await getMeta(itemType, language, `kitsu:${kitsuId}`, config, config.userUUID, false);
@@ -325,9 +328,15 @@ async function performKitsuSearch(type: string, query: string, language: string,
 
           const imdbRating = imdbId ? await getImdbRating(imdbId, itemType) : 'N/A';
           const mediaType = isMovie ? 'movie' : 'series';
-          const background = mapping?.mal_id ? await Utils.getAnimeBg({malId: mapping?.mal_id, imdbId: imdbId, tvdbId: tvdbId, tmdbId: tmdbId, mediaType, malPosterUrl: item.coverImage?.original}, config) : item.coverImage?.original;
-          const poster = mapping?.mal_id ? await Utils.getAnimePoster({malId: mapping?.mal_id, imdbId: imdbId, tvdbId: tvdbId, tmdbId: tmdbId, mediaType, malPosterUrl: item.posterImage?.original}, config) : item.posterImage?.original;
-          const logo = isMovie ? tmdbId ? await moviedb.getTmdbMovieLogo(tmdbId, config) : null : await Utils.getAnimeLogo({malId: mapping?.mal_id, imdbId: imdbId, tvdbId: tvdbId, tmdbId: tmdbId, mediaType}, config);
+          const background = light
+            ? item.coverImage?.original
+            : mapping?.mal_id ? await Utils.getAnimeBg({malId: mapping?.mal_id, imdbId: imdbId, tvdbId: tvdbId, tmdbId: tmdbId, mediaType, malPosterUrl: item.coverImage?.original}, config) : item.coverImage?.original;
+          const poster = light
+            ? item.posterImage?.original
+            : mapping?.mal_id ? await Utils.getAnimePoster({malId: mapping?.mal_id, imdbId: imdbId, tvdbId: tvdbId, tmdbId: tmdbId, mediaType, malPosterUrl: item.posterImage?.original}, config) : item.posterImage?.original;
+          const logo = light
+            ? null
+            : isMovie ? tmdbId ? await moviedb.getTmdbMovieLogo(tmdbId, config) : null : await Utils.getAnimeLogo({malId: mapping?.mal_id, imdbId: imdbId, tvdbId: tvdbId, tmdbId: tmdbId, mediaType}, config);
 
           let finalPoster = poster || `${host}/missing_poster.png`;
           if (Utils.isPosterRatingEnabled(config)) {
@@ -345,7 +354,7 @@ async function performKitsuSearch(type: string, query: string, language: string,
           }
 
           return {
-            id: `kitsu:${kitsuId}`,
+            id: light && config.mal?.useImdbIdForCatalogAndSearch && !isMovie ? id : `kitsu:${kitsuId}`,
             type: mediaType,
             name: Utils.getKitsuLocalizedTitle(item.titles, language) || item.canonicalTitle,
             poster: finalPoster,
@@ -578,12 +587,21 @@ async function performTmdbSearch(type: string, query: string, language: string, 
 
   const sortedRawResults = Utils.sortSearchResults(Array.from(rawResults.values()), query).slice(0, 25);
 
+  const light = config._searchLight === true
+    && !hasAgeRatingCap(config)
+    && !(type === 'movie' && config.hideUnreleasedDigitalSearch);
+  const lightGenres = light ? await getGenreList('tmdb', language, type === 'movie' ? 'movie' : 'series', config).catch(() => []) : [];
+
   const hydrationPromises = sortedRawResults.map(async (media: any) => {
     try {
         const mediaType = media.media_type === 'movie' ? 'movie' : 'series';
         if(mediaType !== type) {
           logger.debug(`Filtering out ${media.title || media.name} - mediaType: ${mediaType}, searchType: ${type}`);
           return null;
+        }
+
+        if (light && (media.title || media.name)) {
+          return hydrateLight(media, mediaType, language, config, lightGenres);
         }
 
         let logoUrl; let backgroundUrl; let posterUrl;
@@ -730,14 +748,21 @@ async function performImdbSuggestionSearch(type: string, query: string, language
   const limited = suggestions.slice(0, limit);
   logger.debug(`IMDb returned ${suggestions.length} suggestions, hydrating ${limited.length}`);
 
-  const hydrated = await mapWithLimit(limited, (suggestion: ImdbSuggestion) =>
-    performTmdbSearch(type, suggestion.imdbId, language, config, false)
+  const metas = await hydrateImdbIds(type, limited, language, config);
+
+  logger.info(`IMDb suggestion search completed in ${Date.now() - startTime}ms, returning ${metas.length} results`);
+  return metas;
+}
+
+// Results keep the provider's order, since its ranking is the reason to use it.
+async function hydrateImdbIds(type: string, results: Array<{ imdbId: string; title: string }>, language: string, config: any): Promise<any[]> {
+  const hydrated = await mapWithLimit(results, (result) =>
+    performTmdbSearch(type, result.imdbId, language, config, false)
       .catch((error: any) => {
-        logger.debug(`Could not hydrate ${suggestion.imdbId} (${suggestion.title}): ${error.message}`);
+        logger.debug(`Could not hydrate ${result.imdbId} (${result.title}): ${error.message}`);
         return [];
       }));
 
-  // IMDb's rank ordering is the reason to use it, so results keep suggestion order.
   const seen = new Set<string>();
   const metas: any[] = [];
   for (const group of hydrated) {
@@ -748,8 +773,72 @@ async function performImdbSuggestionSearch(type: string, query: string, language
       }
     }
   }
+  return metas;
+}
 
-  logger.info(`IMDb suggestion search completed in ${Date.now() - startTime}ms, returning ${metas.length} results`);
+
+/**
+ * A self-hosted LumiereDB answers with IMDb ids ranked on how the title matched,
+ * so it gets the same TMDB hydration as IMDb suggestions without the bot challenge.
+ */
+async function performLumiereSearch(type: string, query: string, language: string, config: any): Promise<any[]> {
+  const startTime = Date.now();
+  logger.info(`Starting LumiereDB search for type "${type}" with query: "${query}"`);
+
+  const baseUrl = lumiereApiBase();
+  const timeoutMs = parseInt(getSetting('LUMIERE_SEARCH_TIMEOUT_MS'), 10) || 5000;
+  const ttl = parseInt(getSetting('LUMIERE_SEARCH_TTL_SECONDS'), 10);
+  const limit = parseInt(getSetting('LUMIERE_SEARCH_RESULT_LIMIT'), 10) || 12;
+
+  const cacheKey = `lumiere-search:${type}:${limit}:${query.toLowerCase().trim()}`;
+  let results: LumiereResult[];
+  try {
+    results = ttl > 0
+      ? await cacheWrapGlobal(cacheKey, () => fetchLumiereSearch(baseUrl, type, query, limit, timeoutMs), ttl)
+      : await fetchLumiereSearch(baseUrl, type, query, limit, timeoutMs);
+  } catch (error: any) {
+    logger.error(`LumiereDB search failed for "${query}": ${error.message}`);
+    return [];
+  }
+
+  if (!results || results.length === 0) {
+    logger.info(`No LumiereDB results found for query: "${query}"`);
+    return [];
+  }
+
+  const metas = await hydrateImdbIds(type, results, language, config);
+  logger.info(`LumiereDB search completed in ${Date.now() - startTime}ms, returning ${metas.length} results`);
+  return metas;
+}
+
+async function performLumierePeopleSearch(type: string, query: string, language: string, config: any, page: number = 1): Promise<any[]> {
+  const startTime = Date.now();
+  logger.info(`[People Search] Starting LumiereDB people search for type "${type}" with query: "${query}"`);
+
+  const baseUrl = lumiereApiBase();
+  const timeoutMs = parseInt(getSetting('LUMIERE_SEARCH_TIMEOUT_MS'), 10) || 5000;
+  const ttl = parseInt(getSetting('LUMIERE_SEARCH_TTL_SECONDS'), 10);
+  const pageSize = parseInt(getSetting('LUMIERE_PEOPLE_PAGE_SIZE'), 10) || 20;
+
+  const cacheKey = `lumiere-people:${type}:${query.toLowerCase().trim()}`;
+  let titles: LumiereResult[];
+  try {
+    titles = ttl > 0
+      ? await cacheWrapGlobal(cacheKey, () => fetchLumierePeopleSearch(baseUrl, type, query, timeoutMs), ttl)
+      : await fetchLumierePeopleSearch(baseUrl, type, query, timeoutMs);
+  } catch (error: any) {
+    logger.error(`LumiereDB people search failed for "${query}": ${error.message}`);
+    return [];
+  }
+
+  const pageTitles = (titles || []).slice((page - 1) * pageSize, page * pageSize);
+  if (pageTitles.length === 0) {
+    logger.info(`[People Search] No LumiereDB ${type} results for query: "${query}" (page ${page})`);
+    return [];
+  }
+
+  const metas = await hydrateImdbIds(type, pageTitles, language, config);
+  logger.info(`[People Search] LumiereDB people search completed in ${Date.now() - startTime}ms, returning ${metas.length} results`);
   return metas;
 }
 
@@ -788,10 +877,11 @@ async function performSimklAnimeSearch(type: string, query: string, language: st
   const startTime = Date.now();
   logger.info(`Starting Simkl anime search for type "${type}" with query: "${query}"`);
 
-  const { fetchSimklSearchItems, parseSimklItems }: any = require('../utils/simklUtils.js');
+  const { fetchSimklSearchItems, parseSimklItems, simklUserTokenIfRequired }: any = require('../utils/simklUtils.js');
   const limit = parseInt(getSetting('SIMKL_ANIME_SEARCH_RESULT_LIMIT'), 10) || 20;
 
-  const results = await fetchSimklSearchItems('anime', query, limit, page);
+  const accessToken = await simklUserTokenIfRequired(config);
+  const results = await fetchSimklSearchItems('anime', query, limit, page, accessToken);
   if (!results || results.length === 0) {
     logger.info(`No Simkl anime results found for query: "${query}"`);
     return [];
@@ -830,6 +920,44 @@ function excludesAdult(config: any): boolean {
   return config?.includeAdult !== true;
 }
 
+const SOFT_GENRES = new Set([18, 35, 10749, 10766]);
+
+// Adult titles TMDB leaves unflagged are unclassified or thinly voted soft-genre entries.
+function looksAdultSuspect(media: any): boolean {
+  const genres: number[] = Array.isArray(media?.genre_ids) ? media.genre_ids : [];
+  if (!genres.length) return true;
+  return (media?.vote_count ?? 0) < 50 && genres.every((g) => SOFT_GENRES.has(g));
+}
+
+async function hydrateLight(media: any, mediaType: string, language: string, config: any, genreList: any[]): Promise<any> {
+  const keywords = excludesAdult(config) && looksAdultSuspect(media)
+    ? await (mediaType === 'movie'
+        ? moviedb.movieInfo({ id: media.id, language, append_to_response: 'keywords' }, config)
+        : moviedb.tvInfo({ id: media.id, language, append_to_response: 'keywords' }, config)
+      ).then((d: any) => d?.keywords ?? null).catch(() => null)
+    : null;
+
+  const allIds = await resolveAllIds(`tmdb:${media.id}`, mediaType, config, { tmdbId: media.id }, ['imdb']);
+  const parsed = Utils.parseMedia(media, mediaType, genreList, config);
+  if (!parsed) return null;
+
+  const fallbackImage = `${host}/missing_poster.png`;
+  const posterUrl = media.poster_path ? tmdbImageUrl(tmdbPosterSize(), media.poster_path) : fallbackImage;
+  parsed.id = allIds?.imdbId || `tmdb:${media.id}`;
+  parsed.poster = Utils.isPosterRatingEnabled(config)
+    ? Utils.buildPosterProxyUrl(host, mediaType, `tmdb:${media.id}`, posterUrl, language, config)
+    : posterUrl;
+  parsed.imdbRating = allIds?.imdbId ? await getImdbRating(allIds.imdbId, mediaType) : null;
+  parsed.popularity = media.popularity;
+  parsed.score = media.score;
+  if (allIds?.imdbId) parsed.imdb_id = allIds.imdbId;
+  parsed._tmdbId = String(media.id);
+  if (allIds?.tvdbId) parsed._tvdbId = String(allIds.tvdbId);
+  parsed.certification = null;
+  parsed.app_extras = { certification: null };
+  return { parsed, details: keywords ? { ...media, keywords } : media };
+}
+
 function isAdultTmdbItem(details: any): boolean {
   if (details?.adult === true) return true;
   const keywords = details?.keywords?.results || details?.keywords?.keywords || [];
@@ -866,11 +994,12 @@ async function performSimklSearch(type: string, query: string, language: string,
   const startTime = Date.now();
   logger.info(`Starting Simkl search for type "${type}" with query: "${query}"`);
 
-  const { fetchSimklSearchItems, fetchSimklItemDetail }: any = require('../utils/simklUtils.js');
+  const { fetchSimklSearchItems, fetchSimklItemDetail, simklUserTokenIfRequired }: any = require('../utils/simklUtils.js');
   const limit = parseInt(getSetting('SIMKL_SEARCH_RESULT_LIMIT'), 10) || 20;
   const searchType = type === 'movie' ? 'movie' : 'tv';
 
-  const results = await fetchSimklSearchItems(searchType, query, limit, page);
+  const accessToken = await simklUserTokenIfRequired(config);
+  const results = await fetchSimklSearchItems(searchType, query, limit, page, accessToken);
   if (!results || results.length === 0) {
     logger.info(`No Simkl results found for query: "${query}"`);
     return [];
@@ -884,7 +1013,7 @@ async function performSimklSearch(type: string, query: string, language: string,
       const mapped = item?.ids?.tmdb ? null : simklIdsFromMapper(simklId);
       let detail: any = null;
       if (!item?.ids?.tmdb && !mapped?.imdb && !mapped?.tmdb && !mapped?.tvdb) {
-        detail = await fetchSimklItemDetail(searchType, simklId);
+        detail = await fetchSimklItemDetail(searchType, simklId, accessToken);
         detailLookups++;
       }
 
@@ -1326,7 +1455,7 @@ async function matchAndEnrichFromTMDB(suggestion: { title: string; year: string 
 }
 
 
-async function performAiSearch(query: string, language: string, config: any): Promise<any[]> {
+async function performAiSearch(query: string, language: string, config: any): Promise<{ metas: any[]; error?: string }> {
   const startTime = Date.now();
   const aiProvider = config.search?.ai_provider || 'gemini';
   const aiModel = aiProvider === 'openrouter'
@@ -1354,7 +1483,7 @@ async function performAiSearch(query: string, language: string, config: any): Pr
 
     if (!suggestions || suggestions.length === 0) {
       logger.info('AI search returned no suggestions.');
-      return [];
+      return { metas: [] };
     }
 
     logger.debug(`AI search returned ${suggestions.length} suggestions`);
@@ -1388,12 +1517,15 @@ async function performAiSearch(query: string, language: string, config: any): Pr
     const totalTime = Date.now() - startTime;
     logger.success(`AI search completed in ${totalTime}ms. Returning ${filteredResults.length} results.`);
 
-    return filteredResults;
+    return { metas: filteredResults };
 
   } catch (error: any) {
     const totalTime = Date.now() - startTime;
     logger.error(`AI search failed after ${totalTime}ms:`, error.message);
-    return [];
+    return {
+      metas: [],
+      error: `${aiProvider === 'openrouter' ? 'OpenRouter' : 'Gemini'} (${aiModel}): ${error?.message || 'request failed'}`,
+    };
   }
 }
 
@@ -2352,6 +2484,8 @@ function getProviderFromSearchId(searchId: string): string {
     return 'simkl';
   } else if (searchId.includes('imdb.')) {
     return 'imdb';
+  } else if (searchId.includes('lumiere.')) {
+    return 'lumiere';
   } else if (searchId.includes('gemini.')) {
     return 'ai';
   } else if (searchId === 'people_search') {
@@ -2363,7 +2497,7 @@ function getProviderFromSearchId(searchId: string): string {
   }
 }
 
-async function getSearch(id: string, type: string, language: string, extra: any, config: any): Promise<{ metas: any[] }> {
+async function getSearch(id: string, type: string, language: string, extra: any, config: any): Promise<{ metas: any[]; error?: string }> {
   const searchStartTime = Date.now();
 
   const queryText = extra?.search || extra?.genre_id || extra?.va_id || 'N/A';
@@ -2408,7 +2542,9 @@ async function getSearch(id: string, type: string, language: string, extra: any,
       case 'gemini.search':
         if (extra.search) {
           const query = extra.search;
-          metas = await performAiSearch(query, language, config);
+          const aiResult = await performAiSearch(query, language, config);
+          if (aiResult.error) return { metas: [], error: aiResult.error };
+          metas = aiResult.metas;
         }
         break;
 
@@ -2423,6 +2559,11 @@ async function getSearch(id: string, type: string, language: string, extra: any,
             providerId = config.search?.providers?.people_search_series || 'tmdb.people.search';
           }
 
+          if (providerId === 'lumiere.people.search' && !lumiereApiBase()) {
+            logger.info(`LumiereDB is not configured on this instance, falling back to 'tmdb.people.search' for "${query}"`);
+            providerId = 'tmdb.people.search';
+          }
+
           logger.debug(`Performing people-only search for type '${type}' using provider '${providerId}'`);
 
           switch (providerId) {
@@ -2434,6 +2575,9 @@ async function getSearch(id: string, type: string, language: string, extra: any,
                 break;
               case 'trakt.people.search':
                 metas = await performTraktPeopleSearch(type, query, language, config);
+                break;
+              case 'lumiere.people.search':
+                metas = await performLumierePeopleSearch(type, query, language, config, page);
                 break;
           }
         }
@@ -2463,6 +2607,22 @@ async function getSearch(id: string, type: string, language: string, extra: any,
           if (SIMKL_SEARCH_PROVIDERS.has(providerId) && isSimklSearchDisabled()) {
             const fallback = getDefaultProvider(type);
             logger.info(`Simkl search is off on this instance, falling back to '${fallback}' for "${query}"`);
+            providerId = fallback;
+          }
+
+          // A V2-only Simkl app answers nobody without a connected account.
+          if (SIMKL_SEARCH_PROVIDERS.has(providerId)) {
+            const { simklUserTokenIfRequired }: any = require('../utils/simklUtils.js');
+            if ((await simklUserTokenIfRequired(config)) === null) {
+              const fallback = getDefaultProvider(type);
+              logger.info(`Simkl search needs a connected Simkl account on this instance, falling back to '${fallback}' for "${query}"`);
+              providerId = fallback;
+            }
+          }
+
+          if (providerId === 'lumiere.search' && !lumiereApiBase()) {
+            const fallback = getDefaultProvider(type);
+            logger.info(`LumiereDB is not configured on this instance, falling back to '${fallback}' for "${query}"`);
             providerId = fallback;
           }
 
@@ -2508,6 +2668,9 @@ async function getSearch(id: string, type: string, language: string, extra: any,
               case 'imdb.suggestions.search':
                 metas = await performImdbSuggestionSearch(type, query, language, config);
                 break;
+              case 'lumiere.search':
+                metas = await performLumiereSearch(type, query, language, config);
+                break;
               case 'simkl.search':
                 metas = await performSimklSearch(type, query, language, config, page);
                 break;
@@ -2547,6 +2710,7 @@ async function getSearch(id: string, type: string, language: string, extra: any,
         else if (providerId.includes('mdblist.')) actualProvider = 'mdblist';
         else if (providerId.includes('simkl.')) actualProvider = 'simkl';
         else if (providerId.includes('imdb.')) actualProvider = 'imdb';
+        else if (providerId.includes('lumiere.')) actualProvider = 'lumiere';
       }
     }
 
@@ -2616,6 +2780,7 @@ async function getSearch(id: string, type: string, language: string, extra: any,
         else if (providerId.includes('mdblist.')) actualProvider = 'mdblist';
         else if (providerId.includes('simkl.')) actualProvider = 'simkl';
         else if (providerId.includes('imdb.')) actualProvider = 'imdb';
+        else if (providerId.includes('lumiere.')) actualProvider = 'lumiere';
       }
     }
 

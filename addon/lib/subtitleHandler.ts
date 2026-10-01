@@ -9,6 +9,7 @@ import {
   isWatchTrackingServiceEnabled,
   normalizeWatchTrackingMediaType,
   shouldTrackServiceMediaType,
+  type WatchTrackingService as TrackedService,
 } from './watchTracking';
 
 const logger: any = consola.withTag('SubtitleHandler');
@@ -47,7 +48,17 @@ function parseMediaId(id: any): ParsedMediaId | null {
     return null;
   }
 
-  const [prefix, ...rest] = parts;
+  let [prefix, ...rest] = parts;
+
+  if (prefix === 'mal' && rest.length > 0) {
+    const kitsuId = require('./id-mapper').getMappingByMalId(rest[0])?.kitsu_id;
+    if (kitsuId === undefined || kitsuId === null) {
+      logger.debug(`[Watch Tracking] No Kitsu id known for MAL ${rest[0]}`);
+      return null;
+    }
+    prefix = 'kitsu';
+    rest = [String(kitsuId), ...rest.slice(1)];
+  }
 
   const isImdb = prefix.startsWith('tt');
   const imdbMatch = isImdb ? /^tt\d+$/.test(prefix) : false;
@@ -223,15 +234,6 @@ function handleSubtitleRequest(type: string, id: string, config: any, userUUID: 
       });
     }
 
-    if (shouldTrackServiceMediaType(config, 'trakt', mediaType)) {
-      checkinTrakt(parsedId, config).catch((error: any) => {
-        logger.error(`[Watch Tracking] Trakt tracking failed for ${id}: ${error.message}`, {
-          stack: error.stack,
-          parsedId: parsedId
-        });
-      });
-    }
-
     if (shouldTrackServiceMediaType(config, 'publicmetadb', mediaType)) {
       checkinPublicMetaDB(parsedId, config).catch((error: any) => {
         logger.error(`[Watch Tracking] PublicMetaDB tracking failed for ${id}: ${error.message}`, {
@@ -255,6 +257,17 @@ function buildIdSummary(ids: Record<string, any>): string {
   return Object.entries(ids || {})
     .map(([key, value]) => `${key}:${value}`)
     .join(', ');
+}
+
+async function withTmdbId(ids: Record<string, any>, mediaType: 'movie' | 'series'): Promise<Record<string, any>> {
+  if (!ids?.imdb || ids.tmdb) return ids;
+  try {
+    const { tmdbIdFrom } = require('../utils/publicmetadbUtils');
+    const tmdbId = await tmdbIdFrom(ids, mediaType);
+    return tmdbId ? { ...ids, tmdb: tmdbId } : ids;
+  } catch {
+    return ids;
+  }
 }
 
 function normalizeIdsForMovie(parsedId: ParsedMediaId): Record<string, any> | null {
@@ -294,7 +307,12 @@ function normalizeIdsForMovie(parsedId: ParsedMediaId): Record<string, any> | nu
 async function resolveSeriesIds(parsedId: ParsedMediaId, config: any = {}, isSimkl: boolean = false): Promise<ResolvedSeriesIds | null> {
   switch (parsedId.provider) {
     case 'imdb': {
-      const animeMapping = idMapper.getMappingByImdbId(parsedId.id);
+      const found = idMapper.getMappingByImdbId(parsedId.id);
+      if (found && !idMapper.mappingIsType(found, 'series')) {
+        logger.debug(`[Watch Tracking] ${parsedId.id} is a film in the anime mapping, not a series`);
+        return null;
+      }
+      const animeMapping = found;
       if (animeMapping?.tvdb_id && !isSimkl) {
         try {
           const anidbInfo = await resolveAnidbEpisodeFromTvdbEpisode(
@@ -426,11 +444,12 @@ async function trackMdblistWatchStatus(
     }
 
     if (parsedId.type === 'movie') {
-      const ids = normalizeIdsForMovie(parsedId);
-      if (!ids) {
+      const normalized = normalizeIdsForMovie(parsedId);
+      if (!normalized) {
         logger.debug(`[Mdblist Watch Tracking] No valid identifiers for movie provider ${parsedId.provider}`);
         return;
       }
+      const ids = await withTmdbId(normalized, 'movie');
 
       logger.debug(`[Mdblist Watch Tracking] Checkin in movie (${buildIdSummary(ids)})`);
       await checkinMovie(ids, apiKey, options);
@@ -444,10 +463,11 @@ async function trackMdblistWatchStatus(
         return;
       }
 
+      const ids = await withTmdbId(resolution.ids, 'series');
       logger.debug(
-        `[Mdblist Watch Tracking] Checkin in for episode (${buildIdSummary(resolution.ids)}) S${resolution.season}E${resolution.episode}`
+        `[Mdblist Watch Tracking] Checkin in for episode (${buildIdSummary(ids)}) S${resolution.season}E${resolution.episode}`
       );
-      await checkinEpisode(resolution.ids, resolution.season, resolution.episode, apiKey, options);
+      await checkinEpisode(ids, resolution.season, resolution.episode, apiKey, options);
       return;
     }
 
@@ -456,6 +476,224 @@ async function trackMdblistWatchStatus(
     logger.error(`[Mdblist Watch Tracking] Unexpected tracking error: ${error.message}`, {
       stack: error.stack
     });
+  }
+}
+
+// A scrobble stop would open and finalise a session for something nobody
+// played, so this goes to /sync/history instead.
+async function creditWatch(parsedId: ParsedMediaId, config: any): Promise<void> {
+  const mediaType = parsedId.type === 'movie' ? 'movie' : 'series';
+
+  await eachHistoryService(parsedId, config, mediaType, 'addToHistory', 'Crediting a watch');
+  await clearResumePoint(parsedId, config);
+  await publicMetaDbHistory(parsedId, config, mediaType, 'watched');
+}
+
+/** The history half of a credited watch, for one service. */
+async function creditHistory(parsedId: ParsedMediaId, config: any, only: TrackedService): Promise<void> {
+  const mediaType = parsedId.type === 'movie' ? 'movie' : 'series';
+  if (only === 'publicmetadb') await publicMetaDbHistory(parsedId, config, mediaType, 'watched');
+  else await eachHistoryService(parsedId, config, mediaType, 'addToHistory', 'Crediting a watch', only);
+}
+
+// PublicMetaDB keeps plays rather than a watched flag and is keyed on TMDB.
+async function publicMetaDbHistory(
+  parsedId: ParsedMediaId,
+  config: any,
+  mediaType: 'movie' | 'series',
+  action: 'watched' | 'unwatch'
+): Promise<void> {
+  if (!shouldTrackServiceMediaType(config, 'publicmetadb', mediaType)) return;
+  try {
+    await checkinPublicMetaDB(parsedId, config, { action });
+  } catch (error: any) {
+    logger.error(`[PublicMetaDB] ${action} failed: ${error.message}`);
+  }
+}
+
+async function eachHistoryService(
+  parsedId: ParsedMediaId,
+  config: any,
+  mediaType: 'movie' | 'series',
+  method: 'addToHistory' | 'removeFromHistory' | 'clearPlayback',
+  what: string,
+  only?: TrackedService
+): Promise<void> {
+  for (const service of ['simkl', 'mdblist'] as const) {
+    if (only && only !== service) continue;
+    if (!shouldTrackServiceMediaType(config, service, mediaType)) continue;
+    try {
+      let utils: any;
+      let credential: string | undefined;
+
+      if (service === 'mdblist') {
+        utils = require('../utils/mdbList');
+        credential = config.apiKeys?.mdblist;
+      } else {
+        utils = require('../utils/simklUtils');
+        const tokenId = config.apiKeys?.simklTokenId;
+        if (!tokenId) continue;
+        const token = await utils.getSimklToken(tokenId);
+        credential = token?.access_token;
+      }
+      if (!credential) continue;
+
+      if (parsedId.type === 'movie') {
+        const ids = normalizeIdsForMovie(parsedId);
+        if (ids) await utils[method](await withTmdbId(ids, 'movie'), credential);
+      } else {
+        const resolution = await resolveSeriesIds(parsedId, config, service === 'simkl');
+        if (resolution) {
+          const ids = await withTmdbId(resolution.ids, 'series');
+          await utils[method](ids, credential, resolution.season, resolution.episode);
+        }
+      }
+    } catch (error: any) {
+      logger.error(`[${service}] ${what} failed: ${error.message}`);
+    }
+  }
+}
+
+// Each video resolves on its own (an anime episode pivots per episode); one history call per show ids.
+async function markEpisodes(
+  videoIds: string[],
+  config: any,
+  method: 'addToHistory' | 'removeFromHistory',
+  scope?: 'season' | 'series',
+  only?: TrackedService
+): Promise<void> {
+  const parsed = videoIds.map(parseMediaId).filter((p): p is ParsedMediaId => !!p && p.type === 'series');
+  if (!parsed.length) return;
+
+  for (const service of ['simkl', 'mdblist'] as const) {
+    if (only && only !== service) continue;
+    if (!shouldTrackServiceMediaType(config, service, 'series')) continue;
+    try {
+      let utils: any;
+      let credential: string | undefined;
+      if (service === 'mdblist') {
+        utils = require('../utils/mdbList');
+        credential = config.apiKeys?.mdblist;
+      } else {
+        utils = require('../utils/simklUtils');
+        const tokenId = config.apiKeys?.simklTokenId;
+        if (!tokenId) continue;
+        const token = await utils.getSimklToken(tokenId);
+        credential = token?.access_token;
+      }
+      if (!credential) continue;
+
+      const groups = new Map<string, { ids: Record<string, any>; episodes: Array<{ season: number; episode: number }> }>();
+      for (const id of parsed) {
+        const resolution = await resolveSeriesIds(id, config, service === 'simkl');
+        if (!resolution) continue;
+        const ids = await withTmdbId(resolution.ids, 'series');
+        const key = JSON.stringify(ids);
+        const group = groups.get(key) ?? { ids, episodes: [] };
+        group.episodes.push({ season: resolution.season, episode: resolution.episode });
+        groups.set(key, group);
+      }
+      for (const group of groups.values()) {
+        await utils[method](group.ids, credential, undefined, undefined, group.episodes);
+      }
+    } catch (error: any) {
+      logger.error(`[${service}] Marking ${parsed.length} episode(s) failed: ${error.message}`);
+    }
+  }
+
+  if (only && only !== 'publicmetadb') return;
+  if (!shouldTrackServiceMediaType(config, 'publicmetadb', 'series')) return;
+
+  // PublicMetaDB deletes a whole show or season in one call; a watch is one call per episode.
+  if (method === 'removeFromHistory' && scope && config.apiKeys?.publicmetadb) {
+    const { removeWatched, tmdbIdFrom } = require('../utils/publicmetadbUtils');
+    const groups = new Map<string, ParsedMediaId>();
+    for (const id of parsed) groups.set(`${id.provider}:${id.id}:${scope === 'season' ? id.season : ''}`, id);
+    for (const id of groups.values()) {
+      try {
+        const resolution = await resolveSeriesIds(id, config);
+        const tmdbId = resolution ? await tmdbIdFrom(resolution.ids, 'series') : null;
+        if (!tmdbId) continue;
+        const result = await removeWatched(config.apiKeys.publicmetadb, tmdbId, 'tv', scope === 'season' ? id.season : undefined);
+        logger.info(`[Watch Tracking] Cleared ${result?.deleted ?? 0} play(s): tmdb:${tmdbId}${scope === 'season' ? ` S${id.season}` : ''}`);
+      } catch (error: any) {
+        logger.error(`[PublicMetaDB] Clearing the ${scope} failed: ${error.message}`);
+      }
+    }
+    return;
+  }
+
+  const { mapWithConcurrency } = require('../utils/concurrency');
+  await mapWithConcurrency(parsed, 4, (id: ParsedMediaId) =>
+    checkinPublicMetaDB(id, config, { action: method === 'addToHistory' ? 'watched' : 'unwatch' }).catch(() => undefined)
+  );
+}
+
+async function unwatch(parsedId: ParsedMediaId, config: any, only?: TrackedService): Promise<void> {
+  const mediaType = parsedId.type === 'movie' ? 'movie' : 'series';
+  await eachHistoryService(parsedId, config, mediaType, 'removeFromHistory', 'Unwatch', only);
+  if (!only || only === 'mdblist') await clearMdblistResumePoint(parsedId, config, mediaType);
+  if (!only || only === 'publicmetadb') await publicMetaDbHistory(parsedId, config, mediaType, 'unwatch');
+}
+
+/** The resume point on every tracker, and nothing else: the watch stays. */
+async function clearResumePoint(parsedId: ParsedMediaId, config: any, only?: TrackedService): Promise<void> {
+  const mediaType = parsedId.type === 'movie' ? 'movie' : 'series';
+  await eachHistoryService(parsedId, config, mediaType, 'clearPlayback', 'Clear resume point', only);
+  if (!only || only === 'publicmetadb') await clearPublicMetaDbResumePoint(parsedId, config, mediaType);
+}
+
+async function clearPublicMetaDbResumePoint(parsedId: ParsedMediaId, config: any, mediaType: 'movie' | 'series'): Promise<void> {
+  if (!shouldTrackServiceMediaType(config, 'publicmetadb', mediaType)) return;
+  const apiKey = config.apiKeys?.publicmetadb;
+  if (!apiKey) return;
+  try {
+    const { clearResume, tmdbIdFrom } = require('../utils/publicmetadbUtils');
+    if (parsedId.type === 'movie') {
+      const ids = normalizeIdsForMovie(parsedId);
+      const tmdbId = ids ? await tmdbIdFrom(ids, 'movie') : null;
+      if (!tmdbId) return;
+      await clearResume(apiKey, tmdbId, 'movie');
+      logger.info('[PublicMetaDB] Cleared the resume point', { tmdb: tmdbId });
+      return;
+    }
+    const resolution = await resolveSeriesIds(parsedId, config);
+    const tmdbId = resolution ? await tmdbIdFrom(resolution.ids, 'series') : null;
+    if (!tmdbId || !resolution) return;
+    await clearResume(apiKey, tmdbId, 'tv', resolution.season, resolution.episode);
+    logger.info('[PublicMetaDB] Cleared the resume point', { tmdb: tmdbId, season: resolution.season, episode: resolution.episode });
+  } catch (error: any) {
+    logger.error(`[PublicMetaDB] Clearing the resume point failed: ${error.message}`);
+  }
+}
+
+// MDBList holds a resume point apart from watched status, so a mark either way
+// leaves the item sitting in continue-watching until the session is cleared.
+async function clearMdblistResumePoint(
+  parsedId: ParsedMediaId,
+  config: any,
+  mediaType: 'movie' | 'series'
+): Promise<void> {
+  if (!shouldTrackServiceMediaType(config, 'mdblist', mediaType)) return;
+
+  const apiKey = config.apiKeys?.mdblist;
+  if (!apiKey) return;
+
+  try {
+    const { clearScrobbleSession } = require('../utils/mdbList');
+
+    if (parsedId.type === 'movie') {
+      const ids = normalizeIdsForMovie(parsedId);
+      if (ids) await clearScrobbleSession(await withTmdbId(ids, 'movie'), apiKey);
+      return;
+    }
+
+    const resolution = await resolveSeriesIds(parsedId, config, false);
+    if (resolution) {
+      await clearScrobbleSession(await withTmdbId(resolution.ids, 'series'), apiKey, resolution.season, resolution.episode);
+    }
+  } catch (error: any) {
+    logger.error(`[MDBList] Clearing the resume point failed: ${error.message}`);
   }
 }
 
@@ -468,7 +706,7 @@ async function trackMdblistWatchStatus(
 async function checkinSimkl(
   parsedId: ParsedMediaId,
   config: any,
-  options: { action?: 'checkin' | 'start' | 'stop'; progress?: number } = {}
+  options: { action?: 'checkin' | 'start' | 'pause' | 'stop'; progress?: number } = {}
 ): Promise<void> {
   try {
     const { checkinSeries, checkinMovie, getSimklToken } = require('../utils/simklUtils');
@@ -486,11 +724,12 @@ async function checkinSimkl(
     }
 
     if (parsedId.type === 'movie') {
-      const ids = normalizeIdsForMovie(parsedId);
-      if (!ids) {
+      const normalized = normalizeIdsForMovie(parsedId);
+      if (!normalized) {
         logger.debug(`[Simkl Checkin] No valid identifiers for movie provider ${parsedId.provider}`);
         return;
       }
+      const ids = await withTmdbId(normalized, 'movie');
 
       logger.debug(`[Simkl Checkin] Tracking movie (${buildIdSummary(ids)})`);
       await checkinMovie(ids, accessToken, options);
@@ -504,70 +743,17 @@ async function checkinSimkl(
         return;
       }
 
+      const ids = await withTmdbId(resolution.ids, 'series');
       logger.debug(
-        `[Simkl Checkin] Checkin in episode (${buildIdSummary(resolution.ids)}) S${resolution.season}E${resolution.episode}`
+        `[Simkl Checkin] Checkin in episode (${buildIdSummary(ids)}) S${resolution.season}E${resolution.episode}`
       );
-      await checkinSeries(resolution.ids, resolution.season, resolution.episode, accessToken, resolution.fallbackData, options);
+      await checkinSeries(ids, resolution.season, resolution.episode, accessToken, resolution.fallbackData, options);
       return;
     }
 
     logger.debug(`[Simkl Checkin] Unsupported content type for tracking: ${parsedId.type}`);
   } catch (error: any) {
     logger.error(`[Simkl Checkin] Unexpected tracking error: ${error.message}`, {
-      stack: error.stack
-    });
-  }
-}
-
-/**
- * `options` selects the Trakt call, matching the other trackers. Left out this
- * is the check-in, which Trakt flips to watched on its own once the runtime has
- * elapsed, whether or not anybody watched it.
- */
-async function checkinTrakt(
-  parsedId: ParsedMediaId,
-  config: any,
-  options: { action?: 'checkin' | 'start' | 'pause' | 'stop'; progress?: number } = {}
-): Promise<void> {
-  try {
-    const { checkinSeries, checkinMovie, getTraktToken } = require('../utils/traktUtils');
-    const tokenId = config.apiKeys?.traktTokenId;
-    const accessToken = await getTraktToken(tokenId);
-
-    if (!accessToken) {
-      logger.debug('[Trakt Checkin] Skipping checkin - missing or invalid token');
-      return;
-    }
-
-    if (parsedId.type === 'movie') {
-      const ids = normalizeIdsForMovie(parsedId);
-      if (!ids) {
-        logger.debug(`[Trakt Checkin] No valid identifiers for movie provider ${parsedId.provider}`);
-        return;
-      }
-
-      logger.debug(`[Trakt Checkin] Tracking movie (${buildIdSummary(ids)})`);
-      await checkinMovie(ids, accessToken, options);
-      return;
-    }
-
-    if (parsedId.type === 'series') {
-      const resolution = await resolveSeriesIds(parsedId, config);
-      if (!resolution) {
-        logger.debug(`[Trakt Checkin] Unable to resolve identifiers for series provider ${parsedId.provider}`);
-        return;
-      }
-
-      logger.debug(
-        `[Trakt Checkin] Checkin in episode (${buildIdSummary(resolution.ids)}) S${resolution.season}E${resolution.episode}`
-      );
-      await checkinSeries(resolution.ids, resolution.season, resolution.episode, accessToken, options);
-      return;
-    }
-
-    logger.debug(`[Trakt Checkin] Unsupported content type for tracking: ${parsedId.type}`);
-  } catch (error: any) {
-    logger.error(`[Trakt Checkin] Unexpected tracking error: ${error.message}`, {
       stack: error.stack
     });
   }
@@ -582,7 +768,7 @@ async function checkinTrakt(
 async function checkinPublicMetaDB(
   parsedId: ParsedMediaId,
   config: any,
-  options: { action?: 'watched' | 'stop'; played?: boolean; positionMs?: number; runtimeMs?: number } = {}
+  options: { action?: 'watched' | 'stop' | 'unwatch'; played?: boolean; positionMs?: number; runtimeMs?: number } = {}
 ): Promise<void> {
   try {
     const { checkinMovie, checkinEpisode } = require('../utils/publicmetadbUtils');
@@ -628,8 +814,12 @@ export {
   parseMediaId,
   checkinSimkl,
   trackMdblistWatchStatus,
-  checkinTrakt,
   checkinPublicMetaDB,
+  unwatch,
+  clearResumePoint,
+  creditWatch,
+  creditHistory,
+  markEpisodes,
   shouldTrackMdblistWatch,
   shouldTrackAniList
 };
@@ -638,8 +828,12 @@ module.exports = {
   parseMediaId,
   checkinSimkl,
   trackMdblistWatchStatus,
-  checkinTrakt,
   checkinPublicMetaDB,
+  unwatch,
+  clearResumePoint,
+  creditWatch,
+  creditHistory,
+  markEpisodes,
   shouldTrackMdblistWatch,
   shouldTrackAniList
 };

@@ -14,6 +14,10 @@ import {
   normalizeTmdbPrimaryTranslationsForCache,
   normalizeTmdbReleaseDatesForCache,
   normalizeTmdbContentRatingsForCache,
+  normalizeTmdbRecommendationsForCache,
+  normalizeTmdbPersonSearchForCache,
+  normalizeTmdbPersonForCache,
+  normalizeTmdbPersonCreditsForCache,
 
   normalizeTmdbImagesForCache,
   normalizeTmdbSeasonForCache,
@@ -480,6 +484,28 @@ export async function tvInfo(params: any, config: UserConfig) {
   );
 }
 
+export async function movieRecommendations(params: any, config: UserConfig) {
+  const { id, ...queryParams } = params;
+  const normalizedQueryParams = normalizeTmdbCacheQueryParams(queryParams);
+  const cacheKey = `tmdb:movie:recommendations:${id}${getTmdbQueryCacheSuffix(normalizedQueryParams)}`;
+  return cacheWrapGlobal(cacheKey, () =>
+    makeTmdbRequest(`/movie/${id}/recommendations`, getApiKey(config), normalizedQueryParams, 'GET', null, config)
+      .then(normalizeTmdbRecommendationsForCache),
+    24 * 60 * 60
+  );
+}
+
+export async function tvRecommendations(params: any, config: UserConfig) {
+  const { id, ...queryParams } = params;
+  const normalizedQueryParams = normalizeTmdbCacheQueryParams(queryParams);
+  const cacheKey = `tmdb:tv:recommendations:${id}${getTmdbQueryCacheSuffix(normalizedQueryParams)}`;
+  return cacheWrapGlobal(cacheKey, () =>
+    makeTmdbRequest(`/tv/${id}/recommendations`, getApiKey(config), normalizedQueryParams, 'GET', null, config)
+      .then(normalizeTmdbRecommendationsForCache),
+    24 * 60 * 60
+  );
+}
+
 export async function movieReleaseDates(id: string, config: UserConfig) {
   return cacheWrapGlobal(`tmdb:movie:release_dates:${id}`, () =>
     makeTmdbRequest(`/movie/${id}/release_dates`, getApiKey(config), {}, 'GET', null, config),
@@ -494,20 +520,55 @@ export async function tvContentRatings(id: string, config: UserConfig) {
   );
 }
 
-export async function movieExternalIds(id: string, config: UserConfig) {
-  return cacheWrapGlobal(`tmdb:movie:external_ids:${id}`, () =>
-    makeTmdbRequest(`/movie/${id}/external_ids`, getApiKey(config), {}, 'GET', null, config)
-      .then(normalizeTmdbExternalIdsForCache),
-    24 * 60 * 60 // 24 hours
+export async function movieKeywords(id: string, config: UserConfig) {
+  return cacheWrapGlobal(`tmdb:movie:keywords:${id}`, () =>
+    makeTmdbRequest(`/movie/${id}/keywords`, getApiKey(config), {}, 'GET', null, config),
+    7 * 24 * 60 * 60
   );
 }
 
-export async function tvExternalIds(id: string, config: UserConfig) {
-  return cacheWrapGlobal(`tmdb:tv:external_ids:${id}`, () => 
-    makeTmdbRequest(`/tv/${id}/external_ids`, getApiKey(config), {}, 'GET', null, config)
-      .then(normalizeTmdbExternalIdsForCache),
+export async function tvKeywords(id: string, config: UserConfig) {
+  return cacheWrapGlobal(`tmdb:tv:keywords:${id}`, () =>
+    makeTmdbRequest(`/tv/${id}/keywords`, getApiKey(config), {}, 'GET', null, config),
+    7 * 24 * 60 * 60
+  );
+}
+
+export function keywordNamesOf(reply: any): string[] | undefined {
+  const block = reply?.keywords;
+  const list = Array.isArray(block) ? block : block?.keywords ?? block?.results ?? reply?.results;
+  if (!Array.isArray(list)) return undefined;
+  const names = list.map((keyword: any) => keyword?.name).filter((name: unknown): name is string => typeof name === 'string' && name.length > 0);
+  return names.length ? names : undefined;
+}
+
+export async function titleKeywordNames(id: string | number | null | undefined, type: string, config: UserConfig): Promise<string[] | undefined> {
+  if (!id) return undefined;
+  try {
+    return keywordNamesOf(type === 'movie' ? await movieKeywords(String(id), config) : await tvKeywords(String(id), config));
+  } catch {
+    return undefined;
+  }
+}
+
+const EXTERNAL_IDS_NOT_FOUND = { status: 'not_found' };
+
+export async function movieExternalIds(id: string, config: UserConfig) {
+  const found = await cacheWrapGlobal(`tmdb:movie:external_ids:${id}`, () =>
+    makeTmdbRequest(`/movie/${id}/external_ids`, getApiKey(config), {}, 'GET', null, config)
+      .then((ids: any) => (ids ? normalizeTmdbExternalIdsForCache(ids) : EXTERNAL_IDS_NOT_FOUND)),
     24 * 60 * 60 // 24 hours
   );
+  return found?.status === EXTERNAL_IDS_NOT_FOUND.status ? null : found;
+}
+
+export async function tvExternalIds(id: string, config: UserConfig) {
+  const found = await cacheWrapGlobal(`tmdb:tv:external_ids:${id}`, () =>
+    makeTmdbRequest(`/tv/${id}/external_ids`, getApiKey(config), {}, 'GET', null, config)
+      .then((ids: any) => (ids ? normalizeTmdbExternalIdsForCache(ids) : EXTERNAL_IDS_NOT_FOUND)),
+    24 * 60 * 60 // 24 hours
+  );
+  return found?.status === EXTERNAL_IDS_NOT_FOUND.status ? null : found;
 }
 
 export async function movieCredits(params: any, config: UserConfig) {
@@ -549,56 +610,46 @@ export async function searchTv(params: any, config: UserConfig) {
 }
 
 export async function searchPerson(params: any, config: UserConfig) {
-  const startTime = Date.now();
-  const query = params.query || 'unknown';
-  consola.info(`[TMDB] Starting person search for: "${query}"`);
-  
-  const result = await makeTmdbRequest('/search/person', getApiKey(config), params, 'GET', null, config);
-  
-  const searchTime = Date.now() - startTime;
-  const resultCount = result?.results?.length || 0;
-  consola.info(`[TMDB] Person search completed in ${searchTime}ms, found ${resultCount} results`);
-  
-  return result;
+  const normalizedQueryParams = normalizeTmdbCacheQueryParams(params);
+  const cacheKey = `tmdb:search:person${getTmdbQueryCacheSuffix(normalizedQueryParams)}`;
+  return cacheWrapGlobal(cacheKey, () =>
+    makeTmdbRequest('/search/person', getApiKey(config), normalizedQueryParams, 'GET', null, config)
+      .then(normalizeTmdbPersonSearchForCache),
+    24 * 60 * 60
+  );
 }
 
 export async function personInfo(params: any, config: UserConfig) {
-  const startTime = Date.now();
-  const personId = params.id || 'unknown';
-  consola.info(`[TMDB] Fetching person info for ID: ${personId}`);
-  
-  const result = await makeTmdbRequest(`/person/${personId}`, getApiKey(config), params, 'GET', null, config);
-  
-  const fetchTime = Date.now() - startTime;
-  consola.info(`[TMDB] Person info fetched in ${fetchTime}ms`);
-  
-  return result;
+  const { id, ...queryParams } = params;
+  const normalizedQueryParams = normalizeTmdbCacheQueryParams(queryParams);
+  const cacheKey = `tmdb:person:detail:${id}${getTmdbQueryCacheSuffix(normalizedQueryParams)}`;
+  return cacheWrapGlobal(cacheKey, () =>
+    makeTmdbRequest(`/person/${id}`, getApiKey(config), normalizedQueryParams, 'GET', null, config)
+      .then(normalizeTmdbPersonForCache),
+    24 * 60 * 60
+  );
 }
 
 export async function personMovieCredits(params: any, config: UserConfig) {
-  const startTime = Date.now();
-  const personId = params.id || 'unknown';
-  consola.info(`[TMDB] Fetching person movie credits for ID: ${personId}`);
-  
-  const result = await makeTmdbRequest(`/person/${personId}/movie_credits`, getApiKey(config), params, 'GET', null, config);
-  
-  const fetchTime = Date.now() - startTime;
-  consola.info(`[TMDB] Person movie credits fetched in ${fetchTime}ms`);
-  
-  return result;
+  const { id, ...queryParams } = params;
+  const normalizedQueryParams = normalizeTmdbCacheQueryParams(queryParams);
+  const cacheKey = `tmdb:person:movie_credits:${id}${getTmdbQueryCacheSuffix(normalizedQueryParams)}`;
+  return cacheWrapGlobal(cacheKey, () =>
+    makeTmdbRequest(`/person/${id}/movie_credits`, getApiKey(config), normalizedQueryParams, 'GET', null, config)
+      .then(normalizeTmdbPersonCreditsForCache),
+    24 * 60 * 60
+  );
 }
 
 export async function personTvCredits(params: any, config: UserConfig) {
-  const startTime = Date.now();
-  const personId = params.id || 'unknown';
-  consola.info(`[TMDB] Fetching person TV credits for ID: ${personId}`);
-  
-  const result = await makeTmdbRequest(`/person/${personId}/tv_credits`, getApiKey(config), params, 'GET', null, config);
-  
-  const fetchTime = Date.now() - startTime;
-  consola.info(`[TMDB] Person TV credits fetched in ${fetchTime}ms`);
-  
-  return result;
+  const { id, ...queryParams } = params;
+  const normalizedQueryParams = normalizeTmdbCacheQueryParams(queryParams);
+  const cacheKey = `tmdb:person:tv_credits:${id}${getTmdbQueryCacheSuffix(normalizedQueryParams)}`;
+  return cacheWrapGlobal(cacheKey, () =>
+    makeTmdbRequest(`/person/${id}/tv_credits`, getApiKey(config), normalizedQueryParams, 'GET', null, config)
+      .then(normalizeTmdbPersonCreditsForCache),
+    24 * 60 * 60
+  );
 }
 
 export async function find(params: any, config: UserConfig) {
@@ -903,6 +954,7 @@ export async function getTvWatchProviders(params: any, config: UserConfig) {
   return null;
 }
 
+/** utils/tmdbLocalization.ts copies this matching rule; relax one, relax both. */
 export function getTranslations(translations: any, language: string) {
   if (translations?.translations) {
     const iso639 = language.split('-')[0];
@@ -1081,6 +1133,8 @@ export async function tvImages(params: any, config: UserConfig) {
 
 module.exports = {
   makeTmdbRequest, 
+  movieRecommendations,
+  tvRecommendations,
   movieInfo,
   tvInfo,
   searchMovie,
@@ -1126,6 +1180,10 @@ module.exports = {
   getTranslations,
   movieReleaseDates,
   tvContentRatings,
+  movieKeywords,
+  tvKeywords,
+  keywordNamesOf,
+  titleKeywordNames,
   movieExternalIds,
   tvExternalIds,
   movieCredits,

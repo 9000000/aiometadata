@@ -5,12 +5,12 @@ const {
   cacheWrapJikanApi,
   stableStringify,
   projectCatalogPayloadForCache,
-  writeMetaComponentsBatchWithConfig,
 } = require('./getCache');
 const { sleep } = require('../utils/concurrency');
 const { getGenreList } = require('./getGenreList');
 const { parseAnimeCatalogMetaBatch } = require('../utils/parseProps');
 const { envInt } = require('../utils/envNumber');
+const { defaultsToNoneGenre } = require('./genreNoneDefault');
 const jikan = require('./mal');
 const { buildProxyArtUrl } = require('./posterCache/proxyArt.js');
 const movielens = require('./movielens');
@@ -207,6 +207,12 @@ class ComprehensiveCatalogWarmer {
 
   async shouldWarmup() {
     try {
+      const interrupted = await redis.get('catalog-warmup:in-progress');
+      if (interrupted && this.config.resumeOnRestart) {
+        const startedAt = new Date(parseInt(interrupted, 10)).toISOString();
+        this.log('info', `A warmup started at ${startedAt} was cut short - running it again; what it reached is read back from cache`);
+        return true;
+      }
       await redis.del('catalog-warmup:in-progress');
 
       for (const uuid of this.config.uuids) {
@@ -360,24 +366,11 @@ class ComprehensiveCatalogWarmer {
     }
   }
 
-  async persistFullMetasAndProjectCatalog(result, config, type, options = {}) {
-    const metas = Array.isArray(result?.metas) ? result.metas : [];
-
-    if (metas.length > 0) {
-      try {
-        const stats = await writeMetaComponentsBatchWithConfig({
-          config,
-          metas,
-          type,
-          useShowPoster: !!options.useShowPoster,
-          overwrite: false,
-        });
-        this.log('debug', `[Catalog Cache] Processed ${stats.written} meta component set(s), skipped ${stats.skipped}`);
-      } catch (error) {
-        this.log('warn', `[Catalog Cache] Failed to write meta components before catalog projection: ${error.message}`);
-      }
-    }
-
+  // Catalog metas are catalog-shaped (MAL's carry no cast, links or videos) and
+  // already projected for the warming user, so they never go into the shared
+  // meta cache. Items built through cacheWrapMetaSmart were written there, in
+  // full, when the catalog was built.
+  projectCatalogResult(result) {
     return projectCatalogPayloadForCache(result);
   }
 
@@ -589,32 +582,7 @@ class ComprehensiveCatalogWarmer {
     const catalogId = catalog.id;
     // Determine if manifest will include a "None" genre option for this catalog
     // When showInHome=false and catalog type adds "None", Stremio will send genre=None
-    const shouldIncludeGenreNone = (
-      catalog.showInHome === false && (
-        catalogId.startsWith('mdblist.') ||
-        catalogId.startsWith('trakt.') ||
-        catalogId.startsWith('anilist.') ||
-        catalogId.startsWith('letterboxd.') ||
-        catalogId.startsWith('flixpatrol.') ||
-        catalogId.startsWith('stremthru.') ||
-        catalogId.startsWith('custom.') ||
-        catalogId.startsWith('streaming.') ||
-        catalogId.startsWith('simkl.') ||
-        catalogId.startsWith('movielens.') ||
-        catalogId.startsWith('publicmetadb.') ||
-        catalogId.startsWith('tmdb.discover') ||
-        catalogId.startsWith('tmdb.collection.') ||
-        catalogId.startsWith('tvdb.discover') ||
-        catalogId.startsWith('tvdb.list.') ||
-        catalogId.startsWith('mal.discover')  ||
-        catalogId.startsWith('anilist.discover') ||
-        catalogId === 'tmdb.top' ||
-        catalogId === 'tvmaze.schedule' ||
-        catalogId === 'tmdb.airing_today' ||
-        catalogId === 'tmdb.top_rated' ||
-        (catalogId.startsWith('mal.') && !catalogId.includes(['mal.genres', 'mal.studios', 'mal.schedule', 'mal.seasons']))
-      )
-    );
+    const shouldIncludeGenreNone = catalog.showInHome === false && defaultsToNoneGenre(catalogId);
 
     // Use the genre value that Stremio will actually send
     // For tvdb.genres, when showInHome is false the manifest does not add a 'None' option so the client defaults to the first genre.
@@ -814,7 +782,7 @@ class ComprehensiveCatalogWarmer {
                   pairs = [[parts[2], parts[3]]];
                 }
                 const fps = await Promise.all(
-                  pairs.map(([t, st]) => getSimklActivityFingerprint(token.access_token, t, st))
+                  pairs.map(([t, st]) => getSimklActivityFingerprint(token.access_token, t, st, config))
                 );
                 const fp = fps.filter(Boolean).join('+');
                 if (fp) extraArgs._simklAct = fp;
@@ -853,7 +821,7 @@ class ComprehensiveCatalogWarmer {
           if (catalogId.startsWith('mal.')) {
             const configWithUUID = { ...config, userUUID: uuid };
             const fullResult = await this.warmMALCatalog(catalogId, derivedPage, configWithUUID, extraArgs);
-            return await this.persistFullMetasAndProjectCatalog(fullResult, configWithUUID, actualType);
+            return this.projectCatalogResult(fullResult);
           } else if (catalogId === 'tmdb.trending') {
             // Special handling for tmdb.trending - call getTrending directly
             if (!uuid) {
@@ -862,7 +830,7 @@ class ComprehensiveCatalogWarmer {
             const configWithUUID = { ...config, userUUID: uuid };
             const { getTrending } = require('./getTrending');
             const fullResult = await getTrending(catalog.type, config.language, derivedPage, extraArgs.genre || null, configWithUUID, uuid, true);
-            return await this.persistFullMetasAndProjectCatalog(fullResult, configWithUUID, actualType);
+            return this.projectCatalogResult(fullResult);
           } else if (catalogId === 'tvmaze.schedule') {
             const configWithUUID = { ...config, userUUID: uuid };
             const fullResult = await getTvmazeScheduleCatalog({
@@ -877,7 +845,7 @@ class ComprehensiveCatalogWarmer {
               enableErrorCaching: false,
               maxRetries: 1,
             });
-            return await this.persistFullMetasAndProjectCatalog(fullResult, configWithUUID, actualType);
+            return this.projectCatalogResult(fullResult);
           } else {
             // Everything else goes through getCatalog
             if (!uuid) {
@@ -887,9 +855,7 @@ class ComprehensiveCatalogWarmer {
             const configWithUUID = { ...config, userUUID: uuid };
             const { getCatalog } = require('./getCatalog');
             const fullResult = await getCatalog(catalog.type, config.language, derivedPage, catalogId, extraArgs.genre || null, configWithUUID, uuid, true);
-            return await this.persistFullMetasAndProjectCatalog(fullResult, configWithUUID, actualType, {
-              useShowPoster: !!extraArgs.useShowPoster,
-            });
+            return this.projectCatalogResult(fullResult);
           }
           }, {
             enableErrorCaching: false,
@@ -936,7 +902,7 @@ class ComprehensiveCatalogWarmer {
     while (pagesWarmed < maxPages) {
       try {
         const fullResult = await getCatalog(catalog.type, config.language, 1, catalogId, genreValue || null, configWithUUID, uuid, true, currentSkip);
-        const result = await this.persistFullMetasAndProjectCatalog(fullResult, configWithUUID, catalog.type);
+        const result = this.projectCatalogResult(fullResult);
 
         const rawMetaCount = result?.metas?.length || 0;
 
@@ -1017,7 +983,7 @@ class ComprehensiveCatalogWarmer {
     this.stats.totalUUIDs = this.config.uuids.length;
     const startTime = Date.now();
 
-    await redis.set('catalog-warmup:in-progress', Date.now().toString());
+    if (!imagesOnly) await redis.set('catalog-warmup:in-progress', Date.now().toString());
 
     try {
       this.log('success', `Starting comprehensive catalog warmup for ${this.config.uuids.length} UUID(s)...`);
@@ -1039,8 +1005,10 @@ class ComprehensiveCatalogWarmer {
               }
             }
             const skipIds = new Set(['trakt.upnext', 'mdblist.upnext', 'publicmetadb.upnext', 'simkl.upnext', 'simkl.upnext.anime']);
+            const { isRecommendationCatalog } = require('../utils/recommendations/catalog');
             const enabledCatalogs = allCatalogs.filter(c =>
-              c.source !== 'merged' && !skipIds.has(c.id) && c.cacheTTL !== 0 &&
+              c.source !== 'merged' && !skipIds.has(c.id) && !isRecommendationCatalog(c.id) &&
+              c.cacheTTL !== 0 &&
               (c.enabled || mergedChildIds.has(`${c.id}:${c.type}`))
             );
             userConfigs[uuid] = { config, enabledCatalogs };

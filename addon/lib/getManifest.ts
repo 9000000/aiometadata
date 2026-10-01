@@ -8,13 +8,19 @@ import { getGenresBySelection } from "../static/genres";
 import buildInfo from "./buildInfo";
 import catalogsTranslationsJson from "../static/translations.json";
 import catalogTypesJson from "../static/catalog-types.json";
-import { PLAYBACK_MANIFEST_EVENTS, WATCH_STATE_VERSION } from "./playbackHandler";
+import { PLAYBACK_MANIFEST_EVENTS, WATCH_STATE_PUSH_EVENTS, WATCH_STATE_VERSION } from "./playbackHandler";
+import { watchStatePullTtl } from "./watchState";
+import { collectionCatalogs, collectionsServed, COLLECTION_META_PREFIX } from "./collectionBuilder/aiostreamsCollections";
+import { holderCards, servesCatalog, withAccountOwner } from "./accounts";
+import { hasNamedViewers } from "./jellyfin/profiles";
 const jikan: any = require('./mal');
 const DEFAULT_LANGUAGE = "en-US";
 const catalogsTranslations: Record<string, Record<string, string>> = catalogsTranslationsJson;
 const CATALOG_TYPES: Record<string, any> = catalogTypesJson;
-import { cacheWrapJikanApi, cacheWrapGlobal, cacheWrapStremThruGenres } from './getCache';
+import { cacheWrapJikanApi, cacheWrapGlobal, cacheWrapStremThruGenres, cacheWrapLumiereGenres } from './getCache';
 import { mergeGenreOptions } from '../utils/mergedCatalog';
+import { fetchLumiereGenres, lumiereApiBase, lumiereGenreLabel, lumiereListOf } from '../utils/lumiereLists';
+const { getSetting }: any = require('./settingsService');
 import consola from 'consola';
 import { hasAnyWatchTrackingEnabled } from './watchTracking';
 const logger = consola.withTag('Manifest');
@@ -878,6 +884,17 @@ function formatTagSuffix(tags: string[]): string {
   return `${tags.slice(0, 2).join(' + ')} +${tags.length - 2} more`;
 }
 
+async function lumiereGenreOptions(): Promise<Record<'movie' | 'series', string[]>> {
+  try {
+    const timeoutMs = parseInt(getSetting('LUMIERE_SEARCH_TIMEOUT_MS'), 10) || 5000;
+    const genres = await cacheWrapLumiereGenres(() => fetchLumiereGenres(lumiereApiBase(), timeoutMs));
+    return { movie: genres.movie.map(lumiereGenreLabel), series: genres.series.map(lumiereGenreLabel) };
+  } catch (error: any) {
+    logger.warn(`LumiereDB genres unavailable: ${error.message}`);
+    return { movie: [], series: [] };
+  }
+}
+
 async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise<any> {
   const startTime = Date.now();
   logger.start('Starting manifest generation...');
@@ -893,7 +910,7 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
   const tags = Array.isArray(opts.tags) ? opts.tags.filter(Boolean) : [];
   const tagSet = new Set(tags.map((t: string) => t.toLowerCase()));
   const enabledCatalogs = userCatalogs.filter((c: any) =>
-    c.enabled && (tagSet.size === 0 || (Array.isArray(c.tags) && c.tags.some((t: any) => tagSet.has(String(t).toLowerCase()))))
+    c.enabled && servesCatalog(config, c) && (tagSet.size === 0 || (Array.isArray(c.tags) && c.tags.some((t: any) => tagSet.has(String(t).toLowerCase()))))
   );
 
   // Absorbed merge sources must be built (even if disabled) so their genres feed the parent.
@@ -1093,8 +1110,18 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
       if (isSimkl(userCatalog.id)) {
         return true;
       }
+      if (userCatalog.id.startsWith('recommendations.')) {
+        // Needs a history to read and a model to read it with.
+        const hasHistory = !!(config.apiKeys?.simklTokenId || config.apiKeys?.mdblist);
+        const hasModel = !!(config.apiKeys?.gemini || config.apiKeys?.openrouter
+          || process.env.GEMINI_API_KEY || process.env.BUILT_IN_GEMINI_API_KEY || process.env.OPENROUTER_API_KEY);
+        return hasHistory && hasModel;
+      }
       if (userCatalog.id.startsWith('movielens.')) {
         return !!config.apiKeys?.movieLensCredId;
+      }
+      if (userCatalog.id.startsWith('lumiere.')) {
+        return !!lumiereListOf(userCatalog.id) && !!lumiereApiBase() && (userCatalog.type === 'movie' || userCatalog.type === 'series');
       }
       if (userCatalog.id.startsWith('tmdb.list.')) {
         return true;
@@ -1161,6 +1188,35 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
           const result = await createSimklCatalog(userCatalog, showPrefix, prefixName);
           logger.debug(`Simkl catalog result:`, result ? 'success' : 'failed');
           return result;
+      }
+      if (userCatalog.id.startsWith('recommendations.')) {
+          logger.debug(`Processing recommendation catalog: ${userCatalog.id}`);
+          // No genre filter; off the home board a required extra keeps it to Discover.
+          return {
+            id: userCatalog.id,
+            type: userCatalog.displayType || userCatalog.type,
+            name: `${showPrefix ? `${prefixName} - ` : ""}${userCatalog.name}`,
+            pageSize: parseInt(process.env.CATALOG_LIST_ITEMS_SIZE as string) || 20,
+            extra: [
+              ...(userCatalog.showInHome ? [] : [{ name: 'genre', options: ['None'], isRequired: true }]),
+              { name: 'skip' },
+            ],
+            showInHome: userCatalog.showInHome
+          };
+      }
+      if (userCatalog.id.startsWith('lumiere.')) {
+          const genreOptions = (await lumiereGenreOptions())[userCatalog.type as 'movie' | 'series'];
+          return {
+            id: userCatalog.id,
+            type: userCatalog.displayType || userCatalog.type,
+            name: `${showPrefix ? `${prefixName} - ` : ""}${userCatalog.name}`,
+            pageSize: parseInt(process.env.CATALOG_LIST_ITEMS_SIZE as string) || 20,
+            extra: [
+              { name: 'genre', options: userCatalog.showInHome ? genreOptions : ['None', ...genreOptions], isRequired: !userCatalog.showInHome },
+              { name: 'skip' },
+            ],
+            showInHome: userCatalog.showInHome
+          };
       }
       if (userCatalog.id.startsWith('movielens.')) {
           logger.debug(`Processing MovieLens catalog: ${userCatalog.id}`);
@@ -1641,6 +1697,9 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
     });
   }
 
+  // Listed first, as on the Jellyfin server.
+  catalogs.unshift(...collectionCatalogs(config, tags));
+
   const nameSuffix = process.env.ADDON_NAME_SUFFIX || "";
   const baseName = config.addonName || (nameSuffix ? `AIOMetadata ${nameSuffix}` : "AIOMetadata");
   const addonName = baseName;
@@ -1658,11 +1717,10 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
   }
 
   // Declared only when the user has opted in, since declaring it is what makes
-  // a front-end start delivering. The prefixes are the ones the tracker can
-  // actually parse, so nothing arrives that would only be discarded.
-  // Named as strings: a reader validates object resources against the names it
+  // a front-end start delivering. Named as strings: a reader validates object resources against the names it
   // knows, and one that has never heard of these would reject the manifest whole.
-  const playbackReporting = watchTrackingEnabled && config.playbackReporting === true;
+  const anyoneTracks = watchTrackingEnabled || holderCards(config).some((card) => hasAnyWatchTrackingEnabled(withAccountOwner(config, card.id)));
+  const playbackReporting = anyoneTracks && config.playbackReporting === true;
   if (playbackReporting) {
     resources.push("watch_state", "playback");
   }
@@ -1677,12 +1735,17 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
     resources,
     ...(playbackReporting
       ? {
-          watchState: { version: WATCH_STATE_VERSION, push: { events: PLAYBACK_MANIFEST_EVENTS } },
+          watchState: {
+            version: WATCH_STATE_VERSION,
+            ...(hasNamedViewers(config, config.userUUID ?? '') ? { viewers: true } : {}),
+            push: { events: WATCH_STATE_PUSH_EVENTS, bulk: true },
+            pull: { items: true, watched: true, watchlist: true, ttlSeconds: watchStatePullTtl() },
+          },
           playback: { version: 1, events: PLAYBACK_MANIFEST_EVENTS },
         }
       : {}),
     types: ["movie", "series", "anime.movie", "anime.series", "anime", "Trakt", "collection"],
-    idPrefixes: ["tmdb:", "tt", "tvdb:", "mal:", "tvmaze:", "kitsu:", "anidb:", "anilist:", "tvdbc:", "upnext_", "unwatched_", "mdblist_upnext_", "pmdb_resume_", "simkl_upnext_"],
+    idPrefixes: ["tmdb:", "tt", "tvdb:", "mal:", "tvmaze:", "kitsu:", "anidb:", "anilist:", "tvdbc:", "upnext_", "unwatched_", "mdblist_upnext_", "pmdb_resume_", "simkl_upnext_", "aiom.error.", ...(collectionsServed(config) ? [COLLECTION_META_PREFIX] : [])],
     stremioAddonsConfig: {
       "issuer": "https://stremio-addons.net",
       "signature": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..3_iKJ-pKhR-LclfTPxvyag.uY747PgjymdL0OMdZrE7HTOVG-8nNWC-LrlJ5tCXm2i2FioXv_ismzWV0_XsLl0Me9cW9D3xog6d4tSHDY8Pe27mbIylUb61MS4VVqg_sFZXUVon2le-fRFrtmMnIqCF.oyYRDftPN2sohMpDMbMbYg"

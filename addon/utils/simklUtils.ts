@@ -1,6 +1,9 @@
-import { httpGet, httpPost } from "./httpClient.js";
+import { httpGet, httpPost, httpRequest } from "./httpClient.js";
+import { historyPayload, type EpisodeRef } from "./historyPayload";
+import { noteTrackerCall } from "./trackerCalls";
 import { getMeta } from "../lib/getMeta.js";
-import { cacheWrapMetaSmart, cacheWrapGlobal } from "../lib/getCache.js";
+import { cacheWrapMetaSmart, cacheWrapGlobal, cacheWrapJikanApi, classifyResultAllowEmpty } from "../lib/getCache.js";
+import { mapWithLimit } from "./concurrency";
 import { UserConfig } from "../types/index.js";
 import * as Utils from "./parseProps.js";
 
@@ -15,26 +18,42 @@ const idMapper = require('../lib/id-mapper');
 const animeListMapper = require('../lib/anime-list-mapper');
 
 const SIMKL_BASE_URL = 'https://api.simkl.com';
-const SIMKL_CLIENT_ID = process.env.SIMKL_CLIENT_ID || '';
+const { isSimklV2Token, simklClientIdFor } = require('../lib/simkl');
+const { getSetting } = require('../lib/settingsService');
 const SIMKL_TRENDING_TTL = 12 * 60 * 60; // 12 hours
 const SIMKL_WATCHLIST_TTL = 24 * 60 * 60; // Cache in Redis for 24h, relies on activity check to invalidate
 const SIMKL_ACTIVITIES_TTL_DEFAULT = 30 * 60; // Simkl asks callers to throttle sync checks to once per 15-30 min
 const SIMKL_LIST_STATUSES = ['plantowatch', 'watching', 'completed', 'hold', 'dropped'];
 
+const SIMKL_SYNC_INTERVAL_MIN_MINUTES = 1;
+const SIMKL_SYNC_INTERVAL_MAX_MINUTES = 24 * 60;
+
 function getSimklActivitiesTtl(): number {
-  const parsed = parseInt(process.env.SIMKL_ACTIVITIES_TTL || '', 10);
+  const parsed = parseInt(getSetting('SIMKL_ACTIVITIES_TTL') || '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : SIMKL_ACTIVITIES_TTL_DEFAULT;
+}
+
+function simklActivitiesTtlFor(accessToken: string, config?: any): number {
+  const minutes = Number(config?.simklSyncInterval);
+  if (!isSimklV2Token(accessToken) || !Number.isFinite(minutes) || minutes <= 0) return getSimklActivitiesTtl();
+  return Math.round(Math.min(Math.max(minutes, SIMKL_SYNC_INTERVAL_MIN_MINUTES), SIMKL_SYNC_INTERVAL_MAX_MINUTES) * 60);
 }
 const SIMKL_TRENDING_DATA_URL = 'https://data.simkl.in/discover/trending';
 const SIMKL_DISCOVER_DATA_URL = 'https://data.simkl.in/discover';
 const SIMKL_APP_NAME = 'aiometadata';
+
+function withAppParams(url: string): string {
+  if (/[?&]app-name=/.test(url)) return url;
+  const params = new URLSearchParams({ 'app-name': SIMKL_APP_NAME, 'app-version': process.env.npm_package_version || '1.0' });
+  return `${url}${url.includes('?') ? '&' : '?'}${params.toString()}`;
+}
 
 function simklDataParams(): string {
   const params = new URLSearchParams({
     'app-name': SIMKL_APP_NAME,
     'app-version': process.env.npm_package_version || '1.0'
   });
-  if (SIMKL_CLIENT_ID) params.set('client_id', SIMKL_CLIENT_ID);
+  if (simklClientIdFor()) params.set('client_id', simklClientIdFor());
   return params.toString();
 }
 
@@ -64,14 +83,144 @@ const RATE_LIMIT_CONFIG = {
   backoffMultiplier: 2
 };
 
-// Rate limiting state
-let rateLimitState = {
-  lastRequestTime: 0,
-  recentRateLimitHits: 0,
-  lastRateLimitTime: 0,
-  isRateLimited: false,
-  rateLimitResetTime: 0
-};
+const SIMKL_APP_BUCKET = 'app';
+const SIMKL_V2_GET_INTERVAL_MS = 100;
+const SIMKL_V2_POST_INTERVAL_MS = 1000;
+const SIMKL_QUOTA_KEY_PREFIX = 'simkl-quota:';
+
+interface SimklBucket {
+  lastRequestTime: number;
+  recentRateLimitHits: number;
+  cooldownUntil: number;
+  pausedUntil: number;
+}
+
+const simklBuckets = new Map<string, SimklBucket>();
+
+function simklBucket(key: string): SimklBucket {
+  let bucket = simklBuckets.get(key);
+  if (!bucket) {
+    bucket = { lastRequestTime: 0, recentRateLimitHits: 0, cooldownUntil: 0, pausedUntil: 0 };
+    simklBuckets.set(key, bucket);
+  }
+  return bucket;
+}
+
+function simklTokenHash(accessToken: string): string {
+  return crypto.createHash('sha256').update(accessToken).digest('hex').substring(0, 16);
+}
+
+function simklBucketFor(accessToken?: string): string {
+  return accessToken && isSimklV2Token(accessToken) ? `user:${simklTokenHash(accessToken)}` : SIMKL_APP_BUCKET;
+}
+
+function nyOffsetMs(at: number): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hourCycle: 'h23',
+    year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric',
+  }).formatToParts(new Date(at));
+  const get = (type: string) => Number(parts.find(p => p.type === type)?.value);
+  return Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second')) - Math.floor(at / 1000) * 1000;
+}
+
+function nextSimklReset(now: number = Date.now()): number {
+  const nyNow = new Date(now + nyOffsetMs(now));
+  const nyMidnight = Date.UTC(nyNow.getUTCFullYear(), nyNow.getUTCMonth(), nyNow.getUTCDate() + 1);
+  const guess = nyMidnight - nyOffsetMs(now);
+  return nyMidnight - nyOffsetMs(guess);
+}
+
+export interface SimklQuota {
+  limit: number;
+  remaining: number;
+  resetsAt: number;
+  pausedUntil?: number;
+  updatedAt: number;
+}
+
+async function readSimklQuota(bucketKey: string): Promise<SimklQuota | null> {
+  if (!redis || bucketKey === SIMKL_APP_BUCKET) return null;
+  try {
+    const raw = await redis.get(SIMKL_QUOTA_KEY_PREFIX + bucketKey);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeSimklQuota(bucketKey: string, quota: SimklQuota): Promise<void> {
+  if (!redis || bucketKey === SIMKL_APP_BUCKET) return;
+  const ttl = Math.max(60, Math.ceil((Math.max(quota.resetsAt, quota.pausedUntil ?? 0) - Date.now()) / 1000));
+  await redis.set(SIMKL_QUOTA_KEY_PREFIX + bucketKey, JSON.stringify(quota), 'EX', ttl).catch(() => undefined);
+}
+
+async function getSimklQuota(accessToken: string): Promise<SimklQuota | null> {
+  const quota = await readSimklQuota(simklBucketFor(accessToken));
+  if (!quota || quota.resetsAt <= Date.now()) return null;
+  return quota;
+}
+
+function headerNumber(headers: any, name: string): number | null {
+  const value = headers?.[name];
+  const parsed = parseInt(Array.isArray(value) ? value[0] : value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function noteSimklQuota(bucketKey: string, headers: any): Promise<void> {
+  if (bucketKey === SIMKL_APP_BUCKET) return;
+  const limit = headerNumber(headers, 'x-ratelimit-limit');
+  const remaining = headerNumber(headers, 'x-ratelimit-remaining');
+  if (limit === null || remaining === null) return;
+  const resetsAt = nextSimklReset();
+  const pausedUntil = remaining <= 0 ? resetsAt : undefined;
+  if (pausedUntil) simklBucket(bucketKey).pausedUntil = pausedUntil;
+  await writeSimklQuota(bucketKey, { limit, remaining, resetsAt, pausedUntil, updatedAt: Date.now() });
+}
+
+function simklErrorCode(error: any): string | null {
+  let data = error?.response?.data;
+  if (typeof data === 'string') {
+    try { data = JSON.parse(data); } catch { return null; }
+  }
+  return typeof data?.error === 'string' ? data.error : null;
+}
+
+function simklQuotaExhausted(until: number): Error {
+  const error: any = new Error(`Simkl daily allowance spent until ${new Date(until).toISOString()}`);
+  error.code = 'SIMKL_QUOTA_EXHAUSTED';
+  error.response = { status: 429, data: { error: 'user_limit_exceeded' } };
+  return error;
+}
+
+async function simklPausedUntil(bucketKey: string): Promise<number> {
+  const bucket = simklBucket(bucketKey);
+  const now = Date.now();
+  if (bucket.pausedUntil > now) return bucket.pausedUntil;
+  const stored = await readSimklQuota(bucketKey);
+  if (stored?.pausedUntil && stored.pausedUntil > now) {
+    bucket.pausedUntil = stored.pausedUntil;
+    return stored.pausedUntil;
+  }
+  return 0;
+}
+
+async function pauseSimklBucket(bucketKey: string, error: any, context: string): Promise<void> {
+  const retryAfter = headerNumber(error?.response?.headers, 'retry-after');
+  const until = retryAfter && retryAfter > 0 ? Date.now() + retryAfter * 1000 : nextSimklReset();
+  simklBucket(bucketKey).pausedUntil = until;
+  const who = bucketKey === SIMKL_APP_BUCKET ? "the app's" : "this user's";
+  logger.warn(`[Simkl] ${who} daily allowance is spent until ${new Date(until).toISOString()}, skipping Simkl calls until then - ${context}`);
+  if (bucketKey !== SIMKL_APP_BUCKET) {
+    const previous = await readSimklQuota(bucketKey);
+    await writeSimklQuota(bucketKey, {
+      limit: previous?.limit ?? 0,
+      remaining: 0,
+      resetsAt: nextSimklReset(),
+      pausedUntil: until,
+      updatedAt: Date.now(),
+    });
+  }
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -95,64 +244,88 @@ function getRetryAfterMs(error: any, fallbackMs: number): number {
   return fallbackMs;
 }
 
+interface SimklRequestOptions {
+  bucket?: string;
+  minInterval?: number;
+}
+
 async function makeRateLimitedRequest<T>(
   requestFn: () => Promise<T>,
   context: string = 'Simkl',
-  retries: number = RATE_LIMIT_CONFIG.maxRetries
+  retries: number = RATE_LIMIT_CONFIG.maxRetries,
+  options: SimklRequestOptions = {}
 ): Promise<T> {
+  const bucketKey = options.bucket ?? SIMKL_APP_BUCKET;
+  const minInterval = options.minInterval ?? RATE_LIMIT_CONFIG.minInterval;
+  const state = simklBucket(bucketKey);
   let attempt = 0;
   while (attempt < retries) {
     attempt++;
     const isLastAttempt = attempt === retries;
+
+    const pausedUntil = await simklPausedUntil(bucketKey);
+    if (pausedUntil) {
+      logger.debug(`[Simkl] Daily allowance spent until ${new Date(pausedUntil).toISOString()}, not calling - ${context}`);
+      noteTrackerCall(SIMKL_BASE_URL, 429, 'user_limit_exceeded', null, pausedUntil);
+      throw simklQuotaExhausted(pausedUntil);
+    }
+
     const now = Date.now();
-
-    if (rateLimitState.isRateLimited && rateLimitState.rateLimitResetTime > now) {
-      const waitTime = rateLimitState.rateLimitResetTime - now;
-      logger.debug(`Global rate limit cooldown active, waiting ${waitTime}ms - ${context}`);
+    if (state.cooldownUntil > now) {
+      const waitTime = state.cooldownUntil - now;
+      logger.debug(`Rate limit cooldown active, waiting ${waitTime}ms - ${context}`);
       await sleep(waitTime);
     }
-    rateLimitState.isRateLimited = false;
 
-    const timeSinceLastRequest = now - rateLimitState.lastRequestTime;
-    if (timeSinceLastRequest < RATE_LIMIT_CONFIG.minInterval) {
-      const waitTime = RATE_LIMIT_CONFIG.minInterval - timeSinceLastRequest;
-      await sleep(waitTime);
+    const timeSinceLastRequest = Date.now() - state.lastRequestTime;
+    if (timeSinceLastRequest < minInterval) {
+      await sleep(minInterval - timeSinceLastRequest);
     }
-    rateLimitState.lastRequestTime = Date.now();
+    state.lastRequestTime = Date.now();
     const startTime = Date.now();
 
     try {
-      const response = await requestFn();
+      const response: any = await requestFn();
       const responseTime = Date.now() - startTime;
       requestTracker.trackProviderCall('simkl', responseTime, true);
-      rateLimitState.recentRateLimitHits = 0;
+      state.recentRateLimitHits = 0;
+      await noteSimklQuota(bucketKey, response?.headers);
       return response;
     } catch (error: any) {
       const responseTime = Date.now() - startTime;
       requestTracker.trackProviderCall('simkl', responseTime, false);
       const status = error.response?.status;
+      await noteSimklQuota(bucketKey, error.response?.headers);
 
       if (isPermanentError(error)) {
         logger.error(`[Simkl] Permanent error (${status}): ${context} - ${error.message || String(error)}`);
         throw error;
       }
 
+      const code = status === 429 ? simklErrorCode(error) : null;
+      if (code === 'user_limit_exceeded' || code === 'app_limit_exceeded') {
+        await pauseSimklBucket(code === 'app_limit_exceeded' ? SIMKL_APP_BUCKET : bucketKey, error, context);
+        throw error;
+      }
+
       if (isRateLimitError(error)) {
-        rateLimitState.lastRateLimitTime = Date.now();
-        rateLimitState.recentRateLimitHits++;
-        
+        state.recentRateLimitHits++;
+
         if (isLastAttempt) {
           logger.error(`[Simkl] Rate limit exceeded after ${retries} attempts: ${context}`);
           throw error;
         }
 
-        const fallbackDelay = RATE_LIMIT_CONFIG.rateLimitDelay * Math.pow(2, rateLimitState.recentRateLimitHits - 1);
-        const totalDelay = Math.min(getRetryAfterMs(error, fallbackDelay), RATE_LIMIT_CONFIG.maxDelay);
-        
-        logger.warn(`[Simkl] Rate limit hit (${status}). Retrying in ${Math.round(totalDelay / 1000)}s (attempt ${attempt}/${retries}) - ${context}`);
-        
-        rateLimitState.isRateLimited = true;
-        rateLimitState.rateLimitResetTime = Date.now() + totalDelay;
+        const totalDelay = code === 'rate_limit'
+          ? 1000 + Math.random() * 500
+          : Math.min(
+            getRetryAfterMs(error, RATE_LIMIT_CONFIG.rateLimitDelay * Math.pow(2, state.recentRateLimitHits - 1)),
+            RATE_LIMIT_CONFIG.maxDelay
+          );
+
+        logger.warn(`[Simkl] Rate limit hit (${status}${code ? ` ${code}` : ''}). Retrying in ${Math.round(totalDelay / 1000)}s (attempt ${attempt}/${retries}) - ${context}`);
+
+        state.cooldownUntil = Date.now() + totalDelay;
         await sleep(totalDelay);
         continue;
       }
@@ -166,7 +339,7 @@ async function makeRateLimitedRequest<T>(
         RATE_LIMIT_CONFIG.baseDelay * Math.pow(RATE_LIMIT_CONFIG.backoffMultiplier, attempt - 1),
         RATE_LIMIT_CONFIG.maxDelay
       );
-      
+
       logger.warn(`[Simkl] Request failed (${status}), retrying in ${delay}ms (attempt ${attempt}/${retries}): ${context} - ${error.message || String(error)}`);
       await sleep(delay);
     }
@@ -180,6 +353,7 @@ async function getSimklToken(tokenId: any): Promise<any | null> {
     if (!token || token.provider !== 'simkl') {
       return null;
     }
+    if (needsRefresh(token)) return (await refreshSimklToken(tokenId)) ?? token;
     return token;
   } catch (error: any) {
     logger.error(`Error getting Simkl access token: ${error.message}`);
@@ -187,28 +361,99 @@ async function getSimklToken(tokenId: any): Promise<any | null> {
   }
 }
 
+function needsRefresh(token: any): boolean {
+  if (!isSimklV2Token(token?.access_token) || !token?.refresh_token) return false;
+  const aheadMs = (parseInt(getSetting('SIMKL_TOKEN_REFRESH_AHEAD'), 10) || 24 * 60 * 60) * 1000;
+  return Number(token.expires_at) - Date.now() < aheadMs;
+}
+
+const refreshing = new Map<string, Promise<any | null>>();
+const refreshFailedUntil = new Map<string, number>();
+
+// A refresh kills the previous access token, so only one runs per grant across replicas.
+function refreshSimklToken(tokenId: string): Promise<any | null> {
+  const running = refreshing.get(tokenId);
+  if (running) return running;
+  const work = (async () => {
+    if ((refreshFailedUntil.get(tokenId) ?? 0) > Date.now()) return null;
+    const lockKey = `simkl-token-refresh:${tokenId}`;
+    const locked = redis ? await redis.set(lockKey, '1', 'PX', 30000, 'NX').catch(() => 'OK') : 'OK';
+    try {
+      if (locked !== 'OK') {
+        for (let waited = 0; waited < 10000; waited += 500) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          const fresh = await database.getOAuthToken(tokenId);
+          if (fresh && !needsRefresh(fresh)) return fresh;
+        }
+        return null;
+      }
+      const current = await database.getOAuthToken(tokenId);
+      if (!current || !needsRefresh(current)) return current;
+
+      const { simklV2Credentials, refreshSimklV2Token } = require('../lib/simkl');
+      const { clientId, clientSecret } = simklV2Credentials();
+      if (!clientId) {
+        logger.warn('A Simkl token needs refreshing but SIMKL_V2_CLIENT_ID is not set');
+        return null;
+      }
+      const tokens = await refreshSimklV2Token(clientId, clientSecret, current.refresh_token);
+      const expiresAt = Date.now() + tokens.expires_in * 1000;
+      await database.updateOAuthToken(tokenId, tokens.access_token, tokens.refresh_token, expiresAt);
+      logger.debug(`Simkl token ${tokenId} refreshed until ${new Date(expiresAt).toISOString()}`);
+      return { ...current, access_token: tokens.access_token, refresh_token: tokens.refresh_token, expires_at: expiresAt };
+    } catch (error: any) {
+      const retryMs = (parseInt(getSetting('SIMKL_TOKEN_REFRESH_RETRY'), 10) || 300) * 1000;
+      refreshFailedUntil.set(tokenId, Date.now() + retryMs);
+      logger.warn(`Simkl token ${tokenId} could not be refreshed: ${error?.message || error}${error?.code === 'invalid_grant' ? '; the user has to reconnect Simkl' : ''}`);
+      return null;
+    } finally {
+      if (locked === 'OK' && redis) await redis.del(lockKey).catch(() => undefined);
+    }
+  })().finally(() => refreshing.delete(tokenId));
+  refreshing.set(tokenId, work);
+  return work;
+}
+
 async function makeAuthenticatedSimklRequest(
   url: string,
   accessToken: string,
   context: string = 'Simkl (Auth)',
-  method: 'GET' | 'POST' = 'GET',
-  body?: any
+  method: 'GET' | 'POST' | 'DELETE' = 'GET',
+  body?: any,
+  timeout?: number
 ): Promise<any> {
   const headers = {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${accessToken}`,
-    'simkl-api-key': SIMKL_CLIENT_ID
+    'simkl-api-key': simklClientIdFor(accessToken)
   };
+  url = withAppParams(url);
+  const bucket = simklBucketFor(accessToken);
+  const minInterval = bucket === SIMKL_APP_BUCKET
+    ? undefined
+    : method === 'GET' ? SIMKL_V2_GET_INTERVAL_MS : SIMKL_V2_POST_INTERVAL_MS;
+  const extra = timeout ? { timeout } : {};
 
-  if (method === 'POST') {
+  if (method === 'DELETE') {
     return await makeRateLimitedRequest(
-      () => httpPost(url, body || {}, { headers, dispatcher: simklDispatcher }),
-      context
+      () => httpRequest(url, { method: 'DELETE', headers, dispatcher: simklDispatcher, ...extra }),
+      context,
+      undefined,
+      { bucket, minInterval }
+    );
+  } else if (method === 'POST') {
+    return await makeRateLimitedRequest(
+      () => httpPost(url, body || {}, { headers, dispatcher: simklDispatcher, ...extra }),
+      context,
+      undefined,
+      { bucket, minInterval }
     );
   } else {
     return await makeRateLimitedRequest(
-      () => httpGet(url, { headers, dispatcher: simklDispatcher }),
-      context
+      () => httpGet(url, { headers, dispatcher: simklDispatcher, ...extra }),
+      context,
+      undefined,
+      { bucket, minInterval }
     );
   }
 }
@@ -234,10 +479,31 @@ async function getSimklRatings(
   }
 }
 
-async function makeRateLimitedSimklRequest(url: string, context: string = 'Simkl Proxy'): Promise<any> {
+// Paused sessions across every type, which is the shape a continue watching
+// row wants. Anime entries carry their own kitsu numbering alongside the TVDB
+// one, so an episode needs no mapping to name it the way the meta does.
+async function fetchPlaybackSessions(accessToken: string): Promise<any[]> {
+  if (!accessToken) return [];
+
+  try {
+    const response = await makeAuthenticatedSimklRequest(
+      `${SIMKL_BASE_URL}/sync/playback`,
+      accessToken,
+      'Simkl fetchPlaybackSessions'
+    );
+    return Array.isArray(response?.data) ? response.data : [];
+  } catch (error: any) {
+    logger.error(`[Simkl] Fetching playback sessions failed: ${error.message}`);
+    return [];
+  }
+}
+
+// With a user's token it goes as that user, which a V2 app requires of every request.
+async function makeRateLimitedSimklRequest(url: string, context: string = 'Simkl Proxy', accessToken?: string | null): Promise<any> {
+  if (accessToken) return makeAuthenticatedSimklRequest(url, accessToken, context);
   const headers = {
     'Content-Type': 'application/json',
-    'simkl-api-key': SIMKL_CLIENT_ID
+    'simkl-api-key': simklClientIdFor()
   };
   
   return await makeRateLimitedRequest(
@@ -254,14 +520,15 @@ async function fetchSimklSearchItems(
   type: 'movie' | 'tv' | 'anime',
   query: string,
   limit: number = 20,
-  page: number = 1
+  page: number = 1,
+  accessToken?: string | null
 ): Promise<any[]> {
   try {
     // Simkl clamps rather than rejecting: limit tops out at 50 and page at 20.
     const safeLimit = Math.min(Math.max(limit, 1), 50);
     const safePage = Math.min(Math.max(page, 1), 20);
     const url = `${SIMKL_BASE_URL}/search/${type}?q=${encodeURIComponent(query)}&limit=${safeLimit}&page=${safePage}&extended=full&${simklDataParams()}`;
-    const response: any = await makeRateLimitedSimklRequest(url, `Simkl search (${type}, query: "${query}")`);
+    const response: any = await makeRateLimitedSimklRequest(url, `Simkl search (${type}, query: "${query}")`, accessToken);
 
     if (!response?.data || !Array.isArray(response.data)) {
       logger.info(`No Simkl search results found for query: "${query}"`);
@@ -285,7 +552,7 @@ async function fetchSimklSearchItems(
  * has to come from here. This is also the only place a simkl id turns into an imdb
  * or tvdb one, which search omits.
  */
-async function fetchSimklItemDetail(type: 'movie' | 'tv', simklId: string | number): Promise<any> {
+async function fetchSimklItemDetail(type: 'movie' | 'tv', simklId: string | number, accessToken?: string | null): Promise<any> {
   if (!simklId) return null;
   const segment = type === 'movie' ? 'movies' : 'tv';
   return cacheWrapGlobal(
@@ -293,15 +560,30 @@ async function fetchSimklItemDetail(type: 'movie' | 'tv', simklId: string | numb
     async () => {
       try {
         const url = `${SIMKL_BASE_URL}/${segment}/${simklId}?extended=full&${simklDataParams()}`;
-        const response: any = await makeRateLimitedSimklRequest(url, `Simkl detail (${segment}/${simklId})`);
+        const response: any = await makeRateLimitedSimklRequest(url, `Simkl detail (${segment}/${simklId})`, accessToken);
         return response?.data ?? null;
       } catch (err: any) {
         logger.debug(`Simkl detail lookup failed for ${segment}/${simklId}: ${err.message}`);
         return null;
       }
     },
-    24 * 60 * 60
+    24 * 60 * 60,
+    { resultClassifier: classifyResultAllowEmpty }
   );
+}
+
+/**
+ * The token a public read has to carry. A V1 app answers on its client id alone,
+ * so none is needed (undefined) and none is billed to the user; a V2 app refuses
+ * anything without a user's token, so it is the connected account's, or null
+ * when there is none and the read cannot be made.
+ */
+async function simklUserTokenIfRequired(config: any): Promise<string | null | undefined> {
+  if (String(process.env.SIMKL_CLIENT_ID || '').trim()) return undefined;
+  const tokenId = config?.apiKeys?.simklTokenId;
+  if (!tokenId) return null;
+  const token = await getSimklToken(tokenId);
+  return token?.access_token || null;
 }
 
 async function fetchSimklUserStats(tokenId: string): Promise<any> {
@@ -326,48 +608,7 @@ async function fetchSimklUserStats(tokenId: string): Promise<any> {
   );
 }
 
-// Check if any significant timestamp has changed.
-// `reconcile` means items may have LEFT this list, which a date_from delta can
-// never tell us: it only carries additions and updates.
-function hasActivityChanged(oldActivity: any, newActivity: any, status: string): { changed: boolean, reconcile: boolean } {
-  if (!oldActivity) return { changed: true, reconcile: true };
-  if (!newActivity) return { changed: true, reconcile: true }; // Should not happen if API healthy
-
-  // Check generic "all" first
-  if (newActivity.all !== oldActivity.all) {
-    // Dig deeper
-    const categories = ['movies', 'tv_shows', 'anime'];
-    let contentChanged = false;
-    let contentLeft = false;
-
-    for (const cat of categories) {
-      if (newActivity[cat]?.all !== oldActivity[cat]?.all) {
-        // This category changed. Check specific status.
-        if (newActivity[cat]?.[status] !== oldActivity[cat]?.[status]) {
-          contentChanged = true;
-        }
-
-        // An item lives in exactly one status, so it leaves this list either by
-        // landing in a sibling one or by leaving the library. This status bumps
-        // on the way out too, but that is indistinguishable from an arrival: the
-        // sibling bump is what actually says something has to be dropped.
-        const movedOut = SIMKL_LIST_STATUSES.some(
-          s => s !== status && newActivity[cat]?.[s] !== oldActivity[cat]?.[s]
-        );
-
-        // removed_from_list is the other exit: gone from the library entirely.
-        if (movedOut || newActivity[cat]?.removed_from_list !== oldActivity[cat]?.removed_from_list) {
-          contentLeft = true;
-        }
-      }
-    }
-    return { changed: contentChanged, reconcile: contentLeft };
-  }
-
-  return { changed: false, reconcile: false };
-}
-
-async function fetchSimklLastActivities(accessToken: string): Promise<any> {
+async function fetchSimklLastActivities(accessToken: string, config?: any): Promise<any> {
   const tokenHash = crypto.createHash('sha256').update(accessToken).digest('hex').substring(0, 16);
   const cacheKey = `simkl-api-last-activities:${tokenHash}`;
   
@@ -377,8 +618,7 @@ async function fetchSimklLastActivities(accessToken: string): Promise<any> {
     cacheKey,
     async () => {
       const url = `${SIMKL_BASE_URL}/sync/activities`;
-      // GET, not POST: Simkl caps apps at 10 GET/sec but only 1 POST/sec per
-      // client_id, shared across every user on the instance.
+      // GET, not POST: Simkl allows 10 GET/sec but only 1 POST/sec.
       const response: any = await makeAuthenticatedSimklRequest(
         url,
         accessToken,
@@ -386,7 +626,7 @@ async function fetchSimklLastActivities(accessToken: string): Promise<any> {
       );
       return response.data;
     },
-    getSimklActivitiesTtl(),
+    simklActivitiesTtlFor(accessToken, config),
     { upstream: true }
   );
 }
@@ -394,10 +634,11 @@ async function fetchSimklLastActivities(accessToken: string): Promise<any> {
 async function getSimklActivityFingerprint(
   accessToken: string,
   type: 'movies' | 'shows' | 'anime',
-  status: string
+  status: string,
+  config?: any
 ): Promise<string> {
   try {
-    const activities = await fetchSimklLastActivities(accessToken);
+    const activities = await fetchSimklLastActivities(accessToken, config);
     if (!activities) return '';
     const cat = type === 'shows' ? activities.tv_shows : activities[type];
     const specific = cat?.[status] ?? cat?.all ?? activities.all ?? '';
@@ -413,200 +654,56 @@ async function getSimklActivityFingerprint(
 }
 
 /**
- * Drop the items that have left a list. A date_from delta only carries additions
- * and updates, so Simkl's documented way to spot a departure is to refetch the
- * list ids-only and diff: whatever the cached blob still holds and the live list
- * does not has moved to another status or left the library.
- * Returns null when the answer could not be trusted, so the caller keeps the
- * cached list rather than pruning against a body it failed to read.
+ * One status of a Simkl library, read from the watch mirror: the account's library kept
+ * in the database and brought up to date from what changed since its last sync, the
+ * same copy the Jellyfin server reads. A catalog, Up Next and the hide-watched filter
+ * therefore ask Simkl only what changed, once for all of them.
  */
-async function reconcileSimklList(
-  accessToken: string,
-  status: string,
-  cached: any
-): Promise<any | null> {
-  let response: any;
-  try {
-    // ids-only: the point is which ids are still here, not their contents, and
-    // this runs often enough that pulling extended=full again would be wasteful.
-    const url = `${SIMKL_BASE_URL}/sync/all-items/${status}?extended=simkl_ids_only`;
-    response = await makeAuthenticatedSimklRequest(url, accessToken, `Simkl Reconcile ${status}`);
-  } catch (e: any) {
-    logger.warn(`Simkl ${status}: reconcile fetch failed (${e.message}), keeping cached list`);
-    return null;
-  }
-
-  const data = response?.data;
-  if (!data || typeof data !== 'object') {
-    logger.warn(`Simkl ${status}: reconcile returned no usable body, keeping cached list`);
-    return null;
-  }
-
-  const result: any = {};
-  let dropped = 0;
-  for (const bucket of ['movies', 'shows', 'anime']) {
-    const live = Array.isArray(data[bucket]) ? data[bucket] : [];
-    const liveIds = new Set<any>();
-    for (const item of live) {
-      const id = simklItemId(item);
-      // An id we cannot read would prune a live item, so give up rather than guess.
-      if (!id) {
-        logger.warn(`Simkl ${status}: reconcile item carried no simkl id, keeping cached list`);
-        return null;
-      }
-      liveIds.add(id);
-    }
-    result[bucket] = (cached?.[bucket] || []).filter((item: any) => {
-      const id = simklItemId(item);
-      // Unidentifiable cached items are left alone, the same way mergeItems skips them.
-      if (!id) return true;
-      if (liveIds.has(id)) return true;
-      dropped++;
-      return false;
-    });
-  }
-
-  if (dropped) logger.debug(`Simkl ${status}: reconcile dropped ${dropped} item(s) that left the list`);
-  return result;
-}
-
 async function fetchSimklWatchlistItems(
   accessToken: string,
   type: 'movies' | 'shows' | 'anime',
   status: 'watching' | 'plantowatch' | 'hold' | 'completed' | 'dropped',
-  cacheTTL: number = SIMKL_WATCHLIST_TTL // Default long TTL, we manage invalidation manually
+  cacheTTL: number = SIMKL_WATCHLIST_TTL,
+  config?: any
 ): Promise<{items: any[]}> {
   try {
-    const tokenHash = crypto.createHash('sha256').update(accessToken).digest('hex').substring(0, 16);
-    // Redis keys
-    // v2 carried next_to_watch_info; v3 drops the blobs that delta syncs left items
-    // stranded in, so both have to be refetched rather than merged into.
-    const fullListKey = `simkl-watchlist-full-v3:${tokenHash}:${status}`; // Stores the full object { movies:[], shows:[], anime:[] }
-    const activitiesKey = `simkl-activities:${tokenHash}:${status}`; // Per-status watermark, matching fullListKey granularity
+    const tokenId = config?.apiKeys?.simklTokenId;
+    if (!tokenId) {
+      logger.debug(`Simkl ${status}: no Simkl connection on this configuration`);
+      return { items: [] };
+    }
 
-    // 1. Get latest activities from Simkl (Cached via fetchSimklLastActivities for 6 hours)
-    let currentActivities;
+    const { syncMirror, mirrorVersion, sourceKeyFor } = require('../lib/jellyfin/trackerMirror');
+    let version: number;
     try {
-      currentActivities = await fetchSimklLastActivities(accessToken);
-    } catch (e) {
-      logger.error(`Failed to fetch Simkl activities: ${e.message}. Using cache if available.`);
+      version = await syncMirror('simkl', tokenId, config);
+    } catch (error: any) {
+      version = await mirrorVersion('simkl', tokenId);
+      if (!version) throw error;
+      logger.warn(`Simkl ${status}: sync failed, serving the library as last synced: ${error?.message || error}`);
     }
 
-    // 2. Get cached data
-    let cachedList: any = null;
-    let cachedActivities: any = null;
-    
-    if (redis) {
-      const [listStr, actStr] = await Promise.all([
-        redis.get(fullListKey),
-        redis.get(activitiesKey)
-      ]);
-      if (listStr) cachedList = JSON.parse(listStr);
-      if (actStr) cachedActivities = JSON.parse(actStr);
-    }
-
-    // 3. Determine Sync Strategy
-    let itemsToReturn: any = { movies: [], shows: [], anime: [] };
-    let shouldUpdateCache = false;
-    let reconcileFailed = false;
-
-    if (!currentActivities) {
-      // API failed, return cache if exists
-      if (cachedList) {
-        itemsToReturn = cachedList;
-      } else {
-        return { items: [] };
-      }
-    } else {
-      // We have API connection
-      const { changed, reconcile } = hasActivityChanged(cachedActivities, currentActivities, status);
-
-      if (!cachedList) {
-        // Case A: No cache -> Full Sync
-        logger.debug(`Simkl ${status}: Performing FULL sync (Reason: No cache)`);
-        
-        const url = `${SIMKL_BASE_URL}/sync/all-items/${status}?extended=full&next_watch_info=yes&language=en`;
-        const response: any = await makeAuthenticatedSimklRequest(url, accessToken, `Simkl Full Sync ${status}`);
-        
-        itemsToReturn = {
-          movies: response.data?.movies || [],
-          shows: response.data?.shows || [],
-          anime: response.data?.anime || []
-        };
-        shouldUpdateCache = true;
-
-      } else if (changed || reconcile) {
-        // Case B: Updates available -> Incremental Sync
-        itemsToReturn = cachedList;
-
-        if (changed) {
-          // Use the main 'all' timestamp from the *cached* activities as date_from
-          const lastSyncDate = cachedActivities?.all || new Date(0).toISOString();
-          logger.debug(`Simkl ${status}: Performing INCREMENTAL sync (Since: ${lastSyncDate})`);
-
-          const url = `${SIMKL_BASE_URL}/sync/all-items/${status}?extended=full&next_watch_info=yes&language=en&date_from=${encodeURIComponent(lastSyncDate)}`;
-          const response: any = await makeAuthenticatedSimklRequest(url, accessToken, `Simkl Incremental Sync ${status}`);
-
-          const updates = {
-            movies: response.data?.movies || [],
-            shows: response.data?.shows || [],
-            anime: response.data?.anime || []
-          };
-
-          // Merge logic
-          itemsToReturn = {
-            movies: mergeItems(itemsToReturn.movies || [], updates.movies),
-            shows: mergeItems(itemsToReturn.shows || [], updates.shows),
-            anime: mergeItems(itemsToReturn.anime || [], updates.anime)
-          };
-
-          const totalUpdates = updates.movies.length + updates.shows.length + updates.anime.length;
-          logger.debug(`Simkl ${status}: Merged ${totalUpdates} updates`);
+    const source = sourceKeyFor('simkl', tokenId);
+    const items: any[] = await cacheWrapGlobal(`simkl-watchlist-mirror:${source}:v${version}:${type}:${status}`, async () => {
+      const database: any = require('../lib/database');
+      const out: any[] = [];
+      for (const row of await database.listTrackerMirrorGroup(source, type)) {
+        let entry: any;
+        try {
+          entry = JSON.parse(row.data);
+        } catch {
+          continue;
         }
-
-        if (reconcile) {
-          // The merge above can add and update, never drop, so anything that left
-          // the list is still sitting in the blob until this diff removes it.
-          const pruned = await reconcileSimklList(accessToken, status, itemsToReturn);
-          if (pruned) itemsToReturn = pruned;
-          else reconcileFailed = true;
-        }
-
-        shouldUpdateCache = true;
-
-      } else {
-        // Case C: No changes
-        // This is the path taken when you paginate quickly, because fetchSimklLastActivities returns cached data
-        // and that data matches what's stored in activitiesKey
-        logger.debug(`Simkl ${status}: No changes detected (Hit Cache)`);
-        itemsToReturn = cachedList;
-        // Extend TTL
-        if (redis) redis.expire(fullListKey, cacheTTL);
+        if (entry?.status !== status) continue;
+        // The episode lists are the watch store's; no list reader looks at them.
+        const { seasons, mapped_tvdb_seasons, ...item } = entry;
+        out.push(item);
       }
-    }
+      return out;
+    }, cacheTTL, { upstream: true, resultClassifier: classifyResultAllowEmpty });
 
-    // 4. Update Cache if needed
-    if (shouldUpdateCache && redis && currentActivities) {
-      const writes: any[] = [redis.setex(fullListKey, cacheTTL, JSON.stringify(itemsToReturn))];
-      // Holding the watermark back on a failed reconcile is what makes the next
-      // call retry the diff instead of trusting a list it could not verify.
-      if (!reconcileFailed) {
-        writes.push(redis.setex(activitiesKey, cacheTTL, JSON.stringify(currentActivities)));
-      }
-      await Promise.all(writes);
-    }
-
-    // 5. Select items based on requested type
-    let finalItems: any[] = [];
-    if (type === 'movies') {
-      finalItems = itemsToReturn.movies || [];
-    } else if (type === 'shows') {
-      finalItems = itemsToReturn.shows || [];
-    } else if (type === 'anime') {
-      finalItems = itemsToReturn.anime || [];
-    }
-
-    // 6. Sort: plantowatch/hold by added date, others by last watched
+    const finalItems = [...(items ?? [])];
+    // Plan to Watch and On Hold by the date added, the others by the last watch.
     if (status === 'plantowatch' || status === 'hold') {
       finalItems.sort((a: any, b: any) => {
         const aTime = a.added_to_watchlist_at ? new Date(a.added_to_watchlist_at).getTime() : 0;
@@ -622,7 +719,6 @@ async function fetchSimklWatchlistItems(
     }
 
     return { items: finalItems };
-
   } catch (error: any) {
     logger.error(`Error fetching Simkl watchlist items: ${error.message}`);
     return { items: [] };
@@ -721,9 +817,104 @@ function normalizeEpisodeIdInput(input: EpisodeIdInput | null | undefined) {
   return Object.keys(ids).length > 0 ? ids : null;
 }
 
+export async function addToHistory(
+  idInput: Record<string, string | number>,
+  accessToken: string,
+  season?: number,
+  episode?: number,
+  episodes?: EpisodeRef[]
+): Promise<boolean> {
+  const payload = historyPayload(idInput, season, episode, episodes);
+
+  try {
+    const response = await makeAuthenticatedSimklRequest(
+      `${SIMKL_BASE_URL}/sync/history`, accessToken, 'Simkl add to history', 'POST', payload, 10000
+    );
+    if (response.status >= 200 && response.status < 300) {
+      logger.info('[Simkl] Added to history', { ids: idInput, season, episode });
+      return true;
+    }
+    logger.warn(`[Simkl] Add to history answered ${response.status}`);
+    return false;
+  } catch (error: any) {
+    logger.error(`[Simkl] Failed to add to history: ${error.message}`);
+    return false;
+  }
+}
+
+/** True when a playback entry is the title, and for a show the episode, named. */
+export function playbackEntryMatches(
+  entry: any,
+  idInput: Record<string, string | number>,
+  season?: number,
+  episode?: number
+): boolean {
+  const ids = (entry?.anime ?? entry?.show ?? entry?.movie)?.ids ?? {};
+  const shared = Object.entries(idInput).some(([key, value]) => ids[key] != null && String(ids[key]) === String(value));
+  if (!shared) return false;
+  if (season == null || episode == null) return !entry?.episode;
+
+  const ep = entry?.episode;
+  if (!ep) return false;
+  return (Number(ep.season) === season && Number(ep.number) === episode)
+    || (Number(ep.tvdb_season) === season && Number(ep.tvdb_number) === episode);
+}
+
+/** Drops the paused session so the title leaves continue watching. */
+export async function clearPlayback(
+  idInput: Record<string, string | number>,
+  accessToken: string,
+  season?: number,
+  episode?: number
+): Promise<boolean> {
+  const sessions = await fetchPlaybackSessions(accessToken);
+  const matches = sessions.filter((entry) => entry?.id && playbackEntryMatches(entry, idInput, season, episode));
+  if (!matches.length) return true;
+
+  try {
+    for (const entry of matches) {
+      await makeAuthenticatedSimklRequest(
+        `${SIMKL_BASE_URL}/sync/playback/${entry.id}`, accessToken, 'Simkl clear playback', 'DELETE', undefined, 10000
+      );
+    }
+    logger.info('[Simkl] Cleared the resume point', { ids: idInput, season, episode });
+    return true;
+  } catch (error: any) {
+    logger.error(`[Simkl] Clearing the resume point failed: ${error.message}`);
+    return false;
+  }
+}
+
+// A show sent with no seasons is removed from the library entirely, so an
+// episode always names both its season and its number.
+export async function removeFromHistory(
+  idInput: Record<string, string | number>,
+  accessToken: string,
+  season?: number,
+  episode?: number,
+  episodes?: EpisodeRef[]
+): Promise<boolean> {
+  const payload = historyPayload(idInput, season, episode, episodes);
+
+  try {
+    const response = await makeAuthenticatedSimklRequest(
+      `${SIMKL_BASE_URL}/sync/history/remove`, accessToken, 'Simkl remove from history', 'POST', payload, 10000
+    );
+    if (response.status >= 200 && response.status < 300) {
+      logger.info('[Simkl] Removed from history', { ids: idInput, season, episode });
+      return true;
+    }
+    logger.warn(`[Simkl] Remove from history answered ${response.status}`);
+    return false;
+  } catch (error: any) {
+    logger.error(`[Simkl] Failed to remove from history: ${error.message}`);
+    return false;
+  }
+}
+
 export interface SimklScrobbleOptions {
   /** checkin is fire and forget and self-completes; start and stop are a session. */
-  action?: 'checkin' | 'start' | 'stop';
+  action?: 'checkin' | 'start' | 'pause' | 'stop';
   /** 0-100. Simkl marks an item watched on stop at 80 or above. */
   progress?: number;
 }
@@ -828,11 +1019,11 @@ async function checkinSeries(
   const headers = {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${accessToken}`,
-    'simkl-api-key': SIMKL_CLIENT_ID
+    'simkl-api-key': simklClientIdFor(accessToken)
   };
 
   const doCheckin = async (ids: Record<string, string | number>, attemptLabel: string, seasonNumber: number, episodeNumber:number) => {
-      const url = `${SIMKL_BASE_URL}/scrobble/${action}`;
+      const url = withAppParams(`${SIMKL_BASE_URL}/scrobble/${action}`);
       const payload = {
         progress,
         show: { ids: ids },
@@ -841,11 +1032,16 @@ async function checkinSeries(
 
       logger.debug(`[Simkl Checkin] ${attemptLabel} - ids: ${formatIdSummary(ids)}, S${seasonNumber}E${episodeNumber}`);
 
+      const bucket = simklBucketFor(accessToken);
       const response = await httpPost(url, payload, { 
         headers, 
         dispatcher: simklDispatcher,
         timeout: 10000 
+      }).catch(async (error: any) => {
+        await noteSimklQuota(bucket, error?.response?.headers);
+        throw error;
       });
+      await noteSimklQuota(bucket, response.headers);
   
       if (response.status >= 200 && response.status < 300) {
         logger.info(`[Simkl ${action}] Reported episode (${attemptLabel})`, { ids, seasonNumber, episodeNumber });
@@ -896,70 +1092,118 @@ async function checkinSeries(
 }
 
 
-function simklItemId(item: any): any {
-  return item?.show?.ids?.simkl ?? item?.movie?.ids?.simkl ?? item?.anime?.ids?.simkl ?? item?.ids?.simkl;
-}
+export type SimklListsError = 'premium_only' | 'needs_v2';
 
-function mergeItems(existingItems: any[], newItems: any[]): any[] {
-  const itemMap = new Map();
-  
-  // Index existing items
-  existingItems.forEach((item: any) => {
-    const simklId = simklItemId(item);
-    if (simklId) itemMap.set(simklId, item);
-  });
-
-  // Merge new items (overwriting existing ones)
-  newItems.forEach((item: any) => {
-    const simklId = simklItemId(item);
-    if (simklId) itemMap.set(simklId, item);
-  });
-
-  return Array.from(itemMap.values());
-}
-
-async function fetchSimklWatchedItems(
-  accessToken: string,
-  type: 'movies' | 'shows' | 'anime' = 'movies'
-): Promise<any[]> {
-  try {
-    const endpoint = type === 'movies' ? 'movies' : type === 'shows' ? 'tv' : 'anime';
-    const url = `${SIMKL_BASE_URL}/sync/all-items/${endpoint}/completed`;
-    
-    const response: any = await makeAuthenticatedSimklRequest(
-      url,
-      accessToken,
-      `Simkl fetchWatchedItems (${type})`
-    );
-    
-    const items = response.data || [];
-    return Array.isArray(items) ? items : [];
-  } catch (error: any) {
-    logger.error(`Error fetching Simkl watched items: ${error.message}`);
-    return [];
+// Custom Lists need a V2 token on a PRO or VIP account; a free one gets HTTP 200 carrying `premium_only`.
+function simklListsError(status: number | undefined, data: any): SimklListsError | null {
+  if (typeof data === 'string') {
+    try { data = JSON.parse(data); } catch { data = null; }
   }
+  if (data?.error === 'premium_only') return 'premium_only';
+  if (status === 403 && data?.error === 'oauth2_token_required') return 'needs_v2';
+  return null;
 }
 
-async function fetchSimklWatchingItems(
-  accessToken: string,
-  type: 'shows' | 'anime' = 'shows'
-): Promise<any[]> {
-  try {
-    const endpoint = type === 'shows' ? 'tv' : 'anime';
-    const url = `${SIMKL_BASE_URL}/sync/all-items/${endpoint}/watching`;
-    
-    const response: any = await makeAuthenticatedSimklRequest(
-      url,
-      accessToken,
-      `Simkl fetchWatchingItems (${type})`
-    );
-    
-    const items = response.data || [];
-    return Array.isArray(items) ? items : [];
-  } catch (error: any) {
-    logger.error(`Error fetching Simkl watching items: ${error.message}`);
-    return [];
+async function fetchSimklUserLists(accessToken: string, userId: string | number): Promise<{ lists: any[]; error?: SimklListsError }> {
+  if (!isSimklV2Token(accessToken)) return { lists: [], error: 'needs_v2' };
+  const lists: any[] = [];
+  for (let page = 1; page <= 20; page++) {
+    let response: any;
+    try {
+      response = await makeAuthenticatedSimklRequest(`${SIMKL_BASE_URL}/lists/user/${encodeURIComponent(String(userId))}?limit=500&page=${page}`, accessToken, 'Simkl user lists');
+    } catch (error: any) {
+      const failure = simklListsError(error?.response?.status, error?.response?.data);
+      if (failure) return { lists, error: failure };
+      throw error;
+    }
+    const failure = simklListsError(response?.status, response?.data);
+    if (failure) return { lists, error: failure };
+    lists.push(...(Array.isArray(response?.data?.lists) ? response.data.lists : []));
+    if (page >= (Number(response?.data?.pagination?.total_pages) || 1)) break;
   }
+  return { lists };
+}
+
+/** Simkl clamps `limit` above this silently, so the cap has to be ours. */
+const SIMKL_LIST_MAX_LIMIT = 500;
+const SIMKL_LIST_PAGE_REACH = 10000;
+
+/** Reads are billed per request to the user's own daily allowance. `page` times `limit` may not exceed 10000 either way. */
+function simklListBlockSize(pageSize: number): number {
+  const configured = parseInt(getSetting('SIMKL_LIST_BLOCK_SIZE'), 10);
+  const size = Number.isFinite(configured) && configured > 0 ? configured : SIMKL_LIST_MAX_LIMIT;
+  return Math.max(pageSize, Math.min(size, SIMKL_LIST_MAX_LIMIT));
+}
+
+function simklListBlockTtl(): number {
+  const floor = parseInt(getSetting('SIMKL_LIST_MIN_TTL'), 10) || 300;
+  const catalog = parseInt(process.env.CATALOG_TTL || '', 10) || 24 * 60 * 60;
+  return Math.max(floor, catalog);
+}
+
+class SimklListFailure extends Error {
+  constructor(public reason: SimklListsError) { super(reason); }
+}
+
+async function fetchSimklListBlock(accessToken: string, listId: string, blockPage: number, blockSize: number): Promise<{ list: any; items: any[]; totalPages: number }> {
+  const cacheKey = `simkl-list-block:${simklTokenHash(accessToken)}:${listId}:${blockPage}:${blockSize}`;
+
+  return cacheWrapGlobal(cacheKey, async () => {
+    // No sort: sending one turns the direction default to desc.
+    const url = `${SIMKL_BASE_URL}/lists/${encodeURIComponent(listId)}?limit=${blockSize}&page=${blockPage}`;
+    let response: any;
+    try {
+      response = await makeAuthenticatedSimklRequest(url, accessToken, `Simkl list ${listId} block ${blockPage}`);
+    } catch (error: any) {
+      const failure = simklListsError(error?.response?.status, error?.response?.data);
+      if (failure) throw new SimklListFailure(failure);
+      throw error;
+    }
+    const failure = simklListsError(response?.status, response?.data);
+    if (failure) throw new SimklListFailure(failure);
+
+    const remaining = response?.headers?.['x-ratelimit-remaining'];
+    if (remaining !== undefined) logger.debug(`[Simkl] List ${listId} block ${blockPage} of ${blockSize}: ${remaining} requests left today`);
+
+    const data = response?.data ?? {};
+    return {
+      list: data,
+      items: Array.isArray(data.items) ? data.items : [],
+      totalPages: Number(data.pagination?.total_pages) || 0,
+    };
+  }, simklListBlockTtl(), { maxRetries: 0 });
+}
+
+async function fetchSimklListPage(accessToken: string, listId: string, page: number, limit: number): Promise<{ list: any; items: any[]; totalPages: number; hasMore: boolean; error?: SimklListsError }> {
+  if (!isSimklV2Token(accessToken)) return { list: null, items: [], totalPages: 0, hasMore: false, error: 'needs_v2' };
+
+  const blockSize = simklListBlockSize(limit);
+  const start = (page - 1) * limit;
+  const blockPage = Math.floor(start / blockSize) + 1;
+  if (blockPage * blockSize > SIMKL_LIST_PAGE_REACH) return { list: null, items: [], totalPages: 0, hasMore: false };
+
+  let block: { list: any; items: any[]; totalPages: number };
+  try {
+    block = await fetchSimklListBlock(accessToken, listId, blockPage, blockSize);
+  } catch (error: any) {
+    if (error instanceof SimklListFailure) return { list: null, items: [], totalPages: 0, hasMore: false, error: error.reason };
+    throw error;
+  }
+
+  const within = start - (blockPage - 1) * blockSize;
+  const items = block.items.slice(within, within + limit);
+  const hasMore = within + limit < block.items.length ? true : blockPage < block.totalPages;
+
+  // total_pages counts blocks, so it converts only once a block is the last.
+  const lastBlock = block.items.length < blockSize || blockPage >= block.totalPages;
+  const totalItems = lastBlock ? (blockPage - 1) * blockSize + block.items.length : undefined;
+
+  return {
+    list: block.list,
+    items,
+    totalPages: totalItems !== undefined ? Math.ceil(totalItems / limit) : 0,
+    hasMore,
+  };
 }
 
 export interface SimklWatchedIds {
@@ -978,7 +1222,7 @@ async function getSimklWatchedIds(config: any): Promise<SimklWatchedIds | null> 
     const types = ['movies', 'shows', 'anime'] as const;
     const tokenHash = crypto.createHash('sha256').update(accessToken).digest('hex').substring(0, 16);
     const fingerprints = await Promise.all(
-      types.map(type => getSimklActivityFingerprint(accessToken, type, 'completed'))
+      types.map(type => getSimklActivityFingerprint(accessToken, type, 'completed', config))
     );
     const fingerprint = crypto.createHash('sha256')
       .update(fingerprints.join('|'))
@@ -992,7 +1236,7 @@ async function getSimklWatchedIds(config: any): Promise<SimklWatchedIds | null> 
       const anilistIds: number[] = [];
 
       for (const type of types) {
-        const { items } = await fetchSimklWatchlistItems(accessToken, type, 'completed');
+        const { items } = await fetchSimklWatchlistItems(accessToken, type, 'completed', undefined, config);
         for (const item of items) {
           const ids = (item?.movie || item?.show)?.ids;
           if (!ids) continue;
@@ -1014,7 +1258,7 @@ async function getSimklWatchedIds(config: any): Promise<SimklWatchedIds | null> 
 
       logger.info(`[Watched IDs] ${movieImdbIds.length} movies, ${showImdbIds.length} shows, ${malIds.length} anime completed on Simkl`);
       return { movieImdbIds, showImdbIds, malIds, anilistIds };
-    }, SIMKL_WATCHLIST_TTL);
+    }, SIMKL_WATCHLIST_TTL, { resultClassifier: classifyResultAllowEmpty });
 
     return {
       movieImdbIds: new Set(watched.movieImdbIds),
@@ -1030,8 +1274,9 @@ async function getSimklWatchedIds(config: any): Promise<SimklWatchedIds | null> 
 
 /** Resolves mal_id only from native anime IDs (mal, anilist, kitsu, anidb). Does NOT resolve from imdb/tmdb/tvdb - those go through getMeta. */
 function resolveMalIdFromIds(ids: any): number | null {
-  const malId = ids.mal;
-  if (malId && typeof malId === 'number' && malId > 0) return malId;
+  // Simkl sends its ids as strings.
+  const malId = Number(ids.mal);
+  if (Number.isInteger(malId) && malId > 0) return malId;
   const anilistId = ids.anilist;
   if (anilistId) {
     const m = idMapper.getMappingByAnilistId(anilistId);
@@ -1064,7 +1309,7 @@ async function parseSimklItems(
 
   if (isAnimeCatalog) {
     // Split: items with mal/kitsu/anidb/anilist -> parseAnimeCatalogMetaBatch; items with only tmdb/imdb/tvdb -> getMeta
-    const animeItems: any[] = [];
+    const animeItems: { index: number; malId: number; stub: any }[] = [];
     const getMetaItems: { item: any; itemType: string; stremioId: string; index: number }[] = [];
 
     for (let i = 0; i < items.length; i++) {
@@ -1101,7 +1346,7 @@ async function parseSimklItems(
 
           const secondYear = years?.[1];
           const airedTo = secondYear ? `${secondYear}-12-31` : null;
-          animeItems.push({
+          animeItems.push({ index: i, malId, stub: {
             mal_id: malId,
             type: itemType,
             title: (item.title || '').replace(/\\'/g, "'"),
@@ -1111,7 +1356,7 @@ async function parseSimklItems(
             images: { jpg: { large_image_url: posterUrl } },
             aired: { from: airedFrom, to: airedTo },
             status: item.status
-          });
+          } });
         } else {
           const imdbId = ids.imdb;
           const tmdbId = ids.tmdb;
@@ -1148,13 +1393,43 @@ async function parseSimklItems(
     const result: (any | null)[] = new Array(items.length).fill(null);
 
     if (animeItems.length > 0) {
-      const batchMetas = await Utils.parseAnimeCatalogMetaBatch(animeItems, config, config.language, includeVideos);
-      let batchIdx = 0;
-      for (let i = 0; i < items.length && batchIdx < batchMetas.length; i++) {
-        const malId = resolveMalIdFromIds(items[i].ids || {});
-        if (malId) {
-          result[i] = batchMetas[batchIdx++] ?? null;
-        }
+      // Simkl carries no synopsis or genres, so the batch reads MAL's own record,
+      // through the cache the meta page fills. Kitsu builds from its own records,
+      // and an IMDb-id catalog from getMeta, so those titles need none.
+      const provider = config.providers?.anime || 'mal';
+      const imdbIds = (config as any).mal?.useImdbIdForCatalogAndSearch === true;
+      const needsRecord = ({ malId, stub }: { malId: number; stub: any }): boolean => {
+        const mapping = idMapper.getMappingByMalId(malId);
+        if (provider === 'kitsu') return !mapping?.kitsu_id;
+        if (!imdbIds) return true;
+        const imdbId = stub.type === 'movie' ? idMapper.getTraktAnimeMovieByMalId(malId)?.externals?.imdb : mapping?.imdb_id;
+        return !imdbId;
+      };
+      const { getAnimeDetails } = require('../lib/mal');
+      const records = await mapWithLimit(animeItems, async (entry) => {
+        if (!needsRecord(entry)) return entry.stub;
+        const details = await cacheWrapJikanApi(`anime-details-${entry.malId}`, () => getAnimeDetails(entry.malId), null).catch(() => null);
+        return details?.mal_id ? { ...details, mal_id: entry.malId } : entry.stub;
+      });
+      const batchMetas = await Utils.parseAnimeCatalogMetaBatch(records, config, config.language, includeVideos);
+
+      // The batch leaves out a title it cannot build or the age rating hides, so
+      // its metas go back to their items by MAL id; one that does not name it
+      // takes the next empty slot.
+      const slotsByMal = new Map<string, number[]>();
+      for (const { index, malId } of animeItems) {
+        const slots = slotsByMal.get(String(malId)) ?? [];
+        slots.push(index);
+        slotsByMal.set(String(malId), slots);
+      }
+      const unplaced: any[] = [];
+      for (const meta of batchMetas) {
+        const at = slotsByMal.get(String(meta?._malId ?? ''))?.shift();
+        if (at !== undefined) result[at] = meta;
+        else if (meta) unplaced.push(meta);
+      }
+      for (const { index } of animeItems) {
+        if (result[index] === null && unplaced.length) result[index] = unplaced.shift();
       }
     }
 
@@ -1444,7 +1719,7 @@ async function fetchSimklGenreItems(
   cacheTTL?: number
 ): Promise<{ items: any[]; totalItems?: number; hasMore: boolean; totalPages?: number }> {
   try {
-    const clientId = SIMKL_CLIENT_ID;
+    const clientId = simklClientIdFor();
     if (!clientId) {
       logger.warn('[Simkl] Missing SIMKL_CLIENT_ID, cannot fetch discover genre items');
       return { items: [], hasMore: false };
@@ -1676,7 +1951,7 @@ async function fetchSimklUpNextItems(
   let unmappedAnime = 0;
 
   for (const bucket of buckets) {
-    const { items } = await fetchSimklWatchlistItems(accessToken, bucket, 'watching');
+    const { items } = await fetchSimklWatchlistItems(accessToken, bucket, 'watching', undefined, config);
     considered += items.length;
 
     for (const item of items) {
@@ -1806,7 +2081,12 @@ export {
   makeAuthenticatedSimklRequest,
   getSimklRatings,
   getSimklToken,
+  fetchPlaybackSessions,
+  fetchSimklLastActivities,
   getSimklWatchedIds,
+  fetchSimklUserLists,
+  fetchSimklListPage,
+  simklUserTokenIfRequired,
   getSimklActivityFingerprint,
   fetchSimklTrendingItems,
   fetchSimklRecipeItems,
@@ -1814,7 +2094,9 @@ export {
   fetchSimklGenreItems,
   fetchSimklCalendarItems,
   checkinMovie,
-  checkinSeries
+  checkinSeries,
+  getSimklQuota,
+  nextSimklReset
 };
 
 async function fetchSimklCalendar(

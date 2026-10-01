@@ -12,6 +12,7 @@ import type {
   FusionCardStyle,
   TileShape,
 } from '@shared/types';
+import { folderSources } from '@shared/types';
 import { TERMS, type Target } from '@/lib/collectionBuilder/terms';
 
 const TILE_ASPECT: Record<TileShape, string> = {
@@ -142,7 +143,7 @@ function gradientFor(title: string): string {
 
 /** Mirrors what nuvioExport.toFolder and fusionExport.toCollectionItem will accept. */
 function usableSourceCount(folder: FolderDraft, target: Target): number {
-  return folder.sources.filter(source => {
+  return folderSources(folder).filter(source => {
     if (isNativeSource(source)) return nativeOrigin(source) === target && Boolean(source.native);
     return Boolean((source.catalogId || '').trim()) && Boolean((source.type || '').trim());
   }).length;
@@ -400,7 +401,7 @@ function NuvioCollectionStage({
                     {folder.hideTitle ? '' : folder.title.trim() || 'Untitled folder'}
                   </span>
                   <span className="block text-xs text-white/50">
-                    {folder.sources.length} catalog{folder.sources.length === 1 ? '' : 's'}
+                    {folderSources(folder).length} catalog{folderSources(folder).length === 1 ? '' : 's'}
                   </span>
                 </span>
               </div>

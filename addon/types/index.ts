@@ -3,8 +3,23 @@
 export interface UserConfig {
   language?: string;
   overviewLanguage?: string;
+  /** Install URL of a stream addon the Jellyfin server delegates playback to. */
+  jellyfinStreamUrl?: string;
+  jellyfinLatestRows?: boolean;
   /** Playback is reported by the client, so the subtitle trigger is not used. */
   playbackReporting?: boolean;
+  /** Password a Jellyfin client signs in with, for accounts that have no configuration password. */
+  jellyfinAppPassword?: string;
+  /** Tracker the Jellyfin resume shelf reads from. `auto` picks a capable one. */
+  jellyfinResumeSource?: 'auto' | 'off' | 'mdblist' | 'trakt' | 'simkl' | 'publicmetadb' | 'anilist' | 'mal';
+  /** Name and picture of the main Jellyfin user, the configuration itself. */
+  jellyfinUserName?: string;
+  jellyfinUserAvatar?: string;
+  jellyfinUserTags?: string[];
+  jellyfinUserHandoffNames?: string[];
+  jellyfinSkipSource?: 'auto' | 'publicmetadb' | 'introdb' | 'off';
+  jellyfinWatchlistServices?: string[];
+  jellyfinUsers?: Array<{ id: string; name: string; avatar?: string; tags: string[]; trackers?: boolean; trackerSource?: string; skipSource?: string; watchlistServices?: string[]; handoffNames?: string[]; accounts?: any; streamUrl?: string }>;
   /** Serve the collection layout's images through this instance's image cache. */
   collectionImagesViaCache?: boolean;
   providers?: {
@@ -40,6 +55,8 @@ export interface UserConfig {
   mdblistWatchTracking?: boolean;
   traktWatchTracking?: boolean;
   simklWatchTracking?: boolean;
+  /** Minutes between Simkl activity checks on a V2 connection; unset follows SIMKL_ACTIVITIES_TTL */
+  simklSyncInterval?: number;
   /** Enable/disable AniList watch tracking */
   anilistWatchTracking?: boolean;
   /** Enable/disable MyAnimeList watch tracking */
@@ -75,7 +92,9 @@ export interface UserConfig {
   exclusionKeywords?: string;
   regexExclusionFilter?: string;
   exclusionGenres?: string;
+  exclusionTmdbKeywords?: string[];
   tvdbSeasonType?: string;
+  tvdbEpisodeOrders?: Record<string, string>;
   castCount?: number;
   blurThumbs?: boolean;
   displayAgeRating?: boolean;

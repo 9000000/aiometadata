@@ -11,13 +11,15 @@ const addon = express();
 
 const { getCatalog } = require("./lib/getCatalog");
 const { applyCatalogFilters, catalogFiltersActive } = require("./utils/catalogFilters");
-const { cursorKey, resolveStartPage, writeCursor, fillFilteredPage } = require("./lib/catalogPagination");
+const { cursorKey, resolveStartPage, fillFilteredPage, fillOnce } = require("./lib/catalogPagination");
+const { registerInProcessRoute } = require("./lib/inProcessRoutes");
+const { defaultsToNoneGenre } = require("./lib/genreNoneDefault");
 const anilist = require("./lib/anilist");
 const { getSearch } = require("./lib/getSearch");
 const { getManifest, resolveManifestTags, DEFAULT_LANGUAGE } = require("./lib/getManifest");
 const { resolveInstallFilters, uniformTagRating, allowsUnrated, scopeTagsToCatalog } = require("./utils/ageRating");
 const { getMeta } = require("./lib/getMeta");
-const { cacheWrapMetaSmart, cacheWrapCatalog, cacheWrapSearch, cacheWrapJikanApi, cacheWrapGlobal, getCacheHealth, clearCacheHealth, logCacheHealth, stableStringify, deleteKeysByPattern, scanKeys } = require("./lib/getCache");
+const { cacheWrapMetaSmart, cacheWrapCatalog, cacheWrapSearch, cacheWrapJikanApi, cacheWrapGlobal, classifyResultAllowEmpty, getCacheHealth, clearCacheHealth, logCacheHealth, stableStringify, deleteKeysByPattern, scanKeys } = require("./lib/getCache");
 const { hasPermission } = require("./lib/authSession");
 const { isOidcConfigured } = require("./lib/oidc");
 const { resolveConfigAccess } = require("./lib/configAccess");
@@ -59,15 +61,18 @@ const {
   createAniListOAuthState,
   createMalOAuthTransaction,
   createSimklOAuthState,
+  createSimklV2OAuthTransaction,
   createTraktOAuthState,
   verifyAniListOAuthState,
   verifyMalOAuthState,
   verifySimklOAuthState,
+  verifySimklV2OAuthState,
   verifyTraktOAuthState,
 } = require('./lib/oauthState');
 const { renderOAuthPage } = require('./lib/oauthPage');
 const { hasAnyWatchTrackingEnabled } = require('./lib/watchTracking');
-const { SimklClient } = require('./lib/simkl');
+const simklAuth = require('./lib/simkl');
+const { SimklClient } = simklAuth;
 const {
   createSessionId,
   deleteDeviceAuthSession,
@@ -100,6 +105,7 @@ function resolveSimklAuthMode() {
   if (configured === 'pin' || configured === 'oauth' || configured === 'both') {
     return configured;
   }
+  if (simklAuth.simklV2Credentials().clientId) return simklAuth.simklV2Credentials().clientSecret ? 'oauth' : 'pin';
   return getSetting('SIMKL_CLIENT_SECRET') ? 'oauth' : 'pin';
 }
 
@@ -377,6 +383,7 @@ async function configLoadRateLimitMiddleware(req, res, next) {
 
 const posterCacheConfig = require('./lib/posterCache/config.js');
 const { buildProxyArtUrl, proxyArtUrlVouched } = require('./lib/posterCache/proxyArt.js');
+const { applyMetaArt } = require('./lib/metaArt');
 const { serveStoreResult, servePassThrough, openArtStream } = require('./lib/posterCache/artProxyServe.js');
 
 function POSTER_PROXY_PREFIX_URL() { return posterCacheConfig.getPosterProxyPrefix(); }
@@ -646,8 +653,11 @@ const respond = function (req, res, data, opts?) {
       mdblist: getSetting('MDBLIST_API_KEY'),
       gemini: getSetting('GEMINI_API_KEY'),
       trakt: getSetting('TRAKT_CLIENT_ID'),
-      simkl: getSetting('SIMKL_CLIENT_ID'),
+      simkl: getSetting('SIMKL_CLIENT_ID') || getSetting('SIMKL_V2_CLIENT_ID'),
       simklAuthMode: resolveSimklAuthMode(),
+      simklV2: Boolean(getSetting('SIMKL_V2_CLIENT_ID')),
+      simklListMinTTL: parseInt(getSetting('SIMKL_LIST_MIN_TTL'), 10) || 300,
+      simklActivitiesTTL: parseInt(getSetting('SIMKL_ACTIVITIES_TTL'), 10) || 1800,
       customDescriptionBlurb: getSetting('CUSTOM_DESCRIPTION_BLURB'),
       addonVersion: ADDON_VERSION,
       hasBuiltInTvdb: !!getSetting('BUILT_IN_TVDB_API_KEY'),
@@ -657,10 +667,16 @@ const respond = function (req, res, data, opts?) {
       catalogTTL: parseInt(getSetting('CATALOG_TTL') || String(24 * 60 * 60), 10),
       maxCatalogs: parseInt(getSetting('MAX_CATALOGS') || '', 10) || null,
       collectionImportCatalogCap: parseInt(getSetting('COLLECTION_IMPORT_CATALOG_CAP') || '', 10) || 400,
+      maxEpisodeOrders: Math.max(1, parseInt(getSetting('TVDB_EPISODE_ORDER_MAX') || '', 10) || 100),
+      aiCatalogMaxPerRequest: Math.max(1, parseInt(getSetting('AI_CATALOG_MAX_PER_REQUEST') || '', 10) || 20),
       simklTrendingPageSizeOptions: resolvedOptions,
       anilistRequiresAuth: require('./utils/anilistAccess').anilistRequiresAuth(),
+      jellyfinEnabled: String(getSetting('JELLYFIN_API_ENABLED') || '').trim().toLowerCase() === 'true',
+      jellyfinResolveOnOpen: String(getSetting('JELLYFIN_RESOLVE_ON_OPEN') || 'user'),
+      jellyfinBaseUrl: require('./lib/installUrl').baseUrlFrom(process.env.HOST_NAME, req.get('host')),
       traktSearchEnabled: getSetting('DISABLE_TRAKT_SEARCH') !== 'true',
       simklSearchEnabled: getSetting('DISABLE_SIMKL_SEARCH') !== 'true',
+      lumiereEnabled: !!String(getSetting('LUMIERE_API_BASE') || '').trim(),
     };
     
     // No cache to prevent cross-instance contamination
@@ -683,6 +699,12 @@ const respond = function (req, res, data, opts?) {
 require('./lib/authRoutes').register(addon, {
   rateLimit: configLoadRateLimitMiddleware,
   requireAdmin: requireDashboardAdmin,
+});
+
+// --- Jellyfin API ---
+require('./lib/jellyfin').register(addon, {
+  loginRateLimit: configLoadRateLimitMiddleware,
+  enabled: () => String(getSetting('JELLYFIN_API_ENABLED') || '').trim().toLowerCase() === 'true',
 });
 const { requireSigninForAppPages, requireSigninForApi, isAuthenticatedRequest, respondIfSigninRequired } = require('./lib/signinGate');
 const { runWithRequestAuth } = require('./lib/requestSession');
@@ -982,6 +1004,14 @@ addon.post("/api/oauth/token/info", async (req, res) => {
         }
       } catch {}
     }
+    if (token.provider === 'simkl') {
+      const { isSimklV2Token } = require('./lib/simkl');
+      response.authVersion = isSimklV2Token(token.access_token) ? 'v2' : 'v1';
+      if (response.authVersion === 'v2') {
+        const { getSimklQuota } = require('./utils/simklUtils');
+        response.quota = await getSimklQuota(token.access_token).catch(() => null);
+      }
+    }
     res.json(response);
   } catch (error) {
     consola.error("[OAuth] Token info fetch error:", error);
@@ -1078,7 +1108,10 @@ addon.post("/api/movielens/lists/:userUUID", async (req, res) => {
 
 // Saves a new Simkl access token and returns the token ID the user pastes into
 // their config. Used by both the OAuth callback and the PIN flow.
-async function persistSimklToken(user, accessToken) {
+async function persistSimklToken(user, accessToken, v2Tokens = null) {
+  const refreshToken = v2Tokens?.refresh_token || '';
+  const expiresAt = v2Tokens ? Date.now() + v2Tokens.expires_in * 1000 : 0;
+  const scope = v2Tokens?.scope || '';
   // Check if this Simkl user already has a token in the database
   const existingTokens = await database.getOAuthTokensByProvider('simkl');
   const existingToken = existingTokens.find(t => t.user_id.toLowerCase() === user.username.toLowerCase());
@@ -1091,14 +1124,17 @@ async function persistSimklToken(user, accessToken) {
     tokenId = existingToken.id;
     consola.info(`[Simkl OAuth] Updating existing token - tokenId: ${tokenId}, user: ${user.username}`);
 
-    // Simkl tokens don't expire, so we don't have expires_at
-    saved = await database.updateOAuthToken(tokenId, accessToken, '', 0);
+    saved = await database.saveOAuthToken(tokenId, 'simkl', existingToken.user_id, accessToken, refreshToken, expiresAt, scope);
+    // A new V2 grant does not end the one it replaces.
+    if (saved && existingToken.refresh_token && existingToken.refresh_token !== refreshToken) {
+      revokeSimklGrant(existingToken.refresh_token);
+    }
   } else {
     // Create new token
     tokenId = crypto.randomUUID();
     consola.info(`[Simkl OAuth] Creating new token - tokenId: ${tokenId}, user: ${user.username}`);
 
-    saved = await database.saveOAuthToken(tokenId, 'simkl', user.username, accessToken, '', 0, '');
+    saved = await database.saveOAuthToken(tokenId, 'simkl', user.username, accessToken, refreshToken, expiresAt, scope);
   }
 
   if (!saved) {
@@ -1109,12 +1145,12 @@ async function persistSimklToken(user, accessToken) {
     const userSimklTokens = existingTokens.filter(t => t.user_id.toLowerCase() === user.username.toLowerCase());
     const oldTokenIds = userSimklTokens.map(t => t.id).filter(id => id !== tokenId);
     if (oldTokenIds.length > 0) {
-      const affectedUsers = await database.getUsersByOAuthTokenIds('simklTokenId', oldTokenIds);
-      for (const dbUser of affectedUsers) {
-        dbUser.config.apiKeys.simklTokenId = tokenId;
-        await database.saveUserConfig(dbUser.id, dbUser.password_hash, dbUser.config);
-        configCache.del(dbUser.id);
-        consola.info(`[Simkl OAuth] Updated user ${dbUser.id} config to use new token ${tokenId}`);
+      const { setAccountKey } = require('./lib/accounts');
+      for (const ref of await database.findTokenReferences('simklTokenId', oldTokenIds)) {
+        for (const owner of ref.owners) setAccountKey(ref.config, owner, 'simkl', tokenId);
+        await database.saveUserConfig(ref.uuid, ref.passwordHash, ref.config);
+        configCache.del(ref.uuid);
+        consola.info(`[Simkl OAuth] Updated user ${ref.uuid} config to use new token ${tokenId}`);
       }
     }
   } catch (configError) {
@@ -1124,9 +1160,29 @@ async function persistSimklToken(user, accessToken) {
   return tokenId;
 }
 
+function revokeSimklGrant(token) {
+  const { clientId, clientSecret } = simklAuth.simklV2Credentials();
+  if (!clientId || !token) return;
+  simklAuth.revokeSimklV2Token(clientId, clientSecret, token)
+    .catch((error) => consola.debug(`[Simkl] Could not revoke a replaced grant: ${error?.message}`));
+}
+
+function simklRedirectUri() {
+  return normalizeRedirectUri(process.env.SIMKL_REDIRECT_URI || `${process.env.HOST_NAME}/api/auth/simkl/callback`);
+}
+
 // --- Simkl OAuth Routes ---
 addon.get("/api/auth/simkl/authorize", async (req, res) => {
   try {
+    const v2 = simklAuth.simklV2Credentials();
+    if (v2.clientId) {
+      if (!v2.clientSecret) {
+        return res.status(500).json({ error: "Simkl sign-in through the browser needs SIMKL_V2_CLIENT_SECRET, from a Server apps & services registration." });
+      }
+      const { state, codeVerifier } = createSimklV2OAuthTransaction(v2.clientSecret, SIMKL_OAUTH_STATE_TTL_MS);
+      return res.redirect(simklAuth.simklV2AuthorizationUrl(v2.clientId, simklRedirectUri(), state, codeVerifier));
+    }
+
     const clientId = process.env.SIMKL_CLIENT_ID;
     const clientSecret = process.env.SIMKL_CLIENT_SECRET;
     const redirectUri = normalizeRedirectUri(process.env.SIMKL_REDIRECT_URI || `${process.env.HOST_NAME}/api/auth/simkl/callback`);
@@ -1153,6 +1209,11 @@ addon.get("/api/auth/simkl/callback", async (req, res) => {
     const stateParam = Array.isArray(req.query.state) ? req.query.state[0] : req.query.state;
     const code = typeof codeParam === 'string' ? codeParam : '';
     const state = typeof stateParam === 'string' ? stateParam : '';
+
+    const v2 = simklAuth.simklV2Credentials();
+    if (v2.clientId && v2.clientSecret) {
+      return await finishSimklV2Callback(req, res, v2, code, state);
+    }
     
     if (!code) {
       return res.status(400).send(renderOAuthPage({
@@ -1226,6 +1287,42 @@ addon.get("/api/auth/simkl/callback", async (req, res) => {
     }));
   }
 });
+
+async function finishSimklV2Callback(req, res, v2, code, state) {
+  const retryHref = '/api/auth/simkl/authorize';
+  const fail = (status, title, message) => res.status(status).send(renderOAuthPage({ provider: 'simkl', status: 'error', title, message, retryHref }));
+
+  // iss guards against a code from another provider.
+  const iss = typeof req.query.iss === 'string' ? req.query.iss : '';
+  const codeVerifier = verifySimklV2OAuthState(state, v2.clientSecret);
+  if (!codeVerifier || iss !== simklAuth.SIMKL_V2_ISSUER) {
+    return fail(400, 'Connection expired', 'The secure authorization state is missing, invalid, or expired. Please start again.');
+  }
+  if (typeof req.query.error === 'string') {
+    return fail(400, 'Sign-in cancelled', 'Simkl did not authorize the connection. You can start again whenever you like.');
+  }
+  if (!code) {
+    return fail(400, 'Authorization incomplete', 'Simkl did not return an authorization code. Please start the connection again.');
+  }
+
+  const tokens = await simklAuth.exchangeSimklV2Code(v2.clientId, v2.clientSecret, code, simklRedirectUri(), codeVerifier);
+  if (!simklAuth.simklV2ScopeWrites(tokens.scope)) {
+    consola.warn(`[Simkl OAuth] Granted scope "${tokens.scope}" cannot write; scrobbles and watchlist changes will fail`);
+  }
+  const user = await new SimklClient(v2.clientId).getMe(tokens.access_token);
+  const tokenId = await persistSimklToken(user, tokens.access_token, tokens);
+  if (!tokenId) {
+    return fail(500, 'Token could not be saved', 'Simkl authorized the connection, but this server could not store the token. Please try again.');
+  }
+  res.send(renderOAuthPage({
+    provider: 'simkl',
+    status: 'success',
+    title: 'Simkl connected',
+    message: 'Authorization is complete. Copy the token ID and paste it into the Simkl integration settings.',
+    username: user.username,
+    tokenId,
+  }));
+}
 
 addon.post("/api/auth/trakt/disconnect", async (req, res) => {
   try {
@@ -1301,6 +1398,27 @@ addon.post("/api/auth/simkl/pin", deviceAuthPollRateLimitMiddleware, async (req,
       return res.status(404).json({ error: "Simkl PIN authentication is not enabled on this instance." });
     }
 
+    const v2ClientId = simklAuth.simklV2Credentials().clientId;
+    if (v2ClientId) {
+      const device = await simklAuth.requestSimklDeviceCode(v2ClientId);
+      const sessionId = createSessionId();
+      await saveDeviceAuthSession(sessionId, {
+        provider: 'simkl',
+        userCode: device.user_code,
+        deviceCode: device.device_code,
+        expiresAt: Date.now() + device.expires_in * 1000,
+        pollIntervalMs: device.interval * 1000,
+        lastPolledAt: 0,
+      });
+      return res.json({
+        sessionId,
+        userCode: device.user_code,
+        verificationUrl: device.verification_url,
+        interval: device.interval,
+        expiresIn: device.expires_in,
+      });
+    }
+
     const clientId = getSetting('SIMKL_CLIENT_ID');
     if (!clientId) {
       return res.status(500).json({ error: "Simkl is not configured. Please set the SIMKL_CLIENT_ID environment variable." });
@@ -1328,7 +1446,7 @@ addon.post("/api/auth/simkl/pin", deviceAuthPollRateLimitMiddleware, async (req,
     });
   } catch (error) {
     consola.error("[Simkl PIN] Failed to request a PIN:", error);
-    res.status(500).json({ error: "Failed to request a Simkl PIN" });
+    res.status(500).json({ error: error?.expose ? error.message : "Failed to request a Simkl PIN" });
   }
 });
 
@@ -1338,7 +1456,8 @@ addon.get("/api/auth/simkl/pin/status", deviceAuthPollRateLimitMiddleware, async
       return res.status(404).json({ error: "Simkl PIN authentication is not enabled on this instance." });
     }
 
-    const clientId = getSetting('SIMKL_CLIENT_ID');
+    const v2ClientId = simklAuth.simklV2Credentials().clientId;
+    const clientId = v2ClientId || getSetting('SIMKL_CLIENT_ID');
     if (!clientId) {
       return res.status(500).json({ error: "Simkl is not configured. Please set the SIMKL_CLIENT_ID environment variable." });
     }
@@ -1359,8 +1478,12 @@ addon.get("/api/auth/simkl/pin/status", deviceAuthPollRateLimitMiddleware, async
       return res.json({ status: 'pending' });
     }
 
-    const simklClient = new SimklClient(clientId);
-    const poll = await simklClient.pollPin(session.userCode);
+    // A session started before V2 was switched on still finishes on V1.
+    const onV2 = Boolean(session.deviceCode && v2ClientId);
+    const simklClient = new SimklClient(onV2 ? v2ClientId : getSetting('SIMKL_CLIENT_ID'));
+    const poll = onV2
+      ? await simklAuth.pollSimklDeviceCode(v2ClientId, session.deviceCode)
+      : await simklClient.pollPin(session.userCode);
 
     if (poll.status === 'pending') {
       return res.json({ status: 'pending' });
@@ -1376,8 +1499,9 @@ addon.get("/api/auth/simkl/pin/status", deviceAuthPollRateLimitMiddleware, async
       return res.json({ status: 'expired' });
     }
 
-    const user = await simklClient.getMe(poll.access_token);
-    const tokenId = await persistSimklToken(user, poll.access_token);
+    const accessToken = poll.tokens ? poll.tokens.access_token : poll.access_token;
+    const user = await simklClient.getMe(accessToken);
+    const tokenId = await persistSimklToken(user, accessToken, poll.tokens || null);
 
     if (!tokenId) {
       // Session left in place: storing the token is the only thing that failed,
@@ -1412,13 +1536,12 @@ addon.post("/api/auth/simkl/disconnect", async (req, res) => {
     if (!config) {
       return res.status(404).json({ error: "User config not found" });
     }
-    
-    // Delete OAuth token from database if it exists
-    if (config.apiKeys?.simklTokenId) {
-      await database.deleteOAuthToken(config.apiKeys.simklTokenId);
-      delete config.apiKeys.simklTokenId;
-    }
-    
+
+    if (await disconnectCardAccount(req, res, userUUID, 'simkl', config)) return;
+
+    const released = config.apiKeys?.simklTokenId || null;
+    if (released) delete config.apiKeys.simklTokenId;
+
     // Remove Simkl user info
     delete config.simklUser;
     delete config.simklWatchTracking;
@@ -1436,7 +1559,12 @@ addon.post("/api/auth/simkl/disconnect", async (req, res) => {
     
     // Invalidate config cache
     configCache.del(userUUID);
-    
+
+    if (released) {
+      const { releaseTokenIfUnused } = require('./lib/accountLinks');
+      await releaseTokenIfUnused('simkl', released, revokeSimklGrant);
+    }
+
     // `removed` says exactly what this disconnect took out, so a page holding
     // unsaved edits can apply the same removals instead of adopting the whole
     // saved document and losing them.
@@ -1622,7 +1750,8 @@ addon.get("/api/mdblist/lists/search", async (req, res) => {
           totalItems: parseInt(response.headers?.['x-total-items'], 10) || 0,
         };
       },
-      mdblistListCacheTtl()
+      mdblistListCacheTtl(),
+      { resultClassifier: classifyResultAllowEmpty }
     );
     res.json(payload);
   } catch (error) {
@@ -2053,7 +2182,8 @@ addon.get("/api/tvdb/discover/reference", async (req, res) => {
           companyTypes: normalizedCompanyTypes,
         };
       },
-      TVDB_DISCOVER_CACHE_TTL
+      TVDB_DISCOVER_CACHE_TTL,
+      { resultClassifier: classifyResultAllowEmpty }
     );
 
     return res.json(payload);
@@ -2234,6 +2364,31 @@ addon.get("/api/tvdb/discover/search/:entity", async (req, res) => {
 });
 
 
+addon.get("/api/tvdb/episode-orders/:tvdbId", async (req, res) => {
+  try {
+    const tvdbConfig = await buildTvdbListConfig(req, res);
+    if (!tvdbConfig) return;
+    const tvdbId = String(req.params.tvdbId || '').replace(/[^0-9]/g, '');
+    if (!tvdbId) return res.status(400).json({ error: "a TVDB series id is required" });
+    const series = await tvdbApi.getSeriesExtended(tvdbId, tvdbConfig);
+    if (!series) return res.status(404).json({ error: "Series not found on TVDB" });
+    const orders = new Map();
+    for (const season of Array.isArray(series.seasons) ? series.seasons : []) {
+      const type = season?.type?.type;
+      if (type && !orders.has(type)) orders.set(type, season.type.name || type);
+    }
+    return res.json({
+      tvdbId: String(series.id ?? tvdbId),
+      name: series.name || `TVDB ${tvdbId}`,
+      year: series.year || '',
+      orders: [...orders.entries()].map(([type, name]) => ({ type, name })),
+    });
+  } catch (error) {
+    consola.error("[TVDB Episode Orders] Lookup failed:", error.message);
+    return res.status(error.response?.status || 500).json({ error: error.message || "Failed to read the series from TVDB" });
+  }
+});
+
 async function buildTvdbListConfig(req, res) {
   const tvdbApiKey = await resolveTvdbDiscoverApiKey(req);
   if (!tvdbApiKey) {
@@ -2343,7 +2498,8 @@ addon.get("/api/tvdb/lists/resolve", async (req, res) => {
           itemCount: movieCount + seriesCount
         };
       },
-      6 * 60 * 60
+      6 * 60 * 60,
+      { resultClassifier: classifyResultAllowEmpty }
     );
 
     if (!preview) {
@@ -2487,16 +2643,22 @@ addon.post("/api/ai/create-catalog", async (req, res) => {
     const { buildCatalogCreationPrompt, parseCatalogAIResponse, normalizeCatalog, validateCatalogParams, resolveEntities, buildCatalogConfigs } = require('./utils/ai-catalog-service');
     const hasTmdb = !!(config.apiKeys?.tmdb || process.env.TMDB_API_KEY || process.env.TMDB_API || process.env.BUILT_IN_TMDB_API_KEY);
     const hasTvdb = !!(config.apiKeys?.tvdb || process.env.TVDB_API_KEY || process.env.BUILT_IN_TVDB_API_KEY);
-    const hasSimkl = !!process.env.SIMKL_CLIENT_ID;
+    const hasSimkl = !!(process.env.SIMKL_CLIENT_ID || getSetting('SIMKL_V2_CLIENT_ID'));
     if (generationMode === 'tmdb' && !hasTmdb) {
       return res.status(400).json({ error: 'TMDB catalog generation requires a TMDB API key.' });
     }
     if (generationMode === 'tvdb' && !hasTvdb) {
       return res.status(400).json({ error: 'TVDB catalog generation requires a TVDB API key.' });
     }
+    const maxCatalogs = Math.max(1, parseInt(getSetting('AI_CATALOG_MAX_PER_REQUEST'), 10) || 20);
+    const viewerLanguage = String(config.language || 'en-US');
+    const viewerRegion = (viewerLanguage.split('-')[1] || 'US').toUpperCase();
     const { systemPrompt, userPrompt } = buildCatalogCreationPrompt(query.trim(), {
       mode: generationMode,
       keys: { tmdb: hasTmdb, tvdb: hasTvdb, simkl: hasSimkl },
+      maxCatalogs,
+      region: viewerRegion,
+      language: viewerLanguage,
     });
 
     let rawText = null;
@@ -2512,7 +2674,7 @@ addon.post("/api/ai/create-catalog", async (req, res) => {
         model,
         prompt: userPrompt,
         systemPrompt,
-        timeout: 45000,
+        timeout: 90000,
       });
       rawText = result.text;
     } else {
@@ -2522,7 +2684,7 @@ addon.post("/api/ai/create-catalog", async (req, res) => {
         model,
         prompt: userPrompt,
         systemPrompt,
-        timeout: 45000,
+        timeout: 90000,
       });
       rawText = result.text;
     }
@@ -2533,7 +2695,7 @@ addon.post("/api/ai/create-catalog", async (req, res) => {
 
     aiCatalogLogger.debug(`Raw response: ${rawText.substring(0, 500)}`);
 
-    const parsed = parseCatalogAIResponse(rawText);
+    const parsed = parseCatalogAIResponse(rawText, maxCatalogs);
     if (!parsed || !parsed.catalogs.length) {
       return res.status(422).json({ error: 'AI returned an invalid response. Try again or rephrase your request.' });
     }
@@ -2574,7 +2736,10 @@ addon.post("/api/ai/create-catalog", async (req, res) => {
     }
 
     for (const catalog of parsed.catalogs) {
-      const normalizeDiagnostics = normalizeCatalog(catalog, { originalQuery: query.trim() });
+      const normalizeDiagnostics = normalizeCatalog(catalog, {
+        originalQuery: parsed.catalogs.length === 1 ? query.trim() : undefined,
+        region: viewerRegion,
+      });
       if (normalizeDiagnostics?.length) {
         aiCatalogLogger.debug(`Normalized "${catalog.name || 'unnamed'}": ${normalizeDiagnostics.join('; ')}`);
       }
@@ -2610,23 +2775,21 @@ addon.post("/api/ai/create-catalog", async (req, res) => {
     const resolveCtx = { tmdbApiKey, tvdbApiKey, userUUID };
     aiCatalogLogger.info(`Resolving entities. TMDB key: ${tmdbApiKey ? '...' + tmdbApiKey.slice(-4) : 'NONE'}, TVDB key: ${tvdbApiKey ? '...' + tvdbApiKey.slice(-4) : 'NONE'}, Simkl client ID: ${hasSimkl ? 'SET' : 'NONE'}, Generation mode: ${generationMode}, Prompt sources: TMDB=${hasTmdb}, TVDB=${hasTvdb}, Simkl=${hasSimkl}`);
 
-    const resolvedParams = [];
     const perCatalogWarnings = [];
-    for (const catalog of validCatalogs) {
+    const resolvedParams = await Promise.all(validCatalogs.map(async (catalog) => {
       try {
         const { resolved, warnings: resolveWarnings } = await resolveEntities(catalog, resolveCtx);
         aiCatalogLogger.info(`Resolved for "${catalog.name}": ${JSON.stringify(resolved)}`);
-        resolvedParams.push(resolved);
         if (resolveWarnings.length) {
           aiCatalogLogger.debug(`Resolve warnings for "${catalog.name}": ${resolveWarnings.join('; ')}`);
           addUserWarning('Some requested filters could not be resolved and were omitted');
         }
+        return resolved;
       } catch (e) {
         aiCatalogLogger.error(`Entity resolution error: ${e.message}`);
-        resolvedParams.push({});
-        perCatalogWarnings.push([]);
+        return {};
       }
-    }
+    }));
 
     // Build final catalog configs
     const catalogConfigs = buildCatalogConfigs(validCatalogs, resolvedParams, query.trim(), config.catalogTTL, perCatalogWarnings);
@@ -2732,6 +2895,26 @@ addon.get("/api/mdblist/external/lists/user", async (req, res) => {
     consola.error("[MDBList Proxy] Error fetching external lists:", error.message);
     const status = error.response?.status || 500;
     res.status(status).json({ error: error.message || "Failed to fetch external lists" });
+  }
+});
+
+addon.get("/api/mdblist/external/lists/:listId", async (req, res) => {
+  try {
+    const { listId } = req.params;
+    if (!/^\d+$/.test(listId)) {
+      return res.status(400).json({ error: "listId must be numeric" });
+    }
+    const apikey = resolveMdblistKey(req.query.apikey);
+    if (!apikey) {
+      return res.status(400).json({ error: "apikey is required" });
+    }
+    const url = `https://api.mdblist.com/external/lists/${listId}?apikey=${apikey}`;
+    const response = await makeRateLimitedMDBListRequest(url, apikey, `MDBList Proxy - Get External List ${listId}`);
+    res.json(response.data);
+  } catch (error) {
+    consola.error("[MDBList Proxy] Error fetching external list details:", error.message);
+    const status = error.response?.status || 500;
+    res.status(status).json({ error: error.message || "Failed to fetch external list details" });
   }
 });
 
@@ -3013,6 +3196,99 @@ addon.get("/api/collections/preview", collectionPreviewHandler);
 // POST carries the definition of a catalog that is staged but not yet saved.
 addon.post("/api/collections/preview", collectionPreviewHandler);
 
+/**
+ * What the recommendation engine currently knows, for the integration panel.
+ *
+ * Reads only what is already cached or cheap to read: it must never trigger a
+ * profile build, since opening a settings dialog should not spend a model call.
+ */
+addon.get("/api/recommendations/status", async (req: any, res: any) => {
+  try {
+    const userUUID = String(req.query.userUUID || '').trim();
+    if (!userUUID) return res.status(400).json({ error: "userUUID is required" });
+
+    const storedConfig = await loadConfigFromDatabase(userUUID);
+    if (!storedConfig) return res.status(404).json({ error: "User configuration not found" });
+    const config: any = { ...storedConfig, userUUID };
+
+    // The dialog reports on the settings in front of the user, which are not the
+    // saved ones until they save: reading the stored config alone made switching
+    // history source leave every figure on screen unchanged.
+    if (req.query.recommendations) {
+      try {
+        const pending = JSON.parse(String(req.query.recommendations));
+        if (pending && typeof pending === 'object') {
+          config.recommendations = { ...config.recommendations, ...pending };
+        }
+      } catch { /* a malformed override falls back to what is saved */ }
+    }
+
+    const { collectWatchedRows, isWatched, resolveSources }: any = require('./utils/recommendations/history');
+    const { summarise }: any = require('./utils/recommendations/rows');
+    const { resolveProvider }: any = require('./utils/recommendations/provider');
+
+    const sources = resolveSources(config);
+    const rows = (await collectWatchedRows(config, userUUID)).filter(isWatched);
+    const chosen = resolveProvider(config);
+
+    const { profileCacheKey }: any = require('./utils/recommendations/profile');
+    const redis = require('./lib/redisClient').default || require('./lib/redisClient');
+    const profileKey = `global:e2:${profileCacheKey(config, userUUID)}`;
+    let profile: any = null;
+    try {
+      const raw = await redis.get(profileKey);
+      if (raw) profile = JSON.parse(raw);
+    } catch { /* a missing profile is the normal state before the first build */ }
+
+    return res.json({
+      sources: sources.choice,
+      connected: { simkl: sources.simkl, mdblist: sources.mdblist },
+      provider: chosen ? { provider: chosen.provider, model: chosen.model } : null,
+      counts: summarise(rows, require('./utils/recommendations/rows').tuningFrom(config)),
+      profile: profile ? { summary: profile.summary, builtAt: profile.builtAt, builtFrom: profile.builtFrom } : null,
+    });
+  } catch (error: any) {
+    consola.withTag('Recommendations').warn(`Status failed: ${error.message}`);
+    return res.status(500).json({ error: "Could not read recommendation status" });
+  }
+});
+
+/** Starts building one recommendation catalog, so the work happens while the
+ *  user is still in settings rather than when they first open the row. */
+addon.post("/api/recommendations/generate", async (req: any, res: any) => {
+  try {
+    const userUUID = String(req.body?.userUUID || req.query?.userUUID || '').trim();
+    const catalogId = String(req.body?.catalogId || '').trim();
+    if (!userUUID || !catalogId) {
+      return res.status(400).json({ error: "userUUID and catalogId are required" });
+    }
+
+    const storedConfig = await loadConfigFromDatabase(userUUID);
+    if (!storedConfig) return res.status(404).json({ error: "User configuration not found" });
+
+    // The caller may still be editing, so the catalogs it intends to add are not
+    // in the saved config yet. Only the credentials and preferences are read.
+    const config: any = { ...storedConfig, userUUID };
+    if (req.body?.recommendations && typeof req.body.recommendations === 'object') {
+      config.recommendations = { ...config.recommendations, ...req.body.recommendations };
+    }
+
+    const { startJob }: any = require('./utils/recommendations/jobs');
+    const job = startJob(config, userUUID, catalogId);
+    return res.json({ job });
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+addon.get("/api/recommendations/jobs", (req: any, res: any) => {
+  const userUUID = String(req.query.userUUID || '').trim();
+  if (!userUUID) return res.status(400).json({ error: "userUUID is required" });
+  const { listJobs, pruneJobs }: any = require('./utils/recommendations/jobs');
+  pruneJobs();
+  return res.json({ jobs: listJobs(userUUID) });
+});
+
 // --- Trakt Proxy Endpoints ---
 // These proxy frontend Trakt calls through the backend rate limiter
 
@@ -3063,6 +3339,75 @@ addon.post("/api/simkl/users/stats", async (req, res) => {
     consola.error("[Simkl] Error fetching user stats:", error.message);
     const status = error.response?.status || 500;
     res.status(status).json({ error: error.message || "Failed to fetch user stats" });
+  }
+});
+
+addon.post("/api/simkl/lists", async (req, res) => {
+  try {
+    const { tokenId } = req.body || {};
+    if (!tokenId) {
+      return res.status(400).json({ error: "tokenId is required" });
+    }
+    const { getSimklToken, fetchSimklUserLists } = require('./utils/simklUtils');
+    const token = await getSimklToken(tokenId);
+    if (!token?.access_token) {
+      return res.status(404).json({ error: "Token not found" });
+    }
+    const result = await fetchSimklUserLists(token.access_token, token.user_id);
+    res.json({
+      error: result.error,
+      lists: result.lists.map(list => ({
+        id: String(list.id),
+        name: list.name,
+        description: typeof list.description === 'string' ? list.description : (list.description?.full || list.description?.short || ''),
+        mediaType: list.media_type,
+        privacy: list.privacy,
+        itemCount: list.counts?.items ?? 0,
+      })),
+    });
+  } catch (error) {
+    consola.error("[Simkl] Error fetching custom lists:", error.message);
+    res.status(500).json({ error: "Failed to fetch Simkl custom lists" });
+  }
+});
+
+// Any list the connected account can see, by its id or its simkl.com link.
+addon.post("/api/simkl/list", async (req, res) => {
+  try {
+    const { tokenId, list } = req.body || {};
+    const listId = String(list || '').trim().match(/^(\d+)$|\/lists?\/(\d+)/)?.slice(1).find(Boolean);
+    if (!tokenId || !listId) {
+      return res.status(400).json({ error: "A Simkl list link or numeric id is required" });
+    }
+    const { getSimklToken, fetchSimklListPage } = require('./utils/simklUtils');
+    const token = await getSimklToken(tokenId);
+    if (!token?.access_token) {
+      return res.status(404).json({ error: "Token not found" });
+    }
+    let result;
+    try {
+      result = await fetchSimklListPage(token.access_token, listId, 1, 1);
+    } catch (error) {
+      if (error?.response?.status === 404) return res.json({ error: 'not_found' });
+      throw error;
+    }
+    if (result.error) return res.json({ error: result.error });
+    const found = result.list;
+    if (!found?.id) return res.json({ error: 'not_found' });
+    res.json({
+      list: {
+        id: String(found.id),
+        name: found.name,
+        description: typeof found.description === 'string' ? found.description : (found.description?.full || found.description?.short || ''),
+        mediaType: found.media_type,
+        privacy: found.privacy,
+        itemCount: found.counts?.items ?? 0,
+        owner: found.user?.name || '',
+      },
+    });
+  } catch (error) {
+    consola.error("[Simkl] Error fetching a custom list:", error.message);
+    res.status(500).json({ error: "Failed to fetch that Simkl list" });
   }
 });
 
@@ -3416,29 +3761,30 @@ addon.post("/anilist/disconnect", async (req, res) => {
     if (!config) {
       return res.status(404).json({ error: "User config not found" });
     }
-    
-    // Delete OAuth token from database if it exists
+
+    if (await disconnectCardAccount(req, res, userUUID, 'anilist', config)) return;
+
     // Token ID is stored in apiKeys.anilistTokenId by the frontend
-    if (config.apiKeys?.anilistTokenId) {
-      await database.deleteOAuthToken(config.apiKeys.anilistTokenId);
-      delete config.apiKeys.anilistTokenId;
-    }
-    
+    const released = config.apiKeys?.anilistTokenId || null;
+    if (released) delete config.apiKeys.anilistTokenId;
+
     // Disable AniList watch tracking
     delete config.anilistWatchTracking;
-    
+
     // Get user's password hash to save config
     const user = await database.getUser(userUUID);
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
-    
+
     // Save updated config directly to database
     await database.saveUserConfig(userUUID, user.password_hash, config);
-    
+
     // Invalidate config cache
     configCache.del(userUUID);
-    
+
+    if (released) await require('./lib/accountLinks').releaseTokenIfUnused('anilist', released);
+
     // `removed` says exactly what this disconnect took out, so a page holding
     // unsaved edits can apply the same removals instead of adopting the whole
     // saved document and losing them.
@@ -3674,10 +4020,10 @@ addon.post("/mal/disconnect", async (req, res) => {
       return res.status(404).json({ error: "User config not found" });
     }
 
-    if (config.apiKeys?.malTokenId) {
-      await database.deleteOAuthToken(config.apiKeys.malTokenId);
-      delete config.apiKeys.malTokenId;
-    }
+    if (await disconnectCardAccount(req, res, userUUID, 'mal', config)) return;
+
+    const released = config.apiKeys?.malTokenId || null;
+    if (released) delete config.apiKeys.malTokenId;
 
     delete config.malWatchTracking;
 
@@ -3688,6 +4034,8 @@ addon.post("/mal/disconnect", async (req, res) => {
 
     await database.saveUserConfig(userUUID, user.password_hash, config);
     configCache.del(userUUID);
+
+    if (released) await require('./lib/accountLinks').releaseTokenIfUnused('mal', released);
 
     // `removed` says exactly what this disconnect took out, so a page holding
     // unsaved edits can apply the same removals instead of adopting the whole
@@ -3873,6 +4221,29 @@ addon.get("/api/publicmetadb/picks", async (req, res) => {
   }
 });
 
+/** Handles a disconnect naming a Jellyfin user's card; false when it is for your own account. */
+async function disconnectCardAccount(req, res, userUUID, service, config) {
+  const profile = req.body?.profile;
+  if (typeof profile !== 'string' || !profile) return false;
+  const access = await resolveConfigAccess(req, userUUID, req.body?.password);
+  if (!access || !access.passwordHash) {
+    res.status(401).json({ error: "Invalid UUID or password" });
+    return true;
+  }
+  const { detachCardAccount } = require('./lib/accounts');
+  const { releaseTokenIfUnused } = require('./lib/accountLinks');
+  const removed = detachCardAccount(config, profile, service);
+  if (!removed) {
+    res.status(404).json({ error: "No such user, or it has no account for this service" });
+    return true;
+  }
+  await database.saveUserConfig(userUUID, access.passwordHash, config);
+  configCache.del(userUUID);
+  if (removed.tokenId) await releaseTokenIfUnused(service, removed.tokenId, service === 'simkl' ? revokeSimklGrant : undefined);
+  res.json({ success: true, removed: { profile, service, apiKeys: removed.apiKeys, fields: removed.fields } });
+  return true;
+}
+
 // POST /api/integrations/credential - Point a configuration at a credential the OAuth
 // callback already stored. Persisting here rather than waiting for Save is what stops a
 // connection being lost by navigating away, and stops the token row being stranded with
@@ -3888,7 +4259,7 @@ const INTEGRATION_CREDENTIAL_FIELDS = {
 
 addon.post("/api/integrations/credential", async (req, res) => {
   try {
-    const { userUUID, password, provider, tokenId } = req.body || {};
+    const { userUUID, password, provider, tokenId, profile } = req.body || {};
     const mapping = INTEGRATION_CREDENTIAL_FIELDS[provider];
     if (!userUUID || !mapping || !tokenId) {
       return res.status(400).json({ error: "userUUID, a known provider and tokenId are required" });
@@ -3903,9 +4274,27 @@ addon.post("/api/integrations/credential", async (req, res) => {
       return res.status(404).json({ error: `No ${provider} credential with that id` });
     }
     const config = access.config;
-    config.apiKeys = { ...(config.apiKeys || {}), [mapping.field]: tokenId };
+    const before = JSON.parse(JSON.stringify(config));
+    let replaced = null;
+    if (profile) {
+      if (!['simkl', 'anilist', 'mal'].includes(provider)) {
+        return res.status(400).json({ error: "A Jellyfin user can hold only Simkl, AniList and MyAnimeList sign-ins" });
+      }
+      const card = (Array.isArray(config.jellyfinUsers) ? config.jellyfinUsers : []).find((u) => u?.id === profile);
+      if (!card) return res.status(404).json({ error: "No such user yet; it is stored with the next save" });
+      if (card.trackers === true) return res.status(400).json({ error: "This user is you; connect accounts on your own card" });
+      const { ACCOUNT_SERVICES, setAccountKey } = require('./lib/accounts');
+      const previous = card.accounts?.apiKeys?.[ACCOUNT_SERVICES[provider].key];
+      if (previous && previous !== tokenId) replaced = previous;
+      setAccountKey(config, profile, provider, tokenId);
+      if (card.accounts[ACCOUNT_SERVICES[provider].master] === undefined) card.accounts[ACCOUNT_SERVICES[provider].master] = true;
+    } else {
+      config.apiKeys = { ...(config.apiKeys || {}), [mapping.field]: tokenId };
+    }
     await database.saveUserConfig(userUUID, access.passwordHash, config);
     configCache.del(userUUID);
+    if (replaced) await require('./lib/accountLinks').releaseTokenIfUnused(provider, replaced, provider === 'simkl' ? revokeSimklGrant : undefined);
+    require('./lib/jellyfin/watched').warmChangedSources(userUUID, before, config);
     res.json({ success: true, field: mapping.field, tokenId });
   } catch (error) {
     consola.error(`[Integrations] Failed to store credential: ${error.message}`);
@@ -3982,6 +4371,7 @@ addon.post("/api/managers/accounts", async (req, res) => {
       accountId, managerId, label, instanceUrl: normalized, apiKey, profileTags, autoSync
     });
     await database.saveUserConfig(userUUID, access.passwordHash, config);
+    configCache.del(userUUID);
     res.json({ success: true, account, managerAccounts: config.managerAccounts });
   } catch (error) {
     consola.error(`[Managers] Failed to save account: ${error.message}`);
@@ -4007,6 +4397,7 @@ addon.delete("/api/managers/accounts", async (req, res) => {
       return res.status(404).json({ error: "No such account" });
     }
     await database.saveUserConfig(userUUID, access.passwordHash, config);
+    configCache.del(userUUID);
     res.json({ success: true, managerAccounts: config.managerAccounts });
   } catch (error) {
     consola.error(`[Managers] Failed to remove account: ${error.message}`);
@@ -4039,6 +4430,7 @@ addon.post("/api/managers/credentials", async (req, res) => {
       label: existing?.label || managerAccounts.hostLabel(normalized),
     });
     await database.saveUserConfig(userUUID, access.passwordHash, config);
+    configCache.del(userUUID);
     res.json({ success: true, managerAccounts: config.managerAccounts });
   } catch (error) {
     consola.error(`[Managers] Failed to save credentials: ${error.message}`);
@@ -4097,6 +4489,7 @@ addon.post("/api/managers/sync", async (req, res) => {
     }));
 
     await database.saveUserConfig(userUUID, access.passwordHash, config);
+    configCache.del(userUUID);
     const synced = results.filter(r => r.ok).length;
     res.json({ success: synced > 0, synced, failed: results.length - synced, results, managerAccounts: config.managerAccounts });
   } catch (error) {
@@ -4470,15 +4863,29 @@ addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
 
 
 // --- Catalog Route under /stremio/:userUUID prefix ---
-addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (req, res) {
+const catalogRoute = async function (req, res) {
   const { userUUID, type, id, extra } = req.params;
   const storedConfig = await loadConfigFromDatabase(userUUID);
   
   if (!storedConfig) {
     return res.status(404).send({ error: "User configuration not found" });
   }
-  const config = applyRatingOverrides(storedConfig, req, userUUID);
+  const { viewerConfigFor } = require('./lib/accounts');
+  // Set only by the Jellyfin server's in-process reads, never from the request.
+  const config = applyRatingOverrides(viewerConfigFor(storedConfig, req.params.accountOwner, id), req, userUUID);
   config.userUUID = userUUID;
+
+  {
+    const { collectionCatalogMetas, isCollectionCatalogId } = require('./lib/collectionBuilder/aiostreamsCollections');
+    if (isCollectionCatalogId(id)) {
+      const skip = parseInt(new URLSearchParams(extra || '').get('skip') || '0', 10) || 0;
+      const { tags } = resolveManifestTags(storedConfig, req.query.tag);
+      const metas = await collectionCatalogMetas(userUUID, config, tags, id, skip);
+      if (!metas) return res.status(404).send({ error: "Collection not found" });
+      req.userConfig = config;
+      return respond(req, res, { metas });
+    }
+  }
 
   // Handle calendar-videos catalog
   if (id === 'calendar-videos' && type === 'series' && extra) {
@@ -4636,6 +5043,11 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
   const cacheWrapper = cacheWrapCatalog;
 
   extraArgs = extraArgs || {};
+  // A client following the manifest sends the 'None' it leads with; one that
+  // leaves the genre out gets the same page, and the entry the warmer wrote.
+  if (!extraArgs.genre && catalogConfig?.showInHome === false && defaultsToNoneGenre(cleanId)) {
+    extraArgs.genre = 'None';
+  }
   // Ensure sort options are included in cache key
   // Claimed before the provider prefixes; anilist.discover would otherwise match anilist.
   if (isDiscoverCatalogId(cleanId)) {
@@ -4752,7 +5164,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
     catalogPageSize = parseInt(process.env.MAL_PAGE_SIZE || '25');
   } else if (cleanId === 'anilist.trending' || cleanId.startsWith('anilist.discover')) {
     catalogPageSize = 50;
-  } else if (cleanId.startsWith('simkl.watchlist.') || cleanId.startsWith('simkl.upnext') || cleanId.startsWith('simkl.dvd.') || cleanId.startsWith('simkl.trending.') || cleanId.startsWith('simkl.recipe.') || cleanId.startsWith('stremthru.') || cleanId.startsWith('mdblist.') || cleanId.startsWith('custom.') || cleanId.startsWith('trakt.') || cleanId.startsWith('anilist.') || cleanId.startsWith('letterboxd.') || cleanId.startsWith('movielens.') || (cleanId.startsWith('tvdb.') && !cleanId.startsWith('tvdb.collection.'))) {
+  } else if (cleanId.startsWith('simkl.watchlist.') || cleanId.startsWith('simkl.list.') || cleanId.startsWith('simkl.upnext') || cleanId.startsWith('simkl.dvd.') || cleanId.startsWith('simkl.trending.') || cleanId.startsWith('simkl.recipe.') || cleanId.startsWith('stremthru.') || cleanId.startsWith('mdblist.') || cleanId.startsWith('custom.') || cleanId.startsWith('trakt.') || cleanId.startsWith('anilist.') || cleanId.startsWith('letterboxd.') || cleanId.startsWith('movielens.') || cleanId.startsWith('lumiere.') || (cleanId.startsWith('tvdb.') && !cleanId.startsWith('tvdb.collection.'))) {
     catalogPageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE || '20');
   } else {
     catalogPageSize = 20;
@@ -4790,7 +5202,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
             pairs = [[parts[2], parts[3]]];
           }
           const fps = await Promise.all(
-            pairs.map(([t, s]) => getSimklActivityFingerprint(token.access_token, t, s))
+            pairs.map(([t, s]) => getSimklActivityFingerprint(token.access_token, t, s, config))
           );
           const fp = fps.filter(Boolean).join('+');
           if (fp) cacheExtraArgs._simklAct = fp;
@@ -4832,7 +5244,6 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
     // Set by any branch whose handler already ran applyCatalogFilters internally
     // (external addon catalogs filter before computing their pagination cursor).
     let filtersAlreadyApplied = false;
-    let pendingCursor = null;
 
       if (cleanId === 'search' || cleanId === 'gemini.search' || cleanId === 'people_search') {
       let originalSearchId = null;
@@ -4893,6 +5304,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
       config._currentSearchEngine = searchEngine;
       config._currentSearchType = searchType;
       config._currentSearchCatalogId = originalSearchId;
+      config._searchLight = extraArgs.light === '1';
 
       // Compute search-specific page size based on the provider's actual results per page
       let searchPageSize = 20; // default (TMDB, Kitsu)
@@ -4902,6 +5314,8 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
         searchPageSize = 25;
       } else if (searchEngine && searchEngine.startsWith('trakt.')) {
         searchPageSize = 30;
+      } else if (searchEngine === 'lumiere.people.search') {
+        searchPageSize = parseInt(getSetting('LUMIERE_PEOPLE_PAGE_SIZE'), 10) || 20;
       }
       const searchPage = extraArgs.skip ? Math.ceil(parseInt(extraArgs.skip) / searchPageSize) + 1 : 1;
 
@@ -4932,6 +5346,10 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
 
         responseData = await cacheWrapSearch(userUUID, searchKey, async () => {
           const searchResult = await getSearch(cleanId, searchType, language, searchExtraArgs, config);
+          if (searchResult.error) {
+            consola.error(`[SEARCH] ${cleanId} failed: ${searchResult.error}`);
+            return { metas: [], error: searchResult.error };
+          }
           return { metas: searchResult.metas || [] };
         }, searchEngine, cacheOptions);
       }
@@ -4939,13 +5357,13 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
       const { genre: genreName } = extraArgs;
       const skipValue = extraArgs.skip !== undefined ? parseInt(extraArgs.skip) : 0;
       const result = await getCatalog(actualType, language, catalogPage, cleanId, genreName, config, userUUID, false, skipValue);
-      responseData = { metas: result.metas || [] };
+      responseData = { metas: result.metas || [], ...(req.params.forJellyfin === '1' ? { served: true } : {}) };
       filtersAlreadyApplied = true;
       } else if (cleanId.startsWith('merged.')) {
       const { genre: genreName } = extraArgs;
       const skipValue = extraArgs.skip !== undefined ? parseInt(extraArgs.skip) : 0;
       const result = await getCatalog(actualType, language, catalogPage, cleanId, genreName, config, userUUID, false, skipValue);
-      responseData = { metas: result.metas || [] };
+      responseData = { metas: result.metas || [], ...(req.params.forJellyfin === '1' ? { served: true } : {}) };
       filtersAlreadyApplied = true;
       } else {
       const { genre: genreName, type_filter } = extraArgs;
@@ -5021,22 +5439,39 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
     const readPage = (page, skipOverride) =>
       cacheWrapper(userUUID, keyForPage(page), () => runCatalogPage(page, skipOverride), cacheOptions);
 
-    if (catalogFiltersActive({ config, catalogConfig, cleanId })) {
-      const key = cursorKey(userUUID, cleanId, actualType, genreName);
+    if (catalogFiltersActive({ config, catalogConfig, cleanId }) && req.params.forJellyfin === '1') {
+      const raw = (await readPage(catalogPage, legacySkip))?.metas || [];
+      responseData = { metas: await applyCatalogFilters(raw, { type: actualType, config, catalogConfig, cleanId }), rawLength: raw.length };
+      filtersAlreadyApplied = true;
+    } else if (catalogFiltersActive({ config, catalogConfig, cleanId })) {
+      const { accountOwner } = require('./lib/accounts');
+      const key = cursorKey(userUUID, cleanId, actualType, genreName, accountOwner(config));
       const skipValue = legacySkip || 0;
-      const { startPage, startOffset, matched } = await resolveStartPage(key, skipValue, catalogPage);
+      // Deduped here rather than after, so what a page serves, and so where the
+      // next one starts, is the same whether it is filled for this request or on
+      // the way to a later one.
+      const fillChunk = async (start) => {
+        const chunk = await fillFilteredPage({
+          startPage: start.startPage,
+          startOffset: start.startOffset,
+          pageSize: catalogPageSize,
+          fetchPage: async (page) => (await readPage(page, undefined))?.metas || [],
+          filter: (metas) => applyCatalogFilters(metas, { type: actualType, config, catalogConfig, cleanId }),
+        });
+        const seen = new Set();
+        const metas = chunk.metas.filter((meta) => !meta?.id || (!seen.has(meta.id) && seen.add(meta.id)));
+        return { ...chunk, metas };
+      };
+      const { startPage, startOffset, matched } = await resolveStartPage(key, skipValue, catalogPage, fillChunk);
 
-      const filled = await fillFilteredPage({
-        startPage,
-        startOffset,
-        pageSize: catalogPageSize,
-        fetchPage: async (page) => (await readPage(page, undefined))?.metas || [],
-        filter: (metas) => applyCatalogFilters(metas, { type: actualType, config, catalogConfig, cleanId }),
-      });
+      // A page placed by its number is served but leaves no cursor behind, since
+      // one mapped from a guess would carry it into every page after.
+      const filled = matched
+        ? await fillOnce(key, skipValue, { startPage, startOffset }, fillChunk)
+        : await fillChunk({ startPage, startOffset });
 
       responseData = { metas: filled.metas };
       filtersAlreadyApplied = true;
-      pendingCursor = { key, skip: skipValue, page: filled.nextPage, offset: filled.nextOffset };
 
       consola.debug(
         `[Catalog] ${cleanId}: filled ${filled.metas.length}/${catalogPageSize} from ${filled.pagesRead} page(s) ` +
@@ -5072,13 +5507,6 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
       }
     }
 
-    if (pendingCursor) {
-      await writeCursor(pendingCursor.key, {
-        served: pendingCursor.skip + (responseData?.metas?.length || 0),
-        upstreamPage: pendingCursor.page,
-        pageOffset: pendingCursor.offset,
-      });
-    }
 
 
     if (catalogConfig?.randomizePerPage && Array.isArray(responseData?.metas) && responseData.metas.length > 1) {
@@ -5099,19 +5527,21 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
     if ((posterPattern || config.customBackgroundUrlPattern || config.customLandscapeUrlPattern || config.customLogoUrlPattern) && responseData?.metas && Array.isArray(responseData.metas)) {
       const isUpNextCatalog = cleanId.includes('up_next') || cleanId.includes('upnext');
       const upNextUsesShowPoster = isUpNextCatalog && catalogConfig?.metadata?.useShowPosterForUpNext === true;
-      const { resolveCustomArtUrl, getPosterRatingApiKey } = require('./utils/parseProps');
+      const { resolveCustomArtUrl, getPosterRatingApiKey, resolveLandscapePattern, posterShapeOf } = require('./utils/parseProps');
       const proxyApiKey = config.usePosterProxy ? getPosterRatingApiKey(config) : null;
+      const posterApplies = !!posterPattern && (!isUpNextCatalog || upNextUsesShowPoster);
+      const landscapePattern = resolveLandscapePattern(config, posterApplies ? posterPattern : null);
       for (const meta of responseData.metas) {
         const ids = extractIdsFromMeta(meta);
         const type = meta.type || actualType;
-        if (posterPattern && (!isUpNextCatalog || upNextUsesShowPoster)) {
+        if (posterApplies) {
           if (proxyApiKey) {
             const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
             if (proxyId) {
               meta.poster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, ratingKey: proxyApiKey, lang: config.language });
             }
           } else {
-            const resolved = resolveCustomArtUrl(posterPattern, ids, type, config);
+            const resolved = resolveCustomArtUrl(posterPattern, ids, type, config, { shape: posterShapeOf(meta) });
             if (resolved) {
               if (config.usePosterProxy) {
                 const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
@@ -5125,7 +5555,7 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
           }
         }
         if (config.customBackgroundUrlPattern) {
-          const resolved = resolveCustomArtUrl(config.customBackgroundUrlPattern, ids, type, config);
+          const resolved = resolveCustomArtUrl(config.customBackgroundUrlPattern, ids, type, config, { shape: 'landscape' });
           if (resolved) {
             if (config.usePosterProxy) {
               const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
@@ -5139,8 +5569,8 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
             }
           }
         }
-        if (config.customLandscapeUrlPattern) {
-          const resolved = resolveCustomArtUrl(config.customLandscapeUrlPattern, ids, type, config);
+        if (landscapePattern) {
+          const resolved = resolveCustomArtUrl(landscapePattern, ids, type, config, { shape: 'landscape' });
           if (resolved) {
             if (config.usePosterProxy) {
               const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
@@ -5172,6 +5602,32 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
       }
     }
 
+    if (req.params.forJellyfin === '1' && Array.isArray(responseData?.metas)) responseData.pageSize = catalogPageSize;
+
+    if (config.trailerProvider === 'addon' && req.params.forJellyfin !== '1' && Array.isArray(responseData?.metas)) {
+      const { applyTrailerAddonWithin } = require('./lib/trailerProjection');
+      await applyTrailerAddonWithin(responseData.metas, config, envInt('TRAILER_ADDON_CATALOG_WAIT_MS', 1500, 0));
+    }
+
+    const isSearchCatalog = cleanId === 'search' || cleanId === 'people_search' || cleanId === 'gemini.search';
+    if (catalogConfig?.metadata?.posterShape === 'landscape' && !isSearchCatalog && req.params.forJellyfin !== '1' && Array.isArray(responseData?.metas)) {
+      for (const meta of responseData.metas) {
+        const landscape = meta.landscapePoster || meta.background;
+        if (meta.posterShape === 'landscape' || !landscape) continue;
+        meta.poster = landscape;
+        meta.posterShape = 'landscape';
+      }
+    }
+
+    if ((responseData as any)?.error) {
+      const { dynamicError, showsNotices } = require('./lib/errorNotice');
+      const reason = String((responseData as any).error);
+      delete (responseData as any).error;
+      if (showsNotices(config)) {
+        responseData = dynamicError('catalog', { title: 'Search unavailable', description: reason }, actualType === 'series' ? 'series' : 'movie');
+      }
+    }
+
     const httpCacheOpts = { cacheMaxAge: 0, staleRevalidate: 5 * 60 }; // No cache for regular catalogs, 5 min stale-while-revalidate
     respond(req, res, responseData, httpCacheOpts);
 
@@ -5179,10 +5635,18 @@ addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", async function (
     consola.error(`Error in catalog route for id "${id}" and type "${actualType}":`, e);
     return res.status(500).send("Internal Server Error");
   }
-});
+};
+addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", catalogRoute);
+registerInProcessRoute('catalog', "/stremio/:userUUID/catalog/:type/:id{/:extra}.json", catalogRoute);
 // --- Meta Route (with enhanced caching) ---
-addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
+const metaRoute = async function (req, res) {
   const { userUUID, type, id: stremioId } = req.params;
+
+  {
+    const { readNoticeId, dynamicError } = require('./lib/errorNotice');
+    const notice = readNoticeId(stremioId);
+    if (notice) return res.json(dynamicError('meta', notice, type === 'series' ? 'series' : 'movie'));
+  }
   
   // Load config from database
   const config = await loadConfigFromDatabase(userUUID);
@@ -5193,6 +5657,17 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
   // Add userUUID to config for per-user token caching
   config.userUUID = userUUID;
   config.addonIdentifier = req.addonIdentifier || userUUID;
+
+  {
+    const { collectionMeta, COLLECTION_META_PREFIX } = require('./lib/collectionBuilder/aiostreamsCollections');
+    if (stremioId.startsWith(COLLECTION_META_PREFIX)) {
+      const { tags } = resolveManifestTags(config, req.query.tag);
+      const meta = await collectionMeta(userUUID, config, tags, stremioId);
+      if (!meta) return res.status(404).send({ error: "Collection not found" });
+      req.userConfig = config;
+      return respond(req, res, { meta });
+    }
+  }
 
   const language = config.language || DEFAULT_LANGUAGE;
   const fullConfig = config;
@@ -5272,119 +5747,7 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
       return respond(req, res, { meta: null });
     }
 
-    {
-      const userAgent = req.headers['user-agent'] || '';
-      const host = process.env.HOST_NAME?.startsWith('http') ? process.env.HOST_NAME : `https://${process.env.HOST_NAME}`;
-      const { resolveCustomArtUrl, resolvePosterPattern, resolveThumbnailPattern, getPosterRatingApiKey } = require('./utils/parseProps');
-      const ids = extractIdsFromMeta(result.meta);
-      const metaType = result.meta.type || type;
-      // Apply poster pattern unless enableRatingPostersForLibrary is explicitly disabled
-      if (config.enableRatingPostersForLibrary !== false) {
-        const metaPosterPattern = resolvePosterPattern(config);
-        if (metaPosterPattern) {
-          const proxyApiKey = config.usePosterProxy ? getPosterRatingApiKey(config) : null;
-          if (proxyApiKey) {
-            const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
-            if (proxyId) {
-              result.meta.poster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'poster', type: metaType, id: proxyId, fallback: result.meta.poster, ratingKey: proxyApiKey, lang: config.language });
-            }
-          } else {
-            const resolved = resolveCustomArtUrl(metaPosterPattern, ids, metaType, config, { userAgent });
-            if (resolved) {
-              if (config.usePosterProxy) {
-                const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
-                if (proxyId) {
-                  result.meta.poster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'poster', type: metaType, id: proxyId, fallback: result.meta.poster, url: resolved });
-                }
-              } else {
-                result.meta.poster = resolved;
-              }
-            }
-          }
-        }
-      }
-      if (config.customBackgroundUrlPattern) {
-        const resolved = resolveCustomArtUrl(config.customBackgroundUrlPattern, ids, metaType, config, { userAgent });
-        if (resolved) {
-          if (config.usePosterProxy) {
-            const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
-            if (proxyId) {
-              result.meta.background = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'background', type: metaType, id: proxyId, fallback: result.meta.background, url: resolved });
-            } else {
-              result.meta.background = resolved;
-            }
-          } else {
-            result.meta.background = resolved;
-          }
-        }
-      }
-      if (config.customLandscapeUrlPattern) {
-        const resolved = resolveCustomArtUrl(config.customLandscapeUrlPattern, ids, metaType, config, { userAgent });
-        if (resolved) {
-          if (config.usePosterProxy) {
-            const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
-            if (proxyId) {
-              result.meta.landscapePoster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'landscape', type: metaType, id: proxyId, fallback: result.meta.landscapePoster, url: resolved });
-            } else {
-              result.meta.landscapePoster = resolved;
-            }
-          } else {
-            result.meta.landscapePoster = resolved;
-          }
-        }
-      }
-      if (config.customLogoUrlPattern) {
-        const resolved = resolveCustomArtUrl(config.customLogoUrlPattern, ids, metaType, config, { userAgent });
-        if (resolved) {
-          if (config.usePosterProxy) {
-            const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
-            if (proxyId) {
-              result.meta.logo = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'logo', type: metaType, id: proxyId, fallback: result.meta.logo, url: resolved });
-            } else {
-              result.meta.logo = resolved;
-            }
-          } else {
-            result.meta.logo = resolved;
-          }
-        }
-      }
-      // Apply thumbnail pattern to episode videos
-      const thumbnailPattern = resolveThumbnailPattern(config);
-      if (thumbnailPattern && result.meta.videos && Array.isArray(result.meta.videos)) {
-        for (const video of result.meta.videos) {
-          const idParts = video.id?.split(':');
-          if (idParts && idParts.length >= 3) {
-            const season = parseInt(idParts[idParts.length - 2], 10);
-            const episode = parseInt(idParts[idParts.length - 1], 10);
-            if (!isNaN(season) && !isNaN(episode)) {
-              // Unwrap blur proxy to get original thumbnail URL for {thumbnail} placeholder
-              let originalThumb = video.thumbnail || '';
-              if (originalThumb.includes('/api/image/blur?url=')) {
-                originalThumb = decodeURIComponent(originalThumb.split('/api/image/blur?url=')[1] || '');
-              }
-              const resolved = resolveCustomArtUrl(thumbnailPattern, ids, metaType, config, {
-                season,
-                episode,
-                blur: config.blurThumbs ? 'true' : 'false',
-                thumbnail: encodeURIComponent(originalThumb),
-                userAgent,
-              });
-              if (resolved) {
-                if (config.usePosterProxy) {
-                  const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
-                  // Episode thumbnails share the show's proxyId; the per-episode url param keeps the proxy cache/etag distinct.
-                  video.thumbnail = proxyId
-                    ? buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'background', type: metaType, id: proxyId, fallback: originalThumb, url: resolved })
-                    : resolved;
-                } else {
-                  video.thumbnail = resolved;
-                }
-              }
-            }
-          }
-        }
-      }
-    }
+    if (req.params.beforeArt !== '1') applyMetaArt(result.meta, config, type, req.headers['user-agent'] || '');
 
     /*else if (result && result.meta) {
       // cache wrap the ratings
@@ -5443,7 +5806,9 @@ addon.get("/stremio/:userUUID/meta/:type/:id.json", async function (req, res) {
     
     res.status(500).send("Internal Server Error");
   }
-});
+};
+addon.get("/stremio/:userUUID/meta/:type/:id.json", metaRoute);
+registerInProcessRoute('meta', "/stremio/:userUUID/meta/:type/:id.json", metaRoute);
 
 // --- Stream route for rating page ---
 addon.get("/stremio/:userUUID/stream/:type/:id.json", async function (req, res) {
@@ -5505,9 +5870,19 @@ addon.post(["/stremio/:userUUID/watch_state/push/:type/:id.json", "/stremio/:use
     return res.status(404).json({ error: "Playback reporting is not enabled" });
   }
 
+  const { configForViewer } = require('./lib/jellyfin/profiles');
+  const named = req.body?.viewer ?? req.query.viewer;
+  const viewer = configForViewer(config, userUUID, named);
+  if (!viewer) {
+    consola.info(`[Playback] Unknown viewer "${String(named).slice(0, 64)}" for ${userUUID}, dropping ${type}/${id}`);
+    return res.status(404).json({ error: "Unknown viewer" });
+  }
+
   try {
     const { handlePlaybackReport } = require('./lib/playbackHandler');
-    const outcome = await handlePlaybackReport(type, id, req.body, config, userUUID);
+    const { runAsAccountOwner } = require('./lib/jellyfin/viewer');
+    const { accountOwner } = require('./lib/accounts');
+    const outcome = await runAsAccountOwner(accountOwner(viewer), () => handlePlaybackReport(type, id, req.body, viewer, userUUID));
     if (outcome.status === 204) {
       return res.status(204).end();
     }
@@ -5515,6 +5890,42 @@ addon.post(["/stremio/:userUUID/watch_state/push/:type/:id.json", "/stremio/:use
   } catch (error) {
     consola.error(`[Playback] Failed to handle ${type}/${id}: ${error.message}`);
     return res.status(500).json({ error: "Failed to record playback" });
+  }
+});
+
+// What the trackers and this server's own table hold, for a front-end to fill
+// its Continue Watching and Next Up from. Gated on the same opt-in as the push.
+addon.get("/stremio/:userUUID/watch_state/pull.json", async function (req, res) {
+  const { userUUID } = req.params;
+
+  let config;
+  try {
+    config = await loadConfigFromDatabase(userUUID);
+  } catch {
+    config = null;
+  }
+  if (!config || !config.playbackReporting) {
+    return res.status(404).json({ error: "Watch state is not enabled" });
+  }
+
+  const { configForViewer } = require('./lib/jellyfin/profiles');
+  const viewer = configForViewer(config, userUUID, req.query.viewer);
+  if (!viewer) {
+    consola.info(`[Watch State] Unknown viewer "${String(req.query.viewer).slice(0, 64)}" for ${userUUID}`);
+    return res.status(404).json({ error: "Unknown viewer" });
+  }
+
+  try {
+    const { buildWatchStatePull } = require('./lib/watchState');
+    const { runAsAccountOwner } = require('./lib/jellyfin/viewer');
+    const { accountOwner } = require('./lib/accounts');
+    const since = typeof req.query.since === 'string' && req.query.since ? req.query.since : null;
+    const payload = await runAsAccountOwner(accountOwner(viewer), () => buildWatchStatePull(userUUID, viewer, since));
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(payload);
+  } catch (error) {
+    consola.error(`[Watch State] Failed to build the pull for ${userUUID}: ${error.message}`);
+    return res.status(500).json({ error: "Failed to read watch state" });
   }
 });
 
@@ -6344,11 +6755,16 @@ addon.post('/api/admin/prune-id-mappings', requireDashboardAdmin, async (req, re
 
 // Get all users with basic info
 addon.get('/api/admin/users', requireDashboardAdmin, async (req, res) => {
-  
   try {
     await userActivityTracker.flush();
-    const users = await database.getAllUsersWithStats();
-    res.json({ users });
+    const limit = parseInt(String(req.query.limit ?? ''), 10);
+    const offset = parseInt(String(req.query.offset ?? ''), 10);
+    const page = await database.listUsersWithStats({
+      query: typeof req.query.q === 'string' ? req.query.q : '',
+      limit: Number.isFinite(limit) ? limit : 100,
+      offset: Number.isFinite(offset) ? offset : 0,
+    });
+    res.json(page);
   } catch (error) {
     consola.error('[Admin API] Error fetching users:', error);
     res.status(500).json({ error: 'Failed to fetch users' });
@@ -7465,7 +7881,7 @@ addon.get("/api/dashboard/poster-cache/stats", requireDashboardAdmin, async (req
       enabled_types: posterCacheConfig.getEnabledClasses(),
       known_providers: posterCacheConfig.KNOWN_ART_PROVIDERS,
       domain_purge: posterCacheStore.domainPurgeStatus(),
-      provider_policies: posterCacheConfig.parseProviderPolicies(process.env.POSTER_CACHE_PROVIDER_POLICIES) || [],
+      provider_policies: posterCacheConfig.parseProviderPolicies(getSetting('POSTER_CACHE_PROVIDER_POLICIES')) || [],
       infer_ttl: posterCacheConfig.isInferTtlEnabled(),
       presets_enabled: posterCacheConfig.arePresetsEnabled(),
       follow_upstream: posterCacheConfig.followsUpstreamCacheControl(),
@@ -7478,7 +7894,7 @@ addon.get("/api/dashboard/poster-cache/stats", requireDashboardAdmin, async (req
   const policyPayload = {
     builtin: false,
     known_providers: posterCacheConfig.KNOWN_ART_PROVIDERS,
-    provider_policies: posterCacheConfig.parseProviderPolicies(process.env.POSTER_CACHE_PROVIDER_POLICIES) || [],
+    provider_policies: posterCacheConfig.parseProviderPolicies(getSetting('POSTER_CACHE_PROVIDER_POLICIES')) || [],
     presets_enabled: posterCacheConfig.arePresetsEnabled(),
     follow_upstream: posterCacheConfig.followsUpstreamCacheControl(),
     proxy_max_age_days: posterCacheConfig.getProxyMaxAgeDays(),
@@ -7728,6 +8144,51 @@ addon.get("/api/dashboard/content", requireAuthUnlessGuestMode, (req, res) => {
   } catch (error) {
     consola.error('[Dashboard API] Error:', error);
     res.status(500).json({ error: 'Failed to fetch content data' });
+  }
+});
+
+addon.get("/api/dashboard/jellyfin", requireDashboardAdmin, async (req, res) => {
+  try {
+    res.json(await require('./lib/jellyfin/dashboard').dashboardOverview());
+  } catch (error) {
+    consola.error('[Dashboard API] Error:', error);
+    res.status(500).json({ error: 'Failed to fetch Jellyfin playback data' });
+  }
+});
+
+addon.get("/api/dashboard/jellyfin/search", requireDashboardAdmin, async (req, res) => {
+  try {
+    res.json(await require('./lib/jellyfin/dashboard').dashboardSearch(String(req.query.q ?? '')));
+  } catch (error) {
+    consola.error('[Dashboard API] Error:', error);
+    res.status(500).json({ error: 'Failed to search Jellyfin playback' });
+  }
+});
+
+addon.get("/api/dashboard/jellyfin/:userUUID/export", requireDashboardAdmin, async (req, res) => {
+  try {
+    const payload = await require('./lib/jellyfin/dashboard').dashboardExport(String(req.params.userUUID));
+    res.setHeader('Content-Disposition', `attachment; filename="jellyfin-playback-${String(req.params.userUUID).slice(0, 8)}.json"`);
+    res.json(payload);
+  } catch (error) {
+    consola.error('[Dashboard API] Error:', error);
+    res.status(500).json({ error: 'Failed to export Jellyfin playback' });
+  }
+});
+
+addon.get("/api/dashboard/jellyfin/:userUUID", requireDashboardAdmin, async (req, res) => {
+  try {
+    const profile = typeof req.query.profile === 'string' ? req.query.profile : null;
+    const rows = parseInt(String(req.query.rows ?? ''), 10);
+    const payload = await require('./lib/jellyfin/dashboard').dashboardConfiguration(String(req.params.userUUID), profile, Number.isFinite(rows) ? rows : undefined);
+    if (!payload) {
+      res.status(404).json({ error: 'No such configuration' });
+      return;
+    }
+    res.json(payload);
+  } catch (error) {
+    consola.error('[Dashboard API] Error:', error);
+    res.status(500).json({ error: 'Failed to fetch Jellyfin playback data' });
   }
 });
 

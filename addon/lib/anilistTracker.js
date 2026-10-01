@@ -12,6 +12,7 @@ const { httpPost } = require('../utils/httpClient');
 const database = require('./database');
 const idMapper = require('./id-mapper');
 const { resolveAnidbEpisodeFromTvdbEpisode } = require('./anime-list-mapper');
+const { ownTokenId } = require('./accounts');
 
 
 const logger = consola.withTag('AniListTracker');
@@ -85,36 +86,45 @@ function isTokenExpired(expiresAt) {
  * Get a valid access token for a user, refreshing if necessary
  * 
  * @param {string} userUUID - User's UUID
+ * @param {string|null} [tokenId] - null means this user has no AniList account of their own
  * @returns {Promise<string|null>} Valid access token or null if unavailable
  */
-async function getValidAccessToken(userUUID) {
+async function getValidAccessToken(userUUID, tokenId) {
+  if (tokenId === null) {
+    logger.debug(`[AniList Tracker] No AniList account of their own for user ${userUUID}`);
+    return null;
+  }
   try {
-    // Get user config to find the anilistTokenId
-    const config = await database.getUserConfig(userUUID);
-    // Token ID is stored in apiKeys.anilistTokenId by the frontend
-    const anilistTokenId = config?.apiKeys?.anilistTokenId;
-    if (!config || !anilistTokenId) {
+    let anilistTokenId = tokenId;
+    if (!anilistTokenId) {
+      // Token ID is stored in apiKeys.anilistTokenId by the frontend
+      const config = await database.getUserConfig(userUUID);
+      anilistTokenId = config?.apiKeys?.anilistTokenId;
+    }
+    if (!anilistTokenId) {
       logger.debug(`[AniList Tracker] No AniList token ID found for user ${userUUID}`);
       return null;
     }
-
-    // Get the OAuth token from database
-    const tokenData = await database.getOAuthToken(anilistTokenId);
-    if (!tokenData) {
-      logger.debug(`[AniList Tracker] No OAuth token found for token ID ${anilistTokenId}`);
-      return null;
-    }
-
-    if (isTokenExpired(tokenData.expires_at)) {
-      logger.warn(`[AniList Tracker] Token expired for user ${userUUID}. AniList does not support refresh tokens — user must re-authenticate.`);
-      return null;
-    }
-
-    return tokenData.access_token;
+    return await getAccessTokenById(anilistTokenId);
   } catch (error) {
     logger.error(`[AniList Tracker] Error getting valid access token for user ${userUUID}:`, error);
     return null;
   }
+}
+
+async function getAccessTokenById(anilistTokenId) {
+  const tokenData = await database.getOAuthToken(anilistTokenId);
+  if (!tokenData) {
+    logger.debug(`[AniList Tracker] No OAuth token found for token ID ${anilistTokenId}`);
+    return null;
+  }
+
+  if (isTokenExpired(tokenData.expires_at)) {
+    logger.warn(`[AniList Tracker] Token ${anilistTokenId} expired. AniList does not support refresh tokens, so the user must sign in again.`);
+    return null;
+  }
+
+  return tokenData.access_token;
 }
 
 
@@ -472,6 +482,98 @@ async function updateProgress(anilistId, episode, totalEpisodes, accessToken) {
  * @param {ParsedMediaId} parsedId - Parsed media identifier
  * @returns {Promise<{anilistId: number, episode: number}|null>} AniList ID and episode or null if resolution fails
  */
+async function anilistRequest(query, variables, accessToken) {
+  const response = await makeRateLimitedRequest(() =>
+    httpPost(ANILIST_GRAPHQL_URL, { query, variables }, {
+      headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      timeout: REQUEST_TIMEOUT_MS
+    })
+  );
+  const errors = parseGraphQLErrors(response.data);
+  if (errors.hasErrors) throw new Error(errors.errors.map(e => e.message).join(', '));
+  return response.data?.data;
+}
+
+async function fetchPlanningIds(accessToken) {
+  const viewer = await anilistRequest('query { Viewer { id } }', {}, accessToken);
+  const userId = viewer?.Viewer?.id;
+  if (!userId) return [];
+  const data = await anilistRequest(
+    'query ($userId: Int) { MediaListCollection(userId: $userId, type: ANIME, status: PLANNING) { lists { entries { mediaId } } } }',
+    { userId },
+    accessToken
+  );
+  const ids = [];
+  for (const list of data?.MediaListCollection?.lists || []) for (const entry of list?.entries || []) if (entry?.mediaId) ids.push(Number(entry.mediaId));
+  return ids;
+}
+
+const ANILIST_STATUSES = {
+  CURRENT: 'watching',
+  REPEATING: 'watching',
+  COMPLETED: 'completed',
+  DROPPED: 'dropped',
+  PAUSED: 'paused',
+  PLANNING: 'planning',
+};
+
+async function fetchAnimeList(accessToken) {
+  const viewer = await anilistRequest('query { Viewer { id } }', {}, accessToken);
+  const userId = viewer?.Viewer?.id;
+  if (!userId) throw new Error('AniList viewer could not be read');
+  const data = await anilistRequest(
+    `query ($userId: Int) {
+      MediaListCollection(userId: $userId, type: ANIME) {
+        lists { entries { mediaId status progress updatedAt media { idMal format episodes status nextAiringEpisode { episode airingAt } } } }
+      }
+    }`,
+    { userId },
+    accessToken
+  );
+  const entries = new Map();
+  for (const list of data?.MediaListCollection?.lists || []) {
+    for (const entry of list?.entries || []) {
+      if (!entry?.mediaId || entries.has(entry.mediaId)) continue;
+      const media = entry.media || {};
+      entries.set(entry.mediaId, {
+        anilist: Number(entry.mediaId),
+        ...(media.idMal ? { mal: Number(media.idMal) } : {}),
+        status: ANILIST_STATUSES[entry.status] || 'planning',
+        progress: Number(entry.progress) || 0,
+        episodes: Number(media.episodes) || null,
+        movie: media.format === 'MOVIE',
+        updatedAt: (Number(entry.updatedAt) || 0) * 1000,
+        ...(media.status === 'FINISHED' ? { finished: true } : {}),
+        ...(media.nextAiringEpisode?.episode
+          ? { nextAiring: { episode: Number(media.nextAiringEpisode.episode), at: Number(media.nextAiringEpisode.airingAt) * 1000 } }
+          : {}),
+      });
+    }
+  }
+  return [...entries.values()];
+}
+
+async function setPlanning(anilistId, listed, accessToken) {
+  try {
+    if (listed) {
+      await anilistRequest(
+        'mutation ($mediaId: Int) { SaveMediaListEntry(mediaId: $mediaId, status: PLANNING) { id } }',
+        { mediaId: parseInt(anilistId, 10) },
+        accessToken
+      );
+      return true;
+    }
+    const entry = (await getMediaStatus(anilistId, accessToken))?.mediaListEntry;
+    // A title with progress is history, not a watchlist entry.
+    if (!entry?.id || (entry.status && entry.status !== 'PLANNING')) return false;
+    await anilistRequest('mutation ($id: Int) { DeleteMediaListEntry(id: $id) { deleted } }', { id: entry.id }, accessToken);
+    return true;
+  } catch (error) {
+    logger.error(`[AniList Tracker] Watchlist ${listed ? 'add' : 'remove'} failed for AniList ID ${anilistId}: ${error.message}`);
+    return false;
+  }
+}
+
 async function resolveAniListId(parsedId) {
   if (!parsedId || !parsedId.provider || !parsedId.id) {
     logger.warn('[AniList Tracker] Invalid parsedId provided to resolveAniListId');
@@ -630,7 +732,7 @@ async function trackAnimeProgress(parsedId, config, userUUID) {
     logger.debug(`[AniList Tracker] Resolved ${parsedId.provider}:${parsedId.id} to AniList ID ${anilistId}, episode ${episodeNumber}`);
 
     // Step 3: Get valid access token (with auto-refresh)
-    const accessToken = await getValidAccessToken(userUUID);
+    const accessToken = await getValidAccessToken(userUUID, ownTokenId(config, 'anilist'));
     if (!accessToken) {
       logger.warn(`[AniList Tracker] No valid access token available for user ${userUUID}`);
       return { success: false, reason: 'no_valid_token', updated: false };
@@ -811,6 +913,8 @@ module.exports = {
   // Token management
   isTokenExpired,
   getValidAccessToken,
+  getAccessTokenById,
+  fetchAnimeList,
   
   // OAuth flow
   getAuthorizationUrl,
@@ -820,6 +924,8 @@ module.exports = {
   // AniList operations
   getMediaStatus,
   updateProgress,
+  fetchPlanningIds,
+  setPlanning,
   resolveAniListId,
   determineStatus,
   

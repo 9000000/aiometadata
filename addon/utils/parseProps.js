@@ -15,6 +15,7 @@ const { getImdbRating } = require('../lib/getImdbRating');
 const consola = require('consola');
 const { cacheWrapMetaSmart, cacheWrapGlobal } = require('../lib/getCache');
 const { getReleaseAvailability } = require('./releaseAvailability');
+const { classifyTmdbLocalization } = require('./tmdbLocalization');
 const { malRatingToCertification, isUnratedCertification } = require('./ageRating');
 const wikiMappings = require('../lib/wiki-mapper.js');
 function CATALOG_TTL() { return parseInt(process.env.CATALOG_TTL || 1 * 24 * 60 * 60, 10); }
@@ -28,8 +29,7 @@ const host = process.env.HOST_NAME?.startsWith('http')
 
 const logger = consola.withTag('ParseProps');
 
-// Check if debug is enabled (CONSOLA_LEVEL >= 4)
-const isDebugEnabled = consola.level >= 4;
+const isDebugEnabled = () => consola.level >= 4;
 
 /**
  * Helper function to check if RPDB is enabled for the current context
@@ -104,6 +104,7 @@ function resolvePattern(pattern, ids, type, config, extra) {
     '{anilist_id}': ids?.anilistId || '',
     '{anidb_id}': ids?.anidbId || '',
     '{type}': type || '',
+    '{shape}': extra?.shape || 'poster',
     '{season}': extra?.season != null ? String(extra.season) : '',
     '{episode}': extra?.episode != null ? String(extra.episode) : '',
     '{language}': lang,
@@ -123,6 +124,13 @@ function resolvePattern(pattern, ids, type, config, extra) {
   };
 
   let url = pattern;
+  for (const group of new Set(pattern.match(/\{[a-z_]+(?:\|[a-z_]+)+\??\}/g) || [])) {
+    const optional = group.endsWith('?}');
+    const names = group.slice(1, optional ? -2 : -1).split('|');
+    const value = names.map(name => placeholders[`{${name}}`]).find(Boolean) || '';
+    if (!value && !optional) return null;
+    url = url.split(group).join(value);
+  }
   for (const [placeholder, value] of Object.entries(placeholders)) {
     const optional = `${placeholder.slice(0, -1)}?}`;
     if (url.includes(optional)) {
@@ -228,6 +236,18 @@ function resolvePosterPattern(config) {
   if (provider === 'none') return null;
   return config?.customPosterUrlPattern
     || (provider && provider !== 'custom' ? getDefaultPosterPattern(provider) : null);
+}
+
+function hasShapePlaceholder(pattern) {
+  return typeof pattern === 'string' && /\{shape\??\}/.test(pattern);
+}
+
+function resolveLandscapePattern(config, posterPattern) {
+  return config?.customLandscapeUrlPattern || (hasShapePlaceholder(posterPattern) ? posterPattern : null);
+}
+
+function posterShapeOf(meta) {
+  return meta?.posterShape === 'landscape' || meta?.posterShape === 'square' ? meta.posterShape : 'poster';
 }
 
 /**
@@ -634,7 +654,7 @@ function sortSearchResults(results, query) {
   });
 
   // 4. LOGGING (debug only)
-  if (isDebugEnabled) {
+  if (isDebugEnabled()) {
     logger.debug(
       `Intent: ${isPersonSearchIntent ? "Persons" : "Title"} | Query: "${query}" | Raw Matches: ${processedResults.length}`
     );
@@ -846,7 +866,7 @@ function sortTvdbSearchResults(results, query) {
   
   
   // 4. LOGGING for verification and debugging.
-  if (isDebugEnabled) {
+  if (isDebugEnabled()) {
     logger.debug(
       `[TVDB Sort] Query: "${query}" | Raw Matches: ${processedResults.length}`
     );
@@ -2159,6 +2179,7 @@ async function parseAnimeCatalogMeta(anime, config, language, descriptionFallbac
     description: descriptionFallback || addMetaProviderAttribution(anime.synopsis, 'MAL', config),
     year: anime.year,
     imdb_id: mapping?.imdb_id,
+    keywords: await tmdb.titleKeywordNames(tmdbId, stremioType, config),
     ...(tmdbId ? { _tmdbId: String(tmdbId) } : {}),
     ...(mapping?.tvdb_id ? { _tvdbId: String(mapping.tvdb_id) } : {}),
     ...(imdbId ? { _imdbId: imdbId } : {}),
@@ -2181,7 +2202,8 @@ async function parseAnimeCatalogMeta(anime, config, language, descriptionFallbac
 /**
  * Batch version of parseAnimeCatalogMeta that uses AniList batch fetching for better performance
  */
-async function parseAnimeCatalogMetaBatch(animes, config, language, includeVideos = false) {
+async function parseAnimeCatalogMetaBatch(animes, config, language, includeVideos = false, options = {}) {
+  const light = options.light === true;
   if (!animes || animes.length === 0) return [];
 
   const artProvider = resolveArtProvider('anime', 'poster', config);
@@ -2359,6 +2381,7 @@ async function parseAnimeCatalogMetaBatch(animes, config, language, includeVideo
           ...(mapping?.kitsu_id ? { _kitsuId: String(mapping.kitsu_id) } : {}),
           ...(id ? { _malId: String(id) } : {}),
           genres: genres,
+          keywords: await tmdb.titleKeywordNames(tmdbId, stremioType, config),
           releaseInfo: kitsuReleaseInfo,
           runtime: parseRunTime(item.attributes.episodeLength),
           certification: item.attributes.ageRating,
@@ -2472,6 +2495,46 @@ async function parseAnimeCatalogMetaBatch(animes, config, language, includeVideo
         name: anime.title_english || anime.title
       });
     }
+    let malReleaseInfo = anime.year || (anime.aired?.from ? anime.aired.from.substring(0, 4) : "");
+    if (stremioType === 'series' && anime.aired) {
+      const firstYear = anime.aired.from ? anime.aired.from.substring(0, 4) : "";
+      if (firstYear) {
+        const isOngoing = anime.status === 'Currently Airing' || !anime.aired.to;
+
+        if (isOngoing) {
+          malReleaseInfo = `${firstYear}-`;
+        } else if (anime.aired.to) {
+          const lastYear = anime.aired.to.substring(0, 4);
+          malReleaseInfo = firstYear === lastYear ? firstYear : `${firstYear}-${lastYear}`;
+        }
+      }
+    }
+
+    if (light) {
+      return withCatalogCertification({
+        id: config.mal?.useImdbIdForCatalogAndSearch && imdbId ? id : `mal:${malId}`,
+        type: stremioType,
+        name: anime.title_english || anime.title,
+        genres: anime.genres?.map(g => g.name) || [],
+        poster: finalPosterUrl,
+        description: addMetaProviderAttribution(anime.synopsis, 'MAL', config),
+        year: anime.year,
+        imdb_id: imdbId,
+        ...(tmdbId ? { _tmdbId: String(tmdbId) } : {}),
+        ...(tvdbId ? { _tvdbId: String(tvdbId) } : {}),
+        ...(imdbId ? { _imdbId: imdbId } : {}),
+        ...(mapping?.kitsu_id ? { _kitsuId: String(mapping.kitsu_id) } : {}),
+        ...(malId ? { _malId: String(malId) } : {}),
+        releaseInfo: malReleaseInfo,
+        runtime: parseRunTime(anime.duration),
+        imdbRating: imdbRating,
+        certification: malRatingToCertification(anime.rating),
+        released: anime.aired?.from ? new Date(anime.aired.from) : undefined,
+        status: anime.status,
+        trailers: trailers
+      });
+    }
+
     if((config.mal?.useImdbIdForCatalogAndSearch && imdbId)){
       return (await cacheWrapMetaSmart(config.userUUID, id, async () => {
         const { getMeta } = await import("../lib/getMeta");
@@ -2481,29 +2544,16 @@ async function parseAnimeCatalogMetaBatch(animes, config, language, includeVideo
       }, undefined, {enableErrorCaching: true, maxRetries: 2, config}, stremioType, includeVideos))?.meta || null;
     }
     else {
-      let malReleaseInfo = anime.year || (anime.aired?.from ? anime.aired.from.substring(0, 4) : "");
-      if (stremioType === 'series' && anime.aired) {
-        const firstYear = anime.aired.from ? anime.aired.from.substring(0, 4) : "";
-        if (firstYear) {
-          const isOngoing = anime.status === 'Currently Airing' || !anime.aired.to;
-          
-          if (isOngoing) {
-            malReleaseInfo = `${firstYear}-`;
-          } else if (anime.aired.to) {
-            const lastYear = anime.aired.to.substring(0, 4);
-            malReleaseInfo = firstYear === lastYear ? firstYear : `${firstYear}-${lastYear}`;
-          }
-        }
-      }
       let releaseDates = null;
       const shouldFetchReleaseDates = stremioType === 'movie' && tmdbId;
       
-      const [logo, background, releaseDatesResult] = await Promise.all([
+      const [logo, background, releaseDatesResult, keywords] = await Promise.all([
         getAnimeLogo({malId, imdbId, tvdbId, tmdbId, mediaType: stremioType}, config),
         getAnimeBg({malId, imdbId, tvdbId, tmdbId, mediaType: stremioType, malPosterUrl}, config),
         shouldFetchReleaseDates 
           ? tmdb.getMovieCertifications({ id: tmdbId }, config).then(data => data || null).catch(() => null)
-          : Promise.resolve(null)
+          : Promise.resolve(null),
+        tmdb.titleKeywordNames(tmdbId, stremioType, config)
       ]);
       
       if (releaseDatesResult) {
@@ -2517,6 +2567,7 @@ async function parseAnimeCatalogMetaBatch(animes, config, language, includeVideo
         background: background,
         name: anime.title_english || anime.title,
         genres: anime.genres?.map(g => g.name) || [],
+        keywords,
         poster: finalPosterUrl,
         description: addMetaProviderAttribution(anime.synopsis, 'MAL', config),
         year: anime.year,
@@ -3509,6 +3560,9 @@ module.exports = {
   getDefaultPosterPattern,
   getDefaultThumbnailPattern,
   resolvePosterPattern,
+  resolveLandscapePattern,
+  hasShapePlaceholder,
+  posterShapeOf,
   resolveThumbnailPattern,
   parsePosterWithProvider,
   checkIfExists,
@@ -3540,6 +3594,7 @@ module.exports = {
   getTmdbTvCertificationForCountry,
   resolveArtProvider,
   addMetaProviderAttribution,
+  classifyTmdbLocalization,
   processOverviewTranslations,
   processTitleTranslations,
   genSeasonsString,

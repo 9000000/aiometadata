@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
+import { setSimklListMinTTL } from '@/lib/catalogTTL';
 import { AppConfig, CatalogConfig, SearchConfig } from "./config";
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from 'lz-string';
 import { allCatalogDefinitions, allSearchProviders } from "@/data/catalogs";
@@ -16,6 +17,7 @@ interface AuthState {
 export interface InstanceLimits {
   maxCatalogs: number | null;
   collectionImportCatalogCap: number;
+  maxEpisodeOrders: number;
 }
 
 interface ConfigContextType {
@@ -31,6 +33,8 @@ interface ConfigContextType {
   hasBuiltInGemini: boolean;
   traktSearchEnabled: boolean;
   simklSearchEnabled: boolean;
+  lumiereEnabled: boolean;
+  aiCatalogMaxPerRequest: number;
   anilistRequiresAuth: boolean;
   catalogTTL: number;
   /** Instance ceiling on enabled catalogs, null when unset. */
@@ -38,6 +42,7 @@ interface ConfigContextType {
 
   /** Fallback ceiling for a collection import when maxCatalogs is unset. */
   collectionImportCatalogCap: number;
+  maxEpisodeOrders: number;
   /** Re-reads the instance limits, which the dashboard can change mid-session. */
   refreshInstanceLimits: () => Promise<InstanceLimits | null>;
   isLoading: boolean;
@@ -213,6 +218,7 @@ const initialConfig: AppConfig = {
       'trakt.search': true,
       'mdblist.search': true,
       'imdb.suggestions.search': true,
+      'lumiere.search': true,
       'simkl.search': true,
       'simkl.search.movie': true,
       'simkl.search.series': true,
@@ -254,12 +260,20 @@ function getManifestFingerprint(config: AppConfig): string {
   }));
 
   const subtitlesResource = hasAnyWatchTrackingEnabled(config);
+  const collectionCatalogs = !config.catalogModeOnly && config.collectionCatalogs !== false;
+  const collections = collectionCatalogs
+    ? (config.collections || [])
+        .filter((entry) => entry.kind === 'collection')
+        .map((entry) => ({ id: entry.id, title: entry.title }))
+    : [];
 
   return JSON.stringify({
     catalogs: catalogFingerprint,
     addonName: config.addonName,
     catalogModeOnly: config.catalogModeOnly,
     hideStremioCatalogs: config.hideStremioCatalogs,
+    collectionCatalogs,
+    collections,
     showRateMeButton: config.showRateMeButton,
     subtitlesResource,
     showPrefix: config.showPrefix,
@@ -405,9 +419,13 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
   const [anilistRequiresAuth, setAnilistRequiresAuth] = useState(true);
   const [traktSearchEnabled, setTraktSearchEnabled] = useState(true);
   const [simklSearchEnabled, setSimklSearchEnabled] = useState(true);
+  const [lumiereEnabled, setLumiereEnabled] = useState(false);
+  const [instanceLoaded, setInstanceLoaded] = useState(false);
+  const [aiCatalogMaxPerRequest, setAiCatalogMaxPerRequest] = useState(20);
   const [catalogTTL, setCatalogTTL] = useState(86400); // Default to 24 hours
   const [maxCatalogs, setMaxCatalogs] = useState<number | null>(null);
   const [collectionImportCatalogCap, setCollectionImportCatalogCap] = useState(400);
+  const [maxEpisodeOrders, setMaxEpisodeOrders] = useState(100);
 
   const refreshInstanceLimits = useCallback(async (): Promise<InstanceLimits | null> => {
     try {
@@ -417,10 +435,13 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
       const limits: InstanceLimits = {
         maxCatalogs: env.maxCatalogs ?? null,
         collectionImportCatalogCap: env.collectionImportCatalogCap || 400,
+        maxEpisodeOrders: env.maxEpisodeOrders || 100,
       };
       setCatalogTTL(env.catalogTTL || 86400);
+      setSimklListMinTTL(env.simklListMinTTL);
       setMaxCatalogs(limits.maxCatalogs);
       setCollectionImportCatalogCap(limits.collectionImportCatalogCap);
+      setMaxEpisodeOrders(limits.maxEpisodeOrders);
       // Returned as well as stored, so a caller acting on it now is not reading
       // state that React has not re-rendered yet.
       return limits;
@@ -429,6 +450,15 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
   const manifestFingerprint = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!instanceLoaded || lumiereEnabled) return;
+    if (!config.catalogs.some(c => c.source === 'lumiere' && c.enabled)) return;
+    setConfig(prev => ({
+      ...prev,
+      catalogs: prev.catalogs.map(c => (c.source === 'lumiere' ? { ...c, enabled: false, showInHome: false } : c)),
+    }));
+  }, [instanceLoaded, lumiereEnabled, config.catalogs]);
 
   // --- THIS IS THE CORRECTED EFFECT ---
   useEffect(() => {
@@ -446,9 +476,14 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
         setAnilistRequiresAuth(envApiKeys.anilistRequiresAuth ?? true);
         setTraktSearchEnabled(envApiKeys.traktSearchEnabled ?? true);
         setSimklSearchEnabled(envApiKeys.simklSearchEnabled ?? true);
+        setLumiereEnabled(envApiKeys.lumiereEnabled ?? false);
+        setInstanceLoaded(true);
+        setAiCatalogMaxPerRequest(envApiKeys.aiCatalogMaxPerRequest || 20);
         setCatalogTTL(envApiKeys.catalogTTL || 86400);
+        setSimklListMinTTL(envApiKeys.simklListMinTTL);
         setMaxCatalogs(envApiKeys.maxCatalogs ?? null);
         setCollectionImportCatalogCap(envApiKeys.collectionImportCatalogCap || 400);
+        setMaxEpisodeOrders(envApiKeys.maxEpisodeOrders || 100);
 
         // Layer in the server keys with the correct priority.
         // We use `preloadedConfig` because it holds the user's saved data.
@@ -520,7 +555,7 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <ConfigContext.Provider value={{ config, setConfig, addonVersion, resetConfig, auth, setAuth, hasBuiltInTvdb, hasBuiltInTmdb, hasBuiltInMdblist, hasBuiltInGemini, catalogTTL, maxCatalogs, collectionImportCatalogCap, refreshInstanceLimits, isLoading, sessionId, setSessionId, anilistRequiresAuth, traktSearchEnabled, simklSearchEnabled, manifestFingerprint, manifestChangedSinceInstall, markManifestInstalled }}>
+    <ConfigContext.Provider value={{ config, setConfig, addonVersion, resetConfig, auth, setAuth, hasBuiltInTvdb, hasBuiltInTmdb, hasBuiltInMdblist, hasBuiltInGemini, catalogTTL, maxCatalogs, collectionImportCatalogCap, maxEpisodeOrders, refreshInstanceLimits, isLoading, sessionId, setSessionId, anilistRequiresAuth, traktSearchEnabled, simklSearchEnabled, lumiereEnabled, aiCatalogMaxPerRequest, manifestFingerprint, manifestChangedSinceInstall, markManifestInstalled }}>
       {children}
     </ConfigContext.Provider>
   );

@@ -101,6 +101,7 @@ const FILTER_PARAMS: Record<string, string> = {
   withOriginalLanguage: 'with_original_language',
   withOriginCountry: 'with_origin_country',
   withWatchProviders: 'with_watch_providers',
+  withoutWatchProviders: 'without_watch_providers',
   watchRegion: 'watch_region',
   withPeople: 'with_people',
   voteCountGte: 'vote_count.gte',
@@ -233,6 +234,7 @@ function discoverFormState(
     ['without_keywords', 'withoutKeywords', ''],
     ['with_people', 'selectedPeople', 'peopleJoinMode'],
     ['with_watch_providers', 'watchProviders', 'providerJoinMode'],
+    ['without_watch_providers', 'withoutWatchProviders', ''],
   ] as const) {
     const picked = selection(params[param]);
     if (picked.items.length === 0) continue;
@@ -679,6 +681,39 @@ export function createBlueprintWriter(lookup: BlueprintLookup) {
       },
     };
   };
+}
+
+/**
+ * The catalogs part of a file needs: those its sources address, and the parts of
+ * any merge among them. A file carries each catalog once, on the first tile that
+ * uses it, so this is decided from the blueprints of the whole file. A source may
+ * address a catalog by its manifest spelling, `<id>_<type>` under a displayType.
+ */
+export function blueprintsUsedBy(
+  blueprints: CatalogBlueprint[],
+  sources: Array<{ catalogId?: unknown }>
+): CatalogBlueprint[] {
+  const addressed = new Set(sources.map(source => trimmed(source.catalogId)).filter(Boolean));
+  const byOwnKey = new Map(blueprints.map(blueprint => [blueprintKey(blueprint), blueprint]));
+  const kept = new Map<string, CatalogBlueprint>();
+  const queue = blueprints.filter(blueprint =>
+    addressed.has(blueprint.id) || addressed.has(`${blueprint.id}_${blueprint.type}`)
+  );
+
+  while (queue.length > 0) {
+    const blueprint = queue.shift()!;
+    const key = blueprintKey(blueprint);
+    if (kept.has(key)) continue;
+    kept.set(key, blueprint);
+    const parts = blueprint.metadata?.mergedSources;
+    for (const part of Array.isArray(parts) ? parts : []) {
+      if (!isRecord(part)) continue;
+      const child = byOwnKey.get(lookupKey(part.catalogId, part.catalogType));
+      if (child) queue.push(child);
+    }
+  }
+
+  return blueprints.filter(blueprint => kept.has(blueprintKey(blueprint)));
 }
 
 export function dedupeBlueprints(blueprints: CatalogBlueprint[]): CatalogBlueprint[] {

@@ -50,7 +50,6 @@ const PRESERVED_CACHE_KEYS = [
   'anime_list:last_update', 'addon:start_time', 'system:app_version',
   // Clearing this would make the next boot re-sweep the whole keyspace.
   EPOCH_STATE_KEY,
-  'imdb:ratings', 'imdb-ratings-etag',
   // Sessions live here. Clearing them signs out whoever pressed the button, and
   // their next request 401s before it can report what the clear actually did.
   'auth:',
@@ -418,6 +417,13 @@ class DashboardAPI {
           const hitRate = parseFloat(cacheHealth.hitRate) || 0;
           const missRate = hitRate > 0 ? 100 - hitRate : 0;
 
+          let evictedKeys = null;
+          try {
+            const stats = await this.cache.info("stats");
+            const line = stats.split("\r\n").find((l) => l.startsWith("evicted_keys:"));
+            if (line) evictedKeys = parseInt(line.split(":")[1], 10);
+          } catch (_) {}
+
           // Get real Redis memory usage
           let memoryUsed = "0 MB";
           let memoryUsagePercent = null;
@@ -469,7 +475,7 @@ class DashboardAPI {
             missRate: missRate,
             memoryUsage: memoryUsed,
             memoryUsagePercent: memoryUsagePercent,
-            evictionRate: 2.1, // TODO: Calculate real eviction rate from Redis stats
+            evictedKeys: Number.isFinite(evictedKeys) ? evictedKeys : null,
             totalKeys: totalKeys,
             hits: cacheHealth.hits || 0,
             misses: cacheHealth.misses || 0,
@@ -486,7 +492,7 @@ class DashboardAPI {
             missRate: 0,
             memoryUsage: "N/A",
             memoryUsagePercent: null,
-            evictionRate: 0,
+            evictedKeys: null,
             totalKeys: 0,
             hits: 0,
             misses: 0,
@@ -500,7 +506,7 @@ class DashboardAPI {
         missRate: 0,
         memoryUsage: "N/A",
         memoryUsagePercent: null,
-        evictionRate: 0,
+        evictedKeys: null,
         totalKeys: 0,
         hits: 0,
         misses: 0,
@@ -514,7 +520,7 @@ class DashboardAPI {
         missRate: 0,
         memoryUsage: "N/A",
         memoryUsagePercent: null,
-        evictionRate: 0,
+        evictedKeys: null,
         totalKeys: 0,
         hits: 0,
         misses: 0,
@@ -874,7 +880,6 @@ class DashboardAPI {
         anilistWatchTracking: 0,
         malWatchTracking: 0,
         simklWatchTracking: 0,
-        traktWatchTracking: 0,
         ratingPostersRpdb: 0,
         ratingPostersTop: 0,
         aiSearchEnabled: 0,
@@ -946,7 +951,6 @@ class DashboardAPI {
       if (config.anilistWatchTracking) stats.features.anilistWatchTracking++;
       if (config.malWatchTracking) stats.features.malWatchTracking++;
       if (config.simklWatchTracking) stats.features.simklWatchTracking++;
-      if (config.traktWatchTracking) stats.features.traktWatchTracking++;
       config.posterRatingProvider === 'top' ? stats.features.ratingPostersTop++ : stats.features.ratingPostersRpdb++;
       if (config.search?.ai_enabled) stats.features.aiSearchEnabled++;
 
@@ -1079,7 +1083,6 @@ class DashboardAPI {
         anilistWatchTracking: Math.round((stats.features.anilistWatchTracking / total) * 100),
         malWatchTracking: Math.round((stats.features.malWatchTracking / total) * 100),
         simklWatchTracking: Math.round((stats.features.simklWatchTracking / total) * 100),
-        traktWatchTracking: Math.round((stats.features.traktWatchTracking / total) * 100),
         ratingPostersRpdb: Math.round((stats.features.ratingPostersRpdb / total) * 100),
         ratingPostersTop: Math.round((stats.features.ratingPostersTop / total) * 100),
         aiSearchEnabled: Math.round((stats.features.aiSearchEnabled / total) * 100),
@@ -1127,7 +1130,6 @@ class DashboardAPI {
         anilistWatchTracking: 0,
         malWatchTracking: 0,
         simklWatchTracking: 0,
-        traktWatchTracking: 0,
         ratingPostersRpdb: 0,
         ratingPostersTop: 0,
         aiSearchEnabled: 0,
@@ -1340,6 +1342,10 @@ class DashboardAPI {
         cpuUsage: this.getProcessCpuUsage(),
         diskUsage: await this.getDiskUsage(),
         requestsPerMin: await this.getRequestsPerMinute(),
+        // What the kernel counts against the container's limit, which includes
+        // reclaimable page cache and so runs far above the process's own heap.
+        container: require('./containerMemory').containerMemory(),
+        eventLoop: require('./eventLoopLag').eventLoopLag(),
       };
     } catch (error) {
       logger.error("Error getting resource usage:", error);
@@ -2270,8 +2276,8 @@ class DashboardAPI {
 
   /**
    * Delete the Redis entries belonging to exactly one title.
-   * Component keys are `v<version>:<component>:<hash>:<metaId>`, so the metaId
-   * is the trailing segment and the pattern is anchored to the end.
+   * Meta keys are `e<epoch>:meta-h:<hash>:<metaId>` (one hash per title), so the
+   * metaId is the trailing segment and the pattern is anchored to the end.
    */
   async clearCacheForMetaId(metaId, { dryRun = false, samples = null } = {}) {
     if (!this.cache) throw new Error('Cache not available');
@@ -2647,6 +2653,7 @@ class DashboardAPI {
     return {
       guestModeEnabled: !disableGuestMode,
       adminKeyConfigured: !!process.env.ADMIN_KEY,
+      jellyfinEnabled: String(require('./settingsService').getSetting('JELLYFIN_API_ENABLED') || '').trim().toLowerCase() === 'true',
       logViewerMaxEntries: Number.isFinite(viewerMax) && viewerMax > 0 ? viewerMax : 10000
     };
   }

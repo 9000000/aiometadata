@@ -345,7 +345,12 @@ async function runOne(target: WarmTarget): Promise<void> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30000);
     try {
-      const response = await fetch(target.http, { method: 'GET', signal: controller.signal });
+      const { fetch: undiciFetch } = require('undici');
+      const response = await undiciFetch(target.http, {
+        method: 'GET',
+        signal: controller.signal,
+        dispatcher: require('../../utils/httpClient').directDispatcher,
+      });
       await response.arrayBuffer();
       stats.rendered += 1;
       classStats(target.imageClass).rendered += 1;
@@ -355,7 +360,7 @@ async function runOne(target: WarmTarget): Promise<void> {
     return;
   }
 
-  const result = await store.getOrFetch(target.imageClass, target.url, (validators) => fetchImage(target.url, { validators }));
+  const result = await store.getOrFetch(target.imageClass, target.url, (validators) => fetchImage(target.url, { validators }), { awaitRefresh: true });
   if (result.status === 'HIT') {
     stats.alreadyFresh += 1;
     classStats(target.imageClass).alreadyFresh += 1;

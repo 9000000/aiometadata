@@ -135,6 +135,10 @@ export function GeneralSettings() {
     setConfig(prevConfig => ({ ...prevConfig, showMetaProviderAttribution: checked }));
   };
 
+  const handleHideErrorsChange = (checked: boolean) => {
+    setConfig(prevConfig => ({ ...prevConfig, hideErrors: checked ? undefined : true }));
+  };
+
   const handleCastCountChange = (value: string) => {
     const count = parseInt(value, 10);
     setConfig(prevConfig => ({ ...prevConfig, castCount: count === -1 ? undefined : count }));
@@ -160,9 +164,6 @@ export function GeneralSettings() {
     setConfig(prevConfig => ({ ...prevConfig, simklWatchTracking: checked }));
   };
 
-  const handleTraktTrackingChange = (checked: boolean) => {
-    setConfig(prevConfig => ({ ...prevConfig, traktWatchTracking: checked }));
-  };
 
   const handlePublicMetaDBTrackingChange = (checked: boolean) => {
     setConfig(prevConfig => ({ ...prevConfig, publicmetadbWatchTracking: checked }));
@@ -309,6 +310,14 @@ export function GeneralSettings() {
               <Switch id="show-meta-provider-attribution" checked={config.showMetaProviderAttribution} onCheckedChange={handleShowMetaProviderAttributionChange} />
             </div>
 
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+              <div className="min-w-[12rem] flex-1">
+                <Label htmlFor="show-errors" className="font-medium">Show Errors</Label>
+                <p className="text-sm text-muted-foreground">When a provider refuses a request, show the reason as a card in the row instead of an empty one.</p>
+              </div>
+              <Switch id="show-errors" checked={config.hideErrors !== true} onCheckedChange={handleHideErrorsChange} />
+            </div>
+
             <div className="space-y-3 p-3 rounded-lg">
               <div>
                 <Label className="font-medium">Catalog Type Labels</Label>
@@ -429,7 +438,7 @@ export function GeneralSettings() {
             </div>
             {config.playbackReporting ? (
               <p className="text-xs text-muted-foreground">
-                Only a client that reports playback can drive this, which today means Jellyfin ones. In exchange, something you abandon after a few minutes is kept as a resume point rather than being marked watched. <span className="text-amber-400">Watching anywhere else, Stremio included, records nothing at all.</span>
+                Only a client that reports playback can drive this, which today means Jellyfin ones. In exchange, something you abandon after a few minutes is kept as a resume point rather than being marked watched, and a client that asks can read back what your trackers hold, so its Continue Watching reflects other devices. A favourite set in the client goes to your watchlist, and disliking a show marks it dropped. <span className="text-amber-400">Watching anywhere else, Stremio included, records nothing at all.</span>
               </p>
             ) : (
               <p className="text-xs text-muted-foreground">
@@ -438,14 +447,6 @@ export function GeneralSettings() {
             )}
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
-            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="min-w-[12rem] flex-1">
-                <Label htmlFor="trakt-watch-tracking" className="font-medium">Trakt</Label>
-                <p className="text-sm text-muted-foreground">{getWatchTrackingMediaTypeSummary(config, 'trakt')}</p>
-              </div>
-              {renderWatchTrackingControls('trakt', 'trakt-watch-tracking', !!config.traktWatchTracking, handleTraktTrackingChange)}
-            </div>
-
             <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
               <div className="min-w-[12rem] flex-1">
                 <Label htmlFor="simkl-watch-tracking" className="font-medium">Simkl</Label>

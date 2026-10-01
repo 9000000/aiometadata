@@ -1,7 +1,7 @@
 import type { UserConfig } from '../types';
+import { ACCOUNT_SERVICES, credentialOf, trackerConfig } from './accounts';
 
 export type WatchTrackingService =
-  | 'trakt'
   | 'simkl'
   | 'anilist'
   | 'mal'
@@ -10,21 +10,7 @@ export type WatchTrackingService =
 
 export type WatchTrackingMediaType = 'movie' | 'series';
 
-type WatchTrackingMasterKey =
-  | 'traktWatchTracking'
-  | 'simklWatchTracking'
-  | 'anilistWatchTracking'
-  | 'malWatchTracking'
-  | 'mdblistWatchTracking'
-  | 'publicmetadbWatchTracking';
-
-interface WatchTrackingServiceDefinition {
-  masterKey: WatchTrackingMasterKey;
-  hasCredential: (config: UserConfig) => boolean;
-}
-
 export const WATCH_TRACKING_SERVICES: WatchTrackingService[] = [
-  'trakt',
   'simkl',
   'anilist',
   'mal',
@@ -32,53 +18,19 @@ export const WATCH_TRACKING_SERVICES: WatchTrackingService[] = [
   'publicmetadb',
 ];
 
-const SERVICE_DEFINITIONS: Record<
-  WatchTrackingService,
-  WatchTrackingServiceDefinition
-> = {
-  trakt: {
-    masterKey: 'traktWatchTracking',
-    hasCredential: (config) => !!config.apiKeys?.traktTokenId,
-  },
-  simkl: {
-    masterKey: 'simklWatchTracking',
-    hasCredential: (config) => !!config.apiKeys?.simklTokenId,
-  },
-  anilist: {
-    masterKey: 'anilistWatchTracking',
-    hasCredential: (config) => !!config.apiKeys?.anilistTokenId,
-  },
-  mal: {
-    masterKey: 'malWatchTracking',
-    hasCredential: (config) => !!config.apiKeys?.malTokenId,
-  },
-  mdblist: {
-    masterKey: 'mdblistWatchTracking',
-    hasCredential: (config) => !!config.apiKeys?.mdblist,
-  },
-  publicmetadb: {
-    masterKey: 'publicmetadbWatchTracking',
-    hasCredential: (config) => !!config.apiKeys?.publicmetadb,
-  },
-};
-
 export function isWatchTrackingMediaTypeSelected(
   config: UserConfig,
   service: WatchTrackingService,
   mediaType: WatchTrackingMediaType,
 ): boolean {
-  return config.watchTracking?.[service]?.[mediaType] !== false;
+  return trackerConfig(config, service)?.watchTracking?.[service]?.[mediaType] !== false;
 }
 
 export function isWatchTrackingServiceEnabled(
   config: UserConfig,
   service: WatchTrackingService,
 ): boolean {
-  const definition = SERVICE_DEFINITIONS[service];
-  return (
-    definition.hasCredential(config) &&
-    config[definition.masterKey] === true
-  );
+  return Boolean(credentialOf(config, service)) && trackerConfig(config, service)?.[ACCOUNT_SERVICES[service].master] === true;
 }
 
 export function shouldTrackServiceMediaType(

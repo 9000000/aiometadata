@@ -9,11 +9,34 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Switch } from '@/components/ui/switch';
-import { ExternalLink, CheckCircle2, XCircle, Loader2, ChevronDown, Plus, Link2, BarChart3, Bookmark, TrendingUp, Sparkles, PlayCircle, Trash2 } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { ExternalLink, CheckCircle2, XCircle, Loader2, ChevronDown, Plus, Link2, BarChart3, Bookmark, TrendingUp, Sparkles, PlayCircle, Trash2, Download } from 'lucide-react';
 import { toast } from "sonner";
 import { apiCache } from '@/utils/apiCache';
 import { DeviceAuthCard } from '@/components/DeviceAuthCard';
 import { useDeviceAuth } from '@/hooks/useDeviceAuth';
+
+interface SimklCustomList {
+  id: string;
+  name: string;
+  description: string;
+  mediaType: 'movies' | 'tv' | 'anime';
+  privacy: string;
+  itemCount: number;
+}
+
+interface SimklQuota {
+  limit: number;
+  remaining: number;
+  resetsAt: number;
+  pausedUntil?: number;
+}
+
+function formatResetIn(resetsAt: number): string {
+  const minutes = Math.max(1, Math.round((resetsAt - Date.now()) / 60000));
+  const hours = Math.floor(minutes / 60);
+  return hours ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
+}
 
 interface SimklIntegrationProps {
   isOpen: boolean;
@@ -23,12 +46,16 @@ interface SimklIntegrationProps {
 export function SimklIntegration({ isOpen, onClose }: SimklIntegrationProps) {
   const [simklClientId, setSimklClientId] = useState<string>("");
   const [simklAuthMode, setSimklAuthMode] = useState<'oauth' | 'pin' | 'both'>('oauth');
+  const [simklV2Available, setSimklV2Available] = useState(false);
+  const [serverSyncMinutes, setServerSyncMinutes] = useState(30);
   
   useEffect(() => {
     fetch("/api/config")
       .then(res => res.ok ? res.json() : null)
       .then(data => {
         if (data && data.simkl) setSimklClientId(data.simkl);
+        setSimklV2Available(Boolean(data?.simklV2));
+        if (Number(data?.simklActivitiesTTL) > 0) setServerSyncMinutes(Math.max(1, Math.round(data.simklActivitiesTTL / 60)));
         if (data && (data.simklAuthMode === 'pin' || data.simklAuthMode === 'both' || data.simklAuthMode === 'oauth')) {
           setSimklAuthMode(data.simklAuthMode);
         }
@@ -45,6 +72,8 @@ export function SimklIntegration({ isOpen, onClose }: SimklIntegrationProps) {
   const [disconnecting, setDisconnecting] = useState(false);
   const [username, setUsername] = useState<string | null>(null);
   const [loadingUsername, setLoadingUsername] = useState(false);
+  const [authVersion, setAuthVersion] = useState<'v1' | 'v2' | null>(null);
+  const [quota, setQuota] = useState<SimklQuota | null>(null);
   const [userStats, setUserStats] = useState<any>(null);
   const [loadingStats, setLoadingStats] = useState(false);
   const [statsCollapsed, setStatsCollapsed] = useState(true);
@@ -66,29 +95,191 @@ export function SimklIntegration({ isOpen, onClose }: SimklIntegrationProps) {
     return undefined;
   };
 
+  const loadTokenInfo = (tokenId: string) => {
+    setLoadingUsername(true);
+    fetch("/api/oauth/token/info", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tokenId }),
+    })
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data?.username) setUsername(data.username);
+        setAuthVersion(data?.authVersion ?? null);
+        setQuota(data?.quota ?? null);
+      })
+      .catch(() => setUsername(null))
+      .finally(() => setLoadingUsername(false));
+  };
+
   useEffect(() => {
     if (isOpen) {
       setIsConnected(!!config.apiKeys?.simklTokenId);
       setTempTokenId(config.apiKeys?.simklTokenId || "");
       
       if (config.apiKeys?.simklTokenId) {
-        setLoadingUsername(true);
-        fetch("/api/oauth/token/info", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tokenId: config.apiKeys.simklTokenId }),
-        })
-          .then(res => res.ok ? res.json() : null)
-          .then(data => {
-            if (data?.username) setUsername(data.username);
-          })
-          .catch(() => setUsername(null))
-          .finally(() => setLoadingUsername(false));
+        loadTokenInfo(config.apiKeys.simklTokenId);
       } else {
         setUsername(null);
+        setAuthVersion(null);
+        setQuota(null);
       }
     }
   }, [isOpen, config.apiKeys?.simklTokenId]);
+
+  const [customLists, setCustomLists] = useState<SimklCustomList[]>([]);
+  const [selectedCustomLists, setSelectedCustomLists] = useState<Set<string>>(new Set());
+  const [isLoadingCustomLists, setIsLoadingCustomLists] = useState(false);
+
+  const fetchCustomLists = async () => {
+    const tokenId = config.apiKeys?.simklTokenId;
+    if (!tokenId) {
+      toast.error("Connect your Simkl account first.");
+      return;
+    }
+    setIsLoadingCustomLists(true);
+    try {
+      const response = await fetch("/api/simkl/lists", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tokenId }),
+      });
+      if (!response.ok) throw new Error(`Failed to fetch lists (Status: ${response.status})`);
+      const data = await response.json();
+      if (data?.error === 'needs_v2') {
+        toast.error("Reconnect Simkl to load custom lists", {
+          description: "Custom lists need the newer Simkl connection. Disconnect Simkl above and connect it again."
+        });
+        setCustomLists([]);
+        return;
+      }
+      if (data?.error === 'premium_only') {
+        toast.error("Custom lists need Simkl PRO or VIP", {
+          description: "Simkl only shares custom lists with PRO and VIP accounts."
+        });
+        setCustomLists([]);
+        return;
+      }
+      const lists: SimklCustomList[] = Array.isArray(data?.lists) ? data.lists : [];
+      setCustomLists(lists);
+      setSelectedCustomLists(new Set());
+      if (lists.length === 0) {
+        toast.info("No custom lists found", { description: "Make one at simkl.com/lists." });
+      } else {
+        toast.success("Custom lists loaded", { description: `Found ${lists.length} list(s)` });
+      }
+    } catch (error) {
+      toast.error("Failed to load custom lists", {
+        description: error instanceof Error ? error.message : "Unknown error occurred"
+      });
+      setCustomLists([]);
+    } finally {
+      setIsLoadingCustomLists(false);
+    }
+  };
+
+  const handleCustomListSelection = (listId: string, checked: boolean) => {
+    const next = new Set(selectedCustomLists);
+    if (checked) next.add(listId);
+    else next.delete(listId);
+    setSelectedCustomLists(next);
+  };
+
+  /** Returns how many were new: a list already in the catalogs is left as it is. */
+  const addListCatalogs = (lists: SimklCustomList[]): number => {
+    const toAdd = lists.filter(list => !config.catalogs.some(c => c.id === `simkl.list.${list.id}`));
+    setConfig(prev => {
+      const catalogs = [...prev.catalogs];
+      for (const list of toAdd) {
+        const id = `simkl.list.${list.id}`;
+        if (catalogs.some(c => c.id === id)) continue;
+        const catalogType = list.mediaType === 'movies' ? 'movie' : list.mediaType === 'anime' ? 'anime' : 'series';
+        const displayType = getDisplayTypeOverride(catalogType, prev.displayTypeOverrides);
+        catalogs.push({
+          id,
+          type: catalogType,
+          name: list.name,
+          enabled: true,
+          showInHome: true,
+          source: 'simkl' as any,
+          metadata: {
+            listId: list.id,
+            listName: list.name,
+            listDescription: list.description,
+            mediatype: list.mediaType,
+            itemCount: list.itemCount,
+            privacy: list.privacy,
+            isPublic: list.privacy === 'public',
+          },
+          ...(displayType && { displayType })
+        });
+      }
+      return { ...prev, catalogs };
+    });
+    return toAdd.length;
+  };
+
+  const importSelectedCustomLists = () => {
+    if (selectedCustomLists.size === 0) {
+      toast.error("Please select at least one list to import.");
+      return;
+    }
+    const added = addListCatalogs(customLists.filter(list => selectedCustomLists.has(list.id)));
+    setSelectedCustomLists(new Set());
+    toast.success(added ? `Imported ${added} list(s)` : "Those lists are already in your catalogs");
+  };
+
+  const [listLink, setListLink] = useState('');
+  const [isAddingList, setIsAddingList] = useState(false);
+
+  const addListByLink = async () => {
+    const tokenId = config.apiKeys?.simklTokenId;
+    if (!tokenId) {
+      toast.error("Connect your Simkl account first.");
+      return;
+    }
+    setIsAddingList(true);
+    try {
+      const response = await fetch("/api/simkl/list", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tokenId, list: listLink }),
+      });
+      const data = await response.json().catch(() => null);
+      if (response.status === 400) {
+        toast.error("That is not a Simkl list", { description: "Paste a simkl.com/lists link or the list's numeric id." });
+        return;
+      }
+      if (!response.ok) throw new Error(data?.error || `Status ${response.status}`);
+      if (data?.error === 'needs_v2') {
+        toast.error("Reconnect Simkl to add custom lists", {
+          description: "Custom lists need the newer Simkl connection. Disconnect Simkl above and connect it again."
+        });
+        return;
+      }
+      if (data?.error === 'premium_only') {
+        toast.error("Custom lists need Simkl PRO or VIP", {
+          description: "Simkl only shares custom lists with PRO and VIP accounts."
+        });
+        return;
+      }
+      if (data?.error === 'not_found' || !data?.list) {
+        toast.error("No such list", { description: "It may be private, or the id may be wrong." });
+        return;
+      }
+      const added = addListCatalogs([data.list]);
+      setListLink('');
+      toast.success(added ? `Added ${data.list.name}` : `${data.list.name} is already in your catalogs`, {
+        ...(added && data.list.owner ? { description: `A list by ${data.list.owner}, ${data.list.itemCount} items` } : {}),
+      });
+    } catch (error) {
+      toast.error("Could not add that list", {
+        description: error instanceof Error ? error.message : "Unknown error occurred"
+      });
+    } finally {
+      setIsAddingList(false);
+    }
+  };
 
   // Fetch Simkl user stats when connected
   useEffect(() => {
@@ -123,6 +314,7 @@ export function SimklIntegration({ isOpen, onClose }: SimklIntegrationProps) {
   const applyToken = (tokenId: string, connectedUsername: string) => {
     setUsername(connectedUsername);
     setTempTokenId(tokenId);
+    loadTokenInfo(tokenId);
     setConfig(prev => ({
       ...prev,
       apiKeys: {
@@ -498,12 +690,73 @@ export function SimklIntegration({ isOpen, onClose }: SimklIntegrationProps) {
                         ) : username ? (
                           <p className="text-xs text-muted-foreground truncate">@{username}</p>
                         ) : null}
+                        {authVersion === 'v2' && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {!quota
+                              ? 'Your daily Simkl allowance shows here after the next Simkl request'
+                              : quota.pausedUntil && quota.pausedUntil > Date.now()
+                                ? `Daily Simkl allowance used up, resets in ${formatResetIn(quota.pausedUntil)}`
+                                : `${quota.remaining.toLocaleString()} of ${quota.limit.toLocaleString()} Simkl requests left today, resets in ${formatResetIn(quota.resetsAt)}`}
+                          </p>
+                        )}
+                        {authVersion === 'v2' && (
+                          <a
+                            href="https://simkl.com/settings/connected-apps/"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-1"
+                          >
+                            Usage by app <ExternalLink className="h-3 w-3" />
+                          </a>
+                        )}
                       </div>
                     </div>
                     <Button variant="outline" size="sm" onClick={handleDisconnect} disabled={disconnecting} className="shrink-0">
                       {disconnecting ? 'Disconnecting...' : 'Disconnect'}
                     </Button>
                   </div>
+
+                  {authVersion === 'v2' && (
+                    <div className="space-y-2 p-3 rounded-lg border border-border">
+                      <div className="flex items-center justify-between gap-2">
+                        <Label htmlFor="simkl-sync-interval">Check Simkl for changes every (minutes)</Label>
+                        {config.simklSyncInterval !== undefined && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-auto py-0.5 px-2 text-xs"
+                            onClick={() => setConfig(prev => ({ ...prev, simklSyncInterval: undefined }))}
+                          >
+                            Use server default
+                          </Button>
+                        )}
+                      </div>
+                      <Input
+                        id="simkl-sync-interval"
+                        type="number"
+                        min={1}
+                        max={1440}
+                        step={1}
+                        placeholder={String(serverSyncMinutes)}
+                        value={config.simklSyncInterval ?? ''}
+                        onChange={(e) => {
+                          const parsed = parseInt(e.target.value, 10);
+                          setConfig(prev => ({ ...prev, simklSyncInterval: Number.isNaN(parsed) ? undefined : Math.min(Math.max(parsed, 1), 1440) }));
+                        }}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {config.simklSyncInterval === undefined ? `Following the server default of ${serverSyncMinutes} minutes. ` : ''}
+                        How quickly watchlist, Up Next and watched changes made on Simkl show up here. Each check uses one request from your daily Simkl allowance, and only happens while your catalogs are being browsed.
+                      </p>
+                    </div>
+                  )}
+
+                  {authVersion === 'v1' && simklV2Available && (
+                    <p className="text-xs text-muted-foreground p-3 rounded-lg border border-border bg-muted/30">
+                      This connection uses the older Simkl sign-in. Disconnect and connect again to switch to the new one, which gives you your own daily allowance and unlocks custom lists.
+                    </p>
+                  )}
 
                   {/* Simkl User Stats Card */}
                   {isConnected && username && (
@@ -814,6 +1067,112 @@ export function SimklIntegration({ isOpen, onClose }: SimklIntegrationProps) {
                       <p className="text-xs text-muted-foreground">
                         These catalogs show your Simkl watchlist items by status. Page size must match your SimKL settings.
                       </p>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="bg-gradient-to-br from-violet-500/10 via-card/80 to-card/80 border-violet-400/20">
+                    <CardHeader className="flex-row items-start gap-3 sm:gap-4 space-y-0 p-4 sm:p-6">
+                      <div className="shrink-0 h-10 w-10 rounded-lg bg-violet-500/15 text-violet-300 flex items-center justify-center ring-1 ring-violet-400/20">
+                        <Download className="h-5 w-5" />
+                      </div>
+                      <div className="flex-1 min-w-0 space-y-1.5">
+                        <CardTitle>Custom Lists</CardTitle>
+                        <CardDescription>Import the lists you made on Simkl, or add anyone's list by its link or id. Needs a Simkl PRO or VIP account.</CardDescription>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="simkl-list-link">Add a list by link or ID</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            id="simkl-list-link"
+                            value={listLink}
+                            onChange={(event) => setListLink(event.target.value)}
+                            onKeyDown={(event) => { if (event.key === 'Enter' && listLink.trim() && !isAddingList) void addListByLink(); }}
+                            placeholder="https://simkl.com/lists/137494"
+                            disabled={!isConnected}
+                          />
+                          <Button onClick={addListByLink} disabled={!isConnected || isAddingList || !listLink.trim()}>
+                            {isAddingList ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Add'}
+                          </Button>
+                        </div>
+                      </div>
+                      <Button
+                        onClick={fetchCustomLists}
+                        disabled={isLoadingCustomLists || !isConnected}
+                        variant="outline"
+                        className="w-full"
+                      >
+                        {isLoadingCustomLists ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Loading...
+                          </>
+                        ) : (
+                          "Load My Custom Lists"
+                        )}
+                      </Button>
+
+                      {customLists.length > 0 && (
+                        <div className="space-y-3">
+                          <div className="flex items-center space-x-3 p-3 border rounded-lg bg-muted/30">
+                            <Switch
+                              id="select-all-simkl-lists"
+                              checked={selectedCustomLists.size === customLists.length}
+                              onCheckedChange={(checked) => {
+                                setSelectedCustomLists(checked ? new Set(customLists.map(l => l.id)) : new Set());
+                              }}
+                            />
+                            <Label htmlFor="select-all-simkl-lists" className="font-medium cursor-pointer">
+                              Select all my custom lists
+                            </Label>
+                            <Badge variant="outline" className="ml-auto">
+                              {selectedCustomLists.size}/{customLists.length}
+                            </Badge>
+                          </div>
+
+                          <div className="grid grid-cols-1 gap-3 max-h-80 overflow-y-auto border rounded-lg p-3 bg-muted/20">
+                            {customLists.map((list) => (
+                              <div key={list.id} className="flex items-start space-x-3 p-3 border rounded-lg">
+                                <Switch
+                                  id={`simkl-list-${list.id}`}
+                                  checked={selectedCustomLists.has(list.id)}
+                                  onCheckedChange={(checked) => handleCustomListSelection(list.id, checked)}
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <Label htmlFor={`simkl-list-${list.id}`} className="font-medium cursor-pointer break-words">
+                                    {list.name}
+                                  </Label>
+                                  <div className="flex flex-wrap items-center gap-2 mt-1">
+                                    <Badge variant="outline" className="text-xs capitalize">
+                                      {list.mediaType === 'tv' ? 'shows' : list.mediaType}
+                                    </Badge>
+                                    <Badge variant="secondary" className="text-xs capitalize">
+                                      {list.privacy}
+                                    </Badge>
+                                    {list.itemCount > 0 && (
+                                      <Badge variant="secondary" className="text-xs">
+                                        {list.itemCount} items
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  {list.description && (
+                                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                                      {list.description}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          {selectedCustomLists.size > 0 && (
+                            <Button onClick={importSelectedCustomLists} className="w-full">
+                              Import {selectedCustomLists.size} Selected List{selectedCustomLists.size !== 1 ? 's' : ''}
+                            </Button>
+                          )}
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
 

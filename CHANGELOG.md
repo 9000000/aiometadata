@@ -2,6 +2,432 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [3.3.2](https://github.com/cedya77/aiometadata/compare/v3.3.1...v3.3.2) (2026-09-29)
+
+
+### Bug Fixes
+
+* **jellyfin:** name each image with a short hash instead of encrypting its address ([b664d21](https://github.com/cedya77/aiometadata/commit/b664d21f4d70f430ff3e7de3a935535ba8117837))
+
+## [3.3.1](https://github.com/cedya77/aiometadata/compare/v3.3.0...v3.3.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* **cache:** keep Up Next shapes apart for show posters and episode stills ([ca47c0b](https://github.com/cedya77/aiometadata/commit/ca47c0bb4ac7cd23b2b07a5f04596d21bd3988e8))
+* **dashboard:** profile a stall without stalling the server ([8a5c0b4](https://github.com/cedya77/aiometadata/commit/8a5c0b481cf40d88797ba3a341ae660723f58e30))
+* **jellyfin:** answer a search inside a library from the search providers ([0f878d0](https://github.com/cedya77/aiometadata/commit/0f878d0609cd4c7b36a989061e76b8a115de2b21))
+* **jellyfin:** give each image a tag that changes with it ([135d6a0](https://github.com/cedya77/aiometadata/commit/135d6a01111941cd00e2e456d999ccc642362a4b))
+* **jellyfin:** read Next Up history by an index instead of the whole table ([1e7f829](https://github.com/cedya77/aiometadata/commit/1e7f8298f0c03088617daeaa1613d80dd25bfe29))
+* **jellyfin:** show catalogs set to landscape with landscape art ([b333e2e](https://github.com/cedya77/aiometadata/commit/b333e2edd2b91bcdaab55df698da8c14cdd5d3f1))
+* **poster-cache:** hand a connection back once its image is answered ([a901752](https://github.com/cedya77/aiometadata/commit/a901752ae82432c20fcebef39796c5cb9eb46c53))
+
+## [3.3.0](https://github.com/cedya77/aiometadata/compare/v3.2.3...v3.3.0) (2026-09-28)
+
+
+### Features
+
+* **catalogs:** choose a poster or landscape shape for any catalog ([7066c3d](https://github.com/cedya77/aiometadata/commit/7066c3da773659f8f985296540cb49ab7655e14f))
+* **collections:** let collections be left out of the manifest ([c5318c6](https://github.com/cedya77/aiometadata/commit/c5318c639eab39e744ab5deccf8ac3a5af7d85a6))
+* **dashboard:** keep profiling after a long event loop stall ([cb60710](https://github.com/cedya77/aiometadata/commit/cb607108ff87d73deb86cee4dbd79f9f379fe84c))
+* **dashboard:** log slow requests to other services ([f3a8497](https://github.com/cedya77/aiometadata/commit/f3a84976088583de9bb2c463543248f78ec5449c))
+* **dashboard:** name the functions behind event loop stalls ([46bd8c7](https://github.com/cedya77/aiometadata/commit/46bd8c74773ce1d633aea3a1a1ea3efc9c4e7b04))
+* **jellyfin:** answer episode queries with a premiere date range ([149e652](https://github.com/cedya77/aiometadata/commit/149e6525ef167a232f615792552faa25c9e35e11))
+* **jellyfin:** give each Jellyfin user their own tracker accounts ([#759](https://github.com/cedya77/aiometadata/issues/759)) ([cb60710](https://github.com/cedya77/aiometadata/commit/cb607108ff87d73deb86cee4dbd79f9f379fe84c))
+* **jellyfin:** offer the Jellyfin extensions AIOStreams' web app reads ([cce417c](https://github.com/cedya77/aiometadata/commit/cce417cbb72d37a4aca2cfea444d263e342db6db))
+* **jellyfin:** read AniList and MyAnimeList as the tracker ([4928ee1](https://github.com/cedya77/aiometadata/commit/4928ee15c11790d2405cc276378b93aa8f8ac39c))
+* **playback:** match AIOStreams household users by their persona id ([f5846af](https://github.com/cedya77/aiometadata/commit/f5846af709c853abe2c77e09c1b8fa757c70006d))
+
+
+### Bug Fixes
+
+* **cache:** keep anime metas read by IMDb id apart from their Kitsu entries ([da754ba](https://github.com/cedya77/aiometadata/commit/da754ba8c6921ec21dc9d801a0cd27ee19210f94)), closes [#758](https://github.com/cedya77/aiometadata/issues/758)
+* **catalogs:** cache a custom catalog's addon pages by the addon's address ([7d290b7](https://github.com/cedya77/aiometadata/commit/7d290b7c333cb2823ea92904ed694353b07ce270))
+* **catalogs:** follow each catalog's cache lifetime at every layer ([7d290b7](https://github.com/cedya77/aiometadata/commit/7d290b7c333cb2823ea92904ed694353b07ce270))
+* **catalogs:** stop a slow trailer addon holding catalog pages ([cb60710](https://github.com/cedya77/aiometadata/commit/cb607108ff87d73deb86cee4dbd79f9f379fe84c))
+* **collections:** keep builder collection catalogs off home screens that ignore required extras ([3eb0bd8](https://github.com/cedya77/aiometadata/commit/3eb0bd81d807550ec3c27f611fbb74c1aaf0d59f)), closes [#757](https://github.com/cedya77/aiometadata/issues/757)
+* **configure:** ask for a reinstall when a collection changes the manifest ([c5318c6](https://github.com/cedya77/aiometadata/commit/c5318c639eab39e744ab5deccf8ac3a5af7d85a6))
+* **jellyfin:** answer shelves while a tracker library is first read ([cb60710](https://github.com/cedya77/aiometadata/commit/cb607108ff87d73deb86cee4dbd79f9f379fe84c))
+* **jellyfin:** clear a rewatch point finished on another device ([cb60710](https://github.com/cedya77/aiometadata/commit/cb607108ff87d73deb86cee4dbd79f9f379fe84c))
+* **jellyfin:** keep each tracker's Next Up and positions apart on a shared profile ([c767a0c](https://github.com/cedya77/aiometadata/commit/c767a0cb45bbbdeb84924dc108bc8779361c7f36))
+* **jellyfin:** keep one episode index per meta configuration and cap its memory ([865e52a](https://github.com/cedya77/aiometadata/commit/865e52a58c464f444ebe1ae919fff5282c922f56))
+* **jellyfin:** page through filtered, merged and addon catalogs to their end ([cb60710](https://github.com/cedya77/aiometadata/commit/cb607108ff87d73deb86cee4dbd79f9f379fe84c))
+* **jellyfin:** resume from a tracker's newer position ([3392dbd](https://github.com/cedya77/aiometadata/commit/3392dbd052ad27a8689857634a9d5bbdc83fc3b3))
+* **jellyfin:** stop a show in progress repeating in Next Up ([bc6d277](https://github.com/cedya77/aiometadata/commit/bc6d27782b9c9816f35e3ed3f350adb2ea665e11))
+* **jellyfin:** stop favourites repeating titles across pages ([2483f05](https://github.com/cedya77/aiometadata/commit/2483f05b58ebdc9bdeb96eb48d048a98098ae45b))
+* **jellyfin:** take a tracker's air time in Next Up for the episode it names ([9820d06](https://github.com/cedya77/aiometadata/commit/9820d064a95bac3cdbe6598feaf7fffc978fa29e))
+* **tvdb:** pick season posters in the user's language ([1b33d21](https://github.com/cedya77/aiometadata/commit/1b33d214131206ca2d2682aab84337ca1b5f5c64))
+
+## [3.2.3](https://github.com/cedya77/aiometadata/compare/v3.2.2...v3.2.3) (2026-09-27)
+
+
+### Bug Fixes
+
+* **jellyfin:** answer watched and unwatched filters in libraries and home rows ([2d6c53e](https://github.com/cedya77/aiometadata/commit/2d6c53e589a65f8556c821dd57bcb3da2db28f6b))
+* **jellyfin:** resolve tracker ids to the ones the meta uses ([1c31b48](https://github.com/cedya77/aiometadata/commit/1c31b48366c0ba55926e41700f3d8dd345786d89))
+* **watch-tracking:** retry a Simkl write refused by its write lock in either spelling ([32755fd](https://github.com/cedya77/aiometadata/commit/32755fdd1cafae2b692bce9f46a5ad75d421c04a))
+
+
+### Performance Improvements
+
+* **jellyfin:** skip configurations the background sync finds unchanged ([0d86ebe](https://github.com/cedya77/aiometadata/commit/0d86ebeeec345123739da5b4537fd86e22d50ba2))
+
+## [3.2.2](https://github.com/cedya77/aiometadata/compare/v3.2.1...v3.2.2) (2026-09-27)
+
+
+### Bug Fixes
+
+* **jellyfin:** ask TMDB once per show when its episode numbering cannot be read ([e87b1de](https://github.com/cedya77/aiometadata/commit/e87b1de2958aa04cd362e30141e1dea4f76b2d6e))
+* **simkl:** load a library with nothing in one of movies, shows or anime ([b4d10c2](https://github.com/cedya77/aiometadata/commit/b4d10c2a1180e783ef1bcc8d562849fb3d39fa3f))
+
+## [3.2.1](https://github.com/cedya77/aiometadata/compare/v3.2.0...v3.2.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* **publicmetadb:** skip episodes already listed as watched when a season is marked ([98eed17](https://github.com/cedya77/aiometadata/commit/98eed17c231b6a18486890fc3e206595a8b46f4e))
+* **recommendations:** fill the anime row whatever language the configuration uses ([aea27e3](https://github.com/cedya77/aiometadata/commit/aea27e3b7dc570f84b44c04f698e29259d69a657))
+* **simkl:** check only the Plan to Watch shelf, anime films included, before removing a watchlist title ([98eed17](https://github.com/cedya77/aiometadata/commit/98eed17c231b6a18486890fc3e206595a8b46f4e))
+* **watch-tracking:** retry a Simkl write refused by its write lock instead of dropping it ([98eed17](https://github.com/cedya77/aiometadata/commit/98eed17c231b6a18486890fc3e206595a8b46f4e))
+* **watch-tracking:** send Simkl and MDBList the TMDB id alongside an IMDb id ([f3bd175](https://github.com/cedya77/aiometadata/commit/f3bd175319bf0781ebfa27d6f244559f54b2ba54))
+* **watch-tracking:** send tracker writes one at a time per account and retry them until they land ([98eed17](https://github.com/cedya77/aiometadata/commit/98eed17c231b6a18486890fc3e206595a8b46f4e))
+* **watch-tracking:** stop treating Trakt as a tracker, so a Trakt sign-in for catalogs no longer hides watched state ([98eed17](https://github.com/cedya77/aiometadata/commit/98eed17c231b6a18486890fc3e206595a8b46f4e))
+
+
+### Performance Improvements
+
+* **jellyfin:** answer watched state from an index built from the tracker mirror, a page at a time ([98eed17](https://github.com/cedya77/aiometadata/commit/98eed17c231b6a18486890fc3e206595a8b46f4e))
+* **jellyfin:** bound the playstate sync by active users, time and concurrency, and log event loop stalls ([98eed17](https://github.com/cedya77/aiometadata/commit/98eed17c231b6a18486890fc3e206595a8b46f4e))
+* **jellyfin:** keep each tracker library in the database and queue tracker writes ([98eed17](https://github.com/cedya77/aiometadata/commit/98eed17c231b6a18486890fc3e206595a8b46f4e))
+* **jellyfin:** read paused titles again only when a tracker's activity shows playback moved ([98eed17](https://github.com/cedya77/aiometadata/commit/98eed17c231b6a18486890fc3e206595a8b46f4e))
+* **mdblist:** read hide-watched and recommendations from the watch mirror instead of the whole history ([98eed17](https://github.com/cedya77/aiometadata/commit/98eed17c231b6a18486890fc3e206595a8b46f4e))
+* **simkl:** read list catalogs, Up Next, hide-watched and recommendations from the watch mirror ([98eed17](https://github.com/cedya77/aiometadata/commit/98eed17c231b6a18486890fc3e206595a8b46f4e))
+
+## [3.2.0](https://github.com/cedya77/aiometadata/compare/v3.1.0...v3.2.0) (2026-09-25)
+
+
+### Features
+
+* **ai-catalogs:** build as many catalogs as a prompt asks for, from every Discover setting ([3f4a237](https://github.com/cedya77/aiometadata/commit/3f4a2377829377da142da7eeaa1909981642e19c))
+* **art:** fill {shape} in art patterns and send a landscape poster from the poster pattern ([58aac94](https://github.com/cedya77/aiometadata/commit/58aac94296a025a36e0bdb956af800822d1407a4))
+* **collections:** serve builder collections as AIOStreams collection metas ([07b0f02](https://github.com/cedya77/aiometadata/commit/07b0f0256d9be94c48b33a63fa4aeb7f155f6e03))
+* **discover:** exclude streaming services ([3f4a237](https://github.com/cedya77/aiometadata/commit/3f4a2377829377da142da7eeaa1909981642e19c))
+* **discover:** pick several origin countries and original languages ([3f4a237](https://github.com/cedya77/aiometadata/commit/3f4a2377829377da142da7eeaa1909981642e19c))
+* **jellyfin:** answer watched history and counts across the library ([26ade38](https://github.com/cedya77/aiometadata/commit/26ade3869269b4c87e186391819e80f446a5c401))
+* **jellyfin:** take upcoming episodes and their air times from MDBList's calendar ([4a7dded](https://github.com/cedya77/aiometadata/commit/4a7dded12752e9743c98da534a9cee4e42bfc073))
+* **mdblist:** add other users' external lists by URL ([c204eba](https://github.com/cedya77/aiometadata/commit/c204ebacce31a018a9fa38fb6de0d80c30187886))
+* **simkl:** say which setting a Simkl client ID belongs in when the PIN request is refused ([2b089ee](https://github.com/cedya77/aiometadata/commit/2b089ee721fa9250a60cddeb2ee4efd9285e0fb7))
+
+
+### Bug Fixes
+
+* **ai-catalogs:** keep each catalog's own dates when one prompt asks for several ([3f4a237](https://github.com/cedya77/aiometadata/commit/3f4a2377829377da142da7eeaa1909981642e19c))
+* **ai:** accept OpenRouter's ~ model aliases instead of falling back to the default ([87f18c8](https://github.com/cedya77/aiometadata/commit/87f18c83e6a66f98dc21e73058d78890d395ff51))
+* **configure:** sign in again when the session expires on an open page ([6f8daf1](https://github.com/cedya77/aiometadata/commit/6f8daf15133d91fab6c1a3ad54c7fc657e7b2eec))
+* **dashboard:** name popular titles requested by a TMDB or TVDB id ([5b337e7](https://github.com/cedya77/aiometadata/commit/5b337e79fc7a387313cd34c800d8ada941f30dc7))
+* **image-cache:** answer an expired image at once and refresh it behind the request ([e8c7d81](https://github.com/cedya77/aiometadata/commit/e8c7d817f130a53e99080507915f4fe9ad251a1d))
+* **jellyfin:** answer /Items/Suggestions instead of reading it as an item id ([b8b4654](https://github.com/cedya77/aiometadata/commit/b8b4654ce3e5d95be40604af17e38fdb737163ff))
+* **jellyfin:** apply stream and subtitle cache lifetimes set in the dashboard without a restart ([47e4dab](https://github.com/cedya77/aiometadata/commit/47e4dab31aad05566720f77bccb78347c85e9b2c))
+* **jellyfin:** list collection folders even when none of their catalogs are visible ([085005c](https://github.com/cedya77/aiometadata/commit/085005cd41747675a72ce6e9d2dd524433b83ddc))
+* **jellyfin:** read a playing item's metadata once, not on every progress report ([03aec63](https://github.com/cedya77/aiometadata/commit/03aec635810f8096792300c7b76957d3cdd5320f))
+* **jellyfin:** send the full set of stream flags on placeholder media sources ([4e13dd5](https://github.com/cedya77/aiometadata/commit/4e13dd5fd09200c2603241b02d06bb86136aaa7c))
+* **jellyfin:** show a drop or watch change on the next read ([ad5ccc3](https://github.com/cedya77/aiometadata/commit/ad5ccc37a276b7dfb43af34c4459078cee22f9a9))
+* **tvdb:** use a season's own poster when TVDB points its image at a background ([5989938](https://github.com/cedya77/aiometadata/commit/598993819678155d74b978fef23921cd7b43f271))
+* **watch-tracking:** clear resume points when a title is marked unwatched ([509c54d](https://github.com/cedya77/aiometadata/commit/509c54d835bb6694613933936d5dde76e183fc08))
+
+
+### Performance Improvements
+
+* **mdblist:** read external and by-name list pages from one cursor-paged block ([bc91d9c](https://github.com/cedya77/aiometadata/commit/bc91d9cbd22250147be72801a66746a14909596c))
+
+## [3.1.0](https://github.com/cedya77/aiometadata/compare/v3.0.0...v3.1.0) (2026-09-24)
+
+
+### Features
+
+* **collections:** choose which rows of a featured collection to import ([26523cf](https://github.com/cedya77/aiometadata/commit/26523cf4e0be9a0b0fd513b4ec8530d346e87e18))
+* **collections:** feature Renoria's Starter Kit first ([e2b1e68](https://github.com/cedya77/aiometadata/commit/e2b1e68bd4285ad051c13f5328e589c1ecedf08b))
+* **collections:** feature the TVGenie collection ([f45cc2d](https://github.com/cedya77/aiometadata/commit/f45cc2da119a46f138fcfd48110b446d224069bd))
+* **collections:** feature two more community designs ([65090e7](https://github.com/cedya77/aiometadata/commit/65090e76e2719eea49089a2ff22f915f2fe8b223))
+* **jellyfin:** list an addon's text-only stream entries after the playable ones ([c0d44e8](https://github.com/cedya77/aiometadata/commit/c0d44e873d2f877f8679a958d28237ec1b465862))
+* **search:** offer a self-hosted LumiereDB as a movie and series search provider ([77c84cb](https://github.com/cedya77/aiometadata/commit/77c84cbfef1e5535d4e3758ff772d736e5ba3650))
+* **simkl:** add any custom list by its link or id ([066fb5b](https://github.com/cedya77/aiometadata/commit/066fb5bb3b8a9115683fcae76ad881bee4afab52))
+* **watch-tracking:** exchange favourites, drops and pauses through watch_state ([086b135](https://github.com/cedya77/aiometadata/commit/086b13521cac6106f76680f6f9f06ef824fd6919))
+
+
+### Bug Fixes
+
+* **catalog:** serve a hidden catalog asked without a genre from the entry the warmer wrote ([7ef886c](https://github.com/cedya77/aiometadata/commit/7ef886c6c4bb3a5d665411051637aa375edeba37)), closes [#739](https://github.com/cedya77/aiometadata/issues/739)
+* **catalog:** serve the same filtered page to every reader, in any order ([0858b6f](https://github.com/cedya77/aiometadata/commit/0858b6f42edce2f200617e7c83a7ba4c340b15cc))
+* **http:** send the addon's calls to itself past the outbound proxy ([d7baa46](https://github.com/cedya77/aiometadata/commit/d7baa46fd153b3117dafbadc27666a291d6205ae))
+* **jellyfin:** answer Next Up within a deadline ([56fc3b7](https://github.com/cedya77/aiometadata/commit/56fc3b74d5f6b3877059ddd067c06ecaa2a0f7b2))
+* **jellyfin:** give the server address from the instance's public host ([5c3b7bf](https://github.com/cedya77/aiometadata/commit/5c3b7bfcafec4bcb905037f5e834b4355e7a1662))
+* **jellyfin:** keep sign-ins in the database and extend them on use ([af08b30](https://github.com/cedya77/aiometadata/commit/af08b30d3bf4b6499b05232c514c754b93daded7))
+* **jellyfin:** let the most recent watch or position win between Jellyfin and the tracker ([02fa8d4](https://github.com/cedya77/aiometadata/commit/02fa8d4ac7544f971fa0725a78b8406f0ec71efa))
+* **jellyfin:** name an episode on the dashboard when its series index is not held ([4de2c18](https://github.com/cedya77/aiometadata/commit/4de2c18d8d15ccea8fbba140aab8dd3ed4f4f5f9))
+* **jellyfin:** page large library requests and carry on where the last page stopped ([a70ae01](https://github.com/cedya77/aiometadata/commit/a70ae018de1563b203be42702fae8b179dca7e7a))
+* **jellyfin:** show the Latest rows unless a configuration turns them off ([24b4fca](https://github.com/cedya77/aiometadata/commit/24b4fca7b3cef53719b87c7d3413693b83416b5f))
+* **jellyfin:** treat an unrecorded catalog length as unknown rather than empty ([5fdae77](https://github.com/cedya77/aiometadata/commit/5fdae77eb26d6c00987fae613beeb23fe1ffae3f))
+* **managers:** refresh the cached configuration when a manager account changes ([d681a81](https://github.com/cedya77/aiometadata/commit/d681a81bd8372925ecbd905d5ef9a78eafc315be))
+* **publicmetadb:** read every page of resume points ([b047010](https://github.com/cedya77/aiometadata/commit/b0470101e7802396644058d78b6dc45ae4741ce0))
+* **recommendations:** say why a taste profile could not be built ([039e622](https://github.com/cedya77/aiometadata/commit/039e6229384d34c4e0bc573c26bdf7e0b412266f))
+* **recommendations:** size reply budgets from the share thinking takes ([d383922](https://github.com/cedya77/aiometadata/commit/d383922c8ee1716c02d65e74fbb32333b897a941))
+* **settings:** register the recommendation and connection tunables the code reads ([0cd254a](https://github.com/cedya77/aiometadata/commit/0cd254a0480e08273b8d8fd1240a9952157ab131))
+* **simkl:** build anime catalog metas from MAL's own record, in the list's order ([6308c8a](https://github.com/cedya77/aiometadata/commit/6308c8abc9092d7f479f07745a395433daa04492))
+* **simkl:** check a V2 connection for changes at the interval its user chose everywhere ([7490e6a](https://github.com/cedya77/aiometadata/commit/7490e6a9f6374cb2a7c912f4c20dec948d2f9400))
+* **simkl:** search on a V2 app as the connected account ([6b9cd26](https://github.com/cedya77/aiometadata/commit/6b9cd26375faa0f0f1a75b54b6352ade36d56fb7))
+
+
+### Performance Improvements
+
+* **jellyfin:** fill a library without reading every show's meta ([e551879](https://github.com/cedya77/aiometadata/commit/e551879bd6e4551eb5b534cee06d7410b802fa61))
+* **jellyfin:** read catalogs and metas in process instead of over loopback ([5f81ab7](https://github.com/cedya77/aiometadata/commit/5f81ab75b5dab1a99422a31947a5d734e975d22e))
+* **jellyfin:** read the configuration from the cache rather than the database on every request ([9c0f3ab](https://github.com/cedya77/aiometadata/commit/9c0f3aba249dfe86fd258250c68c118fa8eddde2))
+
+## [3.0.0](https://github.com/cedya77/aiometadata/compare/v2.17.2...v3.0.0) (2026-09-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* **server:** Redis 8.0 or newer is now required. The addon refuses to start against an older server and names the version it found. Instances pinning an older Redis image should move to redis:latest or an 8.0+ tag; the compose file in the README already uses redis:latest.
+
+### Features
+
+* **cache:** add Redis hash primitives for meta components ([ac95acb](https://github.com/cedya77/aiometadata/commit/ac95acbd7cbc854bfb21e9276292b8a39d79b886))
+* **cache:** keep each title's meta components in one Redis hash ([a7d4e3f](https://github.com/cedya77/aiometadata/commit/a7d4e3f0ca9344b6aff6dcdc3052f95855096990))
+* **cache:** map meta components onto hash fields ([190529a](https://github.com/cedya77/aiometadata/commit/190529a2bf34d3f1da0011ca9f3950b758dd5093))
+* **cold-store:** add completeness classifier ([03e495e](https://github.com/cedya77/aiometadata/commit/03e495eb896836589f3328006da6b326091e914a))
+* **cold-store:** add strict mode flag and partial tier TTL ([67e192b](https://github.com/cedya77/aiometadata/commit/67e192b30580690e2b963ad5ed7668874789524a))
+* **cold-store:** demote incomplete titles to a partial tier ([e624412](https://github.com/cedya77/aiometadata/commit/e6244127f54db4d0f638612abf99d7a07cb5ca0a))
+* **collections:** folders inside folders, as nested box sets on Jellyfin and flattened for Fusion and Nuvio ([e0a1c81](https://github.com/cedya77/aiometadata/commit/e0a1c81d96d85f11fde49f79793ebf5c6ee8daa3))
+* **collections:** serve a layout's images through the instance's image cache ([922a9fa](https://github.com/cedya77/aiometadata/commit/922a9facaee9dffacdf66e59216a6c69b536942b))
+* **collections:** show a collection or classic row to the server users made of its tags ([85cd281](https://github.com/cedya77/aiometadata/commit/85cd28188a3c5b2606c36ee7648379b0a6b5b5ca))
+* **dashboard:** a Jellyfin tab showing what the server recorded for a configuration ([96950d2](https://github.com/cedya77/aiometadata/commit/96950d2b11da013f728da9289f3cfe43a7eae283))
+* **dashboard:** recently played by day with one tile per show, a rows selector, and counts that fold id spellings ([2ce61f2](https://github.com/cedya77/aiometadata/commit/2ce61f292c248cd506cbb8a1eb04f12ca0dce039))
+* **dashboard:** report container memory and OOM kills ([026b5c5](https://github.com/cedya77/aiometadata/commit/026b5c52fc425b8d073a5413e45b3550a06d27da))
+* **dashboard:** surface event loop lag and slow Jellyfin requests ([1573385](https://github.com/cedya77/aiometadata/commit/1573385760dcd2af2875dcacba5ab6c0a5ace83d))
+* **image-cache:** keep collection images in their own class ([1bd1db0](https://github.com/cedya77/aiometadata/commit/1bd1db05e0202f1702ed7eb922a997ed786de2ed))
+* **jellyfin:** a thumbs-down on a series drops it ([0c5cba0](https://github.com/cedya77/aiometadata/commit/0c5cba0462b2e4e5fe3687737b2961009e3c9b43))
+* **jellyfin:** answer a search from the search hits instead of hydrating every result ([8d29a1a](https://github.com/cedya77/aiometadata/commit/8d29a1a6f99e7f0603a4619415e0133a105977b3))
+* **jellyfin:** answer an anime search from the MAL and Kitsu hits ([0c55106](https://github.com/cedya77/aiometadata/commit/0c55106969e761ea1306b6440dd5a916445b14ce))
+* **jellyfin:** build the shelves from an episode index instead of every show's meta ([9f42f73](https://github.com/cedya77/aiometadata/commit/9f42f7341b09a35ca8d5506df061497ff175de3e))
+* **jellyfin:** carry an item's versions inline when it is opened ([3aa7942](https://github.com/cedya77/aiometadata/commit/3aa79429e4269a1629ced30d6512090ee468403b))
+* **jellyfin:** describe a stream's video, audio and subtitles from what the stream addon parsed ([780a5fa](https://github.com/cedya77/aiometadata/commit/780a5fad604cdce824733dd8adbf911ab9b66eee))
+* **jellyfin:** fill the More Like This row from TMDB recommendations ([6b80ff2](https://github.com/cedya77/aiometadata/commit/6b80ff2d2dbbb103881817b813b4807ab165c61a))
+* **jellyfin:** fill Upcoming with the next episode of every caught-up show ([f8c770e](https://github.com/cedya77/aiometadata/commit/f8c770e7a4c2a2822c2caec590f4aaf3a842ba4b))
+* **jellyfin:** give every user a card carrying its own trackers, watchlist and skip source ([85cd281](https://github.com/cedya77/aiometadata/commit/85cd28188a3c5b2606c36ee7648379b0a6b5b5ca))
+* **jellyfin:** keep a client's display preferences and serve custom CSS ([8ecd4ea](https://github.com/cedya77/aiometadata/commit/8ecd4eafb25f4358fab1eb3ff9d38620de49e569))
+* **jellyfin:** keep the settings a client saves for its user ([5326b6a](https://github.com/cedya77/aiometadata/commit/5326b6ae9fd343096137cd094f71c5fd37381461))
+* **jellyfin:** lay the dialog out as a user list with an editor ([419595c](https://github.com/cedya77/aiometadata/commit/419595c8442a625e0ca3ec63a48a85dee61c5e6a))
+* **jellyfin:** leave the Latest rows to configurations that want them ([cdecb92](https://github.com/cedya77/aiometadata/commit/cdecb927508d93928977e3be7caceb6a265a5914))
+* **jellyfin:** let a configuration choose whether a title opens with its streams resolved ([cccc8c5](https://github.com/cedya77/aiometadata/commit/cccc8c5fe2607d87265b9db7e2c5977c50588e40))
+* **jellyfin:** let a user pick where skip markers come from ([554f714](https://github.com/cedya77/aiometadata/commit/554f714698c348af5c8cdd8fcb6d2da436f94239))
+* **jellyfin:** let a user play from its own stream addon ([cdecb92](https://github.com/cedya77/aiometadata/commit/cdecb927508d93928977e3be7caceb6a265a5914))
+* **jellyfin:** let each user pick their trackers, skip markers and watchlist services ([419595c](https://github.com/cedya77/aiometadata/commit/419595c8442a625e0ca3ec63a48a85dee61c5e6a))
+* **jellyfin:** let the main user pick tags and read every tracker ([214aec2](https://github.com/cedya77/aiometadata/commit/214aec221b6d196211efe6d25bf15657d8d1c0b6))
+* **jellyfin:** offer intro, recap and credits skips from PublicMetaDB and IntroDB ([3f9ef54](https://github.com/cedya77/aiometadata/commit/3f9ef5474e4f288a64988305c3127a24c1a6c7e7))
+* **jellyfin:** offer the subtitle files a stream carries and the stream addon finds ([1b1ed19](https://github.com/cedya77/aiometadata/commit/1b1ed19111e22bad8df31a2b7341bd64aee03843))
+* **jellyfin:** open a cast member to their page and filmography ([6b80ff2](https://github.com/cedya77/aiometadata/commit/6b80ff2d2dbbb103881817b813b4807ab165c61a))
+* **jellyfin:** pick a watchlist per service and shelf ([85cd281](https://github.com/cedya77/aiometadata/commit/85cd28188a3c5b2606c36ee7648379b0a6b5b5ca))
+* **jellyfin:** play a trailer addon's direct links in the client ([c3b30b5](https://github.com/cedya77/aiometadata/commit/c3b30b5287a8642e3da9715e7d340890a5741f76))
+* **jellyfin:** read and write favourites through the PublicMetaDB watchlist ([09133a7](https://github.com/cedya77/aiometadata/commit/09133a74bf8b15b0305f889f339c743dfa42804e))
+* **jellyfin:** read every connected tracker into the resume shelf under Automatic ([214aec2](https://github.com/cedya77/aiometadata/commit/214aec221b6d196211efe6d25bf15657d8d1c0b6))
+* **jellyfin:** read PublicMetaDB for the resume shelf, the watched ticks and Next Up ([baedec6](https://github.com/cedya77/aiometadata/commit/baedec6a3feb48266dbca111decab57e8fe9bb07))
+* **jellyfin:** report Atmos and DTS variants as an audio stream's profile ([b5c732b](https://github.com/cedya77/aiometadata/commit/b5c732bd5c88edff3734b6870fcb22dfbb0259ed))
+* **jellyfin:** serve the collection builder's layout as libraries and box sets ([0cc02ef](https://github.com/cedya77/aiometadata/commit/0cc02efc653a841cf1d42ec1e164742009b521a5))
+* **jellyfin:** serve the watchlist as a client's favourites ([419595c](https://github.com/cedya77/aiometadata/commit/419595c8442a625e0ca3ec63a48a85dee61c5e6a))
+* **jellyfin:** show new seasons and unreleased watchlist films as upcoming ([8ecd4ea](https://github.com/cedya77/aiometadata/commit/8ecd4eafb25f4358fab1eb3ff9d38620de49e569))
+* **jellyfin:** take a client's user data update, clearing the resume point everywhere ([ea0ffc9](https://github.com/cedya77/aiometadata/commit/ea0ffc97d2ca919c0b4090f99a77285492653849))
+* **jellyfin:** take a source's duration and bitrate from the stream addon when it knows them ([1b1ed19](https://github.com/cedya77/aiometadata/commit/1b1ed19111e22bad8df31a2b7341bd64aee03843))
+* **jellyfin:** take skip markers from AniSkip and say in the version picker why a title has no streams ([5887384](https://github.com/cedya77/aiometadata/commit/5887384db0ee7bc63e5cbe95dd5b4db2abdffc48))
+* **jellyfin:** write a playing position to the table on an interval ([780a5fa](https://github.com/cedya77/aiometadata/commit/780a5fad604cdce824733dd8adbf911ab9b66eee))
+* **language-map:** report when 3-letter resolution degrades to eng ([5905f07](https://github.com/cedya77/aiometadata/commit/5905f07276db3cdc5021e0ddd33d0db4e136f7e8))
+* **meta:** stamp localization completeness on tmdb and tvdb assemblies ([9d38057](https://github.com/cedya77/aiometadata/commit/9d380574c6c97d9c9b40d3b0ad0f3781a0d90d52))
+* **recommendations:** accept any interval between rewrites ([cdecb92](https://github.com/cedya77/aiometadata/commit/cdecb927508d93928977e3be7caceb6a265a5914))
+* **recommendations:** write a row again before it lapses ([ffc598b](https://github.com/cedya77/aiometadata/commit/ffc598b34a9500bf84928da318309743b5493d68))
+* **redis:** set the server's own cache settings on startup ([fd5901c](https://github.com/cedya77/aiometadata/commit/fd5901c1e6b4b9537ae9d0a52faed1bd4a0f1c8e))
+* **search:** report a provider's refusal as a card in the row ([9ccf66f](https://github.com/cedya77/aiometadata/commit/9ccf66f1ab4ef16c40bea17b527c79790dbb8069))
+* **search:** tag a search catalog the way a catalog is tagged ([6e84b0d](https://github.com/cedya77/aiometadata/commit/6e84b0da03ea539401a4e28b2a89809f5775b62f))
+* **settings:** make the log level editable from the dashboard ([9f3a709](https://github.com/cedya77/aiometadata/commit/9f3a709bb6f544e98891a941725151a4c339a57e))
+* **settings:** offer 45 tunables the dashboard never showed ([9f3a709](https://github.com/cedya77/aiometadata/commit/9f3a709bb6f544e98891a941725151a4c339a57e))
+* **settings:** offer the watched snapshot grace period ([1ee4c47](https://github.com/cedya77/aiometadata/commit/1ee4c47cc842bf846d8162d8e481ca8ba4808712))
+* **simkl:** follow each user's own V2 request allowance ([99260ea](https://github.com/cedya77/aiometadata/commit/99260eaeb5cf9599ba51f652e5fb5021ce590c8d))
+* **simkl:** import custom lists as catalogs ([18199c8](https://github.com/cedya77/aiometadata/commit/18199c80e671732fa5c63c0f08ad6ccf7eed2b0a))
+* **simkl:** sign in through AUTH V2 when a V2 client is set ([59eb0b0](https://github.com/cedya77/aiometadata/commit/59eb0b0ad9d1fff77e2a48afc1dff5cf4fc94367))
+* **tmdb:** classify whether title and overview are in the user's language ([2a4f9b9](https://github.com/cedya77/aiometadata/commit/2a4f9b929afe0390400182f0269668298a4a2f79))
+* **trailers:** let a user take trailers from a trailer addon ([3445161](https://github.com/cedya77/aiometadata/commit/3445161a43110ae80f2f63faef7d73dbbdff708b))
+* **tvdb:** report which language a translation came from ([b3d7040](https://github.com/cedya77/aiometadata/commit/b3d70405045cfbfbb2ebf21d3ba51252c3306bfa))
+* **watch-tracking:** answer the watch_state pull with tracker and own state ([198bf7c](https://github.com/cedya77/aiometadata/commit/198bf7c17fedca6b71ec9015caf56b95ba873110))
+* **watch-tracking:** declare the watch_state resource and take its push spelling ([41f92d6](https://github.com/cedya77/aiometadata/commit/41f92d6e704536bb34b32074c023adb886e3e079))
+* **watch-tracking:** take a season or series mark as one event ([10ec95b](https://github.com/cedya77/aiometadata/commit/10ec95b516cf82ff738680ad0f395053f93d687c))
+
+
+### Bug Fixes
+
+* **ai-search:** let the web search switch decide grounding, and fall back when it is refused ([c2ad6d2](https://github.com/cedya77/aiometadata/commit/c2ad6d2107a99749982e48dbc1a872bca69bd58f))
+* **cache:** keep a rebuild from dropping another profile's components ([e60e013](https://github.com/cedya77/aiometadata/commit/e60e013bca21a27709c49ccbe4a17f9e25610de2))
+* **cache:** keep a title's status through meta reconstruction ([38cf1d6](https://github.com/cedya77/aiometadata/commit/38cf1d6d2616ec38a4a87d66e15e1de17c50b00e))
+* **cache:** log configured key names only, and a cached empty page at debug ([9db2d70](https://github.com/cedya77/aiometadata/commit/9db2d706d69da860ca461c51ff90c81671f66cd2))
+* **catalogs:** end a filtered page on the upstream's own short page ([26bb17f](https://github.com/cedya77/aiometadata/commit/26bb17f9e332a88a6d8878f0b0c9104e47b1f7db))
+* **catalogs:** end a filtered page only on an empty upstream page ([4b55224](https://github.com/cedya77/aiometadata/commit/4b55224c23b451df3b648a4390c547b0b7c5fc9e))
+* **catalogs:** end a filtered page only on an empty upstream page ([050fb26](https://github.com/cedya77/aiometadata/commit/050fb26d51c7456e6de6f01561c820899458d1d4))
+* **catalogs:** resolve the Simkl Up Next catalog's episode ids ([606db08](https://github.com/cedya77/aiometadata/commit/606db083afbab9b2ac9417a6134cf1a357374c52))
+* clamp reported playback progress to 100 ([eea2b03](https://github.com/cedya77/aiometadata/commit/eea2b037182c3762b9975e9a650f1dc94533d763))
+* **cold-store:** evict whole titles instead of their oldest rows ([5e949f7](https://github.com/cedya77/aiometadata/commit/5e949f7bbd2136454cb329275f534b95678d259a))
+* **cold-store:** judge language only, never artwork ([7f8b63d](https://github.com/cedya77/aiometadata/commit/7f8b63d525714cfc77447c499b56b13089f9eb89))
+* **collections:** subfolder images go through the image cache, and the editor checks subfolder catalogs ([50c9b68](https://github.com/cedya77/aiometadata/commit/50c9b6836fc46dafaf32c5e699374bf896d8efea))
+* **dashboard:** accept a single-label hostname in the image cache policy rules ([078ee77](https://github.com/cedya77/aiometadata/commit/078ee770d468e5dbfc88a76eb93f959d1f70ce6a))
+* **dashboard:** copy needs the clipboard API, point at export otherwise ([0d7170f](https://github.com/cedya77/aiometadata/commit/0d7170f9530bbaaa902892080e2966ac2fc9009a))
+* **dashboard:** keep the Jellyfin tab's selection across the mobile breakpoint ([10aff67](https://github.com/cedya77/aiometadata/commit/10aff67d0d3c6ab46c7245683c624cb81c1615ee))
+* **dashboard:** page and search the user list instead of loading every configuration ([718b082](https://github.com/cedya77/aiometadata/commit/718b082a7a2d37b18e76b6334f9148f6e0ce034b))
+* **dashboard:** show evicted keys from Redis stats ([745fe37](https://github.com/cedya77/aiometadata/commit/745fe37fef653989ac271f54cf83417491c9c921))
+* **database:** clear a deleted user's config cache after the row is gone ([dcc9cd2](https://github.com/cedya77/aiometadata/commit/dcc9cd211fb5a9098300cd16cbbed13c2e821b0e))
+* **images:** bring a poster to 2:3 when it is stored ([7a386d2](https://github.com/cedya77/aiometadata/commit/7a386d2c6f10157e3b093a5588530b29369fba7a))
+* **jellyfin:** an empty watched history is not a failed read ([6adb013](https://github.com/cedya77/aiometadata/commit/6adb0139c2d49760c72939d8d6e0fb628af20d28))
+* **jellyfin:** an exhausted MDBList quota no longer fails the libraries ([5934798](https://github.com/cedya77/aiometadata/commit/593479832d76b9691424c40dabc6bbd2668a4ac3))
+* **jellyfin:** answer a season or series mark once every episode holds it ([ea0ffc9](https://github.com/cedya77/aiometadata/commit/ea0ffc97d2ca919c0b4090f99a77285492653849))
+* **jellyfin:** answer a series page's Next Up with that series' episode ([d391203](https://github.com/cedya77/aiometadata/commit/d3912030c8a8ad23767d3766db80b373ff9eeb45))
+* **jellyfin:** answer an item in full when the client asks for its MediaSources ([05e0100](https://github.com/cedya77/aiometadata/commit/05e0100434f6d63eb9ddc868ea6017e4d293a60d))
+* **jellyfin:** answer an opened item under the id it was opened by ([6b80ff2](https://github.com/cedya77/aiometadata/commit/6b80ff2d2dbbb103881817b813b4807ab165c61a))
+* **jellyfin:** answer item art with CORS headers so a page script can read it ([8ecd4ea](https://github.com/cedya77/aiometadata/commit/8ecd4eafb25f4358fab1eb3ff9d38620de49e569))
+* **jellyfin:** answer the handshake the way a client expects ([44bacb1](https://github.com/cedya77/aiometadata/commit/44bacb1bd4a9e80ac27749419822b0e441f560d4))
+* **jellyfin:** apply a season or series mark to each of its episodes ([ad78577](https://github.com/cedya77/aiometadata/commit/ad78577397f550a749439e61d2c17cbb7bd15ca9))
+* **jellyfin:** apply the watched state to search results and the home Latest rows ([659dad1](https://github.com/cedya77/aiometadata/commit/659dad18ebbab948d120490d929cba25236285df))
+* **jellyfin:** build Next Up once per request shape and stop rescanning aliases ([7f66d0c](https://github.com/cedya77/aiometadata/commit/7f66d0cf0ed329728f5277170ea124afb698abfc))
+* **jellyfin:** cap a folder page only for an eager request, fill a row-sized one ([f2a43d7](https://github.com/cedya77/aiometadata/commit/f2a43d74819ed5db267be02aa9ef301bef162b25))
+* **jellyfin:** cap only folder pages, serve cached art in one hop at display size ([93bf83a](https://github.com/cedya77/aiometadata/commit/93bf83a4c46e2dab76e35c72f8fd69017a2b7883))
+* **jellyfin:** clear a watch that was unmarked on the tracker ([53b9e7f](https://github.com/cedya77/aiometadata/commit/53b9e7f5b6221effcb2f401a7666fe86b6a9a9f9))
+* **jellyfin:** close a tracker session a mark leaves behind ([718b082](https://github.com/cedya77/aiometadata/commit/718b082a7a2d37b18e76b6334f9148f6e0ce034b))
+* **jellyfin:** continue a folder walk from its last page and cap list pages ([bcbd638](https://github.com/cedya77/aiometadata/commit/bcbd638e7a14703e9f2b092cfc9660185627b267))
+* **jellyfin:** count a show's plays under every id spelling, and from this server's own records ([9c05c1f](https://github.com/cedya77/aiometadata/commit/9c05c1fbe0f2ac8417b0e02bc653debc5235e8c3))
+* **jellyfin:** count a show's progress over its aired episodes, specials left out ([233aad1](https://github.com/cedya77/aiometadata/commit/233aad1269d1b981433510cc09753c1a7200de4a))
+* **jellyfin:** count an episode as watched under every id it goes by ([d391203](https://github.com/cedya77/aiometadata/commit/d3912030c8a8ad23767d3766db80b373ff9eeb45))
+* **jellyfin:** count live sessions across processes and restarts ([f7d9c71](https://github.com/cedya77/aiometadata/commit/f7d9c716ba86e88bd8d1857c0b7b2433fda613da))
+* **jellyfin:** count paused viewers on the dashboard instead of hiding them ([f3835d1](https://github.com/cedya77/aiometadata/commit/f3835d1932c6cb605c4ed5c64ff7b03fdec61d85))
+* **jellyfin:** date an imported watch with the tracker's own, and skip a sync pass the seen markers cannot be read for ([0fffeb6](https://github.com/cedya77/aiometadata/commit/0fffeb64a35f6e1b36deac6479011a15f8947b02))
+* **jellyfin:** describe each tracker source on its own ([c3b30b5](https://github.com/cedya77/aiometadata/commit/c3b30b5287a8642e3da9715e7d340890a5741f76))
+* **jellyfin:** drop a resume build begun before an invalidation and read the newest alias ([e110e45](https://github.com/cedya77/aiometadata/commit/e110e45edeb87ab366da949be497fbf21f8c3ea9))
+* **jellyfin:** favourites answer IsFavorite, page the watchlist, and can be left to this server ([e8dbcdc](https://github.com/cedya77/aiometadata/commit/e8dbcdc71e3052cf39c332fee1d907a7a460dcf8))
+* **jellyfin:** favourites follow the watchlist picks, and a heart set here stands only until the shelves catch up ([b53719e](https://github.com/cedya77/aiometadata/commit/b53719eb535b2fc9152b531d2a9add128eed2c2d))
+* **jellyfin:** fill Next Up from what this server saw finished, without a tracker ([ab7c7d3](https://github.com/cedya77/aiometadata/commit/ab7c7d33039ad3aff6fd95342a0ef22be9884507))
+* **jellyfin:** flush remembered artwork on shutdown ([f3835d1](https://github.com/cedya77/aiometadata/commit/f3835d1932c6cb605c4ed5c64ff7b03fdec61d85))
+* **jellyfin:** follow the most recent shows played here, not the most recent rows ([654696e](https://github.com/cedya77/aiometadata/commit/654696ec0cf1b29fb0e7245476fc20a8055c5b1e))
+* **jellyfin:** give a search result the id of its own kind whichever catalog found it ([5eda47e](https://github.com/cedya77/aiometadata/commit/5eda47e57197f64fc61a66c62d77817790ceef48))
+* **jellyfin:** give anime and single-kind catalogs a CollectionType on their view ([af6654f](https://github.com/cedya77/aiometadata/commit/af6654f5a057b4490c1a287ea0857006b8adf1cb))
+* **jellyfin:** give directors and writers their portraits ([b08a232](https://github.com/cedya77/aiometadata/commit/b08a2327953e5c17e50de4ec440d79b454a41cfb))
+* **jellyfin:** give every library item a DateCreated ([ca941df](https://github.com/cedya77/aiometadata/commit/ca941df0780d93dbf766f40b63bb4b9023968243))
+* **jellyfin:** hand Apple clients a trailer link the YouTube app opens ([6b80ff2](https://github.com/cedya77/aiometadata/commit/6b80ff2d2dbbb103881817b813b4807ab165c61a))
+* **jellyfin:** hold a fetched meta briefly so one read serves a client's chain of requests ([6a64889](https://github.com/cedya77/aiometadata/commit/6a6488963b86c821fe96e7097e938a85229cf02e))
+* **jellyfin:** hold failed tracker and catalog reads instead of retrying them per request ([b5b913b](https://github.com/cedya77/aiometadata/commit/b5b913bf56db218adf0b817e1dff8b45e74438e8))
+* **jellyfin:** keep a session open while a client only pings ([f3835d1](https://github.com/cedya77/aiometadata/commit/f3835d1932c6cb605c4ed5c64ff7b03fdec61d85))
+* **jellyfin:** keep a show PublicMetaDB lists as dropped out of Next Up and Upcoming ([6f3e000](https://github.com/cedya77/aiometadata/commit/6f3e00024a0e6ca842ca8df99835711c57ec1b9b))
+* **jellyfin:** keep a show the tracker lists as dropped out of Next Up and Upcoming ([c6295e0](https://github.com/cedya77/aiometadata/commit/c6295e0329c01388dbb1c986f3f2605bf3fb773e))
+* **jellyfin:** keep a user's own picks when it is the same person as the account ([7a386d2](https://github.com/cedya77/aiometadata/commit/7a386d2c6f10157e3b093a5588530b29369fba7a))
+* **jellyfin:** keep a watched episode airing today out of Upcoming ([554f714](https://github.com/cedya77/aiometadata/commit/554f714698c348af5c8cdd8fcb6d2da436f94239))
+* **jellyfin:** keep a watched snapshot and its digest for their whole TTL ([4f03099](https://github.com/cedya77/aiometadata/commit/4f0309934e442f318144054bd384cf48e650bbfc))
+* **jellyfin:** keep background work to configurations a client uses, and drop per-request waste ([9d458d6](https://github.com/cedya77/aiometadata/commit/9d458d62c196ab28705a1ed1216cc43dc8b1611d))
+* **jellyfin:** keep Upcoming to caught-up shows and Next Up to aired episodes ([5326b6a](https://github.com/cedya77/aiometadata/commit/5326b6ae9fd343096137cd094f71c5fd37381461))
+* **jellyfin:** key an item id on the title's kind, not the catalog it was listed from ([5b0b56c](https://github.com/cedya77/aiometadata/commit/5b0b56c8bbf944b2ecd21c2d00d9623d7e1eb40d))
+* **jellyfin:** leave a view untyped unless its catalog is movies or series ([a8f6ac1](https://github.com/cedya77/aiometadata/commit/a8f6ac1b9e6e2abd59b3094825ddfe10d74142ca))
+* **jellyfin:** let only a dated, newer watch finish a paused row ([3e43ea0](https://github.com/cedya77/aiometadata/commit/3e43ea0bb0ca8e3b9a25c987392f8720d05eb398))
+* **jellyfin:** list a saved configuration's catalogs as libraries at once ([97d11e3](https://github.com/cedya77/aiometadata/commit/97d11e36e8a8afe5fb6f8e61c260f3b0923d7a3f))
+* **jellyfin:** list an in-progress episode once whatever ids it is stored under ([2524b58](https://github.com/cedya77/aiometadata/commit/2524b58e246022ddca92dd3bd4df96e98670d20d))
+* **jellyfin:** log the playstate sync under the user it runs for ([e8827ea](https://github.com/cedya77/aiometadata/commit/e8827eaa0c33ff3af25bd80cb730b5a1deda9b6a))
+* **jellyfin:** look up a long history in slices during tracker sync ([43ea204](https://github.com/cedya77/aiometadata/commit/43ea204e190ad9f7a43cdde0913d950d61488151))
+* **jellyfin:** map tracker episodes with the configuration's own TMDB key ([5595e20](https://github.com/cedya77/aiometadata/commit/5595e201fbe94f6fe4ac8dafdce4e3af7cdc95be))
+* **jellyfin:** mark a season or series in one pass and one tracker call ([5887384](https://github.com/cedya77/aiometadata/commit/5887384db0ee7bc63e5cbe95dd5b4db2abdffc48))
+* **jellyfin:** mark a series watched on a tracker that reports no total ([659dad1](https://github.com/cedya77/aiometadata/commit/659dad18ebbab948d120490d929cba25236285df))
+* **jellyfin:** mark a stale resume row played once the tracker's history lists it ([214aec2](https://github.com/cedya77/aiometadata/commit/214aec221b6d196211efe6d25bf15657d8d1c0b6))
+* **jellyfin:** mark a title played at the trackers' 80% and measure it over the file's own length ([7b44ac4](https://github.com/cedya77/aiometadata/commit/7b44ac4a8e6f8566372ae315baadc1bc1dd6f652))
+* **jellyfin:** match AniSkip markers to the file's own release and follow the version picked to play ([234eac8](https://github.com/cedya77/aiometadata/commit/234eac8750041bc61a1db400d4a963020e42450f))
+* **jellyfin:** move a show from Upcoming to Next Up on the tracker's own air time, and report a resume the client sends at zero ([39983a4](https://github.com/cedya77/aiometadata/commit/39983a4f476fb78fa3216d42770bb22446174fde))
+* **jellyfin:** name a source by the release the addon says it is ([1b1ed19](https://github.com/cedya77/aiometadata/commit/1b1ed19111e22bad8df31a2b7341bd64aee03843))
+* **jellyfin:** Next Up skips an undated episode of a show whose episodes carry dates ([3bd1c0b](https://github.com/cedya77/aiometadata/commit/3bd1c0b28fc7055c541e9a696e27a9bd958806d0))
+* **jellyfin:** open a title at once and resolve its versions from the picker ([b51ef40](https://github.com/cedya77/aiometadata/commit/b51ef40283821802f549e8e39e7cd52133e6f18e))
+* **jellyfin:** open an anime episode under the series its row came from ([554f714](https://github.com/cedya77/aiometadata/commit/554f714698c348af5c8cdd8fcb6d2da436f94239))
+* **jellyfin:** page the MDBList Next Up list and read the whole watched history ([baedec6](https://github.com/cedya77/aiometadata/commit/baedec6a3feb48266dbca111decab57e8fe9bb07))
+* **jellyfin:** page the unfiltered library listing without skipping items, and end it ([234aa19](https://github.com/cedya77/aiometadata/commit/234aa19a4a6807b1f7403db4f6fc3b1002636593))
+* **jellyfin:** page to the true end, count filtered offsets, keep learned lengths per account ([d958205](https://github.com/cedya77/aiometadata/commit/d958205f47c5e13f0cafada769f047f03a96b515))
+* **jellyfin:** put media sources back on every episode ([92ba6e3](https://github.com/cedya77/aiometadata/commit/92ba6e3d90d04c68f9e2dece106de3c220977ac0))
+* **jellyfin:** read a drop or undrop on MDBList straight away ([04ede9a](https://github.com/cedya77/aiometadata/commit/04ede9a286bcca543c5879eef5bbd87a7840cbea))
+* **jellyfin:** read a shelf's series metas ahead for Odin so its per-series fetches land on the memo ([39250a6](https://github.com/cedya77/aiometadata/commit/39250a63d0330694727ecd740dbaa295dfd33ff5))
+* **jellyfin:** read and write MDBList and Simkl through their rate limiters ([41bae1e](https://github.com/cedya77/aiometadata/commit/41bae1e6a227acb74edf2943e793ae440fc9572e))
+* **jellyfin:** read favourites from the addon's watchlist catalogs ([4a8977d](https://github.com/cedya77/aiometadata/commit/4a8977d5b5fb77d16e736ac04f7d54d15ce5e00c))
+* **jellyfin:** read the unified MDBList watchlist when both shelves are picked ([e880900](https://github.com/cedya77/aiometadata/commit/e8809004af02f07150fd0b634f8002983c366184))
+* **jellyfin:** record plays and watched marks whatever the watch tracking mode ([331ed72](https://github.com/cedya77/aiometadata/commit/331ed72ca088ed611e5bc3b2c1d0321bc56ec182))
+* **jellyfin:** refresh the tracker snapshot after a mark ([82b0c26](https://github.com/cedya77/aiometadata/commit/82b0c26fc5344b3840152c9e8cdb48d9fe43ddc6))
+* **jellyfin:** register the own-plays read and watchlist memo settings ([21cfc6f](https://github.com/cedya77/aiometadata/commit/21cfc6fcc1b8f6e51677a931dcb3b4798a88586d))
+* **jellyfin:** report the version a current server reports ([44bacb1](https://github.com/cedya77/aiometadata/commit/44bacb1bd4a9e80ac27749419822b0e441f560d4))
+* **jellyfin:** round every millisecond to ticks conversion ([e5aca2d](https://github.com/cedya77/aiometadata/commit/e5aca2db49994d3f1782a83660b282b31a0d93fd))
+* **jellyfin:** say why a user data update was refused ([672f956](https://github.com/cedya77/aiometadata/commit/672f956f1b28fadb1516eca9404551d6a29c4e10))
+* **jellyfin:** seed MDBList's Next Up from the latest watched episode ([606db08](https://github.com/cedya77/aiometadata/commit/606db083afbab9b2ac9417a6134cf1a357374c52))
+* **jellyfin:** seed Next Up on Simkl from shows being watched only ([50bc6bd](https://github.com/cedya77/aiometadata/commit/50bc6bda2b3344641d2f1c16873d2037907a1119))
+* **jellyfin:** send every date as an ISO timestamp ([44ade31](https://github.com/cedya77/aiometadata/commit/44ade319e41f3f017fed6a64ab33690421a7d4c5))
+* **jellyfin:** send SortName on every item ([1e7fb76](https://github.com/cedya77/aiometadata/commit/1e7fb7625f2cd0f52bfbab2910bacfffa40928e1))
+* **jellyfin:** send the show's art on its seasons and episodes as the API does ([6ffbc6b](https://github.com/cedya77/aiometadata/commit/6ffbc6b82953258c8fe7c578c7b54479ce2fa3d5))
+* **jellyfin:** send UnplayedItemCount only when the count is known ([c68620c](https://github.com/cedya77/aiometadata/commit/c68620c3ae21007831055deee418caa2a9ac9535))
+* **jellyfin:** serve collection covers from the image cache instead of cropping them ([081d6a8](https://github.com/cedya77/aiometadata/commit/081d6a8b977e2e5fbb46b48f6e31e6d4fa3575be))
+* **jellyfin:** shape the posters the host list was missing ([57e5dcd](https://github.com/cedya77/aiometadata/commit/57e5dcd1133e1052b34615879a834142d6d47db3))
+* **jellyfin:** share and hold a complete tracker watchlist read for a minute ([5ef6175](https://github.com/cedya77/aiometadata/commit/5ef6175ece2396d94d7bab85ba618dcff3357090))
+* **jellyfin:** show a title once in Continue Watching whatever spellings the table holds ([75e0eac](https://github.com/cedya77/aiometadata/commit/75e0eacf260015e9c34d4faf33071bc5b106cb5f))
+* **jellyfin:** stamp resume items with their last play date ([7872aea](https://github.com/cedya77/aiometadata/commit/7872aea28af99898db96bcfa234c1d7c56a54ea3))
+* **jellyfin:** start a series' episode list at the episode asked for and page it ([a9995d3](https://github.com/cedya77/aiometadata/commit/a9995d308f5409da3f9059d104d6d2e6ad62250b))
+* **jellyfin:** start the playstate sync after the id mappers are loaded ([06ef725](https://github.com/cedya77/aiometadata/commit/06ef725a8bf07beb5d9d0441ed060bb0544b7302))
+* **jellyfin:** stop reshaping episode stills into posters ([7e86127](https://github.com/cedya77/aiometadata/commit/7e86127157cac5167b61dec369fa44cfcbedc448))
+* **jellyfin:** stop the dashboard blocking the server ([a8d684f](https://github.com/cedya77/aiometadata/commit/a8d684f9c8678a56a4b9c4d8d3b1a33d2e7ed1fa))
+* **jellyfin:** sync only the configurations a client uses, and date the imports already held ([07d16de](https://github.com/cedya77/aiometadata/commit/07d16dec3e81eb5546c6cd34868ad4fdef98ddad))
+* **jellyfin:** take a short catalog page as the last one ([8ecd4ea](https://github.com/cedya77/aiometadata/commit/8ecd4eafb25f4358fab1eb3ff9d38620de49e569))
+* **jellyfin:** take a show's aired episodes from the episode index instead of building the meta in the response ([b31c8fb](https://github.com/cedya77/aiometadata/commit/b31c8fbe6c65516625073e67c1ba82c5c73ac275))
+* **jellyfin:** take Next Up from MDBList's own list and fill the page ([3e43ea0](https://github.com/cedya77/aiometadata/commit/3e43ea0bb0ca8e3b9a25c987392f8720d05eb398))
+* **jellyfin:** warn when a configuration has no stream addon ([f3835d1](https://github.com/cedya77/aiometadata/commit/f3835d1932c6cb605c4ed5c64ff7b03fdec61d85))
+* **jellyfin:** write a film's playstate under every id its meta carries ([3e43ea0](https://github.com/cedya77/aiometadata/commit/3e43ea0bb0ca8e3b9a25c987392f8720d05eb398))
+* keep object-shaped cache entries for their whole TTL ([5887384](https://github.com/cedya77/aiometadata/commit/5887384db0ee7bc63e5cbe95dd5b4db2abdffc48))
+* **kitsu:** bound every request ([5995f0a](https://github.com/cedya77/aiometadata/commit/5995f0acd781c0fe4b2cf2dc96dd14bab1bc2d0f))
+* **language-map:** treat an unmappable language as unresolved, not English ([437ceaa](https://github.com/cedya77/aiometadata/commit/437ceaa73abff8f79f8a0ad3e5b1e58fde687437))
+* **logs:** mask PublicMetaDB keys like other credentials ([9c3959f](https://github.com/cedya77/aiometadata/commit/9c3959fbc4af2c45466de7568c93a85666270d7d))
+* name the MDBList scrobble action in its log lines and include the response body on failure ([88b8bc1](https://github.com/cedya77/aiometadata/commit/88b8bc109db018585dbd7dd3ea0eabdb38f47a16))
+* open the discover builder in a language TMDB has no genre names for ([118e50c](https://github.com/cedya77/aiometadata/commit/118e50c8cb0c8d1e85b1f35990032962f631c469))
+* **publicmetadb:** a list not on the account shows as an empty row ([34883fe](https://github.com/cedya77/aiometadata/commit/34883fe37528f4cf1740af1ca3b45c6ef5efa3b8))
+* **publicmetadb:** tell a watchlist from a custom list on both sides ([034e126](https://github.com/cedya77/aiometadata/commit/034e126199d14d7adecd01483ea97c64065ffb5b))
+* **recommendations:** keep a recommendation catalog off the home board when asked ([05ab179](https://github.com/cedya77/aiometadata/commit/05ab1791b75eeee62594b42c68c10432fe7ce942))
+* **recommendations:** leave recommendation and MovieLens catalogs out of a shared export ([ffc598b](https://github.com/cedya77/aiometadata/commit/ffc598b34a9500bf84928da318309743b5493d68))
+* **recommendations:** log the refresh sweep under the user it runs for ([aae68f6](https://github.com/cedya77/aiometadata/commit/aae68f666117eb10133742b17c5e6f69696e4214))
+* **scripts:** see tunables read through envInt ([9f3a709](https://github.com/cedya77/aiometadata/commit/9f3a709bb6f544e98891a941725151a4c339a57e))
+* **server:** boot on a Redis that will not answer COMMAND ([1e9f611](https://github.com/cedya77/aiometadata/commit/1e9f61109752ddf6a7f789d7877ab279ac521056))
+* **server:** refuse to start on a Redis the meta cache cannot use ([68aa736](https://github.com/cedya77/aiometadata/commit/68aa7368284e921c1607206b6c24afbd62969400))
+* **settings:** split the artwork TTL that drove two different caches ([9f3a709](https://github.com/cedya77/aiometadata/commit/9f3a709bb6f544e98891a941725151a4c339a57e))
+* **simkl:** disconnecting one configuration keeps the token others share ([eb846e3](https://github.com/cedya77/aiometadata/commit/eb846e36882db53b555b7f421126318dddd8f364))
+* **simkl:** pace a delete like the write it is ([9348c3e](https://github.com/cedya77/aiometadata/commit/9348c3edcdd0fcc971d5334d178b8037b2086229))
+* **simkl:** send a write through the same path a read takes ([9348c3e](https://github.com/cedya77/aiometadata/commit/9348c3edcdd0fcc971d5334d178b8037b2086229))
+* split extras on & for loopback catalog calls ([56b5535](https://github.com/cedya77/aiometadata/commit/56b55357c9bbe38793aa675a50f1982f99aa3d1f))
+* take Trakt out of the watch tracking list and the Jellyfin tracker choice ([a3e3258](https://github.com/cedya77/aiometadata/commit/a3e32583474eef5c136c61fb6d3c33f62a26b931))
+* **tmdb:** cache a missing external ids record as an answer ([66c5c3f](https://github.com/cedya77/aiometadata/commit/66c5c3f2150cd2c9387464e5f847f79852256c47))
+* **tmdb:** cache person search, details and credits like the other endpoints ([6b80ff2](https://github.com/cedya77/aiometadata/commit/6b80ff2d2dbbb103881817b813b4807ab165c61a))
+* treat a missing TMDB external ids record as no ids ([5aa3bca](https://github.com/cedya77/aiometadata/commit/5aa3bca9835c583dd04dc8b5d19bc4052c7a9715))
+* update a film's PublicMetaDB resume point instead of failing on the second save ([e690cd8](https://github.com/cedya77/aiometadata/commit/e690cd84de555990a47b5836149e7ff8b720e005))
+* **warmer:** stop writing catalog metas into the shared meta cache ([b6638e5](https://github.com/cedya77/aiometadata/commit/b6638e5d5f8aef6fca8e2b785554519e1d343449))
+* **watch-tracking:** accept episode ids spelled with MyAnimeList ([f3835d1](https://github.com/cedya77/aiometadata/commit/f3835d1932c6cb605c4ed5c64ff7b03fdec61d85))
+* **watch-tracking:** never take a film's anime entry for its franchise show ([df4326d](https://github.com/cedya77/aiometadata/commit/df4326d1e83903aad83bf8b6f8756d16faf58d27))
+* **watch-tracking:** number episodes the way TMDB does on both sides of a tracker ([df4326d](https://github.com/cedya77/aiometadata/commit/df4326d1e83903aad83bf8b6f8756d16faf58d27))
+* **watch-tracking:** send a mark that repeats an old decision to the trackers ([82b0c26](https://github.com/cedya77/aiometadata/commit/82b0c26fc5344b3840152c9e8cdb48d9fe43ddc6))
+* **watch-tracking:** treat an MDBList miss as a failure and delete a session on a watch ([606db08](https://github.com/cedya77/aiometadata/commit/606db083afbab9b2ac9417a6134cf1a357374c52))
+
+
+### Performance Improvements
+
+* **jellyfin:** answer with the watched snapshot already held while a fresh one is read ([1ee4c47](https://github.com/cedya77/aiometadata/commit/1ee4c47cc842bf846d8162d8e481ca8ba4808712))
+* **jellyfin:** build the episodes a listing returns, not the whole show ([f3835d1](https://github.com/cedya77/aiometadata/commit/f3835d1932c6cb605c4ed5c64ff7b03fdec61d85))
+* **jellyfin:** keep remembered artwork in one hash per scope ([699f43e](https://github.com/cedya77/aiometadata/commit/699f43e53481c397070f23dfa937d1718f8b3632))
+* **jellyfin:** read watched state for the page, not every child ([ca3b400](https://github.com/cedya77/aiometadata/commit/ca3b40076d087d792a27bb1ab508b38dc61fd693))
+* **jellyfin:** reshape only the posters that need it ([37b6794](https://github.com/cedya77/aiometadata/commit/37b67943a6ed643dd355900ea0643be8badb15ae))
+* **jellyfin:** send episode media sources only when asked ([2f1ae9c](https://github.com/cedya77/aiometadata/commit/2f1ae9ca91e84593cdf1e61d2e3d4eca0ada1d66))
+* **jellyfin:** stop scanning the keyspace for seen configurations ([90e7ad5](https://github.com/cedya77/aiometadata/commit/90e7ad5c86a6faa14013cc87579afd844e63cc1b))
+* **jellyfin:** walk catalog pages a few at a time and remember their lengths ([ca54502](https://github.com/cedya77/aiometadata/commit/ca54502374e481e66bae146b4c35120927a97d5a))
+* **jellyfin:** write a listing's artwork in one command ([45d1a2c](https://github.com/cedya77/aiometadata/commit/45d1a2c7a6bd063038dd4de4ae480721218ae351))
+* **mdblist:** read catalog pages from one larger list request ([459e6fb](https://github.com/cedya77/aiometadata/commit/459e6fb08e7c96621bcd6f32310d52b3a767407a))
+* **mdblist:** read catalog pages from one larger list request ([4d19ef8](https://github.com/cedya77/aiometadata/commit/4d19ef8b775fa73b04aa7830a433ee561be383ed))
+* take request-path waste off the addon ([6fc867a](https://github.com/cedya77/aiometadata/commit/6fc867a043295bc61a419d2986c296fc8a71f754))
+
 ## [2.17.2](https://github.com/cedya77/aiometadata/compare/v2.17.1...v2.17.2) (2026-09-11)
 
 

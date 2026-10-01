@@ -1,17 +1,20 @@
 require("dotenv").config();
 import { getGenreList } from "./getGenreList.js";
+import { stampListedAt } from "../utils/listedAt";
 import { getLanguages } from "./getLanguages.js";
 import { fetchMDBListItems, parseMDBListItems, fetchMDBListBatchMediaInfo, fetchMDBListUpNext, parseMDBListUpNextItems, usesMdblistExternalItemsEndpoint, supportsMdblistScoreFilters } from "../utils/mdbList.js";
 import { fetchStremThruCatalog, parseStremThruItems } from "../utils/stremthru.js";
 import { fetchTraktWatchlistItems, fetchTraktFavoritesItems, fetchTraktRecommendationsItems, fetchTraktListItems, fetchTraktListItemsById, parseTraktItems, fetchTraktMostFavoritedItems, fetchTraktCalendarShows, fetchTraktSearchItems, getTraktAccessToken, fetchTraktUpNextEpisodes, fetchTraktUnwatchedEpisodes, fetchTraktTrendingItems, fetchTraktPopularItems, fetchTraktAnticipatedItems } from "../utils/traktUtils.js";
-import { fetchSimklTrendingItems, fetchSimklRecipeItems, fetchSimklWatchlistItems, fetchSimklUpNextItems, parseSimklItems, parseSimklUpNextItems, getSimklToken, fetchSimklCalendarItems, fetchSimklGenreItems, fetchSimklDvdReleases } from "../utils/simklUtils.js";
+import { fetchSimklTrendingItems, fetchSimklRecipeItems, fetchSimklWatchlistItems, fetchSimklUpNextItems, parseSimklItems, parseSimklUpNextItems, getSimklToken, fetchSimklCalendarItems, fetchSimklGenreItems, fetchSimklDvdReleases, fetchSimklListPage } from "../utils/simklUtils.js";
 import { fetchLetterboxdList, parseLetterboxdItems, getLetterboxdGenreIdByName } from "../utils/letterboxdUtils.js";
 import { getFlixPatrolMetas } from "../utils/flixpatrolUtils.js";
-import { fetchResume, parseResumeItems, fetchListItems, parseListItems, fetchPickItems, parsePickItems } from "../utils/publicmetadbUtils.js";
+import { fetchResume, parseResumeItems, fetchListItems, parseListItems, fetchPickItems, parsePickItems, publicMetaDBListType } from "../utils/publicmetadbUtils.js";
 import { getFranchiseCatalog } from "./franchiseUtils.js";
 import { getRottenTomatoesCatalog } from "./getRottenTomatoes.js";
 import { mapWithLimit } from "../utils/concurrency.js";
 const anilist = require('./anilist');
+import { createHash } from 'crypto';
+import { accountOwner, ownTokenId, servesCatalog, viewerConfigFor } from './accounts';
 import * as jikan from "./mal.js"
 import * as Utils from '../utils/parseProps.js';
 import CATALOG_TYPES from "../static/catalog-types.json";
@@ -19,10 +22,12 @@ import * as moviedb from "./getTmdb.js";
 import * as tvdb from './tvdb.js';
 import { to3LetterCode, to3LetterCountryCode } from './language-map.js';
 import { resolveAllIds } from './id-resolver.js';
-import { cacheWrapTvdbApi, cacheWrap, cacheWrapCatalog, cacheWrapAniListCatalog, cacheWrapJikanApi, cacheWrapGlobal, classifyResultAllowEmpty, stableStringify } from './getCache.js';
+import { cacheWrapTvdbApi, cacheWrap, cacheWrapCatalog, cacheWrapAniListCatalog, cacheWrapJikanApi, cacheWrapGlobal, classifyResultAllowEmpty, stableStringify, CATALOG_TTL } from './getCache.js';
 import { isDiscoverCatalogId, applyDiscoverSignature } from './discoverCatalogSignature.js';
 import { getTVDBContentRatingId } from '../utils/tvdbContentRating.js';
 import { getMeta } from './getMeta.js';
+import { fetchLumiereList, lumiereApiBase, lumiereListOf } from '../utils/lumiereLists.js';
+const { getSetting }: any = require('./settingsService');
 import { resolveDynamicTmdbDiscoverParams } from './tmdbDiscoverDateTokens.js';
 import { roundRobinInterleaveTagged, mergedDedupKey, filterMetasByGenre, normalizeGenreKey } from '../utils/mergedCatalog.js';
 const { getTvmazeScheduleCatalog } = require('./tvmazeScheduleCatalog');
@@ -35,7 +40,7 @@ import redis from './redisClient.js';
 const logger = consola.withTag('Catalog');
 import { cacheWrapMetaSmart } from './getCache.js';
 // @ts-ignore
-import { getAnilistAccessToken } from '../utils/anilistUtils';
+import { anilistListAccess, getAnilistAccessToken } from '../utils/anilistUtils';
 import { anilistRequiresAuth } from '../utils/anilistAccess';
 import { UserConfig } from '../types/index.js';
 
@@ -133,6 +138,12 @@ async function getCatalog(type: string, language: string, page: number, id: stri
       const simklResults = await getSimklCatalog(type, id, genre, page, language, config, userUUID, includeVideos, skip);
       return { metas: simklResults };
     }
+    else if (id.startsWith('recommendations.')) {
+      logger.debug(`Routing to recommendation handler for id: ${id}`);
+      const { getRecommendationCatalog }: any = require('../utils/recommendations/catalog');
+      const picks = await getRecommendationCatalog(type, id, page, config, userUUID);
+      return { metas: picks };
+    }
     else if (id.startsWith('movielens.')) {
       logger.debug(`Routing to MovieLens catalog handler for id: ${id}`);
       const movieLensResults = await getMovieLensCatalog(type, id, genre, page, language, config, userUUID, includeVideos);
@@ -142,6 +153,11 @@ async function getCatalog(type: string, language: string, page: number, id: stri
       logger.debug(`Routing to FlixPatrol catalog handler for id: ${id}`);
       const flixpatrolResults = await getFlixPatrolCatalog(type, id, genre, page, language, config, userUUID, includeVideos);
       return { metas: flixpatrolResults };
+    }
+    else if (id.startsWith('lumiere.')) {
+      logger.debug(`Routing to LumiereDB catalog handler for id: ${id}`);
+      const lumiereResults = await getLumiereCatalog(type, id, genre, page, language, config, includeVideos);
+      return { metas: lumiereResults };
     }
     else if (id.startsWith('publicmetadb.')) {
       logger.debug(`Routing to PublicMetaDB catalog handler for id: ${id}`);
@@ -196,7 +212,7 @@ async function getMalDiscoverCatalog(
     const catalogConfig = config.catalogs?.find((c: any) => c.id === catalogId);
     const discoverMetadata = catalogConfig?.metadata?.discover || {};
     const rawParams = { ...(discoverMetadata?.params || {}) };
-    const customCacheTTL = catalogConfig?.cacheTTL || null;
+    const customCacheTTL = catalogConfig?.cacheTTL ?? null;
 
     let seasonCacheSuffix = '';
     if (rawParams.season) {
@@ -234,9 +250,9 @@ async function getMalDiscoverCatalog(
     }
 
     const response = await cacheWrapJikanApi(
-      `mal-discover-${catalogId}-page${page}-genre${genreName || 'All'}${seasonCacheSuffix}`,
+      `mal-discover-${catalogId}-page${page}-genre${genreName || 'All'}${seasonCacheSuffix}${customCacheTTL !== null ? `-ttl${customCacheTTL}` : ''}`,
       async () => jikan.fetchDiscover(rawParams, page),
-      customCacheTTL || 30 * 60
+      customCacheTTL ?? 30 * 60
     );
 
     if (!response?.items || response.items.length === 0) {
@@ -438,7 +454,7 @@ async function getAniListDiscoverCatalog(
     const catalogConfig = config.catalogs?.find((c: any) => c.id === catalogId);
     const discoverMetadata = catalogConfig?.metadata?.discover || {};
     const rawParams = { ...(discoverMetadata?.params || {}) };
-    const customCacheTTL = catalogConfig?.cacheTTL || null;
+    const customCacheTTL = catalogConfig?.cacheTTL ?? null;
     const pageSize = 50;
 
     if (rawParams.season === 'CURRENT') {
@@ -1036,6 +1052,9 @@ async function getTmdbAndMdbListCatalog(type: string, id: string, genre: string,
     }
     
     let metas = await parseMDBListItems(response.items, type, language, config, includeVideos);
+    if (listId === 'watchlist') {
+      metas = stampListedAt(metas, response.items, (item: any) => ({ imdb: item?.imdb_id, tmdb: item?.id, tvdb: item?.tvdb_id }), (item: any) => item?.watchlist_at);
+    }
 
     return metas;
   }
@@ -1863,7 +1882,8 @@ async function getExternalAddonCatalog(type: string, catalogId: string, genre: s
     const useCursor = skip !== undefined && redis;
     const stremioSkip = skip ?? (page - 1) * batchSize;
 
-    const cursorKey = useCursor ? `catalog-cursor:${userUUID}:${catalogId}:${type}:${genre || 'all'}` : null;
+    const owner = accountOwner(config);
+    const cursorKey = useCursor ? `catalog-cursor:${owner ? `${userUUID}@${owner}` : userUUID}:${catalogId}:${type}:${genre || 'all'}` : null;
     let upstreamSkip: number;
     const seenIds = new Set<string>();
 
@@ -1897,8 +1917,9 @@ async function getExternalAddonCatalog(type: string, catalogId: string, genre: s
     const { applyCatalogFilters, catalogFiltersActive } = require('../utils/catalogFilters.js');
     const { fillMaxPages } = require('./catalogPagination');
 
+    const sourceKey = createHash('sha256').update(String(catalogUrl)).digest('hex').slice(0, 16);
     const readBatch = async (offset: number) => {
-      const cacheKey = `custom-batch:${catalogId}:${genre || 'all'}:skip=${offset}`;
+      const cacheKey = `custom-batch:${catalogId}:${sourceKey}:${genre || 'all'}:skip=${offset}:ttl:${catalogTTL}`;
       return await cacheWrap(cacheKey, async () => {
         return await fetchStremThruCatalog(catalogUrl, offset, genre);
       }, catalogTTL, { enableErrorCaching: true, maxRetries: 2 });
@@ -2324,6 +2345,9 @@ async function getTraktCatalog(
     const useShowPoster = catalogConfig?.metadata?.useShowPosterForUpNext || false;
     logger.debug(`Up Next: useShowPosterForUpNext = ${useShowPoster}`);
     let metas = await parseTraktItems(response.items, type, language, config, includeVideos, useShowPoster);
+    if (catalogId.startsWith('trakt.watchlist')) {
+      metas = stampListedAt(metas, response.items, (item: any) => (item?.movie ?? item?.show)?.ids ?? {}, (item: any) => item?.listed_at);
+    }
     const parseTime = Date.now() - parseStart;
     logger.info(`Up Next: parseTraktItems took ${parseTime}ms for ${response.items.length} items`);
     
@@ -2368,7 +2392,7 @@ async function getAniListCatalog(
     if (catalogId === 'anilist.trending') {
       const pageSize = 50;
       const catalogConfig = config.catalogs?.find(c => c.id === catalogId);
-      const customCacheTTL = catalogConfig?.cacheTTL || null;
+      const customCacheTTL = catalogConfig?.cacheTTL ?? null;
       const sfw = config.sfw || false;
       const accessToken = await getAnilistAccessToken(config);
 
@@ -2405,7 +2429,7 @@ async function getAniListCatalog(
     
     // Get the catalog config to retrieve username, list name and custom TTL
     const catalogConfig = config.catalogs?.find(c => c.id === catalogId);
-    const username = catalogConfig?.metadata?.username;
+    const { username, accessToken } = await anilistListAccess(config, catalogConfig ?? { id: catalogId });
     
     // Prefer explicit listName metadata; fall back to id parsing to support older configs
     const idWithoutPrefix = catalogId.replace('anilist.', '');
@@ -2413,7 +2437,7 @@ async function getAniListCatalog(
       || (idWithoutPrefix.includes('.') ? idWithoutPrefix.split('.').slice(1).join('.') : idWithoutPrefix);
     
     if (!username) {
-      logger.error(`[AniList] No username found in catalog config for: ${catalogId}`);
+      logger.error(`[AniList] No AniList user resolved for: ${catalogId}`);
       return [];
     }
     if (!listName) {
@@ -2424,7 +2448,7 @@ async function getAniListCatalog(
     const pageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE as string) || 20;
     
     // Get custom cache TTL and sort option from catalog config if specified
-    const customCacheTTL = catalogConfig?.cacheTTL || null;
+    const customCacheTTL = catalogConfig?.cacheTTL ?? null;
     const sortBase = catalogConfig?.sort || 'ADDED_TIME';
     const sortDirection = catalogConfig?.sortDirection || 'desc';
     
@@ -2433,7 +2457,11 @@ async function getAniListCatalog(
     
     logger.debug(`[AniList] Using sort: ${sortBase}, direction: ${sortDirection}, combined: ${sort}`);
     
-    const accessToken = await getAnilistAccessToken(config);
+    // A page fetched with a token may include private entries, so it must not
+    // be shared with configs that name the same username without one.
+    const cacheScope = accessToken && config.apiKeys?.anilistTokenId
+      ? createHash('sha256').update(String(config.apiKeys.anilistTokenId)).digest('hex').slice(0, 12)
+      : '';
 
     // Fetch list items from AniList API with caching
     const response = await cacheWrapAniListCatalog(
@@ -2442,10 +2470,9 @@ async function getAniListCatalog(
       page,
       async () => anilist.fetchListItems(username, listName, page, pageSize, sort, accessToken),
       customCacheTTL,
-      // The page is shared, so a reader without a token must not cache its
-      // rejection over a copy a token holder could have fetched.
       { enableErrorCaching: anilistRequiresAuth() ? !!accessToken : true },
-      sort
+      sort,
+      cacheScope
     );
     
     // Handle cached error responses
@@ -2464,9 +2491,10 @@ async function getAniListCatalog(
     
     // Resolve AniList media IDs to Stremio metas
     const metas = await resolveAniListItemsToMetas(response.items, type, language, config, userUUID, includeVideos);
+    const listedMetas = stampListedAt(metas, response.items, (item: any) => ({ anilist: item?.media?.id, mal: item?.media?.idMal }), (item: any) => item?.createdAt ? item.createdAt * 1000 : null);
     
     logger.success(`[AniList] Processed ${metas.length} items for catalog ${catalogId} (page ${page})`);
-    return metas;
+    return listedMetas;
     
   } catch (err: any) {
     const errorLine = err.stack?.split('\n')[1]?.trim() || 'unknown';
@@ -2577,7 +2605,7 @@ async function getMalUserListCatalog(
       return [];
     }
 
-    const accessToken = await malTracker.getValidAccessToken(userUUID);
+    const accessToken = await malTracker.getValidAccessToken(userUUID, ownTokenId(config, 'mal'));
     if (!accessToken) {
       logger.warn(`[MAL] No valid access token for user ${userUUID} (catalog: ${catalogId})`);
       return [];
@@ -2623,7 +2651,8 @@ async function getMalUserListCatalog(
     });
 
     const metas = await Utils.parseAnimeCatalogMetaBatch(newItems, config, language);
-    const validMetas = metas.filter((meta: any) => meta !== null);
+    const listedMetas = stampListedAt(metas, response.items, (item: any) => ({ mal: item?.node?.id }), (item: any) => item?.list_status?.updated_at);
+    const validMetas = listedMetas.filter((meta: any) => meta !== null);
 
     logger.success(`[MAL] Processed ${validMetas.length} items for catalog ${catalogId} (page ${page})`);
     return validMetas;
@@ -2664,12 +2693,12 @@ async function getLetterboxdCatalog(
     logger.info(`Fetching Letterboxd ${isWatchlist ? 'watchlist' : 'list'}: ${identifier}, Page: ${page}`);
 
     // Fetch list data from StremThru
-    // cache wrap the fetchLetterboxdList call with the custom cache TTL from the catalog config with a minimum of 2hrs
+    const listTtl = catalogConfig?.cacheTTL ?? 7200;
     const listData = await cacheWrap(
-      `letterboxd-list:${identifier}:${isWatchlist}`,
+      `letterboxd-list:${identifier}:${isWatchlist}:ttl:${listTtl}`,
       async () => await fetchLetterboxdList(identifier, isWatchlist),
-      catalogConfig?.cacheTTL || 7200,
-      { enableErrorCaching: true, maxRetries: 2 }
+      listTtl,
+      { enableErrorCaching: true, maxRetries: 2, resultClassifier: classifyResultAllowEmpty }
     );
     
     if (!listData?.data?.items) {
@@ -3012,6 +3041,7 @@ async function getSimklCatalog(
     }
 
     let response: any;
+    let listMediaType: string | undefined;
 
     if (catalogId.startsWith('simkl.discover.')) {
       const discoverMetadata = catalogConfig?.metadata?.discover || {};
@@ -3162,7 +3192,7 @@ async function getSimklCatalog(
         // No TTL override: this blob is shared across every catalog on the same status
         // and is invalidated by the activity check, so a catalog's own (much shorter)
         // TTL would expire it early and force a full re-sync instead of a delta.
-        const result = await fetchSimklWatchlistItems(accessToken, watchlistType, status);
+        const result = await fetchSimklWatchlistItems(accessToken, watchlistType, status, undefined, config);
         
         // Filter and map items
         let allItems = result.items
@@ -3188,6 +3218,7 @@ async function getSimklCatalog(
               type: itemType,
               ...media,
               simkl_status: item.status,
+              simkl_added_to_watchlist_at: item.added_to_watchlist_at,
               simkl_rating: item.user_rating,
               simkl_last_watched: item.last_watched,
               simkl_next_to_watch: item.next_to_watch,
@@ -3231,6 +3262,34 @@ async function getSimklCatalog(
         logger.warn(`[Simkl] Invalid watchlist catalog ID format: ${catalogId}`);
         return [];
       }
+    } else if (catalogId.startsWith('simkl.list.')) {
+      const listId = catalogId.slice('simkl.list.'.length);
+      const tokenId = (config.apiKeys as any)?.simklTokenId;
+      const token = tokenId ? await getSimklToken(tokenId) : null;
+      if (!token?.access_token) {
+        logger.warn(`[Simkl] List ${listId} needs a connected Simkl account`);
+        return [];
+      }
+      const result = await fetchSimklListPage(token.access_token, listId, page, pageSize);
+      if (result.error === 'needs_v2') {
+        logger.warn(`[Simkl] List ${listId} needs a V2 connection; reconnect Simkl to read custom lists`);
+        return [];
+      }
+      if (result.error === 'premium_only') {
+        logger.warn(`[Simkl] List ${listId} needs a Simkl PRO or VIP account`);
+        return [];
+      }
+      listMediaType = result.list?.media_type || catalogConfig?.metadata?.mediatype;
+      const items = result.items
+        .filter((it: any) => {
+          const ids = it.ids || {};
+          return !!(ids.imdb || ids.tmdb || ids.tvdb || ids.mal || ids.anilist || ids.kitsu || ids.anidb || ids.simkl || ids.simkl_id);
+        })
+        .map((it: any) => ({
+          ...it,
+          type: it.type === 'movie' || it.anime_type === 'movie' ? 'movie' : 'series',
+        }));
+      response = { items, hasMore: result.hasMore };
     } else {
       logger.warn(`[Simkl] Unknown catalog ID: ${catalogId}`);
       return [];
@@ -3247,9 +3306,11 @@ async function getSimklCatalog(
       || catalogId === 'simkl.calendar'
       || catalogId === 'simkl.calendar.anime'
       || catalogId.startsWith('simkl.discover.anime.')
-      || (catalogId.startsWith('simkl.recipe.') && catalogId.endsWith('.anime'));
+      || (catalogId.startsWith('simkl.recipe.') && catalogId.endsWith('.anime'))
+      || listMediaType === 'anime';
     const parseStart = Date.now();
     let metas = await parseSimklItems(response.items, type as 'movie' | 'series', config, userUUID, includeVideos, isAnimeCatalog);
+    metas = stampListedAt(metas, response.items, (item: any) => item?.ids ?? {}, (item: any) => item?.simkl_added_to_watchlist_at);
     const parseTime = Date.now() - parseStart;
     logger.info(`[Simkl] parseSimklItems took ${parseTime}ms for ${response.items.length} items`);
     
@@ -3307,6 +3368,52 @@ async function getFlixPatrolCatalog(
   }
 }
 
+async function getLumiereCatalog(
+  type: string,
+  catalogId: string,
+  genre: string,
+  page: number,
+  language: string,
+  config: UserConfig,
+  includeVideos: boolean = false
+): Promise<any[]> {
+  try {
+    const list = lumiereListOf(catalogId);
+    const baseUrl = lumiereApiBase();
+    if (!list || !baseUrl || (type !== 'movie' && type !== 'series')) return [];
+
+    const catalogConfig = config.catalogs?.find((c: any) => c.id === catalogId && c.type === type);
+    const ttl = Number.isFinite(catalogConfig?.cacheTTL) && catalogConfig.cacheTTL >= 0 ? catalogConfig.cacheTTL : CATALOG_TTL();
+    const timeoutMs = parseInt(getSetting('LUMIERE_SEARCH_TIMEOUT_MS'), 10) || 5000;
+    const genreSlug = genre && genre.toLowerCase() !== 'none' ? genre.toLowerCase() : '';
+
+    const fetchIds = () => fetchLumiereList(baseUrl, list, type, genreSlug, timeoutMs);
+    const ids: string[] = ttl > 0
+      ? await cacheWrapGlobal(`lumiere-list:${list}:${type}:${genreSlug || 'all'}:ttl:${ttl}`, fetchIds, ttl, { resultClassifier: classifyResultAllowEmpty })
+      : await fetchIds();
+
+    const pageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE as string) || 20;
+    const pageIds = (ids || []).slice((page - 1) * pageSize, page * pageSize);
+    const metas = await mapWithLimit(pageIds, async (imdbId: string) => {
+      try {
+        const result = await cacheWrapMetaSmart(config.userUUID || '', imdbId, async () => {
+          return await getMeta(type, language, imdbId, config, config.userUUID || '', includeVideos);
+        }, undefined, { enableErrorCaching: true, maxRetries: 2, config }, type as any, includeVideos);
+        return result?.meta || null;
+      } catch (error: any) {
+        logger.error(`[LumiereDB] Error getting meta for ${imdbId}: ${error.message}`);
+        return null;
+      }
+    });
+
+    logger.info(`[LumiereDB] ${catalogId} ${type} page ${page} (genre: ${genreSlug || 'all'}): ${metas.filter(Boolean).length} metas`);
+    return metas.filter(Boolean);
+  } catch (error: any) {
+    logger.error(`[LumiereDB] Catalog ${catalogId} failed: ${error.message}`);
+    return [];
+  }
+}
+
 async function getPublicMetaDBCatalog(
   type: string,
   catalogId: string,
@@ -3334,11 +3441,20 @@ async function getPublicMetaDBCatalog(
     }
 
     if (catalogId.startsWith('publicmetadb.list.')) {
-      const listId = catalogId.replace('publicmetadb.list.', '');
+      const { pmdbListIdFor } = require('./accounts');
+      const listId = pmdbListIdFor(config, catalogId);
       const pageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE as string) || 20;
-      const data = await fetchListItems(apiKey, listId, page, pageSize);
+      const [data, listType] = await Promise.all([
+        fetchListItems(apiKey, listId, page, pageSize).catch((error: any) => {
+          if (!String(error?.message || '').includes('403')) throw error;
+          logger.warn(`[PublicMetaDB] List ${listId} is not on this account; it is a row left over from an older configuration. Remove it, or reinstall the addon in the client.`);
+          return { items: [] };
+        }),
+        publicMetaDBListType(config, catalogId),
+      ]);
       let metas = await parseListItems(data.items || [], type, language, config);
-      logger.success(`[PublicMetaDB] List ${listId}: ${metas.length} items (page ${page})`);
+      metas = stampListedAt(metas, data.items || [], (item: any) => ({ tmdb: item?.tmdb_id }), (item: any) => item?.created);
+      logger.success(`[PublicMetaDB] ${listType === 'watchlist' ? 'Watchlist' : 'List'} ${listId}: ${metas.length} items (page ${page})`);
       return metas;
     }
 
@@ -3432,14 +3548,14 @@ async function getMergedCatalog(
       logger.warn(`[Merged] Skipping nested merge reference: ${s.catalogId}`);
       return false;
     }
-    const stillExists = config.catalogs?.some((c: any) =>
+    const entry = config.catalogs?.find((c: any) =>
       c.id === s.catalogId && c.type === s.catalogType
     );
-    if (!stillExists) {
+    if (!entry) {
       logger.warn(`[Merged] Source ${s.catalogId} (${s.catalogType}) no longer exists in config`);
       return false;
     }
-    return true;
+    return servesCatalog(config, entry);
   });
   if (validSources.length === 0) return [];
 
@@ -3449,7 +3565,8 @@ async function getMergedCatalog(
   const hasGenreFilter = !!(genre && genre !== 'None' && normalizeGenreKey(genre));
   const catalogTTL = parseInt(process.env.CATALOG_TTL || String(24 * 60 * 60), 10);
 
-  const cursorKey = redis ? `merged-cursor:${userUUID}:${catalogId}:${genre || 'all'}` : null;
+  const owner = accountOwner(config);
+  const cursorKey = redis ? `merged-cursor:${owner ? `${userUUID}@${owner}` : userUUID}:${catalogId}:${genre || 'all'}` : null;
 
   interface MergedCursor {
     served: number;
@@ -3522,14 +3639,15 @@ async function getMergedCatalog(
   const fetchSourcePage = async (src: any, srcPage: number): Promise<{ items: any[]; rawLength: number }> => {
     try {
       const effectiveGenre = genre || await resolveDefaultGenre(src.catalogId, src.catalogType) || '';
-      const cacheArgs = buildCatalogCacheArgs(src.catalogId, src.catalogType, srcPage, effectiveGenre, config);
+      const srcConfig = viewerConfigFor(config, owner, src.catalogId);
+      const cacheArgs = buildCatalogCacheArgs(src.catalogId, src.catalogType, srcPage, effectiveGenre, srcConfig);
       const catalogKey = `${src.catalogId}:${src.catalogType}:${stableStringify(cacheArgs)}`;
 
       const result = await cacheWrapCatalog(userUUID, catalogKey, async () => {
         return await getCatalog(
-          src.catalogType, language, srcPage, src.catalogId, effectiveGenre, config, userUUID, includeVideos
+          src.catalogType, language, srcPage, src.catalogId, effectiveGenre, srcConfig, userUUID, includeVideos
         );
-      }, { config });
+      }, { config: srcConfig });
 
       const raw = result?.metas || [];
       let items = raw;

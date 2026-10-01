@@ -1,7 +1,7 @@
-import { httpGet, httpPost } from "./httpClient.js";
+import { httpGet, httpPost, httpRequest } from "./httpClient.js";
 import { getMeta } from "../lib/getMeta.js";
 import { mapWithLimit } from "./concurrency.js";
-import { cacheWrapMetaSmart, cacheWrapGlobal, readGlobalCache, writeGlobalCache } from "../lib/getCache.js";
+import { cacheWrapMetaSmart, cacheWrapGlobal, classifyResultAllowEmpty, readGlobalCache, writeGlobalCache } from "../lib/getCache.js";
 import { UserConfig } from "../types/index.js";
 const consola = require('consola');
 const crypto = require('crypto');
@@ -635,7 +635,7 @@ async function fetchTraktUpNextEpisodes(
           return resp.data;
         },
         86400, // 1 day TTL
-        { upstream: true }
+        { upstream: true, resultClassifier: classifyResultAllowEmpty }
       );
       showDataMap.set(showId, data);
     } catch(e) {}
@@ -3198,116 +3198,6 @@ async function fetchTraktPersonCredits(
   } catch (err: any) {
     logger.error(`Error fetching Trakt person credits for person ${personId}:`, err.message);
     return [];
-  }
-}
-
-export async function getTraktToken(tokenId: string): Promise<string | null> {
-  if (!tokenId) return null;
-  return getTraktAccessToken({ apiKeys: { traktTokenId: tokenId } });
-}
-
-export async function checkinMovie(
-  idInput: Record<string, string | number>,
-  accessToken: string,
-  options: TraktScrobbleOptions = {}
-): Promise<boolean> {
-  const action = options.action ?? 'checkin';
-  try {
-    const url = traktScrobbleUrl(action);
-    const payload = {
-      movie: {
-        ids: idInput
-      },
-      ...(action === 'checkin' ? {} : { progress: options.progress ?? 0 }),
-      app_version: "1.0",
-      app_date: new Date().toISOString().split('T')[0]
-    };
-    
-    await makeRateLimitedRequest(
-      () => httpPost(url, payload, {
-        dispatcher: traktDispatcher,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${accessToken}`,
-          'trakt-api-version': '2',
-          'trakt-api-key': process.env.TRAKT_CLIENT_ID
-        }
-      }),
-      'Trakt checkinMovie',
-      3,
-      accessToken
-    );
-    logger.info(`[Trakt Checkin] Checked in movie`, { ids: idInput });
-    return true;
-  } catch (error: any) {
-    if (error.response?.status === 409) {
-      logger.info('[Trakt Checkin] Already checked in (409 Conflict)');
-      return true;
-    }
-    logger.error(`[Trakt Checkin] Movie check-in failed: ${error.message}`);
-    return false;
-  }
-}
-
-export interface TraktScrobbleOptions {
-  /** checkin flips to watched once the runtime elapses; scrobble decides at stop. */
-  action?: 'checkin' | 'start' | 'pause' | 'stop';
-  /** 0-100. Stopping above 80 scrobbles it; 1 to 79 is saved as a pause. */
-  progress?: number;
-}
-
-function traktScrobbleUrl(action: string): string {
-  return action === 'checkin'
-    ? 'https://api.trakt.tv/checkin'
-    : `https://api.trakt.tv/scrobble/${action}`;
-}
-
-export async function checkinSeries(
-  idInput: Record<string, string | number>,
-  season: number,
-  episode: number,
-  accessToken: string,
-  options: TraktScrobbleOptions = {}
-): Promise<boolean> {
-  const action = options.action ?? 'checkin';
-  try {
-    const url = traktScrobbleUrl(action);
-    const payload = {
-      episode: {
-        season: season,
-        number: episode
-      },
-      show: {
-        ids: idInput
-      },
-      ...(action === 'checkin' ? {} : { progress: options.progress ?? 0 }),
-      app_version: "1.0",
-      app_date: new Date().toISOString().split('T')[0]
-    };
-
-    await makeRateLimitedRequest(
-      () => httpPost(url, payload, {
-        dispatcher: traktDispatcher,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${accessToken}`,
-          'trakt-api-version': '2',
-          'trakt-api-key': process.env.TRAKT_CLIENT_ID
-        }
-      }),
-      'Trakt checkinSeries',
-      3,
-      accessToken
-    );
-    logger.info(`[Trakt Checkin] Checked in episode`, { ids: idInput, season, episode });
-    return true;
-  } catch (error: any) {
-    if (error.response?.status === 409) {
-      logger.info('[Trakt Checkin] Already checked in (409 Conflict)');
-      return true;
-    }
-    logger.error(`[Trakt Checkin] Episode check-in failed: ${error.message}`);
-    return false;
   }
 }
 

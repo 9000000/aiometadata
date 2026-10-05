@@ -16,6 +16,8 @@ const INTERNAL_ALLOWLIST = new Set<string>([
   'FRANCHISE_REMOTE_BASE_URL',
   'SKIP_CACHE_CLEANUP',
   'TMDB_POSTER_SIZE',
+  'DISABLE_CONTENT_METADATA',
+  'DISABLE_IMDB_RATINGS',
 ]);
 
 /** Known debt: warned about, never grown. A setting not listed here fails the check. */

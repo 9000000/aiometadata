@@ -106,8 +106,11 @@ export function extractToken(req: any): string | undefined {
 // clients have favourites alone, so the watchlist is what they are shown as favourites.
 const OWN_WATCHLIST_CLIENT = /^pelagica\b/i;
 
+const EXTENSION_CLIENT = /^(aiostreams|pelagica)\b/i;
+
 export function runWithClient<T>(req: any, fn: () => T): T {
-  return runInViewerScope(OWN_WATCHLIST_CLIENT.test(clientInfo(req).client), fn);
+  const { client } = clientInfo(req);
+  return runInViewerScope(OWN_WATCHLIST_CLIENT.test(client), fn, EXTENSION_CLIENT.test(client));
 }
 
 /** Whether the client asking keeps a watchlist apart from favourites. */
@@ -184,7 +187,7 @@ export async function loadConfig(req: any): Promise<any> {
 // Artwork is anonymous in Jellyfin, because a client renders it with a plain
 // image tag that cannot carry a token. Requiring one leaves every poster blank
 // in the clients that do not put the key in the query.
-const ANONYMOUS_PATH = /\/(Items|Users)\/[^/]+\/Images\//i;
+const ANONYMOUS_PATH = /\/(?:(?:Items|Users)\/[^/]+\/Images\/|UserImage$)/i;
 
 export function requireAuth(req: any, res: any, next: any): void {
   if (req.jellyfin?.authenticated || ANONYMOUS_PATH.test(String(req.path || ''))) {

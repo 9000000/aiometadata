@@ -5,6 +5,7 @@ import { envInt } from '../../utils/envNumber';
 import { encodeJellyfinId } from './ids';
 import { collectionFolder } from './dto';
 import { profileTags } from './profiles';
+import { viewerReadsExtensions } from './viewer';
 import { isCollectionCatalogId } from '../collectionBuilder/aiostreamsCollections';
 import { accountOwner, servedAccountsKey } from '../accounts';
 
@@ -48,7 +49,7 @@ export function collectionTypeFor(type: string): string | null {
 const BOXSET_CATALOGS = new Set(['tvdb.collections']);
 
 export function isBoxSetCatalog(catalog: { id: string }): boolean {
-  return BOXSET_CATALOGS.has(catalog.id);
+  return BOXSET_CATALOGS.has(catalog.id.replace(/_(movie|series|anime|all)$/, ''));
 }
 
 export function viewTypeFor(catalog: { id: string; type: string }): string | null {
@@ -78,7 +79,8 @@ export async function getCatalogs(userUUID: string, config: any): Promise<Catalo
 // A catalog with a required extra cannot be listed, only queried, so it would
 // make an empty library.
 export function isBrowsable(catalog: CatalogRef): boolean {
-  return !(catalog.extra ?? []).some((e: any) => e?.isRequired && !(e.name === 'genre' && hasGenreOption(e)));
+  const readsExtensions = viewerReadsExtensions();
+  return !(catalog.extra ?? []).some((e: any) => e?.isRequired && !(readsExtensions && e.name === 'genre' && hasGenreOption(e)));
 }
 
 function hasGenreOption(extra: any): boolean {
@@ -119,10 +121,16 @@ export async function buildViews(
 ): Promise<any[]> {
   const { boxSetsFor, collectionView, entryVisible } = require('./collections');
   const catalogs = (await getCatalogs(userUUID, config)).filter(isBrowsable);
-  const catalogView = (catalog: CatalogRef) => ({
-    ...collectionFolder(viewIdFor(catalog), serverId, catalog.name, viewTypeFor(catalog), null),
-    ...(requiresGenre(catalog) ? { aiostreams: { genreRequired: true } } : {}),
-  });
+  const catalogView = (catalog: CatalogRef, ranked = false) => {
+    const extensions = {
+      ...(requiresGenre(catalog) ? { genreRequired: true } : {}),
+      ...(ranked ? { ranked: true } : {}),
+    };
+    return {
+      ...collectionFolder(viewIdFor(catalog), serverId, catalog.name, viewTypeFor(catalog), null),
+      ...(Object.keys(extensions).length > 0 ? { aiostreams: extensions } : {}),
+    };
+  };
 
   const views: any[] = [];
   const placed = new Set<CatalogRef>();
@@ -135,7 +143,7 @@ export async function buildViews(
       );
       if (catalog && !placed.has(catalog)) {
         placed.add(catalog);
-        views.push(catalogView(catalog));
+        views.push(catalogView(catalog, entry.numbered === true));
       }
     } else if (entry?.kind === 'collection' && entry.id && typeof entry.title === 'string') {
       const folders = await boxSetsFor(userUUID, config, serverId, entry);

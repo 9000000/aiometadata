@@ -998,6 +998,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     min: 0,
   },
   {
+    key: 'JELLYFIN_CALENDAR_EMPTY_TTL',
+    envVar: 'JELLYFIN_CALENDAR_EMPTY_TTL',
+    label: 'Jellyfin Empty Calendar Cache (seconds)',
+    description: 'How long a calendar range with no episodes is kept before it is built again. Kept short, since an empty answer can come from a tracker that has not loaded yet.',
+    category: 'Features',
+    type: 'number',
+    default: 30,
+    min: 1,
+  },
+  {
     key: 'JELLYFIN_CALENDAR_FUTURE_DAYS',
     envVar: 'JELLYFIN_CALENDAR_FUTURE_DAYS',
     label: 'Jellyfin Calendar Future Window (days)',
@@ -1168,6 +1178,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'Features',
     type: 'boolean',
     default: false,
+  },
+  {
+    key: 'JELLYFIN_IMAGE_RESIZE_CONCURRENCY',
+    envVar: 'JELLYFIN_IMAGE_RESIZE_CONCURRENCY',
+    label: 'Jellyfin Image Resizes at Once',
+    description: 'How many images the server shrinks at the same time for clients that ask for a smaller size than the source. A cold home screen asks for dozens at once; the rest wait their turn. Each size is made once and kept with the cached original.',
+    category: 'Features',
+    type: 'number',
+    default: 2,
+    min: 1,
   },
   {
     key: 'JELLYFIN_IMAGE_CACHE_MB',

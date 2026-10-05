@@ -8,7 +8,7 @@ import { EMPTY_USER_DATA } from './dto';
 import { placeholderSources } from './streams';
 import redis from '../redisClient';
 import type { CatalogRef } from './views';
-import { viewerAccountOwner } from './viewer';
+import { viewerAccountOwner, viewerReadsExtensions } from './viewer';
 
 const logger = consola.withTag('Jellyfin');
 
@@ -888,6 +888,32 @@ export function buildSeasons(
   });
 }
 
+export async function seasonAnimeEntry(tvdb: number, season: number): Promise<Record<string, string> | null> {
+  if (!tvdb || !(season > 0)) return null;
+  const { resolveAnidbEpisodeFromTvdbEpisode } = require('../anime-list-mapper');
+  const { getMappingByAnidbId } = require('../id-mapper');
+  const anidb = (await resolveAnidbEpisodeFromTvdbEpisode(tvdb, season, 1).catch(() => null))?.anidbId;
+  if (!anidb) return null;
+  const mapping = getMappingByAnidbId(anidb) ?? {};
+  const ids: Record<string, string> = { AniDB: String(anidb) };
+  if (mapping.mal_id) ids.MyAnimeList = String(mapping.mal_id);
+  if (mapping.anilist_id) ids.AniList = String(mapping.anilist_id);
+  if (mapping.kitsu_id) ids.Kitsu = String(mapping.kitsu_id);
+  return ids;
+}
+
+export async function withSeasonAnimeIds(meta: any, seasons: any[]): Promise<any[]> {
+  const tvdb = Number(meta?._tvdbId);
+  if (!tvdb || PER_ENTRY_ANIME.test(String(meta?.id ?? ''))) return seasons;
+  await Promise.all(seasons.map(async (season) => {
+    const ids = await seasonAnimeEntry(tvdb, season.IndexNumber);
+    if (!ids) return;
+    season.ProviderIds = ids;
+    season.ExternalUrls = externalUrls(ids, false);
+  }));
+  return seasons;
+}
+
 export function buildEpisodes(
   meta: any,
   mediaType: string,
@@ -984,6 +1010,9 @@ export function buildEpisode(
 
     if (video.thumbnail) rememberImages(serverId, id, { primary: video.thumbnail });
 
+    const premiere = isoDate(video.released);
+    const unaired = viewerReadsExtensions() && (video.available === false || (premiere ? Date.parse(premiere) > Date.now() : false));
+
     return {
       Name: video.title || `Episode ${video.episode}`,
       SortName: `${String(video.episode).padStart(4, '0')} - ${sortNameFor(video.title || `Episode ${video.episode}`)}`,
@@ -1001,8 +1030,8 @@ export function buildEpisode(
       ParentIndexNumber: hasSeason ? video.season : null,
       IndexNumber: Number(video.episode),
       Overview: video.overview || null,
-      PremiereDate: isoDate(video.released),
-      DateCreated: isoDate(video.released) || EPOCH_DATE,
+      PremiereDate: premiere,
+      DateCreated: premiere || EPOCH_DATE,
       RunTimeTicks: parseRuntimeTicks(video.runtime),
       ProviderIds: {},
       ImageTags: video.thumbnail ? { Primary: imageTag(video.thumbnail) } : {},
@@ -1010,14 +1039,13 @@ export function buildEpisode(
       ImageBlurHashes: {},
       ...art,
       UserData: { ...EMPTY_USER_DATA, Key: id, ItemId: id },
-      LocationType: 'FileSystem',
+      LocationType: unaired ? 'Virtual' : 'FileSystem',
       PrimaryImageAspectRatio: 1.7777777777777777,
       CanDelete: false,
       CanDownload: false,
       LockedFields: [],
       LockData: false,
-      EnableMediaSourceDisplay: true,
-      MediaSources: placeholderSources(id),
+      ...(unaired ? {} : { EnableMediaSourceDisplay: true, MediaSources: placeholderSources(id) }),
     };
   }
 }

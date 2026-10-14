@@ -8,7 +8,8 @@ import { EMPTY_USER_DATA } from './dto';
 import { placeholderSources } from './streams';
 import redis from '../redisClient';
 import type { CatalogRef } from './views';
-import { viewerAccountOwner, viewerReadsExtensions } from './viewer';
+import { viewerAccountOwner, viewerMarksUnaired, viewerProfile, viewerReadsExtensions } from './viewer';
+import { SERVER_WATCHLIST_PREFIX } from '../serverWatchlist';
 
 const logger = consola.withTag('Jellyfin');
 
@@ -37,6 +38,12 @@ function imageKey(scope: string, itemId: string): string {
 }
 
 const imageHash = (scope: string): string => `jf:img:${scope}`;
+const artHash = (scope: string): string => `jf:img:tag:${scope}`;
+
+const artByTag = new LRUCache<string, string>({
+  max: envInt('JELLYFIN_IMAGE_CACHE_MAX', 20000, 1) * 2,
+  ttl: envInt('JELLYFIN_IMAGE_MEMO_TTL', 6 * 60 * 60, 60) * 1000,
+});
 const imageField = (itemId: string): string => normaliseJellyfinId(itemId);
 
 function imageTtl(): number {
@@ -69,7 +76,7 @@ export async function flushRememberedImages(): Promise<void> {
 
   const ttl = imageTtl();
   await Promise.all(
-    batches.map(async ([scope, fields]) => {
+    batches.map(async ([hash, fields]) => {
       const flat: string[] = [];
       for (const [field, value] of fields) flat.push(field, value);
       try {
@@ -77,9 +84,9 @@ export async function flushRememberedImages(): Promise<void> {
         // figures on a busy instance and slowed every scan of the keyspace.
         await redis
           .multi()
-          .hsetex(imageHash(scope), 'EX', ttl, 'FIELDS', fields.size, ...flat)
-          .expire(imageHash(scope), ttl, 'NX')
-          .expire(imageHash(scope), ttl, 'GT')
+          .hsetex(hash, 'EX', ttl, 'FIELDS', fields.size, ...flat)
+          .expire(hash, ttl, 'NX')
+          .expire(hash, ttl, 'GT')
           .exec();
       } catch {
         // Art is a cache; a lost write is read from the meta again.
@@ -88,23 +95,54 @@ export async function flushRememberedImages(): Promise<void> {
   );
 }
 
+function queueImageWrite(hash: string, field: string, value: string): void {
+  let fields = pendingImages.get(hash);
+  if (!fields) {
+    fields = new Map<string, string>();
+    pendingImages.set(hash, fields);
+  }
+  fields.set(field, value);
+  scheduleImageFlush();
+}
+
+export function rememberArt(scope: string, url: string | undefined): void {
+  if (!url) return;
+  const tag = imageTag(url);
+  const key = `${scope}|${tag}`;
+  if (artByTag.get(key) === url) return;
+  artByTag.set(key, url);
+  if (redis) queueImageWrite(artHash(scope), tag, url);
+}
+
 export function rememberImages(scope: string, itemId: string, images: ItemImages): void {
   if (!images.primary && !images.backdrop && !images.logo && !images.thumb) return;
+
+  rememberArt(scope, images.primary);
+  rememberArt(scope, images.backdrop);
+  rememberArt(scope, images.logo);
+  rememberArt(scope, images.thumb);
 
   const key = imageKey(scope, itemId);
   const held = imageCache.get(key);
   if (held && held.primary === images.primary && held.backdrop === images.backdrop && held.logo === images.logo && held.thumb === images.thumb) return;
   imageCache.set(key, images);
 
-  if (!redis) return;
+  if (redis) queueImageWrite(imageHash(scope), imageField(itemId), JSON.stringify(images));
+}
 
-  let fields = pendingImages.get(scope);
-  if (!fields) {
-    fields = new Map<string, string>();
-    pendingImages.set(scope, fields);
+export async function recallArt(scope: string, tag: string): Promise<string | undefined> {
+  const key = `${scope}|${tag}`;
+  const local = artByTag.get(key);
+  if (local) return local;
+  if (!redis) return undefined;
+  try {
+    const stored = await redis.hget(artHash(scope), tag);
+    if (!stored) return undefined;
+    artByTag.set(key, stored);
+    return stored;
+  } catch {
+    return undefined;
   }
-  fields.set(imageField(itemId), JSON.stringify(images));
-  scheduleImageFlush();
 }
 
 export async function recallImages(scope: string, itemId: string): Promise<ItemImages | undefined> {
@@ -237,7 +275,8 @@ const catalogLengths = new LRUCache<string, number>({
 
 function lengthKeyFor(userUUID: string, catalog: CatalogRef, extras: Record<string, string>, tags: string[], keepKey = ''): string {
   const owner = viewerAccountOwner();
-  return `${userUUID}|${catalog.type}|${catalog.id}|${extras.genre ?? ''}|${extras.search ?? ''}|${tags.join(',')}|${keepKey}${owner ? `|@${owner}` : ''}`;
+  const viewer = catalog.id.startsWith(SERVER_WATCHLIST_PREFIX) ? viewerProfile() : '';
+  return `${userUUID}|${catalog.type}|${catalog.id}|${extras.genre ?? ''}|${extras.search ?? ''}|${tags.join(',')}|${keepKey}${owner ? `|@${owner}` : ''}${viewer ? `|#${viewer}` : ''}`;
 }
 
 export function knownCatalogLength(userUUID: string, catalog: CatalogRef, extras: Record<string, string> = {}, tags: string[] = [], keepKey = ''): number | undefined {
@@ -548,8 +587,9 @@ function remoteTrailers(meta: any): any[] {
     .filter((t: any) => typeof t?.url === 'string' && /^https?:\/\//i.test(t.url))
     .map((t: any) => ({ Name: t.title || 'Trailer', Url: t.url }));
   const youtube = streams
-    .filter((t: any) => typeof t?.ytId === 'string' && t.ytId)
-    .map((t: any) => ({ Name: t.title || 'Trailer', Url: `https://www.youtube.com/watch?v=${t.ytId}` }));
+    .map((t: any) => ({ title: t?.title, id: typeof t?.ytId === 'string' ? t.ytId.match(/^[A-Za-z0-9_-]{11}(?![A-Za-z0-9_-])/)?.[0] : undefined }))
+    .filter((t: any) => t.id)
+    .map((t: any) => ({ Name: t.title || 'Trailer', Url: `https://www.youtube.com/watch?v=${t.id}` }));
   return [...direct, ...youtube].slice(0, envInt('JELLYFIN_MAX_TRAILERS', 8, 1));
 }
 
@@ -650,7 +690,7 @@ export function metaToBaseItem(
     LocationType: 'FileSystem',
     PrimaryImageAspectRatio: itemType === 'Movie' ? 0.6666666666666666 : 0.6666666666666666,
     CanDelete: false,
-    CanDownload: false,
+    CanDownload: itemType === 'Movie',
     PlayAccess: 'Full',
     LockedFields: [],
     LockData: false,
@@ -1011,7 +1051,7 @@ export function buildEpisode(
     if (video.thumbnail) rememberImages(serverId, id, { primary: video.thumbnail });
 
     const premiere = isoDate(video.released);
-    const unaired = viewerReadsExtensions() && (video.available === false || (premiere ? Date.parse(premiere) > Date.now() : false));
+    const unaired = viewerReadsExtensions() && viewerMarksUnaired() && (video.available === false || (premiere ? Date.parse(premiere) > Date.now() : false));
 
     return {
       Name: video.title || `Episode ${video.episode}`,
@@ -1042,7 +1082,7 @@ export function buildEpisode(
       LocationType: unaired ? 'Virtual' : 'FileSystem',
       PrimaryImageAspectRatio: 1.7777777777777777,
       CanDelete: false,
-      CanDownload: false,
+      CanDownload: !unaired,
       LockedFields: [],
       LockData: false,
       ...(unaired ? {} : { EnableMediaSourceDisplay: true, MediaSources: placeholderSources(id) }),

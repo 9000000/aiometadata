@@ -1,5 +1,6 @@
+import { useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { EpisodeOrderOverrides } from '@/components/settings/EpisodeOrderOverrides';
+import { TvdbShowSettings } from '@/components/settings/TvdbShowSettings';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { useConfig } from '@/contexts/ConfigContext';
@@ -44,6 +45,12 @@ const animeIdProviders: SelectableOption[] = [
   { value: 'retain', label: 'Retain Requested ID (Auto-detect)' },
 ];
 
+const animeEpisodeDateSources: SelectableOption[] = [
+  { value: 'provider', label: 'Metadata provider' },
+  { value: 'earliest', label: 'Earliest release' },
+  { value: 'dub', label: 'English dub' },
+];
+
 const tvdbSeasonTypes: SelectableOption[] = [
   { value: 'official', label: 'Official Order' },
   { value: 'default', label: 'Aired Order (Default)' },
@@ -51,11 +58,18 @@ const tvdbSeasonTypes: SelectableOption[] = [
   { value: 'absolute', label: 'Absolute Order' },
   { value: 'alternate', label: 'Alternate Order' },
   { value: 'regional', label: 'Regional Order' },
+  { value: 'alttwo', label: 'Alternate Order 2' },
+  { value: 'altdvd', label: 'Alternate DVD Order' },
 ];
 
 export function ProvidersSettings() {
-  const { config, setConfig, hasBuiltInTvdb } = useConfig();
+  const { config, setConfig, hasBuiltInTvdb, jikanEnabled } = useConfig();
   const isImdbForCatalog = !!config.mal?.useImdbIdForCatalogAndSearch;
+
+  useEffect(() => {
+    if (jikanEnabled || config.providers.anime !== 'mal') return;
+    setConfig(prev => ({ ...prev, providers: { ...prev.providers, anime: 'kitsu' } }));
+  }, [jikanEnabled, config.providers.anime]);
   const hasTvdbKey = !!config.apiKeys?.tvdb?.trim() || hasBuiltInTvdb;
 
   const handleProviderChange = (type: 'movie' | 'series' | 'anime', value: string) => {
@@ -176,7 +190,7 @@ export function ProvidersSettings() {
               onValueChange={(val) => handleProviderChange('anime', val)}
               options={isImdbForCatalog
                 ? animeProviders.filter(p => p.value !== 'mal' && p.value !== 'kitsu')
-                : animeProviders}
+                : animeProviders.filter(p => p.value !== 'mal' || jikanEnabled)}
               hasTvdbKey={hasTvdbKey}
             />
             {isImdbForCatalog && (
@@ -220,7 +234,7 @@ export function ProvidersSettings() {
       {/* TVDB Specific Settings */}
       <CollapsibleSettingCard
         title="TheTVDB Settings"
-        anchorIds={['tvdb-season-order']}
+        anchorIds={['tvdb-season-order', 'tvdb-normalize-year-seasons']}
         inUse={isInUse(config, 'tvdb')}
         description={hasTvdbKey
           ? 'Customize how episode data is fetched from TheTVDB.'
@@ -243,12 +257,25 @@ export function ProvidersSettings() {
             />
           }
         />
+        <SettingRow
+          htmlFor="tvdb-normalize-year-seasons"
+          label="Normalize Year Seasons"
+          description="Number year-based seasons 1, 2, 3… instead of TVDB's years (S2014). Changes those shows' episode ids, so turn it off only if your stream sources number them by year."
+          control={
+            <Switch
+              id="tvdb-normalize-year-seasons"
+              checked={config.tvdbNormalizeYearSeasons !== false}
+              onCheckedChange={(val) => setConfig(prev => ({ ...prev, tvdbNormalizeYearSeasons: val }))}
+              disabled={!hasTvdbKey}
+            />
+          }
+        />
         <div className="space-y-2 pt-2">
-          <p className="text-sm font-medium">Per-show Episode Order</p>
+          <p className="text-sm font-medium">Per-show settings</p>
           <p className="text-sm text-muted-foreground">
-            Enter a show's TVDB id to give it its own episode order instead of the Season Order above.
+            Enter a show's TVDB id to give it its own episode order or season numbering.
           </p>
-          <EpisodeOrderOverrides disabled={!hasTvdbKey} />
+          <TvdbShowSettings disabled={!hasTvdbKey} />
         </div>
       </CollapsibleSettingCard>
 
@@ -338,6 +365,27 @@ export function ProvidersSettings() {
                  guessable from the label, so it stays visible. */
               <p className="text-xs text-muted-foreground">
                 "IMDb" can improve compatibility as it is supported by most streaming addons. "Retain Requested ID" automatically uses the ID type from the request (e.g., IMDb for tt123, Kitsu for kitsu:456, MAL for mal:789). Kitsu is recommended when using MAL as meta provider.
+              </p>
+            }
+          />
+          <SettingRow
+            htmlFor="anime-episode-dates"
+            label="Anime Episode Dates"
+            description="When an anime episode counts as out. Earliest release uses the first release anywhere, which is often a streaming premiere days before the TV broadcast; English dub uses the dub's release. Applies to TVDB (Aired or Official order), Kitsu and MyAnimeList metadata; episodes without a schedule keep the provider's date."
+            control={
+              <ProviderSelect
+                id="anime-episode-dates"
+                ariaLabel="Anime episode dates"
+                value={config.animeEpisodeDates || 'provider'}
+                onValueChange={(value) => setConfig(prev => ({ ...prev, animeEpisodeDates: value as 'provider' | 'earliest' | 'dub' }))}
+                options={animeEpisodeDateSources}
+                hasTvdbKey={hasTvdbKey}
+                className="w-full sm:w-[240px]"
+              />
+            }
+            note={
+              <p className="text-xs text-muted-foreground">
+                Release times from <a href="https://anilist.co" target="_blank" rel="noopener noreferrer" className="underline">AniList</a>; dub times from <a href="https://animeschedule.net" target="_blank" rel="noopener noreferrer" className="underline">AnimeSchedule.net</a>, via <a href="https://github.com/RockinChaos/AniSchedule" target="_blank" rel="noopener noreferrer" className="underline">AniSchedule</a>.
               </p>
             }
           />

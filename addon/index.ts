@@ -69,7 +69,7 @@ const {
   verifySimklV2OAuthState,
   verifyTraktOAuthState,
 } = require('./lib/oauthState');
-const { renderOAuthPage } = require('./lib/oauthPage');
+const { renderOAuthPage, escapeHtml } = require('./lib/oauthPage');
 const { hasAnyWatchTrackingEnabled } = require('./lib/watchTracking');
 const simklAuth = require('./lib/simkl');
 const { SimklClient } = simklAuth;
@@ -87,7 +87,7 @@ const { clientDistDir, clientIndexPath, publicDir } = require('./lib/runtimePath
 const ADDON_VERSION = buildInfo.version;
 const { withGlobalEpoch } = require('./lib/cacheEpoch');
 const idMapper = require('./lib/id-mapper');
-const wikiMappings = require('./lib/wiki-mapper.js');
+const idMappings = require('./lib/id-mappings.js');
 
 // Normalize redirect URIs to always include a scheme
 // Best-effort same-process duplicate handling. Trakt enforces authorization-code
@@ -167,6 +167,7 @@ addon.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
   // Reply to preflight immediately
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
@@ -222,6 +223,9 @@ addon.use(createAliasResolutionMiddleware({
   resolve: resolveAliasSync,
   isEnabled: isAliasFeatureEnabled,
 }));
+
+const { createTagPathMiddleware } = require('./lib/tagPathMiddleware');
+addon.use(createTagPathMiddleware());
 
 // Add request tracking middleware (disabled in LITE_MODE)
 if (!isLiteMode()) {
@@ -673,10 +677,12 @@ const respond = function (req, res, data, opts?) {
       anilistRequiresAuth: require('./utils/anilistAccess').anilistRequiresAuth(),
       jellyfinEnabled: String(getSetting('JELLYFIN_API_ENABLED') || '').trim().toLowerCase() === 'true',
       jellyfinResolveOnOpen: String(getSetting('JELLYFIN_RESOLVE_ON_OPEN') || 'user'),
+      jellyfinUpcomingMode: String(getSetting('JELLYFIN_UPCOMING_MODE') || 'user'),
       jellyfinBaseUrl: require('./lib/installUrl').baseUrlFrom(process.env.HOST_NAME, req.get('host')),
       traktSearchEnabled: getSetting('DISABLE_TRAKT_SEARCH') !== 'true',
       simklSearchEnabled: getSetting('DISABLE_SIMKL_SEARCH') !== 'true',
       lumiereEnabled: !!String(getSetting('LUMIERE_API_BASE') || '').trim(),
+      jikanEnabled: jikan.isJikanEnabled(),
     };
     
     // No cache to prevent cross-instance contamination
@@ -716,7 +722,6 @@ addon.use(requireSigninForApi);
 addon.post("/api/config/save", configApi.saveConfig.bind(configApi));
 addon.post("/api/config/load/:userUUID", configLoadRateLimitMiddleware, configApi.loadConfig.bind(configApi));
 addon.put("/api/config/update/:userUUID", configApi.updateConfig.bind(configApi));
-addon.post("/api/config/migrate", configApi.migrateFromLocalStorage.bind(configApi));
 addon.get('/api/config/is-trusted/:uuid', configApi.isTrusted.bind(configApi));
 addon.post("/api/test-keys", testKeysRateLimitMiddleware, configApi.testApiKeys);
 
@@ -1331,6 +1336,11 @@ addon.post("/api/auth/trakt/disconnect", async (req, res) => {
     if (!userUUID) {
       return res.status(400).json({ error: "userUUID is required" });
     }
+
+    const access = await resolveConfigAccess(req, userUUID, req.body?.password);
+    if (!access || !access.passwordHash) {
+      return res.status(401).json({ error: "Invalid UUID or password" });
+    }
     
     // Load user's config
     const config = await loadConfigFromDatabase(userUUID);
@@ -1530,6 +1540,11 @@ addon.post("/api/auth/simkl/disconnect", async (req, res) => {
     if (!userUUID) {
       return res.status(400).json({ error: "userUUID is required" });
     }
+
+    const access = await resolveConfigAccess(req, userUUID, req.body?.password);
+    if (!access || !access.passwordHash) {
+      return res.status(401).json({ error: "Invalid UUID or password" });
+    }
     
     // Load user's config
     const config = await loadConfigFromDatabase(userUUID);
@@ -1537,7 +1552,7 @@ addon.post("/api/auth/simkl/disconnect", async (req, res) => {
       return res.status(404).json({ error: "User config not found" });
     }
 
-    if (await disconnectCardAccount(req, res, userUUID, 'simkl', config)) return;
+    if (await disconnectCardAccount(req, res, userUUID, 'simkl', config, access)) return;
 
     const released = config.apiKeys?.simklTokenId || null;
     if (released) delete config.apiKeys.simklTokenId;
@@ -2284,10 +2299,12 @@ addon.get("/api/mal/discover/search/producer", async (req, res) => {
       return res.json({ results: [] });
     }
 
-    const { httpGet } = require('./utils/httpClient');
-    const JIKAN_API_BASE = process.env.JIKAN_API_BASE || 'https://api.jikan.moe/v4';
+    if (!jikan.isJikanEnabled()) {
+      return res.json({ results: [] });
+    }
 
-    const url = `${JIKAN_API_BASE}/producers?q=${encodeURIComponent(query)}&limit=20&order_by=favorites&sort=desc`;
+    const { httpGet } = require('./utils/httpClient');
+    const url = `${jikan.jikanApiBase()}/producers?q=${encodeURIComponent(query)}&limit=20&order_by=favorites&sort=desc`;
     const response = await httpGet(url, { timeout: 15000 });
 
     const producers = (response.data?.data || []).map((p) => {
@@ -2373,15 +2390,18 @@ addon.get("/api/tvdb/episode-orders/:tvdbId", async (req, res) => {
     const series = await tvdbApi.getSeriesExtended(tvdbId, tvdbConfig);
     if (!series) return res.status(404).json({ error: "Series not found on TVDB" });
     const orders = new Map();
+    let yearSeasons = false;
     for (const season of Array.isArray(series.seasons) ? series.seasons : []) {
       const type = season?.type?.type;
       if (type && !orders.has(type)) orders.set(type, season.type.name || type);
+      if (type === 'official' && season.number > 1900) yearSeasons = true;
     }
     return res.json({
       tvdbId: String(series.id ?? tvdbId),
       name: series.name || `TVDB ${tvdbId}`,
       year: series.year || '',
       orders: [...orders.entries()].map(([type, name]) => ({ type, name })),
+      yearSeasons,
     });
   } catch (error) {
     consola.error("[TVDB Episode Orders] Lookup failed:", error.message);
@@ -2650,12 +2670,15 @@ addon.post("/api/ai/create-catalog", async (req, res) => {
     if (generationMode === 'tvdb' && !hasTvdb) {
       return res.status(400).json({ error: 'TVDB catalog generation requires a TVDB API key.' });
     }
+    if (generationMode === 'mal' && !jikan.isJikanEnabled()) {
+      return res.status(400).json({ error: 'MAL catalog generation needs Jikan, which is turned off on this instance.' });
+    }
     const maxCatalogs = Math.max(1, parseInt(getSetting('AI_CATALOG_MAX_PER_REQUEST'), 10) || 20);
     const viewerLanguage = String(config.language || 'en-US');
     const viewerRegion = (viewerLanguage.split('-')[1] || 'US').toUpperCase();
     const { systemPrompt, userPrompt } = buildCatalogCreationPrompt(query.trim(), {
       mode: generationMode,
-      keys: { tmdb: hasTmdb, tvdb: hasTvdb, simkl: hasSimkl },
+      keys: { tmdb: hasTmdb, tvdb: hasTvdb, simkl: hasSimkl, mal: jikan.isJikanEnabled() },
       maxCatalogs,
       region: viewerRegion,
       language: viewerLanguage,
@@ -3755,6 +3778,11 @@ addon.post("/anilist/disconnect", async (req, res) => {
     if (!userUUID) {
       return res.status(400).json({ error: "userUUID is required" });
     }
+
+    const access = await resolveConfigAccess(req, userUUID, req.body?.password);
+    if (!access || !access.passwordHash) {
+      return res.status(401).json({ error: "Invalid UUID or password" });
+    }
     
     // Load user's config
     const config = await loadConfigFromDatabase(userUUID);
@@ -3762,7 +3790,7 @@ addon.post("/anilist/disconnect", async (req, res) => {
       return res.status(404).json({ error: "User config not found" });
     }
 
-    if (await disconnectCardAccount(req, res, userUUID, 'anilist', config)) return;
+    if (await disconnectCardAccount(req, res, userUUID, 'anilist', config, access)) return;
 
     // Token ID is stored in apiKeys.anilistTokenId by the frontend
     const released = config.apiKeys?.anilistTokenId || null;
@@ -4015,12 +4043,17 @@ addon.post("/mal/disconnect", async (req, res) => {
       return res.status(400).json({ error: "userUUID is required" });
     }
 
+    const access = await resolveConfigAccess(req, userUUID, req.body?.password);
+    if (!access || !access.passwordHash) {
+      return res.status(401).json({ error: "Invalid UUID or password" });
+    }
+
     const config = await loadConfigFromDatabase(userUUID);
     if (!config) {
       return res.status(404).json({ error: "User config not found" });
     }
 
-    if (await disconnectCardAccount(req, res, userUUID, 'mal', config)) return;
+    if (await disconnectCardAccount(req, res, userUUID, 'mal', config, access)) return;
 
     const released = config.apiKeys?.malTokenId || null;
     if (released) delete config.apiKeys.malTokenId;
@@ -4207,6 +4240,21 @@ addon.get("/api/publicmetadb/lists/:listId/items", async (req, res) => {
   }
 });
 
+addon.get("/api/publicmetadb/lists/u/:user/:slug/items", async (req, res) => {
+  try {
+    const { apikey, page, perPage } = req.query;
+    const { user, slug } = req.params;
+    if (!apikey) return res.status(400).json({ error: "apikey is required" });
+    const { fetchPublicListByLink } = require('./utils/publicmetadbUtils');
+    const data = await fetchPublicListByLink(apikey, user, slug, parseInt(page) || 1, parseInt(perPage) || 100);
+    res.json(data);
+  } catch (error) {
+    const status = Number(/returned (\d{3})/.exec(error.message || '')?.[1]) || 500;
+    if (status >= 500) consola.error("[PublicMetaDB Proxy] Public list error:", error.message);
+    res.status(status).json({ error: status === 404 ? 'No public PublicMetaDB list at that link' : error.message });
+  }
+});
+
 addon.get("/api/publicmetadb/picks", async (req, res) => {
   try {
     const { apikey } = req.query;
@@ -4222,14 +4270,9 @@ addon.get("/api/publicmetadb/picks", async (req, res) => {
 });
 
 /** Handles a disconnect naming a Jellyfin user's card; false when it is for your own account. */
-async function disconnectCardAccount(req, res, userUUID, service, config) {
+async function disconnectCardAccount(req, res, userUUID, service, config, access) {
   const profile = req.body?.profile;
   if (typeof profile !== 'string' || !profile) return false;
-  const access = await resolveConfigAccess(req, userUUID, req.body?.password);
-  if (!access || !access.passwordHash) {
-    res.status(401).json({ error: "Invalid UUID or password" });
-    return true;
-  }
   const { detachCardAccount } = require('./lib/accounts');
   const { releaseTokenIfUnused } = require('./lib/accountLinks');
   const removed = detachCardAccount(config, profile, service);
@@ -5164,7 +5207,7 @@ const catalogRoute = async function (req, res) {
     catalogPageSize = parseInt(process.env.MAL_PAGE_SIZE || '25');
   } else if (cleanId === 'anilist.trending' || cleanId.startsWith('anilist.discover')) {
     catalogPageSize = 50;
-  } else if (cleanId.startsWith('simkl.watchlist.') || cleanId.startsWith('simkl.list.') || cleanId.startsWith('simkl.upnext') || cleanId.startsWith('simkl.dvd.') || cleanId.startsWith('simkl.trending.') || cleanId.startsWith('simkl.recipe.') || cleanId.startsWith('stremthru.') || cleanId.startsWith('mdblist.') || cleanId.startsWith('custom.') || cleanId.startsWith('trakt.') || cleanId.startsWith('anilist.') || cleanId.startsWith('letterboxd.') || cleanId.startsWith('movielens.') || cleanId.startsWith('lumiere.') || (cleanId.startsWith('tvdb.') && !cleanId.startsWith('tvdb.collection.'))) {
+  } else if (cleanId.startsWith('simkl.watchlist.') || cleanId.startsWith('simkl.list.') || cleanId.startsWith('simkl.upnext') || cleanId.startsWith('simkl.dvd.') || cleanId.startsWith('simkl.trending.') || cleanId.startsWith('simkl.recipe.') || cleanId.startsWith('stremthru.') || cleanId.startsWith('mdblist.') || cleanId.startsWith('custom.') || cleanId.startsWith('trakt.') || cleanId.startsWith('anilist.') || cleanId.startsWith('letterboxd.') || cleanId.startsWith('movielens.') || cleanId.startsWith('lumiere.') || cleanId.startsWith('aiom.watchlist.') || (cleanId.startsWith('tvdb.') && !cleanId.startsWith('tvdb.collection.'))) {
     catalogPageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE || '20');
   } else {
     catalogPageSize = 20;
@@ -5394,16 +5437,12 @@ const catalogRoute = async function (req, res) {
             const allAnimeGenres = await cacheWrapJikanApi('anime-genres', async () => {
               return await jikan.getAnimeGenres();
             }, null);
-            const genreNameToFetch = genreName || allAnimeGenres[0]?.name;
-            if (genreNameToFetch) {
-              const selectedGenre = allAnimeGenres.find(g => g.name === genreNameToFetch);
-              if (selectedGenre) {
-                const genreId = selectedGenre.mal_id;
-                const animeResults = await cacheWrapJikanApi(`mal-genre-${genreId}-${mediaType || 'all'}-${page}-${config.sfw}`, async () => {
-                  return await jikan.getAnimeByGenre(genreId, mediaType, page, config);
-                }, null);
-                metas = await parseAnimeCatalogMetaBatch(animeResults, config, language);
-              }
+            const genreId = genreName === 'None' ? null : allAnimeGenres.find(g => g.name === (genreName || allAnimeGenres[0]?.name))?.mal_id;
+            if (genreId !== undefined) {
+              const animeResults = await cacheWrapJikanApi(`mal-genre-${genreId ?? 'any'}-${mediaType || 'all'}-${page}-${config.sfw}`, async () => {
+                return await jikan.getAnimeByGenre(genreId, mediaType, page, config);
+              }, null);
+              metas = await parseAnimeCatalogMetaBatch(animeResults, config, language);
             }
             break;
           }
@@ -5518,17 +5557,21 @@ const catalogRoute = async function (req, res) {
     // Skip poster override for up next catalogs unless useShowPosterForUpNext is enabled
     // (when disabled, up next uses episode thumbnails as posters which shouldn't be overridden)
     const host = process.env.HOST_NAME?.startsWith('http') ? process.env.HOST_NAME : `https://${process.env.HOST_NAME}`;
+    const upstreamArt = !config._currentSearchCatalogId && catalogConfig?.metadata?.useUpstreamArt === true;
     const posterPatternsEnabled = config._currentSearchCatalogId
       ? (config.search?.engineRatingPosters?.[config._currentSearchCatalogId] === true)
-      : (catalogConfig?.enableRatingPosters !== false);
+      : (catalogConfig?.enableRatingPosters !== false && !upstreamArt);
     const posterPattern = posterPatternsEnabled ? require('./utils/parseProps').resolvePosterPattern(config) : null;
-    if ((posterPattern || config.customBackgroundUrlPattern || config.customLandscapeUrlPattern || config.customLogoUrlPattern) && responseData?.metas && Array.isArray(responseData.metas)) {
+    const backgroundPattern = upstreamArt ? null : config.customBackgroundUrlPattern;
+    const logoPattern = upstreamArt ? null : config.customLogoUrlPattern;
+    const landscapeUrlPattern = upstreamArt ? null : config.customLandscapeUrlPattern;
+    if ((posterPattern || backgroundPattern || landscapeUrlPattern || logoPattern) && responseData?.metas && Array.isArray(responseData.metas)) {
       const isUpNextCatalog = cleanId.includes('up_next') || cleanId.includes('upnext');
       const upNextUsesShowPoster = isUpNextCatalog && catalogConfig?.metadata?.useShowPosterForUpNext === true;
       const { resolveCustomArtUrl, getPosterRatingApiKey, resolveLandscapePattern, posterShapeOf } = require('./utils/parseProps');
       const proxyApiKey = config.usePosterProxy ? getPosterRatingApiKey(config) : null;
       const posterApplies = !!posterPattern && (!isUpNextCatalog || upNextUsesShowPoster);
-      const landscapePattern = resolveLandscapePattern(config, posterApplies ? posterPattern : null);
+      const landscapePattern = upstreamArt ? null : resolveLandscapePattern(config, posterApplies ? posterPattern : null);
       for (const meta of responseData.metas) {
         const ids = extractIdsFromMeta(meta);
         const type = meta.type || actualType;
@@ -5552,8 +5595,8 @@ const catalogRoute = async function (req, res) {
             }
           }
         }
-        if (config.customBackgroundUrlPattern) {
-          const resolved = resolveCustomArtUrl(config.customBackgroundUrlPattern, ids, type, config, { shape: 'landscape' });
+        if (backgroundPattern) {
+          const resolved = resolveCustomArtUrl(backgroundPattern, ids, type, config, { shape: 'landscape' });
           if (resolved) {
             if (config.usePosterProxy) {
               const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
@@ -5582,8 +5625,8 @@ const catalogRoute = async function (req, res) {
             }
           }
         }
-        if (config.customLogoUrlPattern) {
-          const resolved = resolveCustomArtUrl(config.customLogoUrlPattern, ids, type, config);
+        if (logoPattern) {
+          const resolved = resolveCustomArtUrl(logoPattern, ids, type, config);
           if (resolved) {
             if (config.usePosterProxy) {
               const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
@@ -5610,7 +5653,7 @@ const catalogRoute = async function (req, res) {
     const isSearchCatalog = cleanId === 'search' || cleanId === 'people_search' || cleanId === 'gemini.search';
     if (catalogConfig?.metadata?.posterShape === 'landscape' && !isSearchCatalog && req.params.forJellyfin !== '1' && Array.isArray(responseData?.metas)) {
       for (const meta of responseData.metas) {
-        const landscape = meta.landscapePoster || meta.background;
+        const landscape = upstreamArt ? (meta.background || meta.landscapePoster) : (meta.landscapePoster || meta.background);
         if (meta.posterShape === 'landscape' || !landscape) continue;
         meta.poster = landscape;
         meta.posterShape = 'landscape';
@@ -5830,7 +5873,7 @@ addon.get("/stremio/:userUUID/stream/:type/:id.json", async function (req, res) 
   }
   let streamUrl = null;
   consola.debug(`[Stream Route] Showing rate me button: ${config.showRateMeButton}, id: ${id}`);
-  if (config.showRateMeButton && id) {
+  if (config.showRateMeButton && !config.catalogModeOnly && id) {
     const host = process.env.HOST_NAME && process.env.HOST_NAME.startsWith('http')
       ? process.env.HOST_NAME
       : `https://${process.env.HOST_NAME}`;
@@ -6027,7 +6070,7 @@ addon.post("/stremio/:userUUID/rating", async function (req, res) {
       if (allIds?.malId) {
         allIds.imdbId = idMapper.getTraktAnimeMovieByMalId(allIds.malId)?.externals.imdb;
         allIds.tmdbId = idMapper.getTraktAnimeMovieByMalId(allIds.malId)?.externals.tmdb || allIds.tmdbId;
-        allIds.tvdbId = (wikiMappings.getByImdbId(allIds.imdbId, 'movie'))?.tvdbId || null;
+        allIds.tvdbId = (idMappings.getByImdbId(allIds.imdbId, 'movie'))?.tvdbId || null;
       }
     }
 
@@ -6249,16 +6292,29 @@ addon.get("/api/proxy-manifest", async function (req, res) {
     return res.status(400).json({ error: 'Missing url parameter' });
   }
 
+  if (typeof url !== 'string') {
+    return res.status(400).json({ error: 'Invalid url parameter' });
+  }
+
   try {
     const { httpGet } = require('./utils/httpClient');
     const manifestData = await httpGet(url, {
       timeout: 10000
     });
+
+    let data = manifestData.data;
+    if (typeof data === 'string') {
+      try {
+        data = JSON.parse(data);
+      } catch {
+        return res.status(502).json({ error: 'That URL did not return JSON' });
+      }
+    }
     
     // Set CORS headers to allow frontend access
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'application/json');
-    res.json(manifestData.data);
+    res.json(data);
   } catch (error) {
     consola.error(`[Proxy Manifest] Failed to fetch manifest from ${url}:`, error.message);
     res.status(error.response?.status || 500).json({ 
@@ -6544,6 +6600,15 @@ addon.get("/api/image/banner-to-background", async function (req, res) {
     res.sendFile(clientIndexPath);
   });
 
+function scriptJson(value) {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
 // Rating Page Route - MUST be before static middleware
 // Access via: /stremio/:userUUID/rating?id=stremioId&type=Series&title=Title
 // Or: /rating?user=userUUID&id=stremioId&type=Series&title=Title
@@ -6641,26 +6706,26 @@ addon.get("/stremio/:userUUID/rating", async function (req, res) {
     const pageTitle = metaTitle ? `Rate ${metaTitle} - AIO Metadata` : 'Rate This Title - AIO Metadata';
     html = html.replace(
       /<title>.*?<\/title>/,
-      `<title>${pageTitle}</title>`
+      () => `<title>${escapeHtml(pageTitle)}</title>`
     );
     
     const ratingScript = `
       <script>
         window.RATING_MODE = true;
-        window.RATING_USER = ${JSON.stringify(userUUID)};
-        window.RATING_ID = ${JSON.stringify(id || '')};
-        window.RATING_TYPE = ${JSON.stringify(metaType)};
-        window.RATING_TITLE = ${JSON.stringify(metaTitle || req.query.title || '')};
-        window.RATING_POSTER = ${JSON.stringify(metaPoster)};
-        window.RATING_DESCRIPTION = ${JSON.stringify(metaDescription)};
-        window.RATING_AVAILABLE_SERVICES = ${JSON.stringify(availableServices)};
+        window.RATING_USER = ${scriptJson(userUUID)};
+        window.RATING_ID = ${scriptJson(typeof id === 'string' ? id : '')};
+        window.RATING_TYPE = ${scriptJson(metaType)};
+        window.RATING_TITLE = ${scriptJson(metaTitle || (typeof req.query.title === 'string' ? req.query.title : ''))};
+        window.RATING_POSTER = ${scriptJson(metaPoster)};
+        window.RATING_DESCRIPTION = ${scriptJson(metaDescription)};
+        window.RATING_AVAILABLE_SERVICES = ${scriptJson(availableServices)};
       </script>
     `;
     
     // Add rating-specific script
     html = html.replace(
       '</head>',
-      ratingScript + '</head>'
+      () => ratingScript + '</head>'
     );
     
     res.send(html);
@@ -7003,7 +7068,7 @@ addon.delete('/api/config/delete-user/:userUUID', async (req, res) => {
 // --- Cache Management Endpoints ---
 
 // Clean bad cache entries
-addon.post('/api/cache/clean-bad', async (req, res) => {
+addon.post('/api/cache/clean-bad', requireDashboardAdmin, async (req, res) => {
   try {
     const cacheValidator = require('./lib/cacheValidator');
     const result = await cacheValidator.cleanAllBadCache();
@@ -7023,7 +7088,7 @@ addon.post('/api/cache/clean-bad', async (req, res) => {
 });
 
 // Test granular caching
-addon.post('/api/cache/test-granular', async (req, res) => {
+addon.post('/api/cache/test-granular', requireDashboardAdmin, async (req, res) => {
   try {
     const { userUUID, metaId, type } = req.body;
     
@@ -8437,18 +8502,23 @@ addon.post("/api/dashboard/maintenance/execute", requireDashboardAdmin, async (r
           result = { success: false, message: `Failed to update Kitsu-IMDB Mapping: ${error.message}` };
         }
       }
-    } else if (taskId === 5) { // Update Wikidata Mappings
+    } else if (taskId === 5) { // Update ID Mappings
       if (action === 'restart' || action === 'enable') {
         try {
-          const { forceUpdateWikiMappings } = require('./lib/wiki-mapper');
-          result = await forceUpdateWikiMappings();
+          const { forceUpdateIdMappings } = require('./lib/id-mappings');
+          result = await forceUpdateIdMappings();
           if (result.success) {
-            result.message = `Wikidata Mappings updated successfully (${result.seriesCount.toLocaleString()} series, ${result.moviesCount.toLocaleString()} movies)`;
+            result.message = `ID Mappings updated successfully (${result.seriesCount.toLocaleString()} series, ${result.moviesCount.toLocaleString()} movies)`;
           }
         } catch (error) {
-          consola.error('[Maintenance Task] Error updating Wikidata Mappings:', error);
-          result = { success: false, message: `Failed to update Wikidata Mappings: ${error.message}` };
+          consola.error('[Maintenance Task] Error updating ID Mappings:', error);
+          result = { success: false, message: `Failed to update ID Mappings: ${error.message}` };
         }
+      }
+    } else if (taskId === 13) { // Update anime release schedule
+      if (action === 'restart' || action === 'enable') {
+        const { forceUpdateAnimeSchedule } = require('./lib/animeAiringSchedule');
+        result = await forceUpdateAnimeSchedule();
       }
     } else if (taskId === 11) { // Update IMDb Ratings
       if (action === 'restart' || action === 'enable') {

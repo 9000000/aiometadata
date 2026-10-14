@@ -18,13 +18,14 @@ const { performOpenRouterSearch }: any = require('../utils/openrouter-service');
 import consola from 'consola';
 import { tmdbImageUrl, tmdbLogoSize, tmdbBackdropSize, tmdbPosterSize } from '../utils/tmdbImageSize';
 import { hasAgeRatingCap } from '../utils/ageRating';
+import { buildCertificationMap } from '../utils/contentRating';
 const { cacheWrapMetaSmart, cacheWrapGlobal }: any = require('./getCache');
 const { getSetting }: any = require('./settingsService');
 import { fetchImdbSuggestions, type ImdbSuggestion } from '../utils/imdbSuggestions.js';
 import { fetchLumiereSearch, fetchLumierePeopleSearch, type LumiereResult } from '../utils/lumiereSearch.js';
 import { lumiereApiBase } from '../utils/lumiereLists.js';
 import { mapWithLimit } from '../utils/concurrency.js';
-const wikiMappings: any = require('./wiki-mapper');
+const idMappings: any = require('./id-mappings');
 
 
 const logger = consola.withTag('Search');
@@ -43,9 +44,10 @@ function isSimklSearchDisabled(): boolean {
 function getDefaultProvider(type: string): string {
   if (type === 'movie') return 'tmdb.search';
   if (type === 'series') return 'tvdb.search';
-  if (type === 'anime.movie') return 'mal.search.movie';
-  if (type === 'anime.series') return 'mal.search.series';
-  if (type === 'anime') return 'mal.search.series';
+  const anime = jikan.isJikanEnabled() ? 'mal' : 'kitsu';
+  if (type === 'anime.movie') return `${anime}.search.movie`;
+  if (type === 'anime.series') return `${anime}.search.series`;
+  if (type === 'anime') return `${anime}.search.series`;
   return 'tmdb.search';
 }
 
@@ -117,46 +119,27 @@ async function parseTvdbSearchResult(type: string, extendedRecord: any, language
   const posterProxyUrl = Utils.buildPosterProxyUrl(host, type, posterProxyId, validPosterUrl, language, config);
 
   let certification: string | null = null;
-  let certificationLocal: string | null = null;
+  let certifications: Record<string, string> | null = null;
   let movieReleaseDates: any = null;
   if (config.displayAgeRating || hasAgeRatingCap(config)) {
     try {
-      const langParts = language.split('-');
-      const userCountry = langParts[1] || langParts[0];
-      const contentType = type === 'movie' ? 'movie' : '';
-      const wantsLocal = !!userCountry && userCountry.toUpperCase() !== 'US';
-
-      let tmdbBase: string | null = null;
-      let tmdbLocal: string | null = null;
-
+      let tmdbRatings: any = null;
       if (tmdbId) {
         if (type === 'movie') {
-          const releaseDatesData = await moviedb.movieReleaseDates(String(tmdbId), config);
-          if (releaseDatesData) {
-            movieReleaseDates = releaseDatesData;
-            tmdbBase = Utils.getTmdbMovieCertificationForCountry(releaseDatesData);
-            if (wantsLocal) tmdbLocal = Utils.getTmdbMovieCertificationForCountry(releaseDatesData, userCountry);
-          }
+          movieReleaseDates = await moviedb.movieReleaseDates(String(tmdbId), config);
+          tmdbRatings = movieReleaseDates;
         } else {
-          const contentRatingsData = await moviedb.tvContentRatings(String(tmdbId), config);
-          if (contentRatingsData) {
-            tmdbBase = Utils.getTmdbTvCertificationForCountry(contentRatingsData);
-            if (wantsLocal) tmdbLocal = Utils.getTmdbTvCertificationForCountry(contentRatingsData, userCountry);
-          }
+          tmdbRatings = await moviedb.tvContentRatings(String(tmdbId), config);
         }
       }
 
-      // A provider holding the US rating does not mean it holds the viewer's, so
-      // the other one is still asked for the country before falling back.
-      let tvdbBase: string | null = null;
-      let tvdbLocal: string | null = null;
-      if (extendedRecord.contentRatings && (!tmdbBase || (wantsLocal && !tmdbLocal))) {
-        if (!tmdbBase) tvdbBase = Utils.getTvdbCertification(extendedRecord.contentRatings, 'usa', contentType);
-        if (wantsLocal) tvdbLocal = Utils.getTvdbCertification(extendedRecord.contentRatings, userCountry, contentType, false);
-      }
-
-      certification = tmdbBase || tvdbBase;
-      certificationLocal = wantsLocal ? (tmdbLocal || tvdbLocal || certification) : certification;
+      certifications = buildCertificationMap({
+        tmdbMovie: type === 'movie' ? tmdbRatings : null,
+        tmdbTv: type === 'movie' ? null : tmdbRatings,
+        tvdbRatings: extendedRecord.contentRatings,
+        tvdbContentType: type === 'movie' ? 'movie' : '',
+      });
+      certification = certifications?.US ?? null;
     } catch (error: any) {
       logger.warn(`Failed to get TVDB certification for ${type} ${tvdbId}:`, error.message);
     }
@@ -203,8 +186,8 @@ async function parseTvdbSearchResult(type: string, extendedRecord: any, language
     description: Utils.addMetaProviderAttribution(overview, 'TVDB', config),
     certification: certification,
     app_extras: movieReleaseDates
-      ? { certification, certificationLocal, releaseDates: movieReleaseDates }
-      : { certification, certificationLocal },
+      ? { certification, certifications, releaseDates: movieReleaseDates }
+      : { certification, certifications },
     logo: validLogoUrl,
     runtime: type === 'movie' ? Utils.parseRunTime(extendedRecord.runtime) : Utils.parseRunTime(extendedRecord.averageRuntime),
     genres: extendedRecord.genres?.map((g: any) => g.name) || [],
@@ -308,7 +291,7 @@ async function performKitsuSearch(type: string, query: string, language: string,
 
           let tmdbId = isMovie ? idMapper.getTraktAnimeMovieByMalId(malId)?.externals.tmdb : mapping?.themoviedb_id;
           let imdbId = isMovie ? idMapper.getTraktAnimeMovieByMalId(malId)?.externals.imdb : mapping?.imdb_id;
-          let tvdbId = isMovie ? (wikiMappings.getByImdbId(imdbId, itemType))?.tvdbId || null : mapping?.tvdb_id;
+          let tvdbId = isMovie ? (idMappings.getByImdbId(imdbId, itemType))?.tvdbId || null : mapping?.tvdb_id;
 
           let id = imdbId || `kitsu:${kitsuId}`;
           const preferredProvider = config.providers?.anime || 'mal';
@@ -654,14 +637,11 @@ async function performTmdbSearch(type: string, query: string, language: string, 
         parsed.imdbRating = imdbRating;
         parsed.logo = logoUrl;
         parsed.background = backgroundUrl;
-        const certification = mediaType === 'movie'
-            ? Utils.getTmdbMovieCertificationForCountry(details.release_dates)
-            : Utils.getTmdbTvCertificationForCountry(details.content_ratings);
+        const certifications = mediaType === 'movie'
+            ? buildCertificationMap({ tmdbMovie: details.release_dates })
+            : buildCertificationMap({ tmdbTv: details.content_ratings });
+        const certification = certifications?.US ?? null;
         parsed.certification = certification;
-        const searchCountry = language?.split('-')[1];
-        const certLocal = searchCountry && searchCountry !== 'US'
-            ? (mediaType === 'movie' ? Utils.getTmdbMovieCertificationForCountry(details.release_dates, searchCountry) : Utils.getTmdbTvCertificationForCountry(details.content_ratings, searchCountry)) || certification
-            : certification;
         parsed.popularity = media.popularity;
         parsed.score = media.score;
         if(allIds.imdbId) parsed.imdb_id = allIds.imdbId;
@@ -670,7 +650,7 @@ async function performTmdbSearch(type: string, query: string, language: string, 
         parsed.keywords = moviedb.keywordNamesOf(details) ?? [];
         parsed.runtime = type === 'movie' ? Utils.parseRunTime(details.runtime) : null;
         if(type === 'series') parsed.runtime  = Utils.parseRunTime(details.episode_run_time?.[0] ?? details.last_episode_to_air?.runtime ?? details.next_episode_to_air?.runtime ?? null);
-        parsed.app_extras = { releaseDates: details.release_dates, certification, certificationLocal: certLocal };
+        parsed.app_extras = { releaseDates: details.release_dates, certification, certifications };
         return { parsed, details };
     } catch (error: any) {
         logger.error(`Failed to hydrate TMDB item ${media.id} (${media.title || media.name}):`, error);
@@ -713,8 +693,8 @@ async function performTmdbSearch(type: string, query: string, language: string, 
 
 /**
  * IMDb's own autocomplete. It tolerates typos that TMDB and TVDB reject outright,
- * so it is used only to turn a loose query into IMDb ids; every id is then handed
- * to the TMDB search path, which already resolves an IMDb id into a full meta.
+ * so it is used only to turn a loose query into IMDb ids; every id is then resolved
+ * into a full meta by the user's metadata provider.
  */
 async function performImdbSuggestionSearch(type: string, query: string, language: string, config: any): Promise<any[]> {
   const startTime = Date.now();
@@ -756,10 +736,17 @@ async function performImdbSuggestionSearch(type: string, query: string, language
   return metas;
 }
 
+function hydrateImdbId(type: string, imdbId: string, language: string, config: any): Promise<any[]> {
+  const metaProvider = type === 'movie' ? (config.providers?.movie || 'tmdb') : (config.providers?.series || 'tvdb');
+  return metaProvider === 'tvdb'
+    ? performTvdbSearch(type, imdbId, language, config)
+    : performTmdbSearch(type, imdbId, language, config, false);
+}
+
 // Results keep the provider's order, since its ranking is the reason to use it.
 async function hydrateImdbIds(type: string, results: Array<{ imdbId: string; title: string }>, language: string, config: any): Promise<any[]> {
   const hydrated = await mapWithLimit(results, (result) =>
-    performTmdbSearch(type, result.imdbId, language, config, false)
+    hydrateImdbId(type, result.imdbId, language, config)
       .catch((error: any) => {
         logger.debug(`Could not hydrate ${result.imdbId} (${result.title}): ${error.message}`);
         return [];
@@ -781,7 +768,7 @@ async function hydrateImdbIds(type: string, results: Array<{ imdbId: string; tit
 
 /**
  * A self-hosted LumiereDB answers with IMDb ids ranked on how the title matched,
- * so it gets the same TMDB hydration as IMDb suggestions without the bot challenge.
+ * so it gets the same hydration as IMDb suggestions without the bot challenge.
  */
 async function performLumiereSearch(type: string, query: string, language: string, config: any): Promise<any[]> {
   const startTime = Date.now();
@@ -1425,14 +1412,11 @@ async function matchAndEnrichFromTMDB(suggestion: { title: string; year: string 
     parsed.imdbRating = imdbRating;
     parsed.logo = logoUrl;
     parsed.background = backgroundUrl;
-    const certification = type === 'movie'
-      ? Utils.getTmdbMovieCertificationForCountry(details.release_dates)
-      : Utils.getTmdbTvCertificationForCountry(details.content_ratings);
+    const certifications = type === 'movie'
+      ? buildCertificationMap({ tmdbMovie: details.release_dates })
+      : buildCertificationMap({ tmdbTv: details.content_ratings });
+    const certification = certifications?.US ?? null;
     parsed.certification = certification;
-    const matchCountry = language?.split('-')[1];
-    const certLocal = matchCountry && matchCountry !== 'US'
-      ? (type === 'movie' ? Utils.getTmdbMovieCertificationForCountry(details.release_dates, matchCountry) : Utils.getTmdbTvCertificationForCountry(details.content_ratings, matchCountry)) || certification
-      : certification;
     if (allIds.imdbId) parsed.imdb_id = allIds.imdbId;
     if (allIds.tmdbId) parsed._tmdbId = String(allIds.tmdbId);
     if (allIds.tvdbId) parsed._tvdbId = String(allIds.tvdbId);
@@ -1447,7 +1431,7 @@ async function matchAndEnrichFromTMDB(suggestion: { title: string; year: string 
       );
     }
 
-    parsed.app_extras = { releaseDates: details.release_dates, certification, certificationLocal: certLocal };
+    parsed.app_extras = { releaseDates: details.release_dates, certification, certifications };
 
     return parsed;
 
@@ -2627,6 +2611,12 @@ async function getSearch(id: string, type: string, language: string, extra: any,
           if (providerId === 'lumiere.search' && !lumiereApiBase()) {
             const fallback = getDefaultProvider(type);
             logger.info(`LumiereDB is not configured on this instance, falling back to '${fallback}' for "${query}"`);
+            providerId = fallback;
+          }
+
+          if (providerId.startsWith('mal.search') && !jikan.isJikanEnabled()) {
+            const fallback = getDefaultProvider(type);
+            logger.debug(`Jikan is turned off on this instance, falling back to '${fallback}' for "${query}"`);
             providerId = fallback;
           }
 

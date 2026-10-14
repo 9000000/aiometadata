@@ -264,7 +264,7 @@ class AniListAPI {
 
   /**
    * Fetch items from a specific list with pagination
-   * Returns items: [{ score, media: { id, idMal } }], hasMore, total
+   * Returns items: [{ score, createdAt, media: { id, idMal } }], hasMore, total
    */
   async fetchListItems(username: string, listName: string, page = 1, pageSize = 50, sort = 'ADDED_TIME_DESC', accessToken?: string): Promise<any> {
     if (!username) {
@@ -343,6 +343,7 @@ class AniListAPI {
         .filter((entry: any) => !entry.hiddenFromStatusLists)
         .map((entry: any) => ({
           score: entry.score,
+          createdAt: entry.createdAt,
           media: entry.media,
         }));
 
@@ -360,6 +361,7 @@ class AniListAPI {
               name
               isCustomList
               entries {
+                createdAt
                 score(format: POINT_100)
                 media {
                   id
@@ -422,6 +424,7 @@ class AniListAPI {
 
       const items = paginatedEntries.map((entry: any) => ({
         score: entry.score,
+        createdAt: entry.createdAt,
         media: entry.media,
       }));
 
@@ -507,6 +510,40 @@ class AniListAPI {
       console.error(`[AniList] Error fetching anime for MAL ID ${malId}:`, error.message);
       return null;
     }
+  }
+
+  /**
+   * Airing times for the given anime between two Unix times, earliest first.
+   */
+  async getAiringSchedules(mediaIds: number[], from: number, to: number): Promise<Array<{ mediaId: number; episode: number; airingAt: number }>> {
+    const query = `
+      query ($ids: [Int], $from: Int, $to: Int, $page: Int) {
+        Page(page: $page, perPage: 50) {
+          pageInfo { hasNextPage }
+          airingSchedules(mediaId_in: $ids, airingAt_greater: $from, airingAt_lesser: $to, sort: TIME) {
+            mediaId
+            episode
+            airingAt
+          }
+        }
+      }
+    `;
+    const rows: Array<{ mediaId: number; episode: number; airingAt: number }> = [];
+    for (let page = 1; page <= 10; page++) {
+      const response = await this.makeRateLimitedRequest(() =>
+        httpPost(this.baseURL, { query, variables: { ids: mediaIds, from, to, page } }, {
+          headers: anilistHeaders(),
+          timeout: 30000
+        })
+      );
+      const result = response.data?.data?.Page;
+      if (!result) {
+        throw new Error(`AniList GraphQL errors: ${JSON.stringify(response.data?.errors)}`);
+      }
+      rows.push(...(result.airingSchedules || []));
+      if (!result.pageInfo?.hasNextPage) break;
+    }
+    return rows;
   }
 
   /**

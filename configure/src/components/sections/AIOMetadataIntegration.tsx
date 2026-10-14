@@ -6,7 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import { Check, Plus, Minus, ChevronDown } from 'lucide-react';
 import { toast } from "sonner";
-import { baseCatalogs, animeCatalogs, CatalogDefinition } from '@/data/catalogs';
+import { baseCatalogs, animeCatalogs, serverWatchlistCatalogs, CatalogDefinition, isJikanCatalog } from '@/data/catalogs';
+import type { CatalogConfig } from '@/contexts/config';
 import { cn } from '@/lib/utils';
 
 interface AIOMetadataIntegrationProps {
@@ -81,19 +82,42 @@ const SOURCE_GROUPS: SourceGroup[] = [
     accent: 'bg-rose-500/15 ring-rose-400/20',
     badgeActive: 'bg-rose-500/20 text-rose-300 border-rose-400/30',
   },
+  {
+    source: 'aiom',
+    label: 'Watchlist on this server',
+    description: "Titles favourited in this server's Jellyfin apps, a list per user",
+    icon: '/logo.png',
+    gradient: 'from-teal-500/10 via-card/80 to-card/80',
+    border: 'border-teal-400/20',
+    accent: 'bg-teal-500/15 ring-teal-400/20',
+    badgeActive: 'bg-teal-500/20 text-teal-300 border-teal-400/30',
+  },
 ];
 
-const allBuiltInCatalogs: CatalogDefinition[] = [...baseCatalogs, ...animeCatalogs];
+const allBuiltInCatalogs: CatalogDefinition[] = [...baseCatalogs, ...animeCatalogs, ...serverWatchlistCatalogs];
+
+const entryFor = (catalog: CatalogDefinition): CatalogConfig => ({
+  id: catalog.id,
+  name: catalog.name,
+  type: catalog.type,
+  source: catalog.source,
+  enabled: true,
+  showInHome: catalog.showOnHomeByDefault || false,
+  enableRatingPosters: true,
+  randomizePerPage: false,
+  ...(catalog.source === 'aiom' ? { cacheTTL: 0, sort: 'added' as const } : {}),
+});
 
 const typeLabel = (type: string) => {
   if (type === 'movie') return 'Movies';
   if (type === 'series') return 'Series';
   if (type === 'anime') return 'Anime';
+  if (type === 'all') return 'All';
   return type;
 };
 
 export function AIOMetadataIntegration({ isOpen, onClose }: AIOMetadataIntegrationProps) {
-  const { config, setConfig, lumiereEnabled } = useConfig();
+  const { config, setConfig, lumiereEnabled, jikanEnabled } = useConfig();
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
   const addedSet = useMemo(() => {
@@ -105,8 +129,8 @@ export function AIOMetadataIntegration({ isOpen, onClose }: AIOMetadataIntegrati
   }, [config.catalogs]);
 
   const availableCatalogs = useMemo(
-    () => allBuiltInCatalogs.filter(c => c.source !== 'lumiere' || lumiereEnabled),
-    [lumiereEnabled]
+    () => allBuiltInCatalogs.filter(c => (c.source !== 'lumiere' || lumiereEnabled) && (jikanEnabled || !isJikanCatalog(c))),
+    [lumiereEnabled, jikanEnabled]
   );
 
   const groups = useMemo(() => {
@@ -142,19 +166,7 @@ export function AIOMetadataIntegration({ isOpen, onClose }: AIOMetadataIntegrati
     } else {
       setConfig(prev => ({
         ...prev,
-        catalogs: [
-          ...prev.catalogs,
-          {
-            id: catalog.id,
-            name: catalog.name,
-            type: catalog.type,
-            source: catalog.source,
-            enabled: true,
-            showInHome: catalog.showOnHomeByDefault || false,
-            enableRatingPosters: true,
-            randomizePerPage: false,
-          },
-        ],
+        catalogs: [...prev.catalogs, entryFor(catalog)],
       }));
       toast.success(`Added ${catalog.name} (${typeLabel(catalog.type)})`);
     }
@@ -170,16 +182,7 @@ export function AIOMetadataIntegration({ isOpen, onClose }: AIOMetadataIntegrati
       ...prev,
       catalogs: [
         ...prev.catalogs,
-        ...toAdd.map(c => ({
-          id: c.id,
-          name: c.name,
-          type: c.type,
-          source: c.source,
-          enabled: true,
-          showInHome: c.showOnHomeByDefault || false,
-          enableRatingPosters: true,
-          randomizePerPage: false,
-        })),
+        ...toAdd.map(entryFor),
       ],
     }));
     toast.success(`Added ${toAdd.length} catalog${toAdd.length !== 1 ? 's' : ''}`);

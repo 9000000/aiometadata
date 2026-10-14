@@ -8,7 +8,7 @@ import { fetchTraktWatchlistItems, fetchTraktFavoritesItems, fetchTraktRecommend
 import { fetchSimklTrendingItems, fetchSimklRecipeItems, fetchSimklWatchlistItems, fetchSimklUpNextItems, parseSimklItems, parseSimklUpNextItems, getSimklToken, fetchSimklCalendarItems, fetchSimklGenreItems, fetchSimklDvdReleases, fetchSimklListPage } from "../utils/simklUtils.js";
 import { fetchLetterboxdList, parseLetterboxdItems, getLetterboxdGenreIdByName } from "../utils/letterboxdUtils.js";
 import { getFlixPatrolMetas } from "../utils/flixpatrolUtils.js";
-import { fetchResume, parseResumeItems, fetchListItems, parseListItems, fetchPickItems, parsePickItems, publicMetaDBListType } from "../utils/publicmetadbUtils.js";
+import { fetchResume, parseResumeItems, fetchListItems, parseListItems, fetchPickItems, parsePickItems, publicMetaDBListType, publicMetaDBListId, WATCHLIST_CATALOG_ID } from "../utils/publicmetadbUtils.js";
 import { getFranchiseCatalog } from "./franchiseUtils.js";
 import { getRottenTomatoesCatalog } from "./getRottenTomatoes.js";
 import { mapWithLimit } from "../utils/concurrency.js";
@@ -31,6 +31,7 @@ const { getSetting }: any = require('./settingsService');
 import { resolveDynamicTmdbDiscoverParams } from './tmdbDiscoverDateTokens.js';
 import { roundRobinInterleaveTagged, mergedDedupKey, filterMetasByGenre, normalizeGenreKey } from '../utils/mergedCatalog.js';
 const { getTvmazeScheduleCatalog } = require('./tvmazeScheduleCatalog');
+const { getServerWatchlistCatalog, isServerWatchlistCatalog } = require('./serverWatchlist');
 const movielens = require('./movielens');
 
 const consola = require('consola');
@@ -92,6 +93,9 @@ async function getCatalog(type: string, language: string, page: number, id: stri
       logger.debug(`Routing to Trakt catalog handler for id: ${id}`);
       const traktResults = await getTraktCatalog(type, id, genre, page, language, config, userUUID, includeVideos);
       return { metas: traktResults };
+    }
+    else if (jikan.isJikanCatalogId(id) && !jikan.isJikanEnabled()) {
+      return { metas: [] };
     }
     else if (id.startsWith('mal.discover.')) {
       logger.debug(`Routing to MAL discover catalog handler for id: ${id}`);
@@ -168,6 +172,9 @@ async function getCatalog(type: string, language: string, page: number, id: stri
       logger.debug(`Routing to Rotten Tomatoes catalog handler for id: ${id}`);
       const rtResults = await getRottenTomatoesCatalog(type, id, genre, page, language, config, userUUID, includeVideos);
       return { metas: rtResults };
+    }
+    else if (isServerWatchlistCatalog(id)) {
+      return { metas: await getServerWatchlistCatalog(id, type, page, config, userUUID) };
     }
     else if (id.startsWith('merged.')) {
       logger.debug(`Routing to Merged catalog handler for id: ${id}`);
@@ -334,30 +341,22 @@ async function getMalCatalog(
     const allAnimeGenres = await cacheWrapJikanApi('anime-genres', async () => {
       return await jikan.getAnimeGenres();
     }, null);
-    const genreNameToFetch = genre && genre !== 'None' ? genre : allAnimeGenres[0]?.name;
-    if (genreNameToFetch) {
-      const selectedGenre = allAnimeGenres.find((g: any) => g.name === genreNameToFetch);
-      if (selectedGenre) {
-        const genreId = selectedGenre.mal_id;
-        animeResults = await cacheWrapJikanApi(`mal-${catalogId}-${page}-${genreId}-${config.sfw}`, async () => {
-          return await jikan.getTopAnimeByDateRange(startDate, endDate, page, genreId, config);
-        }, null);
-      }
+    const genreId = genre && genre !== 'None' ? allAnimeGenres.find((g: any) => g.name === genre)?.mal_id : null;
+    if (genreId !== undefined) {
+      animeResults = await cacheWrapJikanApi(`mal-${catalogId}-${page}-${genreId ?? 'all'}-${config.sfw}`, async () => {
+        return await jikan.getTopAnimeByDateRange(startDate, endDate, page, genreId ?? undefined, config);
+      }, null);
     }
   } else if (catalogId === 'mal.genres') {
     const mediaType = null;
     const allAnimeGenres = await cacheWrapJikanApi('anime-genres', async () => {
       return await jikan.getAnimeGenres();
     }, null);
-    const genreNameToFetch = genre || allAnimeGenres[0]?.name;
-    if (genreNameToFetch) {
-      const selectedGenre = allAnimeGenres.find((g: any) => g.name === genreNameToFetch);
-      if (selectedGenre) {
-        const genreId = selectedGenre.mal_id;
-        animeResults = await cacheWrapJikanApi(`mal-genre-${genreId}-${mediaType || 'all'}-${page}-${config.sfw}`, async () => {
-          return await jikan.getAnimeByGenre(genreId, mediaType, page, config);
-        }, null);
-      }
+    const genreId = genre === 'None' ? null : allAnimeGenres.find((g: any) => g.name === (genre || allAnimeGenres[0]?.name))?.mal_id;
+    if (genreId !== undefined) {
+      animeResults = await cacheWrapJikanApi(`mal-genre-${genreId ?? 'any'}-${mediaType || 'all'}-${page}-${config.sfw}`, async () => {
+        return await jikan.getAnimeByGenre(genreId, mediaType, page, config);
+      }, null);
     }
   } else if (catalogId === 'mal.studios') {
     if (genre) {
@@ -1934,7 +1933,7 @@ async function getExternalAddonCatalog(type: string, catalogId: string, genre: s
     // Filter here (not at the catalog route) so the pagination cursor below counts
     // post-filter items. The route detects this via filtersAlreadyApplied and skips re-filtering.
     const { applyCatalogFilters, catalogFiltersActive } = require('../utils/catalogFilters.js');
-    const { fillMaxPages } = require('./catalogPagination');
+    const { fillMaxPages, cursorTtlSeconds } = require('./catalogPagination');
 
     const sourceKey = createHash('sha256').update(String(catalogUrl)).digest('hex').slice(0, 16);
     const readBatch = async (offset: number) => {
@@ -1961,7 +1960,7 @@ async function getExternalAddonCatalog(type: string, catalogId: string, genre: s
 
       for (let i = 0; i < items.length; i += batchSize) {
         const chunk = items.slice(i, i + batchSize);
-        let metas = await parseStremThruItems(chunk, type, genre, language, config, includeVideos);
+        let metas = await parseStremThruItems(chunk, type, genre, language, config, includeVideos, { upstreamArt: userCatalog.metadata?.useUpstreamArt === true });
         metas = await applyCatalogFilters(metas, { type, config, catalogConfig: userCatalog, cleanId: catalogId });
         for (const meta of metas) {
           const id = meta?.id;
@@ -1980,7 +1979,7 @@ async function getExternalAddonCatalog(type: string, catalogId: string, genre: s
         cursorKey,
         JSON.stringify({ served: newServed, upstreamOffset: offset, seenIds: recentIds }),
         'EX',
-        catalogTTL
+        catalogTTL > 0 ? catalogTTL : cursorTtlSeconds()
       );
     }
 
@@ -3459,9 +3458,9 @@ async function getPublicMetaDBCatalog(
       return metas;
     }
 
-    if (catalogId.startsWith('publicmetadb.list.')) {
-      const { pmdbListIdFor } = require('./accounts');
-      const listId = pmdbListIdFor(config, catalogId);
+    if (catalogId === WATCHLIST_CATALOG_ID || catalogId.startsWith('publicmetadb.list.')) {
+      const listId = await publicMetaDBListId(config, catalogId);
+      if (!listId) return [];
       const pageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE as string) || 20;
       const [data, listType] = await Promise.all([
         fetchListItems(apiKey, listId, page, pageSize).catch((error: any) => {
@@ -3469,11 +3468,21 @@ async function getPublicMetaDBCatalog(
           logger.warn(`[PublicMetaDB] List ${listId} is not on this account; it is a row left over from an older configuration. Remove it, or reinstall the addon in the client.`);
           return { items: [] };
         }),
-        publicMetaDBListType(config, catalogId),
+        catalogId === WATCHLIST_CATALOG_ID ? 'watchlist' : publicMetaDBListType(config, catalogId),
       ]);
       let metas = await parseListItems(data.items || [], type, language, config);
       metas = stampListedAt(metas, data.items || [], (item: any) => ({ tmdb: item?.tmdb_id }), (item: any) => item?.created);
       logger.success(`[PublicMetaDB] ${listType === 'watchlist' ? 'Watchlist' : 'List'} ${listId}: ${metas.length} items (page ${page})`);
+      return metas;
+    }
+
+    if (catalogId.startsWith('publicmetadb.public.')) {
+      const listId = catalogId.slice('publicmetadb.public.'.length);
+      const pageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE as string) || 20;
+      const data = await fetchListItems(apiKey, listId, page, pageSize);
+      let metas = await parseListItems(data.items || [], type, language, config);
+      metas = stampListedAt(metas, data.items || [], (item: any) => ({ tmdb: item?.tmdb_id }), (item: any) => item?.created);
+      logger.success(`[PublicMetaDB] Public list ${listId}: ${metas.length} items (page ${page})`);
       return metas;
     }
 
@@ -3642,13 +3651,6 @@ async function getMergedCatalog(
       try {
         const studios = await cacheWrapJikanApi('mal-studios', async () => await jikan.getStudios(100), 30 * 24 * 60 * 60);
         const names = studios.map((s: any) => { const t = s.titles.find((x: any) => x.type === 'Default'); return t?.title; }).filter(Boolean);
-        if (names.length > 0) return names[0];
-      } catch {}
-    }
-    if (srcId === 'mal.genres') {
-      try {
-        const animeGenres = await cacheWrapJikanApi('anime-genres', async () => await jikan.getAnimeGenres(), 30 * 24 * 60 * 60);
-        const names = animeGenres.filter(Boolean).map((g: any) => g.name).sort();
         if (names.length > 0) return names[0];
       } catch {}
     }

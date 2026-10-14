@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Stage 1: Build frontend and transpile backend TypeScript on native host platform (Fast, no QEMU emulation slowdown)
-FROM --platform=$BUILDPLATFORM node:24-alpine AS builder
+FROM --platform=$BUILDPLATFORM mirror.gcr.io/library/node:24-alpine AS builder
 WORKDIR /app
 COPY package*.json package-lock.json* ./
 RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci
@@ -9,7 +9,7 @@ RUN npm run build
 RUN npm run build:backend
 
 # Stage 2: Runtime image for target platform
-FROM node:24-alpine AS runner
+FROM mirror.gcr.io/library/node:24-alpine AS runner
 WORKDIR /app
 RUN apk add --no-cache ca-certificates wget
 COPY package*.json package-lock.json* ./

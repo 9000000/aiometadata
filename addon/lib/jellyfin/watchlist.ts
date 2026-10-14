@@ -1,7 +1,7 @@
 import { fetchMeta, metaToBaseItem } from './items';
 import { clientHasOwnWatchlist } from './context';
 import { profileKey, writesTrackers } from './profiles';
-import { shelfCacheWindowMs, trackerWatchlist, watchlistPicks, type WatchlistEntry, type WatchlistIds } from './watchlistSources';
+import { dedupeWatchlist, keepsServerWatchlist, shelfCacheWindowMs, trackerWatchlist, watchlistPicks, type WatchlistEntry, type WatchlistIds } from './watchlistSources';
 import { mapWithConcurrency } from '../../utils/concurrency';
 import { LRUCache } from 'lru-cache';
 import { envInt } from '../../utils/envNumber';
@@ -61,7 +61,8 @@ export async function watchlistEntries(userUUID: string, config: any, need = Num
   const tracker = held.rows;
 
   const since = watchlistPicks(config).size ? Date.now() - (await shelfCacheWindowMs(config)) : -Infinity;
-  const local = rows.filter((row) => (Number(row.updated_at) || 0) >= since);
+  const keepsServer = keepsServerWatchlist(config);
+  const local = rows.filter((row) => (Number(row.updated_at) || 0) >= since || (keepsServer && Number(row.listed)));
 
   const out = new Map<string, WatchlistEntry>();
   for (const row of tracker) out.set(row.metaId, row);
@@ -74,7 +75,8 @@ export async function watchlistEntries(userUUID: string, config: any, need = Num
       out.delete(metaId);
     }
   }
-  return { entries: [...out.values()].sort((a, b) => b.addedAt - a.addedAt), exhausted: held.exhausted, complete: held.complete };
+  const entries = local.some((row) => Number(row.listed)) ? await dedupeWatchlist([...out.values()], config) : [...out.values()];
+  return { entries: entries.sort((a, b) => b.addedAt - a.addedAt), exhausted: held.exhausted, complete: held.complete };
 }
 
 /** The titles of a shelf, marked as it is to the client: a favourite, or a liked title for a watchlist. */
@@ -84,6 +86,7 @@ export async function watchlistItems(userUUID: string, config: any, serverId: st
     if (!meta) return null;
     const item = metaToBaseItem(meta, entry.mediaType, serverId, null);
     item.UserData = { ...item.UserData, [mark]: true };
+    if (entry.addedAt > 0) item.DateCreated = new Date(entry.addedAt).toISOString();
     return item;
   });
   return built.filter(Boolean);

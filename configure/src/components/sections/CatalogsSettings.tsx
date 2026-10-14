@@ -41,7 +41,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { streamingServices, regions } from "@/data/streamings";
 import { consumeCollectionBuilderRequest } from '@/lib/settingsRoute';
-import { allCatalogDefinitions } from '@/data/catalogs';
+import { allCatalogDefinitions, isJikanCatalog } from '@/data/catalogs';
 import { resolveCatalogTTL, minCacheTTLFor, hasEditableCacheTTL, formatTTL } from '@/lib/catalogTTL';
 import { GenreSelection } from '@/data/genres';
 import { SelectionProvider, useSelection } from '@/contexts/SelectionContext';
@@ -1830,6 +1830,7 @@ const CustomManifestSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: C
   const { setConfig, catalogTTL, config } = useConfig();
   const [cacheTTL, setCacheTTL] = useState<number | null>(catalog.cacheTTL ?? null);
   const [enableRatingPosters, setEnableRatingPosters] = useState<boolean>(catalog.enableRatingPosters !== false);
+  const [useUpstreamArt, setUseUpstreamArt] = useState<boolean>(catalog.metadata?.useUpstreamArt === true);
   const [hideWatchedTrakt, setHideWatchedTrakt] = useState<string>(catalog.metadata?.hideWatchedTrakt === true ? 'on' : catalog.metadata?.hideWatchedTrakt === false ? 'off' : 'global');
   const [hideWatchedAnilist, setHideWatchedAnilist] = useState<string>(catalog.metadata?.hideWatchedAnilist === true ? 'on' : catalog.metadata?.hideWatchedAnilist === false ? 'off' : 'global');
   const [hideWatchedMdblist, setHideWatchedMdblist] = useState<string>(catalog.metadata?.hideWatchedMdblist === true ? 'on' : catalog.metadata?.hideWatchedMdblist === false ? 'off' : 'global');
@@ -1849,7 +1850,7 @@ const CustomManifestSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: C
       ...prev,
       catalogs: prev.catalogs.map(c =>
         c.id === catalog.id && c.type === catalog.type
-          ? { ...c, cacheTTL: resolveCatalogTTL(cacheTTL, minCacheTTLFor(catalog.id)), enableRatingPosters, metadata: { ...c.metadata, posterShape: posterShape === 'landscape' ? 'landscape' : undefined, hideWatchedTrakt: hideTraktValue, hideWatchedAnilist: hideAnilistValue, hideWatchedMdblist: hideMdblistValue, hideWatchedSimkl: hideSimklValue, hideUnreleasedDigital: hideUnreleasedDigitalValue, hideUnreleasedShows: hideUnreleasedShowsValue } }
+          ? { ...c, cacheTTL: resolveCatalogTTL(cacheTTL, minCacheTTLFor(catalog.id)), enableRatingPosters, metadata: { ...c.metadata, useUpstreamArt: useUpstreamArt || undefined, posterShape: posterShape === 'landscape' ? 'landscape' : undefined, hideWatchedTrakt: hideTraktValue, hideWatchedAnilist: hideAnilistValue, hideWatchedMdblist: hideMdblistValue, hideWatchedSimkl: hideSimklValue, hideUnreleasedDigital: hideUnreleasedDigitalValue, hideUnreleasedShows: hideUnreleasedShowsValue } }
           : c
       )
     }));
@@ -1868,9 +1869,24 @@ const CustomManifestSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: C
             value={cacheTTL}
             onChange={setCacheTTL}
             min={minCacheTTLFor(catalog.id)}
-            help="How long to cache this catalog before refreshing. Range: 5 minutes to 7 days."
+            help="How long to cache this catalog before refreshing, up to 7 days. 0 turns caching off."
           />
-          {(config.apiKeys?.rpdb || config.apiKeys?.topPoster || config.customPosterUrlPattern) && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="custom-upstream-art-toggle">Use the Addon's Own Art</Label>
+                <p className="text-xs text-muted-foreground">
+                  Show the poster, background and logo this addon provides. Rating posters and custom art patterns are skipped for this catalog.
+                </p>
+              </div>
+              <Switch
+                id="custom-upstream-art-toggle"
+                checked={useUpstreamArt}
+                onCheckedChange={setUseUpstreamArt}
+              />
+            </div>
+          </div>
+          {!useUpstreamArt && (config.apiKeys?.rpdb || config.apiKeys?.topPoster || config.customPosterUrlPattern) && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
@@ -2478,6 +2494,8 @@ const GenericSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogC
   const [hideUnreleasedDigital, setHideUnreleasedDigital] = useState<string>(catalog.metadata?.hideUnreleasedDigital === true ? 'on' : catalog.metadata?.hideUnreleasedDigital === false ? 'off' : 'global');
   const [hideUnreleasedShows, setHideUnreleasedShows] = useState<string>(catalog.metadata?.hideUnreleasedShows === true ? 'on' : catalog.metadata?.hideUnreleasedShows === false ? 'off' : 'global');
   const isRecommendations = (catalog as CatalogConfig & { source?: string }).source === 'recommendations';
+  const isServerWatchlist = catalog.id.startsWith('aiom.watchlist.');
+  const [serverSort, setServerSort] = useState<string>(catalog.sort || 'added');
   const [pickOrder, setPickOrder] = useState<string>(catalog.metadata?.pickOrder || 'global');
   const [pickMinVotes, setPickMinVotes] = useState<string>(
     catalog.metadata?.pickMinVotes === undefined || catalog.metadata?.pickMinVotes === null
@@ -2500,6 +2518,7 @@ const GenericSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogC
         c.id === catalog.id && c.type === catalog.type
           ? {
             ...c,
+            ...(isServerWatchlist ? { sort: serverSort as CatalogConfig['sort'] } : {}),
             metadata: {
               ...c.metadata, posterShape: posterShape === 'landscape' ? 'landscape' : undefined,
               hideWatchedTrakt: hideTraktValue,
@@ -2531,6 +2550,20 @@ const GenericSettingsDialog = ({ catalog, isOpen, onClose }: { catalog: CatalogC
           <DialogTitle>{catalog.name} Settings</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 py-4">
+          {isServerWatchlist && (
+            <div className="space-y-2">
+              <Label>Sort</Label>
+              <Select value={serverSort} onValueChange={setServerSort}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="added">Date added, newest first</SelectItem>
+                  <SelectItem value="released">Release date, newest first</SelectItem>
+                  <SelectItem value="title">Title, A to Z</SelectItem>
+                  <SelectItem value="imdbrating">Rating, highest first</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           {isRecommendations && (
             <>
               <div className="space-y-2">
@@ -4107,7 +4140,7 @@ function CatalogsSettingsContent({
   collectionFilter: CollectionFilter;
   setCollectionFilter: React.Dispatch<React.SetStateAction<CollectionFilter>>;
 }) {
-  const { config, setConfig, hasBuiltInTvdb, hasBuiltInGemini, lumiereEnabled } = useConfig();
+  const { config, setConfig, hasBuiltInTvdb, hasBuiltInGemini, lumiereEnabled, jikanEnabled } = useConfig();
   const {
     selectAll,
     deselectAll,
@@ -4176,6 +4209,8 @@ function CatalogsSettingsContent({
     | 'disableRatingPosters'
     | 'enableRandomize'
     | 'disableRandomize'
+    | 'setLandscape'
+    | 'setPoster'
     | 'moveToTop'     
     | 'moveToBottom' 
     | null
@@ -4311,6 +4346,7 @@ function CatalogsSettingsContent({
       if (cat.source === 'tvdb' && !hasTvdbKey) return false;
 
       if (cat.source === 'lumiere' && !lumiereEnabled) return false;
+      if (!jikanEnabled && isJikanCatalog(cat)) return false;
 
       // Filter by selected tags (match any)
       if (tagFilters.length > 0 && !tagFilters.some(t => cat.tags?.includes(t))) return false;
@@ -4319,7 +4355,7 @@ function CatalogsSettingsContent({
       const serviceId = cat.id.replace("streaming.", "").replace(/ .*/, "");
       return Array.isArray(config.streaming) && config.streaming.includes(serviceId);
     }),
-    [config.catalogs, config.streaming, hideDisabledCatalogs, hasTvdbKey, lumiereEnabled, tagFilters]
+    [config.catalogs, config.streaming, hideDisabledCatalogs, hasTvdbKey, lumiereEnabled, jikanEnabled, tagFilters]
   );
 
   const collectionCounts = useMemo(() => {
@@ -4818,6 +4854,34 @@ function CatalogsSettingsContent({
       toast.success(`Randomize enabled for ${catalogsToEnableRandomize.length} catalog${catalogsToEnableRandomize.length === 1 ? '' : 's'}`);
     } catch (error) {
       showBulkActionError('enable randomize', error as Error);
+    } finally {
+      setIsLoading(false);
+      setLoadingAction(null);
+    }
+  };
+
+  const handleBulkSetPosterShape = async (shape: 'poster' | 'landscape') => {
+    setIsLoading(true);
+    setLoadingAction(shape === 'landscape' ? 'setLandscape' : 'setPoster');
+
+    try {
+      const toChange = selectedCatalogs.filter(catalog => (catalog.metadata?.posterShape === 'landscape') !== (shape === 'landscape'));
+      const keys = new Set(toChange.map(cat => `${cat.id}-${cat.type}`));
+
+      if (keys.size > 0) {
+        setConfig(prev => ({
+          ...prev,
+          catalogs: prev.catalogs.map(c =>
+            keys.has(`${c.id}-${c.type}`)
+              ? { ...c, metadata: { ...c.metadata, posterShape: shape === 'landscape' ? 'landscape' : undefined } }
+              : c
+          )
+        }));
+      }
+
+      toast.success(`${shape === 'landscape' ? 'Landscape' : 'Poster'} shape set for ${toChange.length} catalog${toChange.length === 1 ? '' : 's'}`);
+    } catch (error) {
+      showBulkActionError('set poster shape', error as Error);
     } finally {
       setIsLoading(false);
       setLoadingAction(null);
@@ -5683,6 +5747,8 @@ function CatalogsSettingsContent({
           onDisableRatingPosters={handleBulkDisableRatingPosters}
           onEnableRandomize={handleBulkEnableRandomize}
           onDisableRandomize={handleBulkDisableRandomize}
+          onSetLandscape={() => handleBulkSetPosterShape('landscape')}
+          onSetPoster={() => handleBulkSetPosterShape('poster')}
           onSetDisplayType={handleBulkSetDisplayType}
           onResetDisplayType={handleBulkResetDisplayType}
           onSetCacheTTL={handleBulkSetCacheTTL}
@@ -6338,7 +6404,7 @@ function CatalogsSettingsContent({
 // ...existing code...
 
 export function CatalogsSettings() {
-  const { config, hasBuiltInTvdb, setConfig, lumiereEnabled } = useConfig();
+  const { config, hasBuiltInTvdb, setConfig, lumiereEnabled, jikanEnabled } = useConfig();
   const [hideDisabledCatalogs, setHideDisabledCatalogs] = useState(config.showDisabledCatalogs ?? false);
   const [tagFilters, setTagFilters] = useState<string[]>([]);
   const [collectionFilter, setCollectionFilter] = useState<CollectionFilter>('all');
@@ -6369,6 +6435,7 @@ export function CatalogsSettings() {
       if (cat.source === 'tvdb' && !hasTvdbKey) return false;
 
       if (cat.source === 'lumiere' && !lumiereEnabled) return false;
+      if (!jikanEnabled && isJikanCatalog(cat)) return false;
 
       // Filter by selected tags (match any)
       if (tagFilters.length > 0 && !tagFilters.some(t => cat.tags?.includes(t))) return false;
@@ -6382,7 +6449,7 @@ export function CatalogsSettings() {
       const serviceId = cat.id.replace("streaming.", "").replace(/ .*/, "");
       return Array.isArray(config.streaming) && config.streaming.includes(serviceId);
     }),
-    [config.catalogs, config.streaming, hideDisabledCatalogs, hasTvdbKey, lumiereEnabled, tagFilters, collectionFilter, collectedKeys]
+    [config.catalogs, config.streaming, hideDisabledCatalogs, hasTvdbKey, lumiereEnabled, jikanEnabled, tagFilters, collectionFilter, collectedKeys]
   );
 
   return (

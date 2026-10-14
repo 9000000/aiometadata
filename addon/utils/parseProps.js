@@ -17,7 +17,8 @@ const { cacheWrapMetaSmart, cacheWrapGlobal } = require('../lib/getCache');
 const { getReleaseAvailability } = require('./releaseAvailability');
 const { classifyTmdbLocalization } = require('./tmdbLocalization');
 const { malRatingToCertification, isUnratedCertification } = require('./ageRating');
-const wikiMappings = require('../lib/wiki-mapper.js');
+const { getTmdbMovieCertificationForCountry, getTmdbTvCertificationForCountry, getTvdbCertification } = require('./contentRating');
+const idMappings = require('../lib/id-mappings.js');
 function CATALOG_TTL() { return parseInt(process.env.CATALOG_TTL || 1 * 24 * 60 * 60, 10); }
 const buildInfo = require('../lib/buildInfo');
 // Dynamic import to avoid circular dependency
@@ -895,38 +896,14 @@ function sortTvdbSearchResults(results, query) {
   return filteredResults.map(p => p.originalItem);
 }
 
-function getTvdbCertification(contentRatings, countryCode, contentType, fallbackToUsa = true) {
-  if (!contentRatings || !Array.isArray(contentRatings)) {
-    return null;
-  }
-
-  let code = countryCode?.toLowerCase();
-  if (code && code.length === 2) {
-    try { code = require('country-iso-2-to-3')(code.toUpperCase())?.toLowerCase(); } catch {}
-  }
-
-  let certification = code ? contentRatings.find(rating =>
-    rating.country?.toLowerCase() === code &&
-    (!contentType || rating.contentType === contentType || rating.contentType === '')
-  ) : null;
-
-  if (!certification && fallbackToUsa) {
-    certification = contentRatings.find(rating =>
-      rating.country?.toLowerCase() === 'usa' &&
-      (!contentType || rating.contentType === contentType || rating.contentType === '')
-    );
-  }
-
-  return certification?.name || null;
-}
-
 function processOverviewTranslations(translations, language, overview) {
-  if(language === 'pt-PT'){
-    let translation = tmdb.getTranslations(translations, 'pt-PT');
+  // Try the other Portuguese variant before falling back to English.
+  if(language === 'pt-PT' || language === 'pt-BR'){
+    let translation = tmdb.getTranslations(translations, language);
       if(translation && translation.data.overview && translation.data.overview.trim() !== ''){
         overview = translation.data.overview;
       } else {
-        translation = tmdb.getTranslations(translations, 'pt-BR');
+        translation = tmdb.getTranslations(translations, language === 'pt-BR' ? 'pt-PT' : 'pt-BR');
         if(translation && translation.data.overview && translation.data.overview.trim() !== ''){
           overview = translation.data.overview;
         } else{
@@ -1275,58 +1252,6 @@ function parseAnimeCreditsLink(characterData, userUUID, castCount) {
   }).filter(Boolean);
 
   return [...voiceActorLinks];
-}
-
-function newestCertification(releaseDates, matches) {
-  const candidates = releaseDates
-    .filter(matches)
-    .sort((a, b) => new Date(b.release_date) - new Date(a.release_date));
-  return candidates.length > 0 ? candidates[0].certification : null;
-}
-
-/**
- * A restoration or reissue is not resubmitted to the ratings board, so it comes back
- * unrated with a release date decades newer than the original. Taking the newest
- * release outright would let that erase the rating the film actually carries, so a
- * real rating is preferred at every step and an unrated one is only the last word.
- */
-function getTmdbMovieCertificationForCountry(certificationsData, country = 'US') {
-  if (!certificationsData) {
-    return null;
-  }
-
-  const countryData = certificationsData.results?.find(r => r.iso_3166_1 === country);
-  if (!countryData?.release_dates) return null;
-
-  const theatrical = newestCertification(
-    countryData.release_dates,
-    rd => rd.type === 3 && !isUnratedCertification(rd.certification)
-  );
-  if (theatrical) return theatrical;
-
-  const anyRelease = newestCertification(
-    countryData.release_dates,
-    rd => !isUnratedCertification(rd.certification)
-  );
-  if (anyRelease) return anyRelease;
-
-  // Nothing here is rated. Answer with the unrated value rather than null, because a
-  // caller reading a second country falls back to the first only when this is null.
-  return newestCertification(
-    countryData.release_dates,
-    rd => typeof rd.certification === 'string' && rd.certification.trim() !== ''
-  );
-}
-
-function getTmdbTvCertificationForCountry(certificationsData, country = 'US') {
-  if (!certificationsData) {
-    return null;
-  }
-
-  const countryData = certificationsData.results?.find(r => r.iso_3166_1 === country);
-  if (!countryData?.rating) return null;
-
-  return countryData.rating;
 }
 
 
@@ -2339,7 +2264,7 @@ async function parseAnimeCatalogMetaBatch(animes, config, language, includeVideo
         const stremioType = item.attributes.subtype === 'movie' ? 'movie' : 'series';
         let tmdbId = stremioType === 'movie' ? idMapper.getTraktAnimeMovieByMalId(id)?.externals.tmdb : mapping?.themoviedb_id;
         let imdbId = stremioType === 'movie' ? idMapper.getTraktAnimeMovieByMalId(id)?.externals.imdb : mapping?.imdb_id;
-        let tvdbId = stremioType === 'movie' ? (wikiMappings.getByImdbId(imdbId, stremioType))?.tvdbId || null : mapping?.tvdb_id;
+        let tvdbId = stremioType === 'movie' ? (idMappings.getByImdbId(imdbId, stremioType))?.tvdbId || null : mapping?.tvdb_id;
         let finalPosterUrl = await getAnimePosterUrl(id, mapping, stremioType, config, language, anilistArtworkMap, item.attributes.posterImage?.original, kitsuArtworkMap);
         let kitsuReleaseInfo = item.attributes.startDate ? item.attributes.startDate.substring(0, 4) : null;
         if (stremioType === 'series' && item.attributes.startDate) {
@@ -2453,7 +2378,7 @@ async function parseAnimeCatalogMetaBatch(animes, config, language, includeVideo
     const mapping = idMapper.getMappingByMalId(malId);
     let tmdbId = stremioType === 'movie' ? idMapper.getTraktAnimeMovieByMalId(malId)?.externals.tmdb : mapping?.themoviedb_id;
     let imdbId = stremioType === 'movie' ? idMapper.getTraktAnimeMovieByMalId(malId)?.externals.imdb : mapping?.imdb_id;
-    let tvdbId = stremioType === 'movie' ? (wikiMappings.getByImdbId(imdbId, stremioType))?.tvdbId || null : mapping?.tvdb_id;
+    let tvdbId = stremioType === 'movie' ? (idMappings.getByImdbId(imdbId, stremioType))?.tvdbId || null : mapping?.tvdb_id;
     
     /*if(mapping && !mapping.imdb_id && mapping.themoviedb_id){
       const allIds = await resolveAllIds(mapping.themoviedb_id, stremioType, config, {}, ['imdb']);
@@ -2873,7 +2798,7 @@ async function getMovieBackground({ tmdbId, tvdbId, imdbId, metaProvider, fallba
     try {
       if(tvdbId) {
         // logger.debug(`[getMovieBackground] Fetching TVDB background for movie (TVDB ID: ${tvdbId})`);
-        const tvdbBackground = await tvdb.getMovieBackground(tvdbId, config);
+        const tvdbBackground = await tvdb.getMovieBackground(tvdbId, config, isLandscape);
         if (tvdbBackground) {
           // logger.debug(`[getMovieBackground] Found TVDB background for movie (TVDB ID: ${tvdbId}): ${tvdbBackground.substring(0, 50)}...`);
           return tvdbBackground;
@@ -2883,7 +2808,7 @@ async function getMovieBackground({ tmdbId, tvdbId, imdbId, metaProvider, fallba
         if(!tmdbId) return fallbackBackgroundUrl;
         const mappedIds = await resolveAllIds(`tmdb:${tmdbId}`, 'movie', config);
         if(mappedIds.tvdbId) {
-          const tvdbBackground = await tvdb.getMovieBackground(mappedIds.tvdbId, config);
+          const tvdbBackground = await tvdb.getMovieBackground(mappedIds.tvdbId, config, isLandscape);
           // logger.debug(`[getMovieBackground] Found TVDB background via ID mapping for movie (TMDB ID: ${tmdbId} → TVDB ID: ${mappedIds.tvdbId})`);
           return tvdbBackground;
         }
@@ -3620,7 +3545,7 @@ async function getAnimePosterUrl(malId, mapping, stremioType, config, language, 
   let finalPosterUrl = posterUrl || `${host}/missing_poster.png`;
   let tmdbId = stremioType === 'movie' ? idMapper.getTraktAnimeMovieByMalId(malId)?.externals.tmdb : mapping?.themoviedb_id;
   let imdbId = stremioType === 'movie' ? idMapper.getTraktAnimeMovieByMalId(malId)?.externals.imdb : mapping?.imdb_id;
-  let tvdbId = stremioType === 'movie' ? (wikiMappings.getByImdbId(imdbId, stremioType))?.tvdbId || null : mapping?.tvdb_id;
+  let tvdbId = stremioType === 'movie' ? (idMappings.getByImdbId(imdbId, stremioType))?.tvdbId || null : mapping?.tvdb_id;
   let poster;
 
   if (useAniList && anilistArtworkMap.has(malId)) {

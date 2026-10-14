@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { allowsUnrated, hasAgeRatingCap, passesAgeRating, resolveInstallFilters } from '../../utils/ageRating';
 import { normaliseJellyfinId } from './idsCodec';
+import { isPinHash } from './pins';
 import { ACCOUNT_SERVICES, ACCOUNT_SERVICE_LIST, AccountService, accountOwner, credentialOf, trackerConfig, withAccountOwner } from '../accounts';
 
 /** The main user is the configuration itself, under the id it always had. */
@@ -18,10 +19,12 @@ export interface Profile {
   sharesHistory: boolean;
   /** Undefined follows the main user. */
   trackerSource?: string;
-  skipSource?: string;
+  skipSource?: string | string[];
   watchlistServices?: string[];
   /** Overrides the configuration's stream addon for this user. */
   streamUrl?: string;
+  /** Hash of the PIN asked before anyone becomes this user. */
+  pin?: string;
 }
 
 export function defaultUserName(config: any, userUUID: string): string {
@@ -95,9 +98,10 @@ export function listProfiles(config: any, userUUID: string): Profile[] {
       handoffNames: namesOf(user.handoffNames),
       sharesHistory: user.trackers === true,
       trackerSource: typeof user.trackerSource === 'string' ? user.trackerSource : undefined,
-      skipSource: typeof user.skipSource === 'string' ? user.skipSource : undefined,
+      skipSource: typeof user.skipSource === 'string' ? user.skipSource : Array.isArray(user.skipSource) ? user.skipSource.map(String) : undefined,
       watchlistServices: Array.isArray(user.watchlistServices) ? user.watchlistServices.map(String) : undefined,
       streamUrl: typeof user.streamUrl === 'string' && user.streamUrl.trim() ? user.streamUrl.trim() : undefined,
+      pin: isPinHash(user.pin) ? user.pin : undefined,
     });
   }
 
@@ -144,7 +148,7 @@ function heldTrackerSource(held: any, trackerSource: string): string {
 /** A holder's watchlist picks, dropping any whose service it doesn't hold; undefined once none are left. */
 function heldWatchlistServices(held: any, watchlistServices: string[]): string[] | undefined {
   if (watchlistServices.includes('none')) return watchlistServices;
-  const kept = watchlistServices.filter((token) => isHeldForWatchlist(held, token.split(':')[0] as AccountService));
+  const kept = watchlistServices.filter((token) => token === 'server' || isHeldForWatchlist(held, token.split(':')[0] as AccountService));
   return kept.length ? kept : undefined;
 }
 

@@ -1,9 +1,9 @@
 import consola from 'consola';
-import { readTokenSession } from './tokens';
-import { scopeConfigToProfile } from './profiles';
+import { readTokenSession, revokeToken } from './tokens';
+import { listProfiles, profileKey, scopeConfigToProfile } from './profiles';
 import { normaliseJellyfinId } from './idsCodec';
 import { LRUCache } from 'lru-cache';
-import { noteAccountOwner, runInViewerScope, viewerOwnsWatchlist } from './viewer';
+import { noteAccountOwner, noteMarksUnaired, noteProfile, runInViewerScope, viewerOwnsWatchlist } from './viewer';
 import { accountOwner } from '../accounts';
 
 const redis: any = require('../redisClient');
@@ -82,8 +82,12 @@ export function parseMediaBrowserHeader(value: string | undefined): Record<strin
     const eq = part.indexOf('=');
     if (eq === -1) continue;
     const key = part.slice(0, eq).trim().toLowerCase();
-    const raw = part.slice(eq + 1).trim();
-    out[key] = raw.replace(/^"(.*)"$/, '$1');
+    const raw = part.slice(eq + 1).trim().replace(/^"(.*)"$/, '$1');
+    try {
+      out[key] = decodeURIComponent(raw);
+    } catch {
+      out[key] = raw;
+    }
   }
   return out;
 }
@@ -134,6 +138,18 @@ export function serverIdFor(userUUID: string): string {
   return normaliseJellyfinId(userUUID);
 }
 
+/** A sign-in as a user since removed from the configuration no longer opens anything. */
+async function profileExists(userUUID: string, profileId: string): Promise<boolean> {
+  let stored: any;
+  try {
+    stored = await require('../configApi').loadSharedConfig(userUUID);
+  } catch (error: any) {
+    if (error?.code === 'CONFIG_NOT_FOUND') return false;
+    throw error;
+  }
+  return Boolean(stored) && listProfiles(stored, userUUID).some((profile) => profile.id === profileId);
+}
+
 export async function attachJellyfinContext(req: any, _res: any, next: any): Promise<void> {
   const userUUID = req.params?.userUUID;
   req.jellyfin = { userUUID, token: extractToken(req), authenticated: false, config: null, profileId: null };
@@ -151,7 +167,9 @@ export async function attachJellyfinContext(req: any, _res: any, next: any): Pro
 
   try {
     const session = await readTokenSession(token);
-    if (session && session.userUUID === userUUID) {
+    if (session && session.userUUID === userUUID && session.profileId && !(await profileExists(userUUID, session.profileId))) {
+      revokeToken(token).catch((error: any) => logger.debug(`Revoking a removed user's sign-in failed: ${error.message}`));
+    } else if (session && session.userUUID === userUUID) {
       req.jellyfin.authenticated = true;
       req.jellyfin.profileId = session.profileId;
       markSeen(userUUID);
@@ -181,6 +199,8 @@ export async function loadConfig(req: any): Promise<any> {
   config.userUUID = req.jellyfin.userUUID;
   req.jellyfin.config = config;
   noteAccountOwner(accountOwner(config));
+  noteProfile(profileKey(config));
+  noteMarksUnaired(config.jellyfinMarkUnaired !== false);
   return config;
 }
 

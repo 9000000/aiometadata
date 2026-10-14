@@ -1,5 +1,7 @@
 import { LRUCache } from 'lru-cache';
-import { withEpisodeOrder } from '../utils/episodeOrder';
+import { readsBySeason, seasonNumberingProfile, withEpisodeOrder } from '../utils/episodeOrder';
+import { applyContentRatingProjection, ratingLinkNames, stripRatingLinks } from '../utils/contentRating';
+import { applySeasonNumberingProjection, predatesSeasonNumbering } from './seasonNumberingProjection';
 import type { MetaHashEntry } from './metaHashStore';
 const redis: any = require('./redisClient');
 const { loadConfigFromDatabase }: any = require('./configApi');
@@ -21,6 +23,7 @@ const {
   applyImdbRatingProjectionToList,
 }: any = require('./imdbRatingProjection');
 const { applyTrailerAddonProjection }: any = require('./trailerProjection');
+const { applyAnimeEpisodeDatesProjection }: any = require('./animeEpisodeDates');
 const {
   RELEASE_AVAILABILITY_FIELD,
   normalizeMetaReleaseAvailability,
@@ -993,6 +996,7 @@ function getMetaCacheContext(config: any, metaId: string, type: string | null, u
         useImdbIdForCatalogAndSearch: config.mal?.useImdbIdForCatalogAndSearch || false,
       },
       ...(context.metaProvider === 'tvdb' ? { tvdbSeasonType: config.tvdbSeasonType || 'default' } : {}),
+      ...(context.metaProvider === 'tvdb' && readsBySeason(config.tvdbSeasonType) ? { episodeSource: 'seasons' } : {}),
     };
   } else if (type === 'movie') {
     context.metaProvider = config.providers?.movie || 'tmdb';
@@ -1025,6 +1029,7 @@ function getMetaCacheContext(config: any, metaId: string, type: string | null, u
     };
     context.videoOptions = {
       tvdbSeasonType: config.tvdbSeasonType || 'default',
+      ...(readsBySeason(config.tvdbSeasonType) ? { episodeSource: 'seasons' } : {}),
       forceAnimeForDetectedImdb: config.providers?.forceAnimeForDetectedImdb || false,
       ...(config.providers?.forceAnimeForDetectedImdb
         ? {
@@ -1053,11 +1058,14 @@ function hashProfile(profile: any): string {
 }
 
 function getMetaSmartLockContextHash(config: any, metaId: string, type: string | null, includeVideos: boolean, useShowPoster: boolean): string {
+  const seasonNumbering = seasonNumberingProfile(config);
   return hashConfig({
     cacheContext: getMetaCacheContext(config, metaId, type, useShowPoster),
     projection: {
       blurThumbs: config.blurThumbs || false,
       displayAgeRating: config.displayAgeRating || false,
+      ...(config.animeEpisodeDates && config.animeEpisodeDates !== 'provider' ? { animeEpisodeDates: config.animeEpisodeDates } : {}),
+      ...(seasonNumbering ? { seasonNumbering } : {}),
     },
     includeVideos: !!includeVideos,
   });
@@ -1210,16 +1218,11 @@ function applyBlurThumbProjection(meta: any, config: any): any {
   return meta;
 }
 
-function stripCertificationLinks(links: any[], certification: string): any[] {
-  if (!Array.isArray(links) || !certification) return links;
-  return links.filter((link: any) => !(link?.name === certification && link?.category === 'Genres'));
-}
-
 function applyDisplayAgeRatingProjection(meta: any, config: any): any {
   const certification = meta?.app_extras?.certification;
-  if (!certification) return meta;
   const displayCert = meta?.app_extras?.certificationLocal || certification;
-  const links = Array.isArray(meta.links) ? stripCertificationLinks(meta.links, certification).filter((l: any) => !(l?.name === displayCert && l?.category === 'Genres')) : [];
+  if (!displayCert) return meta;
+  const links = Array.isArray(meta.links) ? stripRatingLinks(meta.links, meta.app_extras) : [];
   if (config.displayAgeRating) {
     const imdbId = meta.id?.match(/^tt\d+/)?.[0] || meta.imdb_id || meta._imdbId;
     const tmdbPath = meta.type === 'series' ? 'tv' : 'movie';
@@ -1231,6 +1234,28 @@ function applyDisplayAgeRatingProjection(meta: any, config: any): any {
     meta.links = links;
   }
   return meta;
+}
+
+// cacheWrap hands concurrent callers of one key the same payload, and the rating
+// country is per user, so each caller projects its own copy of the rows.
+function projectRatingsInPayload(result: any, config: any, includeRatingLink: boolean): any {
+  if (!Array.isArray(result?.metas) || result.metas.length === 0) return result;
+  const metas = result.metas.map((meta: any) => {
+    if (!meta || typeof meta !== 'object') return meta;
+    const own = meta.app_extras && typeof meta.app_extras === 'object'
+      ? { ...meta, app_extras: { ...meta.app_extras } }
+      : { ...meta };
+    applyContentRatingProjection(own, config);
+    return includeRatingLink || hasRatingLink(own) ? applyDisplayAgeRatingProjection(own, config) : own;
+  });
+  return { ...result, metas };
+}
+
+// A row built from a full meta already carries the building user's rating link.
+function hasRatingLink(meta: any): boolean {
+  if (!Array.isArray(meta?.links)) return false;
+  const names = ratingLinkNames(meta.app_extras);
+  return meta.links.some((link: any) => link?.category === 'Genres' && names.has(link?.name));
 }
 
 function getConfiguredCastCount(config: any): number | null {
@@ -1303,10 +1328,13 @@ async function projectMetaForUser(meta: any, config: any, opts: { addonTrailers?
   applyTrailerStreamsProjection(meta);
   if (opts.addonTrailers !== false) await applyTrailerAddonProjection(meta, config);
   applyCastCountProjection(meta, config);
+  applySeasonNumberingProjection(meta, config);
   applyBlurThumbProjection(meta, config);
+  applyContentRatingProjection(meta, config);
   applyDisplayAgeRatingProjection(meta, config);
   applyLinksUserScopeProjection(meta, config);
   await applyImdbRatingProjection(meta);
+  await applyAnimeEpisodeDatesProjection(meta, config);
   return meta;
 }
 
@@ -1365,6 +1393,7 @@ function projectAppExtrasForCatalogCache(appExtras: any): any {
     // dropping it made a cached row fall back to the US rating while the meta page
     // kept showing the user's own. Same title, two answers, on a cache hit only.
     'certificationLocal',
+    'certifications',
     'ratings',
     'releaseAvailability',
     'cast',
@@ -1380,6 +1409,8 @@ function projectAppExtrasForCatalogCache(appExtras: any): any {
       projected[field] = appExtras[field];
     }
   }
+  // Projected per user on read whenever the map is here.
+  if (projected.certifications) delete projected.certificationLocal;
 
   return Object.keys(projected).length > 0 ? projected : undefined;
 }
@@ -1448,6 +1479,9 @@ async function resolveConfigForCache(userUUID: string, options: any = {}): Promi
   }
   return config;
 }
+
+// Rows that carry episode ids (a linked next episode or a list of them), in the user's season numbering.
+const EPISODE_LINK_CATALOGS = new Set(['trakt.upnext', 'trakt.unwatched', 'simkl.upnext', 'simkl.upnext.anime', 'mdblist.upnext', 'publicmetadb.upnext']);
 
 async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: () => Promise<any>, options: any = {}): Promise<any> {
   let config: any;
@@ -1590,6 +1624,15 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
     };
   }
 
+  if (catalogFromConfig?.metadata?.useUpstreamArt === true) {
+    catalogConfig.upstreamArt = true;
+  }
+
+  if (EPISODE_LINK_CATALOGS.has(idOnly)) {
+    const seasonNumbering = seasonNumberingProfile(config);
+    if (seasonNumbering) catalogConfig.seasonNumbering = seasonNumbering;
+  }
+
   const catalogConfigString = JSON.stringify(catalogConfig);
   const configHash = hashConfig(catalogConfigString);
   const catalogConfigShown = JSON.stringify(catalogConfig, (field, value) => (field === 'apiKeys' && value && typeof value === 'object' ? Object.keys(value) : value));
@@ -1651,6 +1694,11 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
       cacheTTL = Math.max(cacheTTL, ttlSource.min);
       cacheLogger.debug(`[Catalog] Using cache TTL for ${ttlSource.label} catalog ${idOnly}: ${cacheTTL}s`);
     }
+  }
+
+  if (idOnly.startsWith('aiom.watchlist.')) {
+    cacheTTL = 0;
+    cachingDisabled = true;
   }
 
   if (isMergedCatalog) {
@@ -1720,13 +1768,11 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
   normalizeReleaseAvailabilityInPayload(result);
   normalizeCreditsInPayload(result);
 
-  if (result?.metas?.length) {
-    for (const meta of result.metas) applyDisplayAgeRatingProjection(meta, config);
-  }
+  const projected = projectRatingsInPayload(result, config, true);
 
-  await applyImdbRatingProjectionToList(result?.metas);
+  await applyImdbRatingProjectionToList(projected?.metas);
 
-  return result;
+  return projected;
 }
 
 async function cacheWrapSearch(userUUID: string, searchKey: string, method: () => Promise<any>, searchEngine: string | null = null, options: any = {}): Promise<any> {
@@ -1775,6 +1821,7 @@ async function cacheWrapSearch(userUUID: string, searchKey: string, method: () =
     showMetaProviderAttribution: config.showMetaProviderAttribution || false,
     displayAgeRating: config.displayAgeRating || false,
     useImdbIdForCatalogAndSearch: config.mal?.useImdbIdForCatalogAndSearch || false,
+    jikanEnabled: require('./mal').isJikanEnabled(),
     aiProvider: config.search?.ai_provider || 'gemini',
     aiModel: config.search?.ai_model || '',
     aiWebSearch: config.search?.ai_web_search || false,
@@ -1793,8 +1840,9 @@ async function cacheWrapSearch(userUUID: string, searchKey: string, method: () =
     return normalizeReleaseAvailabilityInPayload(await method());
   }, SEARCH_TTL, options);
   normalizeReleaseAvailabilityInPayload(result);
-  await applyImdbRatingProjectionToList(result?.metas);
-  return result;
+  const projected = projectRatingsInPayload(result, config, false);
+  await applyImdbRatingProjectionToList(projected?.metas);
+  return projected;
 }
 
 async function cacheWrapMeta(userUUID: string, metaId: string, method: () => Promise<any>, ttl: number = META_TTL(), options: any = {}, type: string | null = null): Promise<any> {
@@ -1943,13 +1991,13 @@ async function writeMetaComponentsWithConfig({ config, metaId, result, ttl = MET
   if (meta.landscapePoster) components.push({ name: 'landscapePoster', data: { landscapePoster: meta.landscapePoster } });
   if (meta.logo) components.push({ name: 'logo', data: { logo: meta.logo } });
   if (meta.videos && Array.isArray(meta.videos) && meta.videos.length > 0) {
-    components.push({ name: 'videos', data: { videos: canonicalizeVideosForCache(meta.videos), _metaProvider: meta._metaProvider } });
+    components.push({ name: 'videos', data: { videos: canonicalizeVideosForCache(meta.videos), _metaProvider: meta._metaProvider, _seasonNumbering: 1 } });
   }
   if (meta.app_extras?.cast?.length) components.push({ name: 'cast', data: { cast: meta.app_extras.cast } });
   if (meta.app_extras?.directors?.length) components.push({ name: 'director', data: { directors: meta.app_extras.directors } });
   if (meta.app_extras?.writers?.length) components.push({ name: 'writer', data: { writers: meta.app_extras.writers } });
   if (meta.links && Array.isArray(meta.links) && meta.links.length > 0) {
-    components.push({ name: 'links', data: { links: canonicalizeLinksForCache(stripCertificationLinks(meta.links, meta.app_extras?.certification)) } });
+    components.push({ name: 'links', data: { links: canonicalizeLinksForCache(stripRatingLinks(meta.links, meta.app_extras)) } });
   }
   if (meta.trailers?.length) components.push({ name: 'trailers', data: { trailers: meta.trailers } });
   const extrasForCache = projectAppExtrasForComponentCache(meta.app_extras);
@@ -2240,6 +2288,10 @@ async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = 
     if (index >= 0) availableComponents.splice(index, 1);
     if (videos) availableComponents.push({ componentName: 'videos', data: videos });
   }
+  if (includeVideos && predatesSeasonNumbering(bd, availableComponents.find((c: any) => c.componentName === 'videos')?.data, config)) {
+    updateCacheHealth(`meta:reconstructed:${metaId}`, 'miss', true);
+    return { errorReason: 'videos predate season numbering' };
+  }
   Object.assign(reconstructedMeta, bd);
   delete reconstructedMeta._components;
   reconstructedMeta.posterShape = bd.posterShape;
@@ -2442,6 +2494,9 @@ async function cacheWrapMetaSmart(userUUID: string, metaId: string, method: () =
     if (meta.__degradedFallback) {
       delete meta.__degradedFallback;
       cacheLogger.warn(`[Meta] Skipping cache for degraded fallback result: ${metaId}`);
+      applySeasonNumberingProjection(meta, config);
+      applyContentRatingProjection(meta, config);
+      applyDisplayAgeRatingProjection(meta, config);
       return result;
     }
 
@@ -2517,7 +2572,7 @@ async function fillArtComponents(config: any, metaId: string, basic: any, wanted
 
   let art: any;
   try {
-    art = await resolveArtworkForProfile({ type: basic.type, ids, metaProvider: basic._metaProvider, providerArt: basic._providerArt }, config);
+    art = await resolveArtworkForProfile({ type: basic.type, ids, metaProvider: basic._metaProvider, providerArt: basic._providerArt, wanted }, config);
   } catch (error: any) {
     cacheLogger.warn(`[Reconstruct] Art lookup failed for ${metaId}: ${error?.message || error}`);
     return [];
@@ -2744,6 +2799,7 @@ export {
   redis,
   cacheWrap,
   cacheWrapGlobal,
+  classifyResult,
   classifyResultAllowEmpty,
   deleteKeysByPattern,
   scanKeys,
@@ -2764,6 +2820,8 @@ export {
   buildMetaAliasCacheKey,
   projectMetaForCatalogCache,
   projectCatalogPayloadForCache,
+  applyDisplayAgeRatingProjection,
+  projectRatingsInPayload,
   cacheWrapMetaSmart,
   getCacheHealth,
   clearCacheHealth,
@@ -2781,6 +2839,7 @@ module.exports = {
   redis,
   cacheWrap,
   cacheWrapGlobal,
+  classifyResult,
   classifyResultAllowEmpty,
   deleteKeysByPattern,
   scanKeys,
@@ -2801,6 +2860,8 @@ module.exports = {
   buildMetaAliasCacheKey,
   projectMetaForCatalogCache,
   projectCatalogPayloadForCache,
+  applyDisplayAgeRatingProjection,
+  projectRatingsInPayload,
   cacheWrapMetaSmart,
   getCacheHealth,
   clearCacheHealth,

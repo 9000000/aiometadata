@@ -1,8 +1,8 @@
 export interface CatalogDefinition {
   id: string;
   name: string;
-  type: 'movie' | 'series' | 'anime';
-  source: 'tmdb' | 'tvdb' | 'mal' | 'tvmaze' | 'mdblist' | 'streaming' | 'stremthru' | 'custom' | 'trakt' | 'anilist' | 'letterboxd' | 'simkl' | 'flixpatrol' | 'franchise' | 'rottentomatoes' | 'lumiere';
+  type: 'movie' | 'series' | 'anime' | 'all';
+  source: 'tmdb' | 'tvdb' | 'mal' | 'tvmaze' | 'mdblist' | 'streaming' | 'stremthru' | 'custom' | 'trakt' | 'anilist' | 'letterboxd' | 'simkl' | 'flixpatrol' | 'franchise' | 'rottentomatoes' | 'lumiere' | 'aiom';
   isEnabledByDefault?: boolean;
   showOnHomeByDefault?: boolean;
 }
@@ -151,3 +151,14 @@ export const allCatalogDefinitions: CatalogDefinition[] = [
 ]; 
 
 export type Catalog = CatalogDefinition;
+
+export function isJikanCatalog(catalog: { id: string }): boolean {
+  return catalog.id.startsWith('mal.') && !catalog.id.startsWith('mal.userlist.') && catalog.id !== 'mal.suggestions';
+}
+
+export const serverWatchlistCatalogs: CatalogDefinition[] = [
+  { id: 'aiom.watchlist.movies', name: 'Watchlist', type: 'movie', source: 'aiom', showOnHomeByDefault: true },
+  { id: 'aiom.watchlist.series', name: 'Watchlist', type: 'series', source: 'aiom', showOnHomeByDefault: true },
+  { id: 'aiom.watchlist.anime', name: 'Watchlist', type: 'anime', source: 'aiom', showOnHomeByDefault: true },
+  { id: 'aiom.watchlist.all', name: 'Watchlist', type: 'all', source: 'aiom', showOnHomeByDefault: true },
+];

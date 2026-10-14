@@ -45,6 +45,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ['18+', 'certification', 'pg', 'mature'],
   },
   {
+    id: 'general.contentRatingCountry', section: 'general', anchor: 'content-rating-country',
+    label: 'Rating Country',
+    description: "Which country's rating the age rating shows, under Display Age Rating.",
+    keywords: ['certification', 'classification', 'age', 'country', 'region'],
+  },
+  {
     id: 'general.includeAdult', section: 'general', anchor: 'adult-content',
     label: 'Include Adult Content',
     description: 'Show NSFW content in catalogs and search.',
@@ -280,6 +286,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ['tvdb', 'season', 'episode order'],
   },
   {
+    id: 'providers.tvdbNormalizeYearSeasons', section: 'providers', anchor: 'tvdb-normalize-year-seasons',
+    label: 'Normalize Year Seasons',
+    description: "Number year-based seasons 1, 2, 3… instead of TVDB's years (S2014).",
+    keywords: ['tvdb', 'season', 'year', 'normalize', 'numbering'],
+  },
+  {
     id: 'providers.scrapeImdb', section: 'providers', anchor: 'scrape-imdb',
     label: 'Scrape IMDb Data',
     description: "Automatically scrape additional data from IMDb to obtain IMDb ID when missing from TMDB. This is useful for sports events and other content that doesn't have an IMDb ID in TMDB.",
@@ -308,6 +320,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     label: 'Anime Stream Compatibility ID',
     description: 'Choose which ID format to use for anime. This affects which streaming addons will find results.',
     keywords: ['anime', 'id', 'kitsu', 'mal', 'imdb', 'compatibility'],
+  },
+  {
+    id: 'providers.animeEpisodeDates', section: 'providers', anchor: 'anime-episode-dates',
+    label: 'Anime Episode Dates',
+    description: 'Show anime episodes as out when they first release anywhere, or when the English dub releases, instead of the metadata provider\'s date.',
+    keywords: ['anime', 'release', 'air date', 'dub', 'simulcast', 'streaming', 'schedule', 'anilist', 'animeschedule'],
   },
   {
     id: 'providers.skipFiller', section: 'providers', anchor: 'skip-filler',

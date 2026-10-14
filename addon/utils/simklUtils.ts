@@ -2,8 +2,9 @@ import { httpGet, httpPost, httpRequest } from "./httpClient.js";
 import { historyPayload, type EpisodeRef } from "./historyPayload";
 import { noteTrackerCall } from "./trackerCalls";
 import { getMeta } from "../lib/getMeta.js";
-import { cacheWrapMetaSmart, cacheWrapGlobal, cacheWrapJikanApi, classifyResultAllowEmpty } from "../lib/getCache.js";
+import { cacheWrapMetaSmart, cacheWrapGlobal, classifyResultAllowEmpty } from "../lib/getCache.js";
 import { mapWithLimit } from "./concurrency";
+import { envInt } from "./envNumber";
 import { UserConfig } from "../types/index.js";
 import * as Utils from "./parseProps.js";
 
@@ -46,6 +47,14 @@ function withAppParams(url: string): string {
   if (/[?&]app-name=/.test(url)) return url;
   const params = new URLSearchParams({ 'app-name': SIMKL_APP_NAME, 'app-version': process.env.npm_package_version || '1.0' });
   return `${url}${url.includes('?') ? '&' : '?'}${params.toString()}`;
+}
+
+/** Simkl counts a stop as watched from AIOM's own played threshold on; it accepts 50 to 100. */
+function scrobbleUrl(action: string): string {
+  const url = `${SIMKL_BASE_URL}/scrobble/${action}`;
+  if (action === 'pause') return url;
+  const threshold = Math.min(100, Math.max(50, envInt('JELLYFIN_PLAYED_THRESHOLD', 80, 1)));
+  return `${url}?min_progress=${threshold}`;
 }
 
 function simklDataParams(): string {
@@ -915,7 +924,7 @@ export async function removeFromHistory(
 export interface SimklScrobbleOptions {
   /** checkin is fire and forget and self-completes; start and stop are a session. */
   action?: 'checkin' | 'start' | 'pause' | 'stop';
-  /** 0-100. Simkl marks an item watched on stop at 80 or above. */
+  /** 0-100. Simkl marks an item watched on stop at the played threshold or above. */
   progress?: number;
 }
 
@@ -938,7 +947,7 @@ async function checkinMovie(
 
   try {
 
-    const url = `${SIMKL_BASE_URL}/scrobble/${action}`;
+    const url = scrobbleUrl(action);
     const watchedAt = new Date().toISOString();
 
     const payload = {
@@ -1023,7 +1032,7 @@ async function checkinSeries(
   };
 
   const doCheckin = async (ids: Record<string, string | number>, attemptLabel: string, seasonNumber: number, episodeNumber:number) => {
-      const url = withAppParams(`${SIMKL_BASE_URL}/scrobble/${action}`);
+      const url = withAppParams(scrobbleUrl(action));
       const payload = {
         progress,
         show: { ids: ids },
@@ -1405,10 +1414,10 @@ async function parseSimklItems(
         const imdbId = stub.type === 'movie' ? idMapper.getTraktAnimeMovieByMalId(malId)?.externals?.imdb : mapping?.imdb_id;
         return !imdbId;
       };
-      const { getAnimeDetails } = require('../lib/mal');
+      const { getAnimeDetailsCached } = require('../lib/mal');
       const records = await mapWithLimit(animeItems, async (entry) => {
         if (!needsRecord(entry)) return entry.stub;
-        const details = await cacheWrapJikanApi(`anime-details-${entry.malId}`, () => getAnimeDetails(entry.malId), null).catch(() => null);
+        const details = await getAnimeDetailsCached(entry.malId).catch(() => null);
         return details?.mal_id ? { ...details, mal_id: entry.malId } : entry.stub;
       });
       const batchMetas = await Utils.parseAnimeCatalogMetaBatch(records, config, config.language, includeVideos);

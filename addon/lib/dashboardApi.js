@@ -77,12 +77,13 @@ const isCompleteMediaId = (token) => MEDIA_ID_PATTERNS.some((re) => re.test(toke
 const { getCacheCleanupScheduler } = require('./cacheCleanupScheduler');
 const { getAnimeListXmlStats } = require('./anime-list-mapper');
 const { getIdMapperStats, getKitsuImdbStats, getAnimeApiStats, getMemoryStats: getIdMapperMemoryStats } = require('./id-mapper');
-const { getWikiMapperStats } = require('./wiki-mapper');
+const { getIdMappingsStats } = require('./id-mappings');
 const { getImdbRatingsStatsForDashboard, getRatingsStats } = require('./imdbRatings');
 const { getWarmupStats: getEssentialWarmupStats } = require('./cacheWarmer');
 const { getWarmupStats: getMALWarmupStats } = require('./malCatalogWarmer');
 const { getWarmupStats: getCatalogWarmupStats } = require('./comprehensiveCatalogWarmer');
 const { getTraktMemoryStats } = require('../utils/traktUtils');
+const { envInt } = require('../utils/envNumber');
 
 class DashboardAPI {
   constructor(cache, idMapper, config, database, requestTracker) {
@@ -655,8 +656,9 @@ class DashboardAPI {
         },
         {
           name: "MAL",
-          keyStatus: null, // Doesn't require API key
+          keyStatus: require('./mal').isJikanEnabled() ? null : "Disabled",
           requiresKey: false,
+          off: !require('./mal').isJikanEnabled(),
         },
         {
           name: "Kitsu",
@@ -699,15 +701,16 @@ class DashboardAPI {
         },
       ];
 
-      const today = new Date().toISOString().split("T")[0];
+      const counts = this.requestTracker
+        ? await this.requestTracker.getProviderCounts(providers.map((p) => p.name.toLowerCase()))
+        : {};
+      const minCalls = envInt("PROVIDER_HEALTH_MIN_CALLS", 20, 1);
       const providerStatus = await Promise.all(
         providers.map(async (provider) => {
           try {
             const providerKey = provider.name.toLowerCase();
 
-            // Get today's success/error counts
-            const successCount = parseInt(await this.cache.get(`provider_success:${providerKey}:${today}`)) || 0;
-            const errorCount = parseInt(await this.cache.get(`provider_errors:${providerKey}:${today}`)) || 0;
+            const { success: successCount = 0, errors: errorCount = 0 } = counts[providerKey] || {};
             const totalCalls = successCount + errorCount;
 
             // Calculate success rate
@@ -725,10 +728,9 @@ class DashboardAPI {
             // Determine health status based purely on success/failure metrics
             let status = "healthy";
             
-            if (totalCalls === 0) {
-              // No calls today - can't determine status
+            if (totalCalls === 0 || provider.off) {
               status = "unknown";
-            } else if (successRate !== null) {
+            } else if (totalCalls >= minCalls) {
               if (successRate < 50) {
                 status = "down";
               } else if (successRate < 90) {
@@ -742,7 +744,7 @@ class DashboardAPI {
               keyStatus: provider.keyStatus,
               requiresKey: provider.requiresKey,
               stats: {
-                callsToday: totalCalls,
+                calls24h: totalCalls,
                 successRate,
                 avgResponseTime,
               },
@@ -1718,9 +1720,58 @@ class DashboardAPI {
         });
       }
 
-      // 5. Wikidata Mappings update task (scheduled every WIKI_MAPPER_UPDATE_INTERVAL_HOURS)
+      // 13. Anime release schedule (AniSchedule), refreshed in memory as requests arrive
       try {
-        const wikiMapperStats = getWikiMapperStats();
+        const { getAnimeScheduleStats } = require('./animeAiringSchedule');
+        const scheduleStats = getAnimeScheduleStats();
+        const status = !scheduleStats.enabled
+          ? "disabled"
+          : scheduleStats.running
+            ? "running"
+            : scheduleStats.lastError
+              ? "error"
+              : scheduleStats.loaded ? "completed" : "scheduled";
+
+        let nextRunDisplay = "Disabled";
+        if (scheduleStats.enabled) {
+          const nextRunTime = (scheduleStats.lastCheck || 0) + scheduleStats.refreshMinutes * 60 * 1000;
+          nextRunDisplay = nextRunTime > Date.now() ? this.getTimeUntil(new Date(nextRunTime)) : "On next request";
+        }
+
+        const source = scheduleStats.sourceUpdatedAt
+          ? `, source updated ${this.getTimeAgo(new Date(scheduleStats.sourceUpdatedAt))}${scheduleStats.stale ? ", stale: earliest times read from AniList" : ""}`
+          : "";
+        const detail = scheduleStats.lastError
+          ? `last refresh failed: ${scheduleStats.lastError}`
+          : `${scheduleStats.anime.toLocaleString()} anime, ${scheduleStats.dubbed.toLocaleString()} with dub times${source}`;
+
+        tasks.push({
+          id: 13,
+          name: "Update Anime Release Schedule",
+          status,
+          lastRun: scheduleStats.lastRefreshAt ? this.getTimeAgo(new Date(scheduleStats.lastRefreshAt)) : "Never",
+          description: `Earliest release and English dub times for anime episodes (${detail})`,
+          nextRun: nextRunDisplay,
+          action: scheduleStats.enabled ? "restart" : null,
+          category: "mapping"
+        });
+      } catch (error) {
+        logger.warn("Failed to get anime release schedule status:", error.message);
+        tasks.push({
+          id: 13,
+          name: "Update Anime Release Schedule",
+          status: "error",
+          lastRun: "Unknown",
+          description: "Earliest release and English dub times for anime episodes",
+          nextRun: "Unknown",
+          action: "restart",
+          category: "mapping"
+        });
+      }
+
+      // 5. ID Mappings update task (scheduled every WIKI_MAPPER_UPDATE_INTERVAL_HOURS)
+      try {
+        const wikiMapperStats = getIdMappingsStats();
         
         if (this.cache) {
           const wikiMapperLastUpdate = await this.cache.get(
@@ -1750,10 +1801,10 @@ class DashboardAPI {
 
           tasks.push({
             id: 5,
-            name: "Update Wikidata Mappings",
+            name: "Update ID Mappings",
             status: wikiMapperStatus,
             lastRun: wikiMapperTime,
-            description: `Updates ID mappings from Wikidata (${wikiMapperStats.totalCount.toLocaleString()} entries, every ${wikiMapperStats.updateIntervalHours}h)`,
+            description: `Updates ID mappings from dins-mappings + Wikidata backfill (${wikiMapperStats.totalCount.toLocaleString()} entries, ${wikiMapperStats.backfilledCount.toLocaleString()} backfilled, every ${wikiMapperStats.updateIntervalHours}h)`,
             nextRun: nextRunDisplay,
             action: "restart",
             category: "mapping"
@@ -1761,15 +1812,15 @@ class DashboardAPI {
         }
       } catch (error) {
         logger.warn(
-          "Failed to get Wikidata Mapper status:",
+          "Failed to get ID Mappings status:",
           error.message,
         );
         tasks.push({
           id: 5,
-          name: "Update Wikidata Mappings",
+          name: "Update ID Mappings",
           status: "error",
           lastRun: "Unknown",
-          description: "Updates ID mappings from Wikidata",
+          description: "Updates ID mappings from dins-mappings + Wikidata backfill",
           nextRun: "Now",
           action: "restart",
           category: "mapping"

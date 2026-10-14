@@ -688,6 +688,21 @@ function createPublicMetaDBCatalog(userCatalog: any, showPrefix: boolean = false
   }
 }
 
+function createServerWatchlistCatalog(userCatalog: any, showPrefix: boolean = false, prefixName: string = "AIOMetadata"): any {
+  const extra: any[] = [{ name: "skip" }];
+  if (!userCatalog.showInHome) {
+    extra.unshift({ name: "genre", options: ["None"], isRequired: true });
+  }
+  return {
+    id: userCatalog.id,
+    type: userCatalog.displayType || userCatalog.type,
+    name: `${showPrefix ? `${prefixName} - ` : ""}${userCatalog.name || 'Watchlist'}`,
+    pageSize: parseInt(process.env.CATALOG_LIST_ITEMS_SIZE as string) || 20,
+    extra,
+    showInHome: userCatalog.showInHome ?? false
+  };
+}
+
 function createMergedCatalog(
   userCatalog: any,
   allBuiltCatalogs: any[],
@@ -909,8 +924,9 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
   // any one of them is in, so several profiles install as a single addon.
   const tags = Array.isArray(opts.tags) ? opts.tags.filter(Boolean) : [];
   const tagSet = new Set(tags.map((t: string) => t.toLowerCase()));
+  const jikanEnabled = jikan.isJikanEnabled();
   const enabledCatalogs = userCatalogs.filter((c: any) =>
-    c.enabled && servesCatalog(config, c) && (tagSet.size === 0 || (Array.isArray(c.tags) && c.tags.some((t: any) => tagSet.has(String(t).toLowerCase()))))
+    c.enabled && servesCatalog(config, c) && (jikanEnabled || !jikan.isJikanCatalogId(c.id)) && (tagSet.size === 0 || (Array.isArray(c.tags) && c.tags.some((t: any) => tagSet.has(String(t).toLowerCase()))))
   );
 
   // Absorbed merge sources must be built (even if disabled) so their genres feed the parent.
@@ -923,7 +939,7 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
   }
   const enabledKeys = new Set(enabledCatalogs.map((c: any) => `${c.id}:${c.type}`));
   const absorbedSourceCatalogs = userCatalogs.filter((c: any) =>
-    mergedSourceKeys.has(`${c.id}:${c.type}`) && !enabledKeys.has(`${c.id}:${c.type}`)
+    mergedSourceKeys.has(`${c.id}:${c.type}`) && !enabledKeys.has(`${c.id}:${c.type}`) && (jikanEnabled || !jikan.isJikanCatalogId(c.id))
   );
   const absorbedKeys = new Set<string>(absorbedSourceCatalogs.map((c: any) => `${c.id}:${c.type}`));
 
@@ -1162,6 +1178,9 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
       if (isPublicMetaDB(userCatalog.id)) {
         return true;
       }
+      if (userCatalog.id.startsWith('aiom.watchlist.')) {
+        return true;
+      }
       if (!catalogDef) {
         logger.debug(`Catalog ${userCatalog.id} failed filter: no catalog definition`);
         return false;
@@ -1242,6 +1261,9 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
           logger.debug(`Processing PublicMetaDB catalog: ${userCatalog.id}`);
           const result = createPublicMetaDBCatalog(userCatalog, showPrefix, prefixName);
           return result;
+      }
+      if (userCatalog.id.startsWith('aiom.watchlist.')) {
+          return createServerWatchlistCatalog(userCatalog, showPrefix, prefixName);
       }
       if (userCatalog.id.startsWith('tmdb.list.')) {
           logger.debug(`Processing TMDB List catalog: ${userCatalog.id}`);
@@ -1345,7 +1367,7 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
         );
       }
       else if (userCatalog.id === 'mal.genres') {
-          catalogOptions = animeGenreNames;
+          catalogOptions = userCatalog.showInHome ? animeGenreNames : ['None', ...animeGenreNames];
       } else if (userCatalog.id === 'mal.studios'){
         catalogOptions = studioNames.length > 0 ? studioNames : ['None'];
       }
@@ -1653,7 +1675,7 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
           extra: [{ name: 'search', isRequired: true }, { name: 'skip' }]
         });
       });
-    const isMalSearchInUse = Object.entries(searchProviders).some(
+    const isMalSearchInUse = jikanEnabled && Object.entries(searchProviders).some(
       ([, providerId]: [string, any]) =>
         typeof providerId === 'string' &&
         providerId.startsWith('mal.search') &&
@@ -1712,7 +1734,7 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
   if (watchTrackingEnabled) {
     resources.push("subtitles");
   }
-  if(config.showRateMeButton) {
+  if (config.showRateMeButton && !config.catalogModeOnly) {
     resources.push("stream");
   }
 

@@ -5,6 +5,14 @@ const { Agent, ProxyAgent }: any = require('undici');
 const consola: any = require('consola');
 const redis: any = require('./redisClient');
 const logger: any = consola.withTag('MAL');
+const JIKAN_DISABLED_MESSAGE = 'Jikan is turned off (JIKAN_ENABLED), so MAL data is unavailable';
+for (const level of ['warn', 'error'] as const) {
+  const log = logger[level].bind(logger);
+  logger[level] = (...args: any[]) => {
+    if (args.some(a => typeof a === 'string' && a.includes(JIKAN_DISABLED_MESSAGE))) return;
+    log(...args);
+  };
+}
 const {
   normalizeJikanAnimeDetailsForCache,
   normalizeJikanAnimeCharactersForCache,
@@ -12,8 +20,30 @@ const {
   normalizeJikanCatalogForCache,
 }: any = require('./jikanCacheNormalizers');
 
+const DEFAULT_JIKAN_API_BASE = 'https://api.tenrai.org/v1';
+const RETIRED_JIKAN_HOSTS = new Set(['api.jikan.moe']);
+
 function jikanApiBase(): string {
-  return process.env.JIKAN_API_BASE || 'https://api.jikan.moe/v4';
+  const base = String(process.env.JIKAN_API_BASE || '').trim().replace(/\/+$/, '');
+  if (!base) return DEFAULT_JIKAN_API_BASE;
+  try {
+    if (RETIRED_JIKAN_HOSTS.has(new URL(base).hostname)) return DEFAULT_JIKAN_API_BASE;
+  } catch {}
+  return base;
+}
+
+function isJikanEnabled(): boolean {
+  return process.env.JIKAN_ENABLED !== 'false';
+}
+
+function isJikanCatalogId(id: string): boolean {
+  return typeof id === 'string' && id.startsWith('mal.') && !id.startsWith('mal.userlist.') && id !== 'mal.suggestions';
+}
+
+function jikanDisabledError(): Error {
+  const error: any = new Error(JIKAN_DISABLED_MESSAGE);
+  error.code = 'JIKAN_DISABLED';
+  return error;
 }
 
 function malPageSize(): number {
@@ -32,6 +62,10 @@ interface RequestTask {
   task: () => Promise<any>;
   url: string;
   retries: number;
+}
+
+interface CatalogRequestOptions {
+  throwOnError?: boolean;
 }
 
 const etagCache = new Map<string, EtagEntry>();
@@ -286,6 +320,7 @@ async function processRequest(requestTask: RequestTask): Promise<void> {
 }
 
 function enqueueRequest(task: () => Promise<any>, url: string): Promise<any> {
+  if (!isJikanEnabled()) return Promise.reject(jikanDisabledError());
   return new Promise((resolve, reject) => {
     requestQueue.push({ resolve, reject, task, url, retries: 0 });
     if (!isProcessing) {
@@ -367,6 +402,21 @@ async function getAnimeDetails(malId: string | number): Promise<any> {
       return data ? normalizeJikanAnimeDetailsForCache(data) : null;
     })
     .catch(() => null);
+}
+
+function detailsTtl(details: any): number {
+  const status = String(details?.status || '');
+  if (status === 'Not yet aired') return envInt('JIKAN_DETAILS_UPCOMING_TTL', 6 * 60 * 60, 0);
+  if (status === 'Currently Airing') return envInt('JIKAN_DETAILS_AIRING_TTL', 24 * 60 * 60, 0);
+  return envInt('JIKAN_DETAILS_TTL', 30 * 24 * 60 * 60, 0);
+}
+
+async function getAnimeDetailsCached(malId: string | number): Promise<any> {
+  const { cacheWrapJikanApi, classifyResult }: any = require('./getCache');
+  return cacheWrapJikanApi(`anime-details-${malId}`, () => getAnimeDetails(malId), null, {
+    resultClassifier: (result: any, error: any = null, cacheKey: string | null = null) =>
+      result && !error ? { type: 'SUCCESS', ttl: detailsTtl(result) } : classifyResult(result, error, cacheKey),
+  });
 }
 
 function episodePageTtl(): number {
@@ -550,7 +600,7 @@ async function jikanGetAllPages(endpoint: string, initialParams: Record<string, 
   return allItems;
 }
 
-async function getAiringSchedule(day: string, page: number = 1, config: any = {}): Promise<any[]> {
+async function getAiringSchedule(day: string, page: number = 1, config: any = {}, options: CatalogRequestOptions = {}): Promise<any[]> {
   const queryParams: Record<string, any> = {
     filter: day.toLowerCase(),
     page: page,
@@ -566,12 +616,13 @@ async function getAiringSchedule(day: string, page: number = 1, config: any = {}
   return enqueueRequest(() => _makeJikanRequest(url), url)
     .then((response: any) => normalizeJikanCatalogForCache(response.data?.data || []))
     .catch((e: any) => {
+      if (options.throwOnError) throw e;
       logger.warn(`Could not fetch airing schedule for ${day}, page ${page}:`, e.message);
       return [];
     });
 }
 
-async function getAiringNow(page: number = 1, config: any = {}): Promise<any[]> {
+async function getAiringNow(page: number = 1, config: any = {}, options: CatalogRequestOptions = {}): Promise<any[]> {
   const queryParams: Record<string, any> = {
     page: page,
     limit: malPageSize()
@@ -584,6 +635,7 @@ async function getAiringNow(page: number = 1, config: any = {}): Promise<any[]> 
   return enqueueRequest(() => _makeJikanRequest(url), url)
     .then((response: any) => normalizeJikanCatalogForCache(response.data?.data || []))
     .catch((e: any) => {
+      if (options.throwOnError) throw e;
       logger.warn(`Could not fetch currently airing anime, page ${page}:`, e.message);
       return [];
     });
@@ -608,9 +660,9 @@ async function getUpcoming(page: number = 1, config: any = {}): Promise<any[]> {
     });
 }
 
-async function getAnimeByGenre(genreId: number | string, typeFilter: string | null = null, page: number = 1, config: any = {}): Promise<any[]> {
+async function getAnimeByGenre(genreId: number | string | null, typeFilter: string | null = null, page: number = 1, config: any = {}): Promise<any[]> {
   const queryParams: Record<string, any> = {
-    genres: genreId,
+    ...(genreId ? { genres: genreId } : {}),
     order_by: 'members',
     sort: 'desc',
     page: page,
@@ -651,7 +703,7 @@ async function getAnimeGenres(): Promise<any[]> {
     });
 }
 
-async function getTopAnimeByDateRange(startDate: string, endDate: string, page: number = 1, genreId?: string | number, config: any = {}): Promise<any[]> {
+async function getTopAnimeByDateRange(startDate: string, endDate: string, page: number = 1, genreId?: string | number, config: any = {}, options: CatalogRequestOptions = {}): Promise<any[]> {
   const queryParams: Record<string, any> = {
     start_date: startDate,
     end_date: endDate,
@@ -674,12 +726,13 @@ async function getTopAnimeByDateRange(startDate: string, endDate: string, page: 
   return enqueueRequest(() => _makeJikanRequest(url), url)
     .then((response: any) => normalizeJikanCatalogForCache(response.data?.data || []))
     .catch((e: any) => {
+      if (options.throwOnError) throw e;
       logger.warn(`Could not fetch top anime between ${startDate} and ${endDate}, page ${page}:`, e.message);
       return [];
   });
 }
 
-async function getTopAnimeByType(type: string, page: number = 1, config: any = {}): Promise<any[]> {
+async function getTopAnimeByType(type: string, page: number = 1, config: any = {}, options: CatalogRequestOptions = {}): Promise<any[]> {
   const types = ['movie', 'tv', 'ova', 'ona'];
   const queryParams: Record<string, any> = {
     page: page,
@@ -697,12 +750,13 @@ async function getTopAnimeByType(type: string, page: number = 1, config: any = {
   return enqueueRequest(() => _makeJikanRequest(url), url)
     .then((response: any) => normalizeJikanCatalogForCache(response.data?.data || []))
     .catch((e: any) => {
+      if (options.throwOnError) throw e;
       logger.warn(`Could not fetch top  anime, page ${page}:`, e.message);
       return [];
     });
 }
 
-async function getTopAnimeByFilter(filter: string, page: number = 1, config: any = {}): Promise<any[]> {
+async function getTopAnimeByFilter(filter: string, page: number = 1, config: any = {}, options: CatalogRequestOptions = {}): Promise<any[]> {
   const queryParams: Record<string, any> = {
     page: page,
     limit: malPageSize(),
@@ -717,6 +771,7 @@ async function getTopAnimeByFilter(filter: string, page: number = 1, config: any
   return enqueueRequest(() => _makeJikanRequest(url), url)
     .then((response: any) => normalizeJikanCatalogForCache(response.data?.data || []))
     .catch((e: any) => {
+      if (options.throwOnError) throw e;
       logger.warn(`Could not fetch top anime by filter ${filter}, page ${page}:`, e.message);
       return [];
     });
@@ -894,8 +949,12 @@ async function fetchDiscover(params: Record<string, any> = {}, page: number = 1)
 
 export {
   malPageSize,
+  jikanApiBase,
+  isJikanEnabled,
+  isJikanCatalogId,
   searchAnime,
   getAnimeDetails,
+  getAnimeDetailsCached,
   getAnimeEpisodes,
   getAnimeEpisodeVideos,
   getAnimeCharacters,
@@ -918,8 +977,12 @@ export {
 };
 module.exports = {
   malPageSize,
+  jikanApiBase,
+  isJikanEnabled,
+  isJikanCatalogId,
   searchAnime,
   getAnimeDetails,
+  getAnimeDetailsCached,
   getAnimeEpisodes,
   getAnimeEpisodeVideos,
   getAnimeCharacters,

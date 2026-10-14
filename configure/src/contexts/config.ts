@@ -30,6 +30,10 @@ export interface JellyfinUserAccounts {
   labels?: Partial<Record<CardService, string>>;
 }
 
+export type SkipProvider = 'publicmetadb' | 'aniskip' | 'introdb';
+/** Providers in the order they are asked; a list leaves out the ones switched off. */
+export type SkipSource = 'auto' | 'off' | SkipProvider | SkipProvider[];
+
 /** A user on the Jellyfin sign-in screen, made of the profile tags it picks. */
 export interface JellyfinUser {
   id: string;
@@ -42,7 +46,7 @@ export interface JellyfinUser {
   trackers?: boolean;
   /** Absent follows the main user. */
   trackerSource?: 'auto' | 'off' | 'mdblist' | 'trakt' | 'simkl' | 'publicmetadb' | 'anilist' | 'mal';
-  skipSource?: 'auto' | 'publicmetadb' | 'aniskip' | 'introdb' | 'off';
+  skipSource?: SkipSource;
   watchlistServices?: string[];
   /** Overrides the configuration's stream addon for this user. */
   streamUrl?: string;
@@ -50,6 +54,8 @@ export interface JellyfinUser {
   accounts?: JellyfinUserAccounts;
   /** Extra names AIOStreams handoff events may address this user by. */
   handoffNames?: string[];
+  /** 4 to 12 digits as typed, or the hash the server saved it as. */
+  pin?: string;
 }
 
 export interface CatalogConfig {
@@ -58,7 +64,7 @@ export interface CatalogConfig {
   type: 'movie' | 'series' | 'anime' | 'all';
   enabled: boolean;
   tags?: string[];
-  source: 'tmdb' | 'tvdb' | 'mal' | 'tvmaze' | 'mdblist' | 'trakt' | 'streaming' | 'stremthru' | 'custom' | 'anilist' | 'letterboxd' | 'simkl' | 'movielens' | 'flixpatrol' | 'publicmetadb' | 'recommendations' | 'merged' | 'lumiere'; // Keep source as the display label
+  source: 'tmdb' | 'tvdb' | 'mal' | 'tvmaze' | 'mdblist' | 'trakt' | 'streaming' | 'stremthru' | 'custom' | 'anilist' | 'letterboxd' | 'simkl' | 'movielens' | 'flixpatrol' | 'publicmetadb' | 'recommendations' | 'merged' | 'lumiere' | 'aiom'; // Keep source as the display label
   sourceUrl?: string; // Store the actual URL for StremThru and custom catalogs
   showInHome: boolean;
   genres?: string[]; // Optional genres array for catalogs that support genre filtering
@@ -98,6 +104,7 @@ export interface CatalogConfig {
     listName?: string;
     isCustomList?: boolean;
     posterShape?: 'poster' | 'landscape';
+    useUpstreamArt?: boolean;
     // Trakt Up Next metadata
     useShowPosterForUpNext?: boolean;
     includeAnimeInUpNext?: boolean;
@@ -218,6 +225,7 @@ export interface AppConfig {
   hideErrors?: boolean;
   castCount: number;
   displayAgeRating: boolean;
+  contentRatingCountry?: string;
   providers: {
     movie: string;
     series: string;
@@ -246,7 +254,10 @@ export interface AppConfig {
     originalLangFallback: boolean;
   };
   tvdbSeasonType: string;
+  animeEpisodeDates?: 'provider' | 'earliest' | 'dub';
   tvdbEpisodeOrders?: Record<string, string>;
+  tvdbNormalizeYearSeasons?: boolean;
+  tvdbShowSeasonNumbering?: Record<string, 'years' | 'sequential'>;
   mal: {
     skipFiller: boolean;
     skipRecap: boolean;
@@ -430,7 +441,9 @@ export interface AppConfig {
   /** Install URL of a stream addon the Jellyfin server delegates playback to. */
   jellyfinStreamUrl?: string;
   jellyfinResolveOnOpen?: boolean;
+  jellyfinUpcomingMode?: 'airing';
   jellyfinLatestRows?: boolean;
+  jellyfinMarkUnaired?: boolean;
   /** Playback is reported by the client, so the subtitle trigger is not used. */
   playbackReporting?: boolean;
   /** Password a Jellyfin client signs in with, for accounts that have no configuration password. */
@@ -442,7 +455,7 @@ export interface AppConfig {
   jellyfinUserAvatar?: string;
   jellyfinUserTags?: string[];
   jellyfinUserHandoffNames?: string[];
-  jellyfinSkipSource?: 'auto' | 'publicmetadb' | 'aniskip' | 'introdb' | 'off';
+  jellyfinSkipSource?: SkipSource;
   jellyfinWatchlistServices?: string[];
   jellyfinUsers?: JellyfinUser[];
   customPosterUrlPattern?: string;

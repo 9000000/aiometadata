@@ -306,13 +306,17 @@ to every visitor, so which one you reach for depends on who uses the instance.
 ## Jikan API Configuration (MyAnimeList)
 
 ### `JIKAN_API_BASE`
-- **Default**: `https://api.jikan.moe/v4`
-- **Description**: Base URL for Jikan API
-- **Example**: `JIKAN_API_BASE=https://api.jikan.moe/v4`
+- **Default**: `https://api.tenrai.org/v1` (public Tenrai API, 120 requests a minute per IP)
+- **Description**: Base URL of a Jikan v4 compatible API. Empty means the default. The public Jikan API has shut down; an instance still set to `https://api.jikan.moe/v4` uses the default instead. For more headroom, run your own (see [Self-Hosted Jikan API](self-hosted-jikan.md)).
+
+### `JIKAN_ENABLED`
+- **Default**: `true`
+- **Description**: Set to `false` to turn MAL off: MAL catalogs and MAL search are left out, anime metadata and search use Kitsu instead, and the warmers skip MAL. MAL lists, suggestions and tracking use the official MAL API and keep working.
+- **Example**: `JIKAN_API_BASE=http://jikan_rest:8080/v4`
 
 ### `MAL_PAGE_SIZE`
 - **Default**: `25`
-- **Description**: Items per page for all MAL/Jikan catalogs and search. The public Jikan API caps `limit` at 25; only raise this on a self-hosted instance, and keep it **≤** that instance's `MAX_RESULTS_PER_PAGE` or requests will fail with a 400.
+- **Description**: Items per page for all MAL/Jikan catalogs and search. Jikan caps `limit` at 25 by default; only raise this on a self-hosted instance, and keep it **≤** that instance's `MAX_RESULTS_PER_PAGE` or requests will fail with a 400.
 - **Example**: `MAL_PAGE_SIZE=50`
 
 ### `MAL_SOCKS_PROXY_URL`
@@ -327,7 +331,7 @@ to every visitor, so which one you reach for depends on who uses the instance.
 
 ### `WIKI_MAPPER_UPDATE_INTERVAL_HOURS`
 - **Default**: `24`
-- **Description**: How often to fetch Wikidata ID mappings (series/movies) from GitHub (in hours). Uses ETag to avoid re-downloading when unchanged.
+- **Description**: How often to fetch ID mappings (series/movies) from GitHub (in hours): dins-mappings as the primary source, with Wikidata backfilling only what dins lacks. Uses ETag to avoid re-downloading when unchanged.
 - **Example**: `WIKI_MAPPER_UPDATE_INTERVAL_HOURS=12`
 
 ### `IMDB_RATINGS_UPDATE_INTERVAL_HOURS`
@@ -1090,13 +1094,13 @@ Art the addon **passes through without storing** is decided by a chain of its ow
 ## Cache Epoch
 
 ### `CACHE_EPOCH`
-- **Default**: `2` (compiled in as `DEFAULT_CACHE_EPOCH` in `addon/lib/cacheEpoch.ts`)
+- **Default**: `3` (compiled in as `DEFAULT_CACHE_EPOCH` in `addon/lib/cacheEpoch.ts`)
 - **Description**: The invalidation lever for caches that hold payloads the addon assembles itself. It is deliberately **not** the addon version. Releases ship every few days, but the *shape* of a cached payload changes far less often, so keying caches on the release version discards good data on every upgrade — fatal for the cold store, whose TTLs run 60–180 days.
 
   The epoch is bumped by hand, in the same change that alters a payload shape. Anything stored under a lower epoch is dropped on the next start; anything stored under a *higher* one is left alone and simply not read, so rolling a release back and forward again costs nothing.
 
   Set this variable to force a rebuild without waiting for a release — for example after a bad deploy has written malformed metadata to disk. Values below `1` or non-numeric values are ignored and the compiled-in default is used.
-- **Example**: `CACHE_EPOCH=3`
+- **Example**: `CACHE_EPOCH=4`
 
 **What it covers.** Both cache tiers:
 

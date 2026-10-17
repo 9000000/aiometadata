@@ -10,6 +10,7 @@ import redis from '../redisClient';
 import type { CatalogRef } from './views';
 import { viewerAccountOwner, viewerMarksUnaired, viewerProfile, viewerReadsExtensions } from './viewer';
 import { SERVER_WATCHLIST_PREFIX } from '../serverWatchlist';
+import { isLandscapeCatalogConfig } from '../../utils/catalogPosterShape';
 
 const logger = consola.withTag('Jellyfin');
 
@@ -545,7 +546,7 @@ function externalUrls(ids: Record<string, string>, show: boolean): Array<{ Name:
 const CONTINUING = new Set(['continuing', 'returning series', 'running', 'ongoing', 'currently_airing', 'current']);
 const ENDED = new Set(['ended', 'canceled', 'cancelled', 'finished_airing', 'finished']);
 
-function seriesStatus(meta: any): 'Continuing' | 'Ended' | undefined {
+export function seriesStatus(meta: any): 'Continuing' | 'Ended' | undefined {
   const status = String(meta.status ?? '').trim().toLowerCase();
   if (CONTINUING.has(status)) return 'Continuing';
   if (ENDED.has(status)) return 'Ended';
@@ -712,7 +713,7 @@ function catalogSettingsFor(config: any, catalog: { id: string; type: string }):
 }
 
 export function isLandscapeCatalog(config: any, catalog: { id: string; type: string }): boolean {
-  return catalogSettingsFor(config, catalog)?.metadata?.posterShape === 'landscape';
+  return isLandscapeCatalogConfig(config, catalogSettingsFor(config, catalog));
 }
 
 export function showLandscape(items: any[]): void {

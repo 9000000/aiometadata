@@ -13,6 +13,8 @@ export interface WatchlistEntry {
   /** The shelf the service files it under, which is what a pick names. */
   kind: WatchlistKind;
   addedAt: number;
+  film?: boolean;
+  identity?: string;
 }
 
 export type WatchlistIds = { imdb?: string; tmdb?: number | string; tvdb?: number | string; kitsu?: number | string; mal?: number | string };
@@ -148,7 +150,7 @@ async function shelfEntries(userUUID: string, config: any, catalog: Shelf, need:
       if (!meta?.id) return;
       const kind: WatchlistKind = catalog.kind ?? (meta.type === 'movie' ? 'movies' : 'series');
       const mediaType: WatchlistEntry['mediaType'] = kind === 'anime' ? 'anime' : meta.type === 'movie' ? 'movie' : 'series';
-      rows.push({ metaId: String(meta.id), mediaType, kind, addedAt: Date.parse(meta._listedAt ?? '') || -rank });
+      rows.push({ metaId: String(meta.id), mediaType, kind, addedAt: Date.parse(meta._listedAt ?? '') || -rank, ...(kind === 'anime' && meta.type === 'movie' ? { film: true } : {}) });
     });
     return { rows, ok: !window.failed, exhausted: !window.hasMore };
   } catch (error: any) {
@@ -164,6 +166,14 @@ export interface TrackerWatchlist {
   exhausted: boolean;
 }
 
+export function perEntryAnime(config: any): boolean {
+  return ['kitsu', 'mal'].includes(config?.providers?.anime || 'mal');
+}
+
+export function watchlistSlot(identity: { key: string; anime: boolean }, metaId: string, config: any): string {
+  return perEntryAnime(config) && identity.anime ? `${identity.key}#${metaId}` : identity.key;
+}
+
 /**
  * One entry per title across sources. Where an anime entry and a whole show meet, the anime
  * meta provider decides: a grouped one (TVDB, TMDB, IMDb) keeps the show, Kitsu or MAL keeps
@@ -172,7 +182,7 @@ export interface TrackerWatchlist {
 export async function dedupeWatchlist(rows: WatchlistEntry[], config: any): Promise<WatchlistEntry[]> {
   const { watchlistIdentity } = require('./canonicalIds');
   const { mapWithConcurrency } = require('../../utils/concurrency');
-  const perEntry = ['kitsu', 'mal'].includes(config?.providers?.anime || 'mal');
+  const perEntry = perEntryAnime(config);
   const named: Array<{ row: WatchlistEntry; key: string; anime: boolean }> = await mapWithConcurrency(rows, 8, async (row: WatchlistEntry) => {
     const identity = await watchlistIdentity(row.metaId, row.mediaType, config).catch(() => ({ key: row.metaId, anime: false }));
     return { row, ...identity };
@@ -181,11 +191,11 @@ export async function dedupeWatchlist(rows: WatchlistEntry[], config: any): Prom
   const kept = new Map<string, { row: WatchlistEntry; anime: boolean }>();
   for (const { row, key, anime } of named) {
     if (perEntry && !anime && animeShows.has(key)) continue;
-    const slot = perEntry && anime ? `${key}#${row.metaId}` : key;
+    const slot = watchlistSlot({ key, anime }, row.metaId, config);
     const held = kept.get(slot);
     const addedAt = Math.max(row.addedAt, held?.row.addedAt ?? -Infinity);
     if (!held || (held.anime && !anime) || (held.anime === anime && row.addedAt > held.row.addedAt)) {
-      kept.set(slot, { row: { ...row, addedAt }, anime });
+      kept.set(slot, { row: { ...row, addedAt, identity: slot }, anime });
     } else {
       held.row = { ...held.row, addedAt };
     }

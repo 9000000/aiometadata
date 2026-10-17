@@ -2,6 +2,8 @@ import {
   createClassicRowDraft,
   createCollectionDraft,
   createFolderDraft,
+  currentFields,
+  mapFoldersDeep,
   newId,
   type BuilderEntry,
   type ClassicRowDraft,
@@ -9,13 +11,12 @@ import {
   type CollectionViewMode,
   type FolderDraft,
   subFolders,
-  type FusionAspectRatio,
-  type FusionCardStyle,
   SUFFIX_TYPES,
   type SourceDraft,
   type TileShape,
 } from './types';
 import {
+  BLUEPRINT_KEY,
   dedupeBlueprints,
   fromEmbedded,
   lookupKey,
@@ -80,21 +81,7 @@ function toViewMode(value: unknown): CollectionViewMode {
   return 'TABBED_GRID';
 }
 
-function toAspect(value: unknown): FusionAspectRatio {
-  const normalized = trimmed(value).toLowerCase();
-  if (normalized === 'wide') return 'wide';
-  if (normalized === 'square') return 'square';
-  return 'poster';
-}
-
-function toCardStyle(value: unknown): FusionCardStyle {
-  const normalized = trimmed(value).toLowerCase();
-  if (normalized === 'small') return 'small';
-  if (normalized === 'large') return 'large';
-  return 'medium';
-}
-
-/** The inverse of prefixedId in fusionExport, so a round trip keeps the same id. */
+/** Fusion prefixed widget ids by kind; the bare id is kept. */
 function unprefixedId(value: unknown, prefix: string): string {
   const id = trimmed(value);
   return id.startsWith(prefix) ? id.slice(prefix.length) : id;
@@ -428,20 +415,12 @@ export function fromFusionWidgets(
 
     if (trimmed(raw.type).startsWith('row.classic')) {
       const source = fusionSource(raw.dataSource, title, notes, blueprints, context);
-      const presentation = isRecord(raw.presentation) ? raw.presentation : {};
-      const badges = isRecord(presentation.badges) ? presentation.badges : {};
       const row: ClassicRowDraft = {
         ...createClassicRowDraft(title),
         id: unprefixedId(raw.id, 'catalog.') || newId(),
         title,
         hideTitle: Boolean(raw.hideTitle),
         source,
-        limit: Number.isFinite(Number(raw.limit)) ? Math.trunc(Number(raw.limit)) : 20,
-        cacheTTL: Number.isFinite(Number(raw.cacheTTL)) ? Math.trunc(Number(raw.cacheTTL)) : 1800,
-        aspectRatio: toAspect(presentation.aspectRatio),
-        cardStyle: toCardStyle(presentation.cardStyle),
-        badges: { providers: Boolean(badges.providers), ratings: badges.ratings !== false },
-        backgroundImageURL: trimmed(presentation.backgroundImageURL),
         numbered: trimmed(raw.type) === 'row.classic.numbered',
       };
       entries.push(row);
@@ -468,20 +447,33 @@ export function fromFusionWidgets(
 
 // ---- Builder's own shape, for restoring a config backup ----
 
-function fromBuilderEntries(input: unknown, notes: string[]): BuilderEntry[] {
+function fromBuilderEntries(input: unknown, notes: string[], blueprints: CatalogBlueprint[]): BuilderEntry[] {
   const list = Array.isArray(input)
     ? input
     : isRecord(input) && Array.isArray(input.entries) ? input.entries : [];
+
+  // A layout file carries each catalog on a source; the source itself keeps only its address.
+  const unpack = (title: string) => (source: SourceDraft): SourceDraft => {
+    if (!isRecord(source) || !(BLUEPRINT_KEY in source)) return source;
+    blueprints.push(...fromEmbedded(source, title));
+    const { [BLUEPRINT_KEY]: _carried, ...rest } = source as SourceDraft & Record<string, unknown>;
+    return rest as SourceDraft;
+  };
 
   const entries: BuilderEntry[] = [];
   for (const raw of list) {
     if (!isRecord(raw)) continue;
     if (raw.kind === 'classicRow') {
-      entries.push({ ...createClassicRowDraft(trimmed(raw.title)), ...raw } as ClassicRowDraft);
+      const row = currentFields({ ...createClassicRowDraft(trimmed(raw.title)), ...raw } as ClassicRowDraft);
+      entries.push(row.source ? { ...row, source: unpack(row.title)(row.source) } : row);
       continue;
     }
     if (raw.kind === 'collection') {
-      entries.push({ ...createCollectionDraft(trimmed(raw.title)), ...raw } as CollectionDraft);
+      const collection = { ...createCollectionDraft(trimmed(raw.title)), ...raw } as CollectionDraft;
+      entries.push({
+        ...collection,
+        folders: mapFoldersDeep(collection.folders ?? [], folder => ({ ...folder, sources: (folder.sources ?? []).map(unpack(folder.title)) })),
+      });
       continue;
     }
     notes.push('Skipped an entry with an unknown kind.');
@@ -556,7 +548,7 @@ export function importEntries(raw: unknown, options: ImportOptions = {}): Import
 
   if (format === 'nuvio') return done(fromNuvioCollections(raw, notes, blueprints, context));
   if (format === 'fusion') return done(fromFusionWidgets(raw, notes, blueprints, context));
-  if (format === 'builder') return done(fromBuilderEntries(raw, notes));
+  if (format === 'builder') return done(fromBuilderEntries(raw, notes, blueprints));
 
   return {
     format: 'unknown',

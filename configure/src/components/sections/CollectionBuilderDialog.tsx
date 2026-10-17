@@ -51,6 +51,7 @@ import { getSourceBadgeStyle } from '@/lib/sourceBadges';
 
 import {
   createClassicRowDraft,
+  currentFields,
   createCollectionDraft,
   createFolderDraft,
   allFolders,
@@ -70,6 +71,7 @@ import {
   type SourceDraft,
 } from '@shared/types';
 import { toNuvioCollections } from '@shared/nuvioExport';
+import { toLayoutFile } from '@shared/layoutExport';
 import { proxyCollectionImages } from '@shared/imageProxy';
 import {
   groupMissingCatalogs,
@@ -78,7 +80,7 @@ import {
   type ImportResult,
   type MissingCatalogGroup,
 } from '@shared/importers';
-import { toFusionWidgets } from '@shared/fusionExport';
+import { jellyfinNotes } from '@/lib/collectionBuilder/jellyfinNotes';
 import {
   buildIdentity,
   buildManifestUrl,
@@ -121,7 +123,7 @@ import {
   type ImportMode,
 } from '@/lib/collectionBuilder/importModes';
 import { listStarterTemplates } from '@/lib/collectionBuilder/templates';
-import { FUSION_CHIP, NUVIO_CHIP, TERMS, type Target } from '@/lib/collectionBuilder/terms';
+import { FUSION_CHIP, JELLYFIN_CHIP, NUVIO_CHIP, TERMS, type Target } from '@/lib/collectionBuilder/terms';
 import { CollectionPreview } from './CollectionPreview';
 import { buildBlueprintLookup } from '@shared/blueprintLookup';
 import {
@@ -209,6 +211,9 @@ function reissueTakenIds(entries: BuilderEntry[], taken: Set<string>): void {
 }
 
 // ---- Main dialog ----
+
+/** The picker's target when it is adding new rows rather than filling an entry. */
+const NEW_ROWS = '__new-rows__';
 
 export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDialogProps) {
   const { config, setConfig, auth, maxCatalogs, collectionImportCatalogCap, refreshInstanceLimits } = useConfig();
@@ -386,17 +391,15 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     () => toNuvioCollections(exportEntries, identity, blueprints, { usePlaceholder }),
     [exportEntries, identity, blueprints, usePlaceholder]
   );
-  const fusionResult = useMemo(
-    () => toFusionWidgets(exportEntries, identity, { usePlaceholder, blueprints }),
-    [exportEntries, identity, usePlaceholder, blueprints]
-  );
-
   const json = useMemo(
-    () => JSON.stringify(target === 'nuvio' ? nuvioResult.output : fusionResult.output, null, 2),
-    [target, nuvioResult, fusionResult]
+    () => JSON.stringify(target === 'nuvio' ? nuvioResult.output : toLayoutFile(exportEntries, blueprints), null, 2),
+    [target, nuvioResult, exportEntries, blueprints]
   );
 
-  const notes: ExportNote[] = target === 'nuvio' ? nuvioResult.notes : fusionResult.notes;
+  const notes: ExportNote[] = useMemo(
+    () => (target === 'nuvio' ? nuvioResult.notes : jellyfinNotes(committedEntries)),
+    [target, nuvioResult, committedEntries]
+  );
 
   const unknownSources = useMemo(
     () => findUnknownSources(committedEntries, sourceList.catalogs),
@@ -424,7 +427,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     () => deriveSaveStage({ builderJson, configJson: savedJson, configDirty }),
     [builderJson, savedJson, configDirty]
   );
-  const stageCopy = describeSaveStage(stage);
+  const stageCopy = describeSaveStage(stage, target);
 
   // requestSave closes over config, so saving in the same tick as the apply
   // would store the version from before it. This waits for the config to catch up.
@@ -728,13 +731,16 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   const pickerExistingKeys = useMemo(() => {
     if (!pickerTarget) return [];
+    if (pickerTarget.entryId === NEW_ROWS) {
+      return committedEntries.flatMap(entry => (entry.kind === 'classicRow' && entry.source ? [catalogKey(entry.source)] : []));
+    }
     // Replacing is a single pick, so nothing needs to be marked as already added.
     if (typeof pickerTarget.replaceIndex === 'number') return [];
     const entry = entries.find(item => item.id === pickerTarget.entryId);
     if (!entry || entry.kind !== 'collection') return [];
     const folder = pickerTarget.folderId ? findFolder(entry.folders, pickerTarget.folderId) : undefined;
     return folder ? folder.sources.map(catalogKey) : [];
-  }, [pickerTarget, entries]);
+  }, [pickerTarget, entries, committedEntries]);
 
   /** Only tags that actually cover a catalog the user can use. */
   const tagOptions: TagOption[] = useMemo(() => {
@@ -837,10 +843,26 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const handlePick = (picked: ManifestCatalog[]) => {
     if (!pickerTarget || picked.length === 0) return;
     const sources: SourceDraft[] = picked.map(sourceFromCatalog);
+    if (pickerTarget.entryId === NEW_ROWS) {
+      const placed = new Set(pickerExistingKeys);
+      const rows = sources
+        .filter(source => !placed.has(catalogKey(source)))
+        .map(source => ({ ...createClassicRowDraft(source.name), source }));
+      setPickerTarget(null);
+      if (rows.length === 0) return;
+      setEntries(prev => [...prev, ...rows]);
+      setSelectedId(rows[rows.length - 1].id);
+      setActiveTab('design');
+      toast.success(rows.length === 1 ? `"${rows[0].title}" added as a row` : `${rows.length} rows added`);
+      return;
+    }
     setEntries(prev =>
       prev.map(entry => {
         if (entry.id !== pickerTarget.entryId) return entry;
-        if (entry.kind === 'classicRow') return { ...entry, source: sources[0] };
+        if (entry.kind === 'classicRow') {
+          const untitled = !entry.title.trim() || entry.title === createClassicRowDraft().title;
+          return { ...entry, source: sources[0], ...(untitled ? { title: sources[0].name } : {}) };
+        }
         return {
           ...entry,
           folders: mapFolder(entry.folders, String(pickerTarget.folderId), folder => {
@@ -873,14 +895,15 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
 
   const applyToConfig = (options: { withCatalogs?: boolean; thenSave?: boolean } = {}) => {
     const addCatalogs = options.withCatalogs !== false && pendingCount > 0;
-    const applied = clone(committedEntries);
+    const applied = clone(committedEntries).map(currentFields);
 
     setConfig(prev => ({
       ...prev,
       collections: applied,
       ...(addCatalogs && { catalogs: applyCatalogAdditions(prev.catalogs || [], pendingAdditions) }),
     }));
-    setBaseline(JSON.stringify(committedEntries));
+    setEntries(prev => prev.map(currentFields));
+    setBaseline(JSON.stringify(applied));
     if (addCatalogs) setStagedBlueprints([]);
 
     const catalogNote = addCatalogs
@@ -953,9 +976,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   const hostedUrl = useMemo(() => {
     const base = stripManifestSuffix(manifestUrl);
     if (!base) return '';
-    const file = target === 'fusion' ? 'fusion-widgets.json' : 'nuvio-collections.json';
-    const query = manifestUrl.includes('?') ? manifestUrl.slice(manifestUrl.indexOf('?')) : '';
-    return `${base}/${file}${query}`;
+    return `${base}/${target === 'nuvio' ? 'nuvio-collections' : 'aiometadata-collections'}.json`;
   }, [manifestUrl, target]);
 
   // What a featured design was trimmed to survives a re-read of the same text.
@@ -1243,13 +1264,13 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
         0
       );
     }
-    return fusionResult.output.widgets.reduce(
-      (sum, widget) => sum + ('dataSource' in widget && widget.dataSource?.kind === 'collection'
-        ? widget.dataSource.payload.items.filter(item => item.dataSources.length === 0).length
+    return committedEntries.reduce(
+      (sum, entry) => sum + (entry.kind === 'collection'
+        ? entry.folders.filter(folder => folderSources(folder).every(isNativeSource)).length
         : 0),
       0
     );
-  }, [target, nuvioResult, fusionResult]);
+  }, [target, nuvioResult, committedEntries]);
 
   const strandedNative = useMemo(
     () => committedEntries.reduce((sum, entry) => sum + countStranded(entry), 0),
@@ -1261,9 +1282,9 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     [committedEntries, countNative]
   );
 
-  const strandedTarget = useMemo(() => (target === 'fusion'
-    ? { here: 'Fusion', other: 'Nuvio', otherId: 'nuvio' as Target }
-    : { here: 'Nuvio', other: 'Fusion', otherId: 'fusion' as Target }
+  const strandedTarget = useMemo(() => (target === 'jellyfin'
+    ? { here: 'Jellyfin', other: 'Nuvio' as string | null, otherId: 'nuvio' as Target }
+    : { here: 'Nuvio', other: null as string | null, otherId: 'nuvio' as Target }
   ), [target]);
 
   const entryIsStranded = useCallback((entry: BuilderEntry) => {
@@ -1400,8 +1421,11 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
     );
   };
 
+  // The layout file keeps every source as it is, so only the Nuvio export has anything to lose.
+  const exportLoses = target === 'nuvio' && strandedNative > 0;
+
   const handleCopyUrl = async () => {
-    if (strandedNative > 0) {
+    if (exportLoses) {
       setNativeBlockFor('link');
       return;
     }
@@ -1412,7 +1436,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   };
 
   const handleCopy = async () => {
-    if (strandedNative > 0) {
+    if (exportLoses) {
       setNativeBlockFor('copy');
       return;
     }
@@ -1423,11 +1447,11 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
   };
 
   const handleDownload = () => {
-    if (strandedNative > 0) {
+    if (exportLoses) {
       setNativeBlockFor('download');
       return;
     }
-    const name = target === 'nuvio' ? 'nuvio-collections' : 'fusion-widgets';
+    const name = target === 'nuvio' ? 'nuvio-collections' : 'aiometadata-collections';
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
@@ -1448,36 +1472,51 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
               <Upload className="h-5 w-5" /> Export &amp; share
             </DialogTitle>
             <DialogDescription>
-              Every collection you have built, as {target === 'nuvio' ? 'Nuvio' : 'Fusion'} JSON.
+              {target === 'nuvio'
+                ? 'Every collection you have built, as Nuvio JSON.'
+                : 'Every collection and row you have built, folders inside folders included, for someone else to import into their AIOMetadata.'}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 pt-2">
                   <div className="flex items-start gap-2 rounded-xl border border-sky-400/20 bg-sky-500/10 p-3 text-xs">
                     <Info className="mt-px h-4 w-4 shrink-0 text-sky-400" />
                     <div className="space-y-1">
-                      <p className="font-medium text-sky-200">
-                        Saving updates your addon, not {target === 'fusion' ? 'Fusion' : 'Nuvio'}
-                      </p>
-                      <p className="text-muted-foreground">
-                        Nothing is pushed to your app. Import the file or the link below again for these edits to
-                        show up there.
-                      </p>
-                      <p className="text-muted-foreground">
-                        {target === 'fusion'
-                          ? "Fusion adds on import rather than matching what it already has, so re-importing everything gives you duplicate widgets. Delete the widgets you changed first, then tick just those in Fusion's import list. They come back at the end, so you may need to reorder them."
-                          : 'Editing a collection you imported keeps its id, so Nuvio updates the one you already have instead of adding a second copy. Building a new collection from scratch mints a new id and arrives alongside the old one.'}
-                      </p>
+                      {target === 'nuvio' ? (
+                        <>
+                          <p className="font-medium text-sky-200">
+                            Saving updates your addon, not Nuvio
+                          </p>
+                          <p className="text-muted-foreground">
+                            Nothing is pushed to your app. Import the file or the link below again for these edits to
+                            show up there.
+                          </p>
+                          <p className="text-muted-foreground">
+                            Editing a collection you imported keeps its id, so Nuvio updates the one you already have instead of adding a second copy. Building a new collection from scratch mints a new id and arrives alongside the old one.
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="font-medium text-sky-200">
+                            Your own Jellyfin clients need no file
+                          </p>
+                          <p className="text-muted-foreground">
+                            Saving is enough for them. This file is for sharing: whoever imports it in their
+                            collections builder gets the same layout, with the catalogs it uses created for them. Your
+                            user tags stay out of it.
+                          </p>
+                        </>
+                      )}
                     </div>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge
                       variant="outline"
-                      className={`text-xs ${target === 'nuvio' ? NUVIO_CHIP : FUSION_CHIP}`}
+                      className={`text-xs ${target === 'nuvio' ? NUVIO_CHIP : JELLYFIN_CHIP}`}
                     >
-                      {target === 'nuvio' ? 'Nuvio collections' : 'Fusion widgets'}
+                      {target === 'nuvio' ? 'Nuvio collections' : 'AIOMetadata layout'}
                     </Badge>
-                    <span className="text-xs text-muted-foreground">Target and manifest URL are in the header</span>
+                    <span className="text-xs text-muted-foreground">The manifest URL is in the header</span>
                     <div className="ml-auto flex items-center gap-2">
                     <Button size="sm" variant="outline" onClick={handleCopy}>
                       {copied ? <Check className="mr-1.5 h-4 w-4" /> : <Copy className="mr-1.5 h-4 w-4" />}
@@ -1495,9 +1534,9 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                       <LinkIcon className="h-4 w-4 text-primary" />
                       <Label htmlFor="collection-hosted-url" className="text-xs font-medium">Import by link</Label>
                       <span className="text-xs text-muted-foreground">
-                        {target === 'fusion'
-                          ? 'Paste this straight into Fusion instead of the JSON'
-                          : 'Serves the same JSON live, if your app can read a URL'}
+                        {target === 'nuvio'
+                          ? 'Serves the same JSON live, if your app can read a URL'
+                          : 'Serves the same JSON live; paste it into Import JSON on the other side'}
                       </span>
                     </div>
                     {hostedUrl ? (
@@ -1555,31 +1594,33 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                     </div>
                   )}
 
-                  <div className="space-y-1.5 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        id="collection-use-placeholder"
-                        checked={usePlaceholder}
-                        onCheckedChange={setUsePlaceholder}
-                      />
-                      <Label htmlFor="collection-use-placeholder" className="text-xs font-medium">
-                        Make a copy for someone else
-                      </Label>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Your addon link contains your user ID, and this file embeds it on every row. Anyone who has it
-                      can read that config. Turn this on to blank it out before posting the file publicly. Whoever
-                      imports it here gets their own link filled in automatically, so they end up with your layout
-                      pointing at their catalogs.
-                    </p>
-                    {usePlaceholder && (
-                      <p className="flex items-start gap-1.5 text-xs text-amber-500">
-                        <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
-                        This copy is for handing out, not for your own use. It has no addon link in it, so
-                        importing it back here is what puts one in.
+                  {target === 'nuvio' && (
+                    <div className="space-y-1.5 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          id="collection-use-placeholder"
+                          checked={usePlaceholder}
+                          onCheckedChange={setUsePlaceholder}
+                        />
+                        <Label htmlFor="collection-use-placeholder" className="text-xs font-medium">
+                          Make a copy for someone else
+                        </Label>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Your addon link contains your user ID, and this file embeds it on every row. Anyone who has it
+                        can read that config. Turn this on to blank it out before posting the file publicly. Whoever
+                        imports it here gets their own link filled in automatically, so they end up with your layout
+                        pointing at their catalogs.
                       </p>
-                    )}
-                  </div>
+                      {usePlaceholder && (
+                        <p className="flex items-start gap-1.5 text-xs text-amber-500">
+                          <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+                          This copy is for handing out, not for your own use. It has no addon link in it, so
+                          importing it back here is what puts one in.
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   <textarea
                     readOnly
@@ -1608,7 +1649,7 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 Collections &amp; Widgets
               </DialogTitle>
               <DialogDescription className="sr-only">
-                Arrange your catalogs once, then export as Nuvio collection JSON or Fusion widget JSON.
+                Arrange your catalogs once for Jellyfin clients, and export them as Nuvio collection JSON.
               </DialogDescription>
               <div
                 className={`gap-1 rounded-xl bg-white/[0.02] p-1 @2xl:flex ${
@@ -1628,14 +1669,14 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 </button>
                 <button
                   type="button"
-                  onClick={() => setTarget('fusion')}
+                  onClick={() => setTarget('jellyfin')}
                   className={`flex h-8 items-center gap-1.5 rounded-lg px-3 text-sm transition-colors ${
-                    target === 'fusion'
-                      ? 'bg-violet-500/15 text-violet-200'
+                    target === 'jellyfin'
+                      ? 'bg-purple-500/15 text-purple-200'
                       : 'text-muted-foreground hover:bg-white/[0.04] active:bg-white/[0.06]'
                   }`}
                 >
-                  <Rows3 className="h-4 w-4" /> Fusion
+                  <Rows3 className="h-4 w-4" /> Jellyfin
                 </button>
               </div>
               <button
@@ -1813,10 +1854,10 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 <Button
                   size="sm"
                   variant="outline"
-                  className="flex-1 border-0 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20 active:bg-violet-500/25"
-                  onClick={() => addEntry(createClassicRowDraft())}
+                  className="flex-1 border-0 bg-purple-500/10 text-purple-200 hover:bg-purple-500/20 active:bg-purple-500/25"
+                  onClick={() => setPickerTarget({ entryId: NEW_ROWS, folderId: null })}
                 >
-                  <Rows3 className="mr-1.5 h-4 w-4 text-violet-400" /> {terms.row}
+                  <Rows3 className="mr-1.5 h-4 w-4 text-purple-400" /> {terms.row}
                 </Button>
               </div>
               <Button size="sm" variant="ghost" className="w-full" onClick={() => setImportOpen(true)}>
@@ -1875,9 +1916,10 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                   <div className="space-y-0.5">
                     {visibleTree.map(({ entry, folders, forceExpand }) => {
                       const index = entries.findIndex(item => item.id === entry.id);
-                      const excluded: 'nuvio' | 'fusion' | null =
-                        target === 'nuvio' && entry.kind === 'classicRow' ? 'fusion'
-                        : entryIsStranded(entry) ? (target === 'fusion' ? 'nuvio' : 'fusion')
+                      const excluded: Target | null =
+                        target === 'nuvio' && entry.kind === 'classicRow' ? 'jellyfin'
+                        : target === 'jellyfin' && entryIsStranded(entry)
+                          && entrySources(entry).every(source => nativeOrigin(source) === 'nuvio') ? 'nuvio'
                         : null;
                       const folderCount = entry.kind === 'collection' ? entry.folders.length : 0;
                       const expanded = forceExpand || expandedIds.has(entry.id);
@@ -2293,8 +2335,8 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
                 const at = Math.min(importPreviewIndex, importPreview.entries.length - 1);
                 const shown = importPreview.entries[at];
                 // A file states its own shape, which need not be the target being edited.
-                const shape = importPreview.format === 'fusion' || importPreview.format === 'nuvio'
-                  ? importPreview.format
+                const shape: Target = importPreview.format === 'fusion' ? 'jellyfin'
+                  : importPreview.format === 'nuvio' ? 'nuvio'
                   : target;
                 return (
                   <div className="space-y-2">
@@ -2685,27 +2727,29 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
             </DialogTitle>
             <DialogDescription>
               {strandedNative} source{strandedNative === 1 ? '' : 's'} in this design{' '}
-              {strandedNative === 1 ? 'is' : 'are'} fetched by {strandedTarget.other} itself, and{' '}
+              {strandedNative === 1 ? 'is' : 'are'} fetched by the app itself, and{' '}
               {strandedTarget.here} has no equivalent. {emptyTiles > 0
                 ? `${emptyTiles} of ${tileTotal} tiles would come out empty.`
-                : `Those sources are left out of the ${strandedTarget.here} export.`}
+                : `Those sources are left out on ${strandedTarget.here}.`}
             </DialogDescription>
           </DialogHeader>
 
           <p className="rounded-lg bg-white/[0.03] p-2 text-xs text-muted-foreground">
-            {nativeBlockFor === 'apply'
-              ? `The design is fine for ${strandedTarget.other}, so you can apply it and build for ${strandedTarget.other} instead. Applying also publishes your hosted widgets URL, which would hand out the same empty export.`
-              : `Switching to ${strandedTarget.other} gives you the complete export. Routing the sources through AIOMetadata keeps them on both targets, at one catalog each.`}
+            {strandedTarget.other
+              ? `The design is fine for ${strandedTarget.other}, so you can build for ${strandedTarget.other} instead. Routing the sources through AIOMetadata keeps them on both targets, at one catalog each.`
+              : 'Routing the sources through AIOMetadata keeps them, at one catalog each.'}
           </p>
 
           <div className="flex flex-wrap justify-end gap-2 border-t border-white/[0.06] pt-3">
             <Button variant="ghost" onClick={() => setNativeBlockFor(null)}>Cancel</Button>
-            <Button
-              variant="outline"
-              onClick={() => { setTarget(strandedTarget.otherId); setNativeBlockFor(null); }}
-            >
-              <Tv className="mr-1.5 h-4 w-4" /> Build for {strandedTarget.other}
-            </Button>
+            {strandedTarget.other && (
+              <Button
+                variant="outline"
+                onClick={() => { setTarget(strandedTarget.otherId); setNativeBlockFor(null); }}
+              >
+                <Tv className="mr-1.5 h-4 w-4" /> Build for {strandedTarget.other}
+              </Button>
+            )}
             <Button onClick={() => { convertNativeSources(); setNativeBlockFor(null); }}>
               <Replace className="mr-1.5 h-4 w-4" /> Route through AIOMetadata
             </Button>
@@ -2750,7 +2794,9 @@ export function CollectionBuilderDialog({ isOpen, onClose }: CollectionBuilderDi
       <CatalogPicker
         isOpen={pickerTarget !== null}
         catalogs={sourceList.catalogs}
-        multiple={pickerTarget?.folderId !== null && typeof pickerTarget?.replaceIndex !== 'number'}
+        multiple={pickerTarget?.entryId === NEW_ROWS || (pickerTarget?.folderId !== null && typeof pickerTarget?.replaceIndex !== 'number')}
+        title={pickerTarget?.entryId === NEW_ROWS ? 'Add rows' : undefined}
+        description={pickerTarget?.entryId === NEW_ROWS ? 'Each catalog you pick becomes its own row, named after it. Rename them afterwards if you like.' : undefined}
         existingKeys={pickerExistingKeys}
         tagOptions={tagOptions}
         onConfirm={handlePick}

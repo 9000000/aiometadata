@@ -50,6 +50,7 @@ const { normalizeTvdbListRecord, enrichTvdbListRecords } = require("./utils/tvdb
 const { resolveTmdbDiscoverApiKey, resolveTvdbDiscoverApiKey, normalizeTmdbDiscoverType, normalizeTvdbDiscoverType, toTvdbCountryCode } = require("./utils/discoverParams");
 const { normalizeRedirectUri } = require("./utils/oauthRedirect");
 const { shuffleMetas } = require("./utils/mergedCatalog");
+const { isLandscapeCatalogConfig } = require("./utils/catalogPosterShape");
 const { getFavorites, getWatchList } = require("./lib/getPersonalLists");
 const { resolveDynamicTmdbDiscoverParams } = require('./lib/tmdbDiscoverDateTokens');
 const { isDiscoverCatalogId, applyDiscoverSignature } = require('./lib/discoverCatalogSignature');
@@ -5588,6 +5589,8 @@ const catalogRoute = async function (req, res) {
                 const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
                 if (proxyId) {
                   meta.poster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, url: resolved });
+                } else {
+                  meta.poster = resolved;
                 }
               } else {
                 meta.poster = resolved;
@@ -5651,7 +5654,7 @@ const catalogRoute = async function (req, res) {
     }
 
     const isSearchCatalog = cleanId === 'search' || cleanId === 'people_search' || cleanId === 'gemini.search';
-    if (catalogConfig?.metadata?.posterShape === 'landscape' && !isSearchCatalog && req.params.forJellyfin !== '1' && Array.isArray(responseData?.metas)) {
+    if (isLandscapeCatalogConfig(config, catalogConfig) && !isSearchCatalog && req.params.forJellyfin !== '1' && Array.isArray(responseData?.metas)) {
       for (const meta of responseData.metas) {
         const landscape = upstreamArt ? (meta.background || meta.landscapePoster) : (meta.landscapePoster || meta.background);
         if (meta.posterShape === 'landscape' || !landscape) continue;
@@ -6521,6 +6524,17 @@ addon.get("/poster-cache/proxy/landscape/:type/:id", streamArtWithFallback('land
 
 {
   const { posterCacheHandler } = require('./lib/posterCache/handler.js');
+  const { SIZED_WIDTH, widthStep } = require('./lib/posterCache/resize.js');
+  // In the path, since the image URL after it carries its own query.
+  addon.use(posterCacheConfig.POSTER_CACHE_ROUTE, (req, res, next) => {
+    const sized = /^\/w(\d{2,4})(\/(?!proxy\/).*)$/.exec(req.url);
+    if (!sized) return next();
+    const step = widthStep(Number(sized[1]));
+    req.url = sized[2];
+    req.originalUrl = req.originalUrl.replace(`${posterCacheConfig.POSTER_CACHE_ROUTE}/w${sized[1]}/`, `${posterCacheConfig.POSTER_CACHE_ROUTE}/`);
+    if (step) req[SIZED_WIDTH] = step;
+    next();
+  });
   addon.use(posterCacheConfig.POSTER_CACHE_ROUTE, posterCacheHandler());
 }
 
@@ -8251,11 +8265,119 @@ addon.get("/api/dashboard/jellyfin/:userUUID/export", requireDashboardAdmin, asy
   }
 });
 
+addon.get("/api/dashboard/jellyfin/:userUUID/plays", requireDashboardAdmin, async (req, res) => {
+  try {
+    const profile = typeof req.query.profile === 'string' ? req.query.profile : null;
+    const kind = req.query.kind === 'played' ? 'played' : 'progress';
+    const offset = parseInt(String(req.query.offset ?? ''), 10);
+    const limit = parseInt(String(req.query.limit ?? ''), 10);
+    const payload = await require('./lib/jellyfin/dashboard').dashboardPlays(String(req.params.userUUID), profile, kind, Number.isFinite(offset) ? offset : 0, Number.isFinite(limit) ? limit : 30);
+    if (!payload) {
+      res.status(404).json({ error: 'No such configuration' });
+      return;
+    }
+    res.json(payload);
+  } catch (error) {
+    consola.error('[Dashboard API] Error:', error);
+    res.status(500).json({ error: 'Failed to read Jellyfin plays' });
+  }
+});
+
+addon.get("/api/dashboard/jellyfin/:userUUID/shows", requireDashboardAdmin, async (req, res) => {
+  try {
+    const profile = typeof req.query.profile === 'string' ? req.query.profile : null;
+    const payload = await require('./lib/jellyfin/dashboard').dashboardShows(String(req.params.userUUID), profile, req.query.fresh === '1');
+    if (!payload) {
+      res.status(404).json({ error: 'No such configuration' });
+      return;
+    }
+    res.json(payload);
+  } catch (error) {
+    consola.error('[Dashboard API] Error:', error);
+    res.status(500).json({ error: 'Failed to read Jellyfin shows' });
+  }
+});
+
+addon.get("/api/dashboard/jellyfin/:userUUID/calendar", requireDashboardAdmin, async (req, res) => {
+  try {
+    const profile = typeof req.query.profile === 'string' ? req.query.profile : null;
+    const from = Number(req.query.from);
+    const to = Number(req.query.to);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) {
+      res.status(400).json({ error: 'Name the window as from and to times' });
+      return;
+    }
+    const rows = await require('./lib/jellyfin/dashboard').dashboardCalendar(String(req.params.userUUID), profile, from, to);
+    if (!rows) {
+      res.status(404).json({ error: 'No such configuration' });
+      return;
+    }
+    res.json({ rows });
+  } catch (error) {
+    consola.error('[Dashboard API] Error:', error);
+    res.status(500).json({ error: 'Failed to read the Jellyfin calendar' });
+  }
+});
+
+addon.get("/api/dashboard/jellyfin/:userUUID/library", requireDashboardAdmin, async (req, res) => {
+  try {
+    const profile = typeof req.query.profile === 'string' ? req.query.profile : null;
+    const tab = ['watchlist', 'ratings', 'dropped'].includes(String(req.query.tab)) ? String(req.query.tab) : 'watchlist';
+    const kind = ['movie', 'series'].includes(String(req.query.kind)) ? String(req.query.kind) : 'all';
+    const limit = parseInt(String(req.query.limit ?? ''), 10);
+    const offset = parseInt(String(req.query.offset ?? ''), 10);
+    const payload = await require('./lib/jellyfin/dashboard').dashboardLibrary(String(req.params.userUUID), profile, tab, kind, Number.isFinite(offset) ? offset : 0, Number.isFinite(limit) ? limit : 48);
+    if (!payload) {
+      res.status(404).json({ error: 'No such configuration' });
+      return;
+    }
+    res.json(payload);
+  } catch (error) {
+    consola.error('[Dashboard API] Error:', error);
+    res.status(500).json({ error: 'Failed to read the Jellyfin library' });
+  }
+});
+
+addon.post("/api/dashboard/jellyfin/:userUUID/library/undrop", requireDashboardAdmin, async (req, res) => {
+  try {
+    const metaId = typeof req.body?.metaId === 'string' ? req.body.metaId.trim() : '';
+    const profile = typeof req.body?.profile === 'string' ? req.body.profile : null;
+    if (!metaId) {
+      res.status(400).json({ error: 'Name the show to pick back up' });
+      return;
+    }
+    const undropped = await require('./lib/jellyfin/dashboard').undropShow(String(req.params.userUUID), profile, metaId);
+    if (undropped === null) {
+      res.status(404).json({ error: 'No such configuration' });
+      return;
+    }
+    res.json({ undropped });
+  } catch (error) {
+    consola.error('[Dashboard API] Error:', error);
+    res.status(500).json({ error: 'Failed to pick the show back up' });
+  }
+});
+
+addon.post("/api/dashboard/jellyfin/:userUUID/shows/refresh", requireDashboardAdmin, async (req, res) => {
+  try {
+    const metaId = typeof req.body?.metaId === 'string' ? req.body.metaId.trim() : '';
+    if (!metaId) {
+      res.status(400).json({ error: 'Name the show to refresh' });
+      return;
+    }
+    res.json({ refreshed: await require('./lib/jellyfin/dashboard').refreshShow(String(req.params.userUUID), metaId) });
+  } catch (error) {
+    consola.error('[Dashboard API] Error:', error);
+    res.status(500).json({ error: 'Failed to refresh the show' });
+  }
+});
+
 addon.get("/api/dashboard/jellyfin/:userUUID", requireDashboardAdmin, async (req, res) => {
   try {
     const profile = typeof req.query.profile === 'string' ? req.query.profile : null;
     const rows = parseInt(String(req.query.rows ?? ''), 10);
-    const payload = await require('./lib/jellyfin/dashboard').dashboardConfiguration(String(req.params.userUUID), profile, Number.isFinite(rows) ? rows : undefined);
+    const offset = parseInt(String(req.query.tz ?? ''), 10);
+    const payload = await require('./lib/jellyfin/dashboard').dashboardConfiguration(String(req.params.userUUID), profile, Number.isFinite(rows) ? rows : undefined, Number.isFinite(offset) && Math.abs(offset) <= 14 * 60 ? offset : 0);
     if (!payload) {
       res.status(404).json({ error: 'No such configuration' });
       return;
@@ -8616,6 +8738,44 @@ addon.put('/api/dashboard/settings/:key', requireDashboardAdmin, async (req, res
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
+});
+
+addon.get('/api/dashboard/settings/export', requireDashboardAdmin, (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(settingsService.exportSettings());
+});
+
+addon.post('/api/dashboard/settings/import', requireDashboardAdmin, async (req, res) => {
+  const { settings, confirm } = req.body || {};
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+    return res.status(400).json({ error: 'Expected a settings object mapping keys to values' });
+  }
+  const { getSettingDefinition } = require('./lib/settingsRegistry');
+  const imported = [];
+  const skipped = [];
+  const failed = [];
+  let requiresRestart = false;
+  for (const [key, raw] of Object.entries(settings)) {
+    const def = getSettingDefinition(key);
+    if (!def) { skipped.push({ key, reason: 'unknown setting' }); continue; }
+    if (def.envOnly) { skipped.push({ key, reason: 'set by environment variable only' }); continue; }
+    if (raw === null || raw === undefined) { skipped.push({ key, reason: def.sensitive ? 'secret left out of the file' : 'no value' }); continue; }
+    const value = String(raw);
+    if (settingsService.hasStoredValue(key) && settingsService.getSetting(key) === value) { skipped.push({ key, reason: 'unchanged' }); continue; }
+    const invalid = settingsService.invalidValueReason(def, value);
+    if (invalid) { failed.push({ key, reason: invalid }); continue; }
+    const block = await describeSelfDemotion(req, key, value, confirm);
+    if (block) { skipped.push({ key, reason: block.reason || block.error }); continue; }
+    try {
+      await settingsService.setSetting(key, value);
+      imported.push(key);
+      if (def.requiresRestart) requiresRestart = true;
+    } catch (error) {
+      failed.push({ key, reason: error.message });
+    }
+  }
+  if (imported.length) consola.info(`[Settings] Imported ${imported.length} setting(s) from a file`);
+  res.json({ imported, skipped, failed, requiresRestart });
 });
 
 addon.post('/api/dashboard/settings/reset/:key', requireDashboardAdmin, async (req, res) => {

@@ -1443,14 +1443,75 @@ export function useResetSetting() {
 }
 
 
+export interface SettingsImportResult {
+  imported: string[];
+  skipped: { key: string; reason: string }[];
+  failed: { key: string; reason: string }[];
+  requiresRestart: boolean;
+}
+
+/** Downloads every setting saved from the dashboard, secrets blanked. */
+export function useExportSettings() {
+  const { adminKey, logout } = useAdmin();
+
+  return useMutation({
+    mutationFn: async () => {
+      const headers: Record<string, string> = {};
+      if (adminKey) headers['x-admin-key'] = adminKey;
+      const response = await fetch('/api/dashboard/settings/export', { headers });
+      if (response.status === 401) { logout(); throw new Error('Session expired.'); }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json();
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `aiometadata-settings-${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+      return payload as { settings: Record<string, string | null>; maskedSecretKeys: string[] };
+    },
+  });
+}
+
+export function useImportSettings() {
+  const { adminKey, logout } = useAdmin();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (settings: Record<string, unknown>): Promise<SettingsImportResult> => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (adminKey) headers['x-admin-key'] = adminKey;
+      const response = await fetch('/api/dashboard/settings/import', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ settings }),
+      });
+      if (response.status === 401) { logout(); throw new Error('Session expired.'); }
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.settings });
+    },
+  });
+}
+
 export interface JellyfinSessionRow {
   profile: string;
   profileKey: string;
   viewer: string | null;
   imageUrl: string | null;
+  backdropUrl: string | null;
   title: string;
   episode: string | null;
   positionMs: number;
+  runtimeMs: number;
   paused: boolean;
   at: number;
 }
@@ -1460,6 +1521,7 @@ export interface JellyfinPlayRow {
   videoId: string;
   imageUrl: string | null;
   posterUrl: string | null;
+  backdropUrl: string | null;
   title: string;
   episode: string | null;
   seriesId: string | null;
@@ -1491,15 +1553,42 @@ export interface JellyfinSearchRow {
   lastActivity: number | null;
 }
 
+export interface JellyfinProfileSummary {
+  key: string;
+  name: string;
+  avatar: string | null;
+  sharedWith: string[];
+  inProgress: number;
+  played: number;
+  movies: number;
+  episodes: number;
+  days: Record<string, number>;
+  lastActivity: number | null;
+}
+
+export interface JellyfinSyncRow {
+  service: string;
+  profiles: string[];
+  syncedAt: number | null;
+  fullAt: number | null;
+  imported: boolean;
+  pending: number;
+  oldestPendingAt: number | null;
+  attempts: number;
+  lastError: string | null;
+}
+
 export interface JellyfinConfiguration {
   userUUID: string;
   label: string;
   profile: string | null;
-  profiles: Array<{ key: string; name: string; sharedWith: string[]; inProgress: number; played: number; lastActivity: number | null }>;
+  profiles: JellyfinProfileSummary[];
+  sync: JellyfinSyncRow[];
   sessions: JellyfinSessionRow[];
   rows: number;
   inProgress: JellyfinPlayRow[];
   recentlyPlayed: JellyfinPlayRow[];
+  totals: { progress: number; played: number };
 }
 
 function useJellyfinQuery<T>(key: readonly unknown[], path: string, options: DashboardQueryOptions & { enabledWhen?: boolean; poll?: boolean } = {}) {
@@ -1542,11 +1631,157 @@ export function useJellyfinConfiguration(userUUID: string | null, profile: strin
   const params = new URLSearchParams();
   if (profile !== null) params.set('profile', profile);
   if (rows !== null) params.set('rows', String(rows));
+  params.set('tz', String(new Date().getTimezoneOffset()));
   const suffix = params.toString() ? `?${params}` : '';
   return useJellyfinQuery<JellyfinConfiguration>(
     ['dashboard', 'jellyfin', 'configuration', userUUID, profile, rows] as const,
     `/api/dashboard/jellyfin/${encodeURIComponent(userUUID ?? '')}${suffix}`,
     { ...options, enabledWhen: Boolean(userUUID) }
+  );
+}
+
+export interface JellyfinEpisodeRef {
+  season: number | null;
+  number: number | null;
+  name?: string | null;
+}
+
+export interface JellyfinShowRow {
+  metaId: string;
+  title: string;
+  posterUrl: string | null;
+  backdropUrl: string | null;
+  source: string;
+  lastWatchedAt: number | null;
+  outcome: string;
+  next: JellyfinEpisodeRef | null;
+  from: JellyfinEpisodeRef | null;
+  last: JellyfinEpisodeRef | null;
+  airsAt: number | null;
+  episodes: number | null;
+  watched: number | null;
+  total: number | null;
+}
+
+export function useJellyfinShows(userUUID: string | null, profile: string | null, fresh: number, options: DashboardQueryOptions = {}) {
+  const params = new URLSearchParams();
+  if (profile !== null) params.set('profile', profile);
+  if (fresh) params.set('fresh', '1');
+  const suffix = params.toString() ? `?${params}` : '';
+  return useJellyfinQuery<{ rows: JellyfinShowRow[]; ms: number }>(
+    ['dashboard', 'jellyfin', 'shows', userUUID, profile, fresh] as const,
+    `/api/dashboard/jellyfin/${encodeURIComponent(userUUID ?? '')}/shows${suffix}`,
+    { ...options, enabledWhen: Boolean(userUUID), poll: false }
+  );
+}
+
+export interface JellyfinCalendarRow {
+  id: string;
+  seriesId: string | null;
+  seriesName: string;
+  name: string | null;
+  season: number | null;
+  number: number | null;
+  premiereDate: string | null;
+  played: boolean;
+  still: string | null;
+  thumb: string | null;
+  backdrop: string | null;
+  logo: string | null;
+}
+
+const CALENDAR_DAY_MS = 24 * 60 * 60 * 1000;
+
+export function useJellyfinCalendar(userUUID: string | null, profile: string | null, start: Date, days: number, options: DashboardQueryOptions = {}) {
+  const params = new URLSearchParams();
+  if (profile !== null) params.set('profile', profile);
+  params.set('from', String(start.getTime() - CALENDAR_DAY_MS));
+  params.set('to', String(start.getTime() + (days + 1) * CALENDAR_DAY_MS));
+  return useJellyfinQuery<{ rows: JellyfinCalendarRow[] }>(
+    ['dashboard', 'jellyfin', 'calendar', userUUID, profile, start.getTime(), days] as const,
+    `/api/dashboard/jellyfin/${encodeURIComponent(userUUID ?? '')}/calendar?${params}`,
+    { ...options, enabledWhen: Boolean(userUUID), poll: false }
+  );
+}
+
+export interface JellyfinLibraryRow {
+  metaId: string;
+  type: 'movie' | 'series';
+  title: string;
+  year: string | null;
+  posterUrl: string | null;
+  backdropUrl: string | null;
+  logoUrl: string | null;
+  overview: string | null;
+  score: string | null;
+  genres: string[];
+  at: number | null;
+  rating: number | null;
+}
+
+export type JellyfinLibraryTab = 'watchlist' | 'ratings' | 'dropped';
+
+export type JellyfinLibraryKind = 'all' | 'movie' | 'series';
+
+export interface JellyfinLibrary {
+  tab: JellyfinLibraryTab;
+  kind: JellyfinLibraryKind;
+  offset: number;
+  total: number;
+  kinds: { movie: number; series: number };
+  counts: Record<JellyfinLibraryTab, number>;
+  sources: string[];
+  complete: boolean;
+  rows: JellyfinLibraryRow[];
+}
+
+export const JELLYFIN_LIBRARY_PAGE = 48;
+
+export function useJellyfinLibrary(userUUID: string | null, profile: string | null, tab: JellyfinLibraryTab, kind: JellyfinLibraryKind, offset: number, options: DashboardQueryOptions = {}) {
+  const params = new URLSearchParams({ tab, kind, offset: String(offset), limit: String(JELLYFIN_LIBRARY_PAGE) });
+  if (profile !== null) params.set('profile', profile);
+  return useJellyfinQuery<JellyfinLibrary>(
+    ['dashboard', 'jellyfin', 'library', userUUID, profile, tab, kind, offset] as const,
+    `/api/dashboard/jellyfin/${encodeURIComponent(userUUID ?? '')}/library?${params}`,
+    { ...options, enabledWhen: Boolean(userUUID), poll: false }
+  );
+}
+
+export function useJellyfinUndrop() {
+  const getHeaders = useApiHeaders();
+  return async (userUUID: string, profile: string | null, metaId: string): Promise<boolean> => {
+    const response = await fetch(`/api/dashboard/jellyfin/${encodeURIComponent(userUUID)}/library/undrop`, {
+      method: 'POST',
+      headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ metaId, profile: profile ?? undefined }),
+    });
+    if (!response.ok) throw new Error(`Could not pick it back up (${response.status})`);
+    return Boolean((await response.json())?.undropped);
+  };
+}
+
+export function useJellyfinShowRefresh() {
+  const getHeaders = useApiHeaders();
+  return async (userUUID: string, metaId: string): Promise<boolean> => {
+    const response = await fetch(`/api/dashboard/jellyfin/${encodeURIComponent(userUUID)}/shows/refresh`, {
+      method: 'POST',
+      headers: { ...getHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ metaId }),
+    });
+    if (!response.ok) throw new Error(`Refresh failed (${response.status})`);
+    return Boolean((await response.json())?.refreshed);
+  };
+}
+
+export type JellyfinPlayKind = 'progress' | 'played';
+
+export function useJellyfinPlays(userUUID: string | null, profile: string | null, kind: JellyfinPlayKind, offset: number, options: DashboardQueryOptions = {}) {
+  const params = new URLSearchParams({ kind, offset: String(offset), limit: '30' });
+  if (profile !== null) params.set('profile', profile);
+  return useJellyfinQuery<{ kind: JellyfinPlayKind; profile: string | null; offset: number; rows: JellyfinPlayRow[]; done: boolean }>(
+    ['dashboard', 'jellyfin', 'plays', userUUID, profile, kind, offset] as const,
+    `/api/dashboard/jellyfin/${encodeURIComponent(userUUID ?? '')}/plays?${params}`,
+    { ...options, enabledWhen: Boolean(userUUID) && offset > 0, poll: false }
   );
 }
 

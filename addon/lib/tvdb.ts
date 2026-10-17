@@ -4,6 +4,7 @@ config();
 import { cacheWrapTvdbApi, stableStringify } from './getCache.js';
 import { to3LetterCode } from './language-map.js';
 import { readsBySeason } from '../utils/episodeOrder';
+import { normalizeTitle } from '../utils/normalizeTitle';
 import { httpPost, httpGet } from '../utils/httpClient.js';
 import { UserConfig } from '../types/index.js';
 import consola from 'consola';
@@ -101,6 +102,7 @@ interface TvdbSearchResult {
   country?: string;
   status?: string;
   slug?: string;
+  remote_ids?: Array<{ id: string; type: number; sourceName: string }>;
 }
 
 interface TvdbSeriesExtended {
@@ -532,30 +534,25 @@ function _filterTvdbSearchResults(results: TvdbSearchResult[], query: string): T
     return [];
   }
 
-  const normalizedQuery = query.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const normalizedQuery = normalizeTitle(query);
+  const compactQuery = normalizedQuery.replace(/\s/g, '');
 
-  const filteredResults = results.filter((item: TvdbSearchResult) => {
-    if (item.network === 'YouTube') {
-      return false;
-    }
+  // Most YouTube entries are channel uploads; keep the ones TMDB lists or the user named exactly.
+  const kept = results.filter((item: TvdbSearchResult) => item.network !== 'YouTube'
+    || item.remote_ids?.some(r => r.sourceName === 'TheMovieDB.com')
+    || (normalizedQuery && normalizeTitle(item.name) === normalizedQuery));
 
+  const filteredResults = kept.filter((item: TvdbSearchResult) => {
     const hasMissingPoster = !item.image_url || item.image_url.includes('/images/missing/');
     if (!item.network && hasMissingPoster) {
-      const normalizedName = item.name.toLowerCase().replace(/[^a-z0-9]/g, '');
-      if (normalizedName.includes(normalizedQuery) || normalizedQuery.includes(normalizedName)) {
-        return true;
-      }
-      return false;
+      const compactName = normalizeTitle(item.name).replace(/\s/g, '');
+      return compactName.includes(compactQuery) || compactQuery.includes(compactName);
     }
 
     return true;
   });
 
-  if (filteredResults.length === 0) {
-    return results.filter((item: TvdbSearchResult) => item.network !== 'YouTube');
-  }
-
-  return filteredResults;
+  return filteredResults.length > 0 ? filteredResults : kept;
 }
 
 async function searchSeries(query: string, config: UserConfig, offset: number = 0, limit: number = 25): Promise<TvdbSearchResult[]> {
@@ -1214,12 +1211,9 @@ async function getSeriesBackground(seriesId: string, config: UserConfig, isLands
     const seriesData = await getSeriesExtended(seriesId, config);
     if (seriesData && seriesData.artworks) {
       // Look for background artwork (type 3 is typically background)
-      let langCode3;
+      let langCode3: string | null = null;
       if (isLandscape) {
-        const langCode = config.language;
-        if (langCode) {
-          langCode3 = await to3LetterCode(langCode, config);
-        }
+        langCode3 = config.language ? await to3LetterCode(config.language, config) : 'eng';
       }
       const backgroundArtwork = findArtwork(seriesData.artworks, 3, langCode3, config);
       logger.debug(`Found background artwork for series ${seriesId}: ${backgroundArtwork}`);
@@ -1255,12 +1249,9 @@ async function getMovieBackground(movieId: string, config: UserConfig, isLandsca
   try {
     const movieData = await getMovieExtended(movieId, config);
     if (movieData && movieData.artworks) {
-      let langCode3;
+      let langCode3: string | null = null;
       if (isLandscape) {
-        const langCode = config.language;
-        if (langCode) {
-          langCode3 = await to3LetterCode(langCode, config);
-        }
+        langCode3 = config.language ? await to3LetterCode(config.language, config) : 'eng';
       }
       // Look for background artwork (type 15 is background for movies)
       const backgroundArtwork = findArtwork(movieData.artworks, 15, langCode3, config);

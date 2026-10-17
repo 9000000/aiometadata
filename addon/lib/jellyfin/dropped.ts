@@ -11,6 +11,31 @@ const held = new LRUCache<string, Set<string>>({
   ttl: envInt('JELLYFIN_RESUME_TTL', 60, 1) * 1000,
 });
 
+const changed = new LRUCache<string, Map<string, { keys: string[]; dropped: boolean }>>({
+  max: envInt('JELLYFIN_RESUME_CACHE_MAX', 500, 1),
+  ttl: envInt('JELLYFIN_DROP_HOLD', 600, 10) * 1000,
+});
+
+export function withHeldDrops(userUUID: string, config: any, dropped: Set<string>): Set<string> {
+  const { profileKey } = require('./profiles');
+  const key = `${userUUID}:${profileKey(config)}`;
+  const shows = changed.get(key);
+  if (!shows?.size) return dropped;
+  const out = new Set(dropped);
+  for (const [show, change] of shows) {
+    if (change.keys.some((k) => dropped.has(k)) === change.dropped) {
+      shows.delete(show);
+      continue;
+    }
+    for (const k of change.keys) {
+      if (change.dropped) out.add(k);
+      else out.delete(k);
+    }
+  }
+  if (!shows.size) changed.delete(key);
+  return out;
+}
+
 // Simkl, MDBList and PublicMetaDB report their dropped shows back.
 export function dropsKeptHere(config: any): boolean {
   const { readsTrackers } = require('./profiles');
@@ -27,6 +52,20 @@ export async function localDrops(userUUID: string, config: any): Promise<Set<str
   const drops = new Set(rows.map((row) => String(row.meta_id)));
   held.set(key, drops);
   return drops;
+}
+
+export async function clearLocalDrop(userUUID: string, config: any, metaId: string): Promise<boolean> {
+  const { fetchMeta } = require('./items');
+  const { idsFor } = require('./watchlist');
+  const { profileKey } = require('./profiles');
+  const meta = await fetchMeta(userUUID, 'series', metaId);
+  if (!meta) return false;
+  const keys = showKeys(String(meta.id), idsFor(meta, 'series'));
+  const local = await localDrops(userUUID, config);
+  if (!keys.some((key) => local.has(key))) return false;
+  await database.setDropped(userUUID, profileKey(config), keys, false);
+  held.delete(`${userUUID}:${profileKey(config)}`);
+  return true;
 }
 
 function showKeys(metaId: string, ids: Record<string, any>): string[] {
@@ -118,6 +157,10 @@ export async function rateSeries(userUUID: string, config: any, descriptor: any,
 
   await database.setDropped(userUUID, profileKey(config), keys, dropping);
   held.delete(`${userUUID}:${profileKey(config)}`);
+  const heldKey = `${userUUID}:${profileKey(config)}`;
+  const shows = changed.get(heldKey) ?? new Map();
+  shows.set(String(meta.id), { keys, dropped: dropping });
+  changed.set(heldKey, shows);
   if (writesTrackers(config)) {
     const { enqueueTrackerWrites } = require('../trackerOutbox');
     const services = (['simkl', 'mdblist', 'publicmetadb'] as const).filter((service) => credentialFor(config, service));

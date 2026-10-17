@@ -81,6 +81,7 @@ export function listProfiles(config: any, userUUID: string): Profile[] {
     tags: knownTags(config, config?.jellyfinUserTags),
     handoffNames: namesOf(config?.jellyfinUserHandoffNames),
     sharesHistory: true,
+    pin: isPinHash(config?.jellyfinUserPin) ? config.jellyfinUserPin : undefined,
   }];
   const seen = new Set<string>();
 
@@ -157,8 +158,9 @@ export function scopeConfigToProfile(config: any, userUUID: string, id: string |
   const profile = profileById(config, userUUID, id);
   if (!profile.id && !profile.tags.length) return config;
 
-  const held = profile.id ? withAccountOwner(config, profile.id) : config;
-  const owns = held !== config;
+  const owner = profile.id ? withAccountOwner(config, profile.id) : config;
+  const owns = owner !== config;
+  const held = profile.id && !profile.sharesHistory && !owns ? { ...owner, jellyfinAccounts: {} } : owner;
   // The main user keeps its own history and trackers whatever tags it picks.
   const scoped = profile.id
     ? {

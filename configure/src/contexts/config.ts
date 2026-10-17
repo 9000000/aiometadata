@@ -379,7 +379,7 @@ export interface AppConfig {
   timezone?: string;
   catalogs: CatalogConfig[];
   deletedCatalogs?: string[];
-  /** Collections and rows built in the Collections editor, exported as Nuvio or Fusion JSON */
+  /** Collections and rows built in the Collections editor, served to Jellyfin clients and exported as Nuvio JSON */
   collections?: BuilderEntry[];
   /** Serve the collection layout's images through this instance's image cache. */
   collectionImagesViaCache?: boolean;
@@ -454,6 +454,8 @@ export interface AppConfig {
   /** Name and picture of the main Jellyfin user, the configuration itself. */
   jellyfinUserName?: string;
   jellyfinUserAvatar?: string;
+  /** The main user's PIN: 4 to 12 digits as typed, or the hash the server saved it as. */
+  jellyfinUserPin?: string;
   jellyfinUserTags?: string[];
   jellyfinUserHandoffNames?: string[];
   jellyfinSkipSource?: SkipSource;

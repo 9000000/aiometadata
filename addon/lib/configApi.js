@@ -454,6 +454,9 @@ class ConfigApi {
           if (config.language !== undefined && config.language !== oldConfig?.language) {
             logger.debug(`Language changed from ${oldConfig?.language} to ${config.language} - new requests will use new cache key`);
           }
+          if (config.overviewLanguage !== undefined && config.overviewLanguage !== oldConfig?.overviewLanguage) {
+            logger.debug(`Overview language changed from ${oldConfig?.overviewLanguage} to ${config.overviewLanguage} - new requests will use new cache key`);
+          }
           if (config.blurThumbs !== undefined && config.blurThumbs !== oldConfig?.blurThumbs) {
             logger.debug(`Blur thumbs changed from ${oldConfig?.blurThumbs} to ${config.blurThumbs} - new requests will use new cache key`);
           }
@@ -880,6 +883,9 @@ class ConfigApi {
           }
           if (config.language !== undefined && config.language !== oldConfig?.language) {
             logger.debug(`Language changed from ${oldConfig?.language} to ${config.language} - new requests will use new cache key`);
+          }
+          if (config.overviewLanguage !== undefined && config.overviewLanguage !== oldConfig?.overviewLanguage) {
+            logger.debug(`Overview language changed from ${oldConfig?.overviewLanguage} to ${config.overviewLanguage} - new requests will use new cache key`);
           }
           if (config.blurThumbs !== undefined && config.blurThumbs !== oldConfig?.blurThumbs) {
             logger.debug(`Blur thumbs changed from ${oldConfig?.blurThumbs} to ${config.blurThumbs} - new requests will use new cache key`);

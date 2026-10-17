@@ -530,6 +530,7 @@ async function handleTvdbCollection(collectionId, language, config, userUUID) {
       if (!details || !Array.isArray(details.entities)) return { meta: null };
 
       const langCode3 = await to3LetterCode(language, config);
+      const overviewLangCode3 = config.overviewLanguage ? (await to3LetterCodeResolved(config.overviewLanguage, config)).code3 : langCode3;
 
       // Walk the language chain rather than dropping straight to English
       let translation = null;
@@ -538,8 +539,16 @@ async function handleTvdbCollection(collectionId, language, config, userUUID) {
         if (translation?.name) break;
       }
 
+      let overviewTranslation = translation;
+      if (config.overviewLanguage && overviewLangCode3 !== langCode3) {
+        for (const code of tvdbLanguageChain(overviewLangCode3)) {
+          overviewTranslation = await tvdb.getCollectionTranslations(collectionId, code, config);
+          if (overviewTranslation?.overview) break;
+        }
+      }
+
       const name = translation?.name || details.name;
-      const overview = translation?.overview || details.overview;
+      const overview = overviewTranslation?.overview || translation?.overview || details.overview;
       const poster = details.image 
         ? (details.image.startsWith('http') ? details.image : `${TVDB_IMAGE_BASE}${details.image}`)
         : undefined;

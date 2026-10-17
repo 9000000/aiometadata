@@ -693,7 +693,8 @@ function parseMedia(el, type, genreList = [], config = {}) {
   let name = type === 'movie' ? el.title : el.name;
 
   if(el.translations){
-    el.overview = processOverviewTranslations(el.translations, config.language, el.overview);
+    const overviewLang = config.overviewLanguage || config.language || 'en-US';
+    el.overview = processOverviewTranslations(el.translations, overviewLang, el.overview);
     const originalTitle = type === 'movie' ? el.original_title : el.original_name;
     name = processTitleTranslations(el.translations, config.language, name, type, el.original_language, originalTitle);
   }

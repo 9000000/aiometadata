@@ -13,8 +13,22 @@ export type TmdbLocalizationStamp = {
 function findExactTranslation(translations: any, language: string): any {
   const list = translations?.translations;
   if (!Array.isArray(list)) return null;
-  const [iso639, iso3166] = String(language).split('-');
-  return list.find((t: any) => t?.iso_639_1 === iso639 && t?.iso_3166_1 === iso3166) || null;
+  const [iso639, iso3166] = String(language || '').split('-');
+  if (iso3166) {
+    const exact = list.find((t: any) => t?.iso_639_1 === iso639 && t?.iso_3166_1 === iso3166);
+    if (exact && exact.data && (exact.data.overview?.trim() || exact.data.title?.trim() || exact.data.name?.trim())) {
+      return exact;
+    }
+    if (exact) {
+      const fallbackWithData = list.find((t: any) =>
+        t?.iso_639_1 === iso639 && t?.data && (t.data.overview?.trim() || t.data.title?.trim() || t.data.name?.trim())
+      );
+      return fallbackWithData || exact;
+    }
+  }
+  return list.find((t: any) =>
+    t?.iso_639_1 === iso639 && t?.data && (t.data.overview?.trim() || t.data.title?.trim() || t.data.name?.trim())
+  ) || list.find((t: any) => t?.iso_639_1 === iso639) || null;
 }
 
 export function classifyTmdbLocalization(

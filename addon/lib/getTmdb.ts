@@ -956,14 +956,25 @@ export async function getTvWatchProviders(params: any, config: UserConfig) {
 
 /** utils/tmdbLocalization.ts copies this matching rule; relax one, relax both. */
 export function getTranslations(translations: any, language: string) {
-  if (translations?.translations) {
-    const iso639 = language.split('-')[0];
-    const iso3166 = language.split('-')[1];
-    const translation = translations.translations.find((t: any) => t.iso_639_1 === iso639 && t.iso_3166_1 === iso3166);
-    if (translation) {
-      return translation;
+  if (translations?.translations && Array.isArray(translations.translations)) {
+    const [iso639, iso3166] = String(language || '').split('-');
+    if (iso3166) {
+      const exactMatch = translations.translations.find((t: any) => t.iso_639_1 === iso639 && t.iso_3166_1 === iso3166);
+      if (exactMatch && exactMatch.data && (exactMatch.data.overview?.trim() || exactMatch.data.title?.trim() || exactMatch.data.name?.trim())) {
+        return exactMatch;
+      }
+      if (exactMatch) {
+        const fallbackWithData = translations.translations.find((t: any) =>
+          t.iso_639_1 === iso639 && t.data && (t.data.overview?.trim() || t.data.title?.trim() || t.data.name?.trim())
+        );
+        return fallbackWithData || exactMatch;
+      }
     }
-    return null;
+    const baseMatch = translations.translations.find((t: any) =>
+      t.iso_639_1 === iso639 && t.data && (t.data.overview?.trim() || t.data.title?.trim() || t.data.name?.trim())
+    ) || translations.translations.find((t: any) => t.iso_639_1 === iso639);
+
+    return baseMatch || null;
   }
   return null;
 }

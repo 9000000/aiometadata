@@ -217,6 +217,7 @@ export interface ManagerAccount {
 
 export interface AppConfig {
   language: string;
+  overviewLanguage?: string;
   addonName: string;
   includeAdult: boolean;
   blurThumbs: boolean;

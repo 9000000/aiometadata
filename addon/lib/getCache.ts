@@ -61,19 +61,6 @@ function parsePositiveIntEnv(envValue: any, defaultValue: number, minValue: numb
 
 
 const { withEpoch, withGlobalEpoch }: any = require('./cacheEpoch');
-
-const l1MemoryCache = new LRUCache<string, Buffer>({
-  maxSize: 50 * 1024 * 1024, // 100MB max L1 cache for node memory
-  sizeCalculation: (value: Buffer, key: string) => {
-    return value?.length || 1024;
-  },
-  ttl: 1000 * 60 * 60 * 24 // 24h
-});
-
-const metaAliasMemoryCache = new LRUCache<string, string | null>({
-  max: 5000,
-  ttl: 1000 * 60 * 30 // 30m in-memory cache for meta aliases
-});
 const { clampTtlToWarmWindow }: any = require('./catalogWarmWindow');
 const { clampMetaTtlToAirWindow }: any = require('./metaAirWindow');
 const {
@@ -186,10 +173,7 @@ async function deleteKeysByPattern(pattern: string, options: any = {}): Promise<
     for (let i = 0; i < keys.length; i += batchSize) {
       const chunk = keys.slice(i, i + batchSize);
       const pipeline = redis.pipeline();
-      for (const k of chunk) {
-        pipeline.del(k);
-        l1MemoryCache.delete(k);
-      }
+      for (const k of chunk) pipeline.del(k);
       await pipeline.exec();
       totalDeleted += chunk.length;
     }
@@ -396,7 +380,6 @@ async function attemptSelfHealing(key: string, originalError: any): Promise<bool
     selfHealingLogger.info(`Attempting to repair corrupted cache entry: ${key}`);
 
     await redis.del(key);
-    l1MemoryCache.delete(key);
     cacheHealth.corruptedEntries++;
 
     const errorResult = {
@@ -407,9 +390,7 @@ async function attemptSelfHealing(key: string, originalError: any): Promise<bool
       timestamp: new Date().toISOString()
     };
 
-    const encodedError = await encodeCachePayload(errorResult);
-    await redis.set(key, encodedError, 'EX', ERROR_TTL_STRATEGIES.CACHE_CORRUPTED);
-    l1MemoryCache.set(key, encodedError);
+    await redis.set(key, await encodeCachePayload(errorResult), 'EX', ERROR_TTL_STRATEGIES.CACHE_CORRUPTED);
 
     selfHealingLogger.success(`Successfully repaired corrupted cache entry: ${key}`);
     return true;
@@ -547,22 +528,9 @@ async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: n
 
   while (retries <= maxRetries) {
     try {
-      let cached = l1MemoryCache.get(versionedKey);
-      let pttlMs = -1;
-
-      if (!cached) {
-        const [redisCached, redisPttl] = wantsRefreshAhead
-          ? await Promise.all([redis.getBuffer(versionedKey), redis.pttl(versionedKey)])
-          : [await redis.getBuffer(versionedKey), -1];
-        cached = redisCached;
-        pttlMs = redisPttl;
-
-        if (cached) {
-          l1MemoryCache.set(versionedKey, cached);
-        }
-      } else if (wantsRefreshAhead) {
-        pttlMs = await redis.pttl(versionedKey);
-      }
+      const [cached, pttlMs] = wantsRefreshAhead
+        ? await Promise.all([redis.getBuffer(versionedKey), redis.pttl(versionedKey)])
+        : [await redis.getBuffer(versionedKey), -1];
 
       if (cached) {
         try {
@@ -573,7 +541,6 @@ async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: n
             if (errorAge > ERROR_TTL_STRATEGIES.TEMPORARY_ERROR * 1000) {
               cacheLogger.debug(`[Cache] Retrying expired temporary error for ${versionedKey}`);
               await redis.del(versionedKey);
-              l1MemoryCache.delete(versionedKey);
             } else {
               cacheLogger.debug(`[Cache] Cached error returned for ${versionedKey}`);
               updateCacheHealth(versionedKey, 'cached-error', true);
@@ -603,9 +570,7 @@ async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: n
                     if (resultClassifier(fresh, null, key).type !== 'SUCCESS') return false;
                     if (!mayReplaceOnRefresh(parsed, fresh)) return false;
                     if (!cacheValidator.validateBeforeCache(fresh, contentTypeForKey(key)).isValid) return false;
-                    const encodedPayload = await encodeCachePayload(fresh);
-                    const written = await redis.set(versionedKey, encodedPayload, 'EX', ttl, 'XX');
-                    if (written) l1MemoryCache.set(versionedKey, encodedPayload);
+                    const written = await redis.set(versionedKey, await encodeCachePayload(fresh), 'EX', ttl, 'XX');
                     return Boolean(written);
                   }, pttlMs).catch(() => { });
                 }
@@ -651,9 +616,7 @@ async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: n
           }
 
           try {
-            const encodedPayload = await encodeCachePayload(result);
-            await redis.set(versionedKey, encodedPayload, 'EX', finalTtl);
-            l1MemoryCache.set(versionedKey, encodedPayload);
+            await redis.set(versionedKey, await encodeCachePayload(result), 'EX', finalTtl);
           } catch (err: any) {
             cacheLogger.warn(`Failed to write to Redis for key ${versionedKey}:`, err);
             updateCacheHealth(versionedKey, 'error', false);
@@ -681,9 +644,7 @@ async function cacheWrapInternal(key: string, method: () => Promise<any>, ttl: n
               message: error.message,
               timestamp: new Date().toISOString()
             };
-            const encodedError = await encodeCachePayload(errorResult);
-            await redis.set(versionedKey, encodedError, 'EX', errorTtl);
-            l1MemoryCache.set(versionedKey, encodedError);
+            await redis.set(versionedKey, await encodeCachePayload(errorResult), 'EX', errorTtl);
             cacheLogger.warn(`Cached ${classification.type} error for ${versionedKey} for ${errorTtl}s`);
           } catch (err: any) {
             cacheLogger.warn(`Failed to cache error for key ${versionedKey}:`, err);
@@ -750,19 +711,7 @@ async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, 
 
   while (retries <= maxRetries) {
     try {
-      let cached: any = null;
-      if (refetch) {
-        l1MemoryCache.delete(versionedKey);
-      } else {
-        cached = l1MemoryCache.get(versionedKey);
-        if (!cached) {
-          cached = await redis.getBuffer(versionedKey);
-          if (cached) {
-            l1MemoryCache.set(versionedKey, cached);
-          }
-        }
-      }
-
+      const cached = refetch ? null : await redis.getBuffer(versionedKey);
       if (cached) {
         try {
           const parsed = await decodeCachePayload(cached);
@@ -771,7 +720,6 @@ async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, 
             const errorAge = Date.now() - new Date(parsed.timestamp).getTime();
             if (errorAge > ERROR_TTL_STRATEGIES.TEMPORARY_ERROR * 1000) {
               globalCacheLogger.debug(`[Global-Cache] Retrying expired temporary error for ${truncateCacheKey(versionedKey)}`);
-              l1MemoryCache.delete(versionedKey);
               await redis.del(versionedKey);
             } else {
               globalCacheLogger.debug(`[Global-Cache] Cached error returned for ${truncateCacheKey(versionedKey)}`);
@@ -789,7 +737,6 @@ async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, 
           }
         } catch (parseError: any) {
           globalCacheLogger.warn(`Corrupted cache entry for ${versionedKey}, attempting self-healing`);
-          l1MemoryCache.delete(versionedKey);
           await attemptSelfHealing(versionedKey, parseError);
         }
       }
@@ -816,9 +763,7 @@ async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, 
         }
 
         if (result !== null && result !== undefined) {
-          const encodedPayload = await encodeCachePayload(result);
-          await redis.set(versionedKey, encodedPayload, 'EX', finalTtl);
-          l1MemoryCache.set(versionedKey, encodedPayload);
+          await redis.set(versionedKey, await encodeCachePayload(result), 'EX', finalTtl);
         }
       } else {
         globalCacheLogger.debug(`[Global-Cache] Skipping cache for ${versionedKey} (TTL: 0)`);
@@ -842,9 +787,7 @@ async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, 
               message: error.message,
               timestamp: new Date().toISOString()
             };
-            const encodedError = await encodeCachePayload(errorResult);
-            await redis.set(versionedKey, encodedError, 'EX', errorTtl);
-            l1MemoryCache.set(versionedKey, encodedError);
+            await redis.set(versionedKey, await encodeCachePayload(errorResult), 'EX', errorTtl);
             globalCacheLogger.warn(`Cached ${classification.type} error for ${versionedKey} for ${errorTtl}s`);
           } catch (err: any) {
             globalCacheLogger.warn(`Failed to cache error for key ${versionedKey}:`, err);
@@ -2119,16 +2062,10 @@ async function writeMetaComponentsBatchWithConfig({ config, metas, ttl = META_TT
 }
 
 async function readMetaAlias({ config, metaId, type = null, useShowPoster = false }: { config: any; metaId: string; type?: string | null; useShowPoster?: boolean }): Promise<string | null> {
-  const cacheKey = withEpoch(buildMetaAliasCacheKey({ config, metaId, type, useShowPoster }));
-  const inMem = metaAliasMemoryCache.get(cacheKey);
-  if (inMem !== undefined) return inMem;
-
   if (!redis) return null;
   try {
-    const aliased = await redis.get(cacheKey);
-    const result = typeof aliased === 'string' && aliased ? aliased : null;
-    metaAliasMemoryCache.set(cacheKey, result);
-    return result;
+    const aliased = await redis.get(withEpoch(buildMetaAliasCacheKey({ config, metaId, type, useShowPoster })));
+    return typeof aliased === 'string' && aliased ? aliased : null;
   } catch (error: any) {
     cacheLogger.warn(`[Meta] Alias read failed for ${metaId}: ${error?.message}`);
     return null;
@@ -2136,12 +2073,9 @@ async function readMetaAlias({ config, metaId, type = null, useShowPoster = fals
 }
 
 async function writeMetaAlias({ config, metaId, aliasTo, ttl = META_TTL(), type = null, useShowPoster = false }: { config: any; metaId: string; aliasTo: string; ttl?: number; type?: string | null; useShowPoster?: boolean }): Promise<void> {
-  if (!metaId || !aliasTo || metaId === aliasTo) return;
-  const cacheKey = withEpoch(buildMetaAliasCacheKey({ config, metaId, type, useShowPoster }));
-  metaAliasMemoryCache.set(cacheKey, aliasTo);
-  if (!redis) return;
+  if (!redis || !metaId || !aliasTo || metaId === aliasTo) return;
   try {
-    await redis.set(cacheKey, aliasTo, 'EX', ttl);
+    await redis.set(withEpoch(buildMetaAliasCacheKey({ config, metaId, type, useShowPoster })), aliasTo, 'EX', ttl);
   } catch (error: any) {
     cacheLogger.warn(`[Meta] Alias write failed for ${metaId} -> ${aliasTo}: ${error?.message}`);
   }
@@ -2735,8 +2669,6 @@ function getCacheHealth(): any {
     coldStoreHits: cacheHealth.coldStoreHits,
     coldStoreMisses: cacheHealth.coldStoreMisses,
     coldStoreComponents: cacheHealth.coldStoreComponents,
-    l1Entries: l1MemoryCache.size,
-    l1Bytes: l1MemoryCache.calculatedSize,
     refreshAhead: getRefreshAheadStats(),
     hitRate: total > 0 ? ((cacheHealth.hits / total) * 100).toFixed(2) : '0.00',
     errorRate: total > 0 ? ((cacheHealth.errors / total) * 100).toFixed(2) : '0.00',
@@ -2758,7 +2690,6 @@ function clearCacheHealth(): void {
   cacheHealth.coldStoreMisses = 0;
   cacheHealth.coldStoreComponents = 0;
   resetRefreshAheadStats();
-  l1MemoryCache.clear();
   cacheHealth.errorCounts = {};
   cacheHealth.keyAccessCounts.clear();
   cacheHealthLogger.info('Statistics cleared');
@@ -2772,7 +2703,6 @@ async function clearCache(key: string): Promise<number | undefined> {
 
   try {
     const result = await redis.del(key);
-    l1MemoryCache.delete(key);
     cacheLogger.info(`Cleared key: ${key} (${result} keys removed)`);
     return result;
   } catch (error: any) {
@@ -2877,7 +2807,5 @@ module.exports = {
   getMemoryStats: () => ({
     inFlightRequests: inFlightRequests.size,
     keyAccessCounts: cacheHealth.keyAccessCounts.size,
-    l1Entries: l1MemoryCache.size,
-    l1Bytes: l1MemoryCache.calculatedSize,
   }),
 };

@@ -5,7 +5,6 @@ import { createInterface } from 'readline';
 import { pipeline } from 'stream';
 import { request } from 'undici';
 import consola from 'consola';
-import { LRUCache } from 'lru-cache';
 import redis from './redisClient';
 import { RatingsTable, type ImdbRating } from './imdbRatingsTable';
 const buildInfo = require('./buildInfo');
@@ -28,12 +27,6 @@ const UPDATE_INTERVAL_HOURS = parseInt(process.env.IMDB_RATINGS_UPDATE_INTERVAL_
 const UPDATE_INTERVAL_MS = UPDATE_INTERVAL_HOURS * 60 * 60 * 1000;
 const RETRY_BASE_MS = 15 * 60 * 1000;
 const MIN_VOTES = 20;
-
-// L1 Memory Cache: Caches IMDb ratings in RAM for 1 hour to prevent duplicate HGET/HMGET calls
-const imdbRatingMemoryCache = new LRUCache<string, ImdbRating | null>({
-  max: 10000,
-  ttl: 1000 * 60 * 60, // 1 hour
-});
 
 // State tracking
 let table: RatingsTable | null = null;
@@ -205,18 +198,10 @@ export async function getImdbRating(imdbId: string): Promise<ImdbRating | null> 
   if (!imdbId) return null;
   if (isImdbRatingsDisabled()) return null;
 
-  const inMem = imdbRatingMemoryCache.get(imdbId);
-  if (inMem !== undefined) return inMem;
-
   totalRequests++;
   const rating = table?.get(imdbId) ?? null;
-  if (rating) {
-    cacheHits++;
-    imdbRatingMemoryCache.set(imdbId, rating);
-  } else {
-    cacheMisses++;
-    imdbRatingMemoryCache.set(imdbId, null);
-  }
+  if (rating) cacheHits++;
+  else cacheMisses++;
   return rating;
 }
 

@@ -285,7 +285,7 @@ async function startServer(): Promise<void> {
   }
 
   const metaColdStore = require('./lib/metaColdStore');
-  if (!isLiteMode() && metaColdStore.isEnabled()) {
+  if (metaColdStore.isEnabled()) {
     metaColdStore.init();
     shutdownSequence.register('meta cold store', async () => {
       await metaColdStore.flushNow();

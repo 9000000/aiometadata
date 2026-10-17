@@ -1607,6 +1607,7 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
     { label: 'Simkl watchlist', matches: idOnly.startsWith('simkl.watchlist.') || idOnly.startsWith('simkl.upnext') },
     { label: 'Simkl custom list', matches: idOnly.startsWith('simkl.list.'), min: parsePositiveIntEnv(require('./settingsService').getSetting('SIMKL_LIST_MIN_TTL'), 300, 60), floorDefault: true },
     { label: 'Letterboxd', matches: idOnly.startsWith('letterboxd.') },
+    { label: 'Rotten Tomatoes', matches: idOnly.startsWith('rt.') },
     { label: 'custom manifest', matches: idOnly.startsWith('custom.') },
     { label: 'AniList', matches: idOnly.startsWith('anilist.') },
     { label: 'PublicMetaDB', matches: idOnly.startsWith('publicmetadb.') },

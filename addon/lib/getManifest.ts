@@ -23,6 +23,7 @@ import { fetchLumiereGenres, lumiereApiBase, lumiereGenreLabel, lumiereListOf } 
 const { getSetting }: any = require('./settingsService');
 import consola from 'consola';
 import { hasAnyWatchTrackingEnabled } from './watchTracking';
+import { RT_GENRES } from './getRottenTomatoes.js';
 const logger = consola.withTag('Manifest');
 
 
@@ -496,6 +497,39 @@ async function createLetterboxdCatalog(userCatalog: any, showPrefix: boolean = f
     return catalog;
   } catch (error: any) {
     logger.error(`Error creating Letterboxd catalog ${userCatalog.id}:`, error.message);
+    return null;
+  }
+}
+
+async function createRottenTomatoesCatalog(userCatalog: any, showPrefix: boolean = false, prefixName: string = "AIOMetadata"): Promise<any> {
+  try {
+    logger.debug(`Creating Rotten Tomatoes catalog: ${userCatalog.id} (${userCatalog.type})`);
+
+    const catalogType = userCatalog.displayType || userCatalog.type;
+    let finalId = userCatalog.id;
+    if (userCatalog.displayType) {
+      finalId = `${userCatalog.id}_${userCatalog.type}`;
+    }
+
+    let genreOptions = [...RT_GENRES];
+    genreOptions = userCatalog.showInHome ? genreOptions : ['None', ...genreOptions];
+
+    const catalog = {
+      id: finalId,
+      type: catalogType,
+      name: `${showPrefix ? `${prefixName} - ` : ""}${userCatalog.name}`,
+      pageSize: parseInt(process.env.CATALOG_LIST_ITEMS_SIZE as string) || 20,
+      extra: [
+        { name: "genre", options: genreOptions, isRequired: !userCatalog.showInHome },
+        { name: "skip" },
+      ],
+      showInHome: userCatalog.showInHome
+    };
+
+    logger.debug(`Rotten Tomatoes catalog created successfully: ${catalog.id}`);
+    return catalog;
+  } catch (error: any) {
+    logger.error(`Error creating Rotten Tomatoes catalog ${userCatalog.id}:`, error.message);
     return null;
   }
 }
@@ -1181,6 +1215,9 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
       if (userCatalog.id.startsWith('aiom.watchlist.')) {
         return true;
       }
+      if (userCatalog.id.startsWith('rt.')) {
+        return true;
+      }
       if (!catalogDef) {
         logger.debug(`Catalog ${userCatalog.id} failed filter: no catalog definition`);
         return false;
@@ -1341,6 +1378,12 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
             extra,
             showInHome: userCatalog.showInHome
           };
+      }
+      if (userCatalog.id.startsWith('rt.')) {
+          logger.debug(`Processing Rotten Tomatoes catalog: ${userCatalog.id}`);
+          const result = await createRottenTomatoesCatalog(userCatalog, showPrefix, prefixName);
+          logger.debug(`Rotten Tomatoes catalog result:`, result ? 'success' : 'failed');
+          return result;
       }
       const catalogDef = getCatalogDefinition(userCatalog.id);
       let catalogOptions: string[];

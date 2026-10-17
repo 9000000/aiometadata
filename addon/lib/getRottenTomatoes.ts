@@ -4,10 +4,31 @@ import { cacheWrap, cacheWrapGlobal, cacheWrapMetaSmart } from './getCache.js';
 import { getMeta } from './getMeta.js';
 import { searchMovie, searchTv, movieExternalIds, tvExternalIds } from './getTmdb.js';
 import consola from 'consola';
+import nameToImdb from 'name-to-imdb';
 
 const logger = consola.withTag('RottenTomatoes');
 
 const RT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+export const RT_GENRES = [
+  'Action',
+  'Adventure',
+  'Animation',
+  'Anime',
+  'Biography',
+  'Comedy',
+  'Crime',
+  'Documentary',
+  'Drama',
+  'Fantasy',
+  'Horror',
+  'Kids & Family',
+  'Mystery & Thriller',
+  'Romance',
+  'Sci-Fi',
+  'War',
+  'Western',
+];
 
 export const RT_GENRE_MAP: Record<string, string> = {
   'action': 'action',
@@ -34,7 +55,7 @@ export const RT_GENRE_MAP: Record<string, string> = {
   'western': 'western',
 };
 
-function normalizeRtGenre(genreName: string | undefined): string | null {
+export function normalizeRtGenre(genreName: string | undefined): string | null {
   if (!genreName || genreName.toLowerCase() === 'none' || genreName.toLowerCase() === 'all') {
     return null;
   }
@@ -42,12 +63,12 @@ function normalizeRtGenre(genreName: string | undefined): string | null {
   return RT_GENRE_MAP[clean] || clean.replace(/ & /g, '_and_').replace(/[ -]/g, '_').replace(/\+/g, '');
 }
 
-function getRtListEndpoint(catalogId: string, type: string): string {
-  const cleanId = catalogId.replace(/^rt\./, '');
+export function getRtListEndpoint(catalogId: string, type: string): string {
+  const cleanId = catalogId.replace(/^rt\./, '').replace(/_(movie|series|anime|all)$/, '');
 
   if (type === 'movie') {
     if (cleanId === 'in_theaters') {
-      return 'movies_in_theaters/critics:certified_fresh';
+      return 'movies_in_theaters/sort:popular';
     }
     if (cleanId === 'verified_hot') {
       return 'movies_at_home/audience:verified_hot~sort:popular';
@@ -85,6 +106,18 @@ function extractYear(item: any): number | undefined {
   return undefined;
 }
 
+function resolveNameToImdb(title: string, year?: number, type?: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    nameToImdb({ name: title, ...(year ? { year } : {}), ...(type ? { type } : {}) }, (err: any, res: string) => {
+      if (err || !res) {
+        resolve(null);
+      } else {
+        resolve(res);
+      }
+    });
+  });
+}
+
 /**
  * Resolve Rotten Tomatoes item to TMDB and IMDb IDs
  */
@@ -100,6 +133,7 @@ async function resolveRtItemToIds(item: any, type: string, config: UserConfig): 
     const year = extractYear(item);
     const tmdbType = type === 'movie' ? 'movie' : 'series';
 
+    // 1. Try TMDB search first
     try {
       let tmdbResult: any;
       if (tmdbType === 'movie') {
@@ -123,34 +157,43 @@ async function resolveRtItemToIds(item: any, type: string, config: UserConfig): 
         tmdbItem = tmdbResult?.results?.[0];
       }
 
-      if (!tmdbItem?.id) {
-        logger.debug(`No TMDB match found for RT item: "${title}" (${year || 'unknown year'})`);
-        return null;
+      if (tmdbItem?.id) {
+        const tmdbId = tmdbItem.id;
+        let imdbId: string | undefined;
+
+        if (tmdbType === 'movie') {
+          const externalIds = await movieExternalIds(String(tmdbId), config);
+          imdbId = externalIds?.imdb_id;
+        } else {
+          const externalIds = await tvExternalIds(String(tmdbId), config);
+          imdbId = externalIds?.imdb_id;
+        }
+
+        return { tmdbId, imdbId };
       }
-
-      const tmdbId = tmdbItem.id;
-      let imdbId: string | undefined;
-
-      if (tmdbType === 'movie') {
-        const externalIds = await movieExternalIds(String(tmdbId), config);
-        imdbId = externalIds?.imdb_id;
-      } else {
-        const externalIds = await tvExternalIds(String(tmdbId), config);
-        imdbId = externalIds?.imdb_id;
-      }
-
-      return { tmdbId, imdbId };
     } catch (err: any) {
-      logger.warn(`Error resolving RT item "${title}": ${err.message}`);
-      return null;
+      logger.debug(`TMDB search failed for RT item "${title}": ${err.message}`);
     }
+
+    // 2. Fallback to nameToImdb
+    try {
+      const imdbId = await resolveNameToImdb(title, year, tmdbType);
+      if (imdbId) {
+        return { imdbId };
+      }
+    } catch (err: any) {
+      logger.debug(`nameToImdb failed for RT item "${title}": ${err.message}`);
+    }
+
+    logger.debug(`No match found for RT item: "${title}" (${year || 'unknown year'})`);
+    return null;
   }, 30 * 24 * 60 * 60); // 30 days cache for ID resolution
 }
 
 /**
  * Fetch raw catalog items list from Rotten Tomatoes CNAPI
  */
-async function fetchRtBrowseList(listEndpoint: string, genreSlug: string | null, maxItems = 100): Promise<any[]> {
+async function fetchRtBrowseList(listEndpoint: string, genreSlug: string | null, maxItems = 120): Promise<any[]> {
   const genreQuery = genreSlug ? `~genres:${genreSlug}` : '';
   const allItems: any[] = [];
   let after = '';
@@ -202,8 +245,10 @@ export async function getRottenTomatoesCatalog(
   try {
     const listEndpoint = getRtListEndpoint(catalogId, type);
     const genreSlug = normalizeRtGenre(genreName);
-    const catalogConfig = config.catalogs?.find(c => c.id === catalogId && c.type === type);
+    const cleanCatalogId = catalogId.replace(/_(movie|series|anime|all)$/, '');
+    const catalogConfig = config?.catalogs?.find(c => (c.id === catalogId || c.id === cleanCatalogId) && (c.type === type || c.displayType === type));
     const ttl = catalogConfig?.cacheTTL || 43200; // 12 hours default
+    const resolvedUserUUID = userUUID || config?.userUUID || '';
 
     logger.info(`Fetching Rotten Tomatoes Catalog: ${catalogId} (${type}), Genre: ${genreSlug || 'all'}, Page: ${page}`);
 
@@ -242,9 +287,9 @@ export async function getRottenTomatoesCatalog(
           const itemType = type === 'movie' ? 'movie' : 'series';
 
           const metaResult = await cacheWrapMetaSmart(
-            userUUID,
+            resolvedUserUUID,
             stremioId,
-            async () => getMeta(itemType, language, stremioId, config, userUUID, includeVideos),
+            async () => getMeta(itemType, language, stremioId, config, resolvedUserUUID, includeVideos),
             undefined,
             { enableErrorCaching: true, maxRetries: 2, config },
             itemType as any,
@@ -267,3 +312,4 @@ export async function getRottenTomatoesCatalog(
     return [];
   }
 }
+

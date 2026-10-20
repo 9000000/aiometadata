@@ -564,7 +564,9 @@ function endDate(meta: any): string | null {
 function peopleFrom(meta: any, serverId: string): any[] {
   const extras = meta.app_extras || {};
   const person = (member: any, type: string, role: string) => {
-    const id = encodeJellyfinId({ k: 'person', n: String(member?.name || '') });
+    const source = Number(member?.tvdbId) > 0 ? { s: 'tvdb' as const, x: Number(member.tvdbId) }
+      : Number(member?.tmdbId) > 0 ? { s: 'tmdb' as const, x: Number(member.tmdbId) } : {};
+    const id = encodeJellyfinId({ k: 'person', n: String(member?.name || ''), ...source });
     // A client only asks for a portrait when the tag is present, so registering
     // the photo and setting it have to happen together.
     if (member?.photo) rememberImages(serverId, id, { primary: member.photo });
@@ -579,6 +581,13 @@ function peopleFrom(meta: any, serverId: string): any[] {
 
   const seen = new Set<string>();
   return people.filter((p: any) => p.Name && !seen.has(`${p.Type}|${p.Id}`) && seen.add(`${p.Type}|${p.Id}`));
+}
+
+export function originalLanguage(meta: any): string | null {
+  const { languageCode } = require('./streams');
+  const { subtitleLanguage } = require('./subtitles');
+  const raw = meta?._originalLanguage || meta?._providerArt?.originalLanguage || (meta?._providerArt?.anime ? 'ja' : null);
+  return raw ? subtitleLanguage(String(raw), languageCode) || null : null;
 }
 
 // A direct video link plays in the client's own player, so those go first.
@@ -641,11 +650,12 @@ export function metaToBaseItem(
   const kind = itemType === 'Series' ? 'series' : 'movie';
   const id = encodeJellyfinId({ k: kind, t: mediaType, i: String(meta.id) });
 
+  const wide = meta.posterShape === 'landscape' && Boolean(meta.poster);
   const images: ItemImages = {
     primary: meta.poster || undefined,
     backdrop: meta.background || undefined,
     logo: meta.logo || undefined,
-    thumb: meta.landscapePoster || undefined,
+    thumb: (wide ? meta.poster : meta.landscapePoster) || undefined,
   };
   rememberImages(serverId, id, images);
 
@@ -653,6 +663,7 @@ export function metaToBaseItem(
   if (images.primary) imageTags.Primary = imageTag(images.primary);
   if (images.logo) imageTags.Logo = imageTag(images.logo);
   if (images.thumb) imageTags.Thumb = imageTag(images.thumb);
+  if (wide) imageTags.Primary = wideTag(imageTags.Thumb);
   const ids = providerIds(meta);
 
   return {
@@ -684,12 +695,13 @@ export function metaToBaseItem(
     Tags: Array.isArray(meta.keywords) ? meta.keywords : [],
     Taglines: [],
     RemoteTrailers: remoteTrailers(meta),
+    OriginalLanguage: originalLanguage(meta),
     ImageTags: imageTags,
     BackdropImageTags: images.backdrop ? [imageTag(images.backdrop)] : [],
     ImageBlurHashes: {},
     UserData: { ...EMPTY_USER_DATA, Key: id, ItemId: id },
     LocationType: 'FileSystem',
-    PrimaryImageAspectRatio: itemType === 'Movie' ? 0.6666666666666666 : 0.6666666666666666,
+    PrimaryImageAspectRatio: wide ? 16 / 9 : 0.6666666666666666,
     CanDelete: false,
     CanDownload: itemType === 'Movie',
     PlayAccess: 'Full',
@@ -794,6 +806,12 @@ const metaMemo = new LRUCache<string, any>({
 });
 const metaInFlight = new Map<string, Promise<any | null>>();
 
+function episodeKindExtension(video: any): any {
+  const filler = (video.isFiller ?? video.filler) === true;
+  const recap = (video.isRecap ?? video.recap) === true;
+  return filler || recap ? { aiostreams: { ...(filler ? { filler: true } : {}), ...(recap ? { recap: true } : {}) } } : {};
+}
+
 export async function fetchMeta(
   userUUID: string,
   stremioType: string,
@@ -822,7 +840,7 @@ async function readMeta(
   const work = (async () => {
     try {
       const { invokeRoute } = require('../inProcessRoutes');
-      const reply = await invokeRoute('meta', url, { userUUID, type: stremioType, id, ...(beforeArt ? { beforeArt: '1' } : {}) }, routeTimeout());
+      const reply = await invokeRoute('meta', url, { userUUID, type: stremioType, id, episodeKinds: '1', ...(beforeArt ? { beforeArt: '1' } : {}) }, routeTimeout());
       if (reply.status < 200 || reply.status >= 300) {
         logger.debug(`Meta ${stremioType}/${id} returned ${reply.status}`);
         return null;
@@ -1067,6 +1085,7 @@ export function buildEpisode(
       SeasonId: hasSeason ? parentSeasonId : null,
       SeriesId: seriesId,
       SeriesName: meta.name,
+      OriginalLanguage: originalLanguage(meta),
       OfficialRating: meta.app_extras?.certification || null,
       ParentIndexNumber: hasSeason ? video.season : null,
       IndexNumber: Number(video.episode),
@@ -1075,6 +1094,8 @@ export function buildEpisode(
       DateCreated: premiere || EPOCH_DATE,
       RunTimeTicks: parseRuntimeTicks(video.runtime),
       ProviderIds: {},
+      Tags: [(video.isFiller ?? video.filler) === true && 'Filler', video.isMixedFiller === true && 'Mixed Canon/Filler', (video.isRecap ?? video.recap) === true && 'Recap'].filter(Boolean),
+      ...(viewerReadsExtensions() ? episodeKindExtension(video) : {}),
       ImageTags: video.thumbnail ? { Primary: imageTag(video.thumbnail) } : {},
       BackdropImageTags: [],
       ImageBlurHashes: {},

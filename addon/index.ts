@@ -414,10 +414,16 @@ function applyImageCachePrefix(data) {
     return posterCacheConfig.buildCachedUrl(prefix, imageClass, url);
   };
 
+  const landscapeCached = posterCacheConfig.isFieldCacheable('landscapePoster');
   const applyToMeta = (meta) => {
     if (!meta) return;
     for (const field of enabledFields) {
-      if (meta[field]) meta[field] = prefixUrl(meta[field], metaFieldClasses[field]);
+      if (!meta[field]) continue;
+      if (field === 'poster' && meta.posterShape === 'landscape') {
+        if (landscapeCached) meta.poster = prefixUrl(meta.poster, 'landscape');
+        continue;
+      }
+      meta[field] = prefixUrl(meta[field], metaFieldClasses[field]);
     }
     if (cacheThumbnails && Array.isArray(meta.videos)) {
       for (const video of meta.videos) {
@@ -4931,6 +4937,16 @@ const catalogRoute = async function (req, res) {
     }
   }
 
+  {
+    const { SIMILAR_CATALOG_ID, similarCatalogMetas } = require('./lib/similarCatalog');
+    if (id === SIMILAR_CATALOG_ID) {
+      const sourceId = new URLSearchParams(extra || '').get('similar') || '';
+      const metas = sourceId ? await similarCatalogMetas(userUUID, config, type, sourceId) : [];
+      req.userConfig = config;
+      return respond(req, res, { metas });
+    }
+  }
+
   // Handle calendar-videos catalog
   if (id === 'calendar-videos' && type === 'series' && extra) {
     const logger = consola.withTag('Calendar');
@@ -5702,6 +5718,14 @@ const metaRoute = async function (req, res) {
   config.userUUID = userUUID;
   config.addonIdentifier = req.addonIdentifier || userUUID;
 
+  if (type === 'person') {
+    const { personMeta } = require('./lib/personMeta');
+    const meta = await personMeta(config, stremioId).catch(() => null);
+    if (!meta) return res.status(404).send({ error: "Person not found" });
+    req.userConfig = config;
+    return respond(req, res, { meta });
+  }
+
   {
     const { collectionMeta, COLLECTION_META_PREFIX } = require('./lib/collectionBuilder/aiostreamsCollections');
     if (stremioId.startsWith(COLLECTION_META_PREFIX)) {
@@ -5722,7 +5746,7 @@ const metaRoute = async function (req, res) {
   const cacheOptions = {
     enableErrorCaching: true,
     maxRetries: 2, // Allow retries for temporary failures
-    config: fullConfig,
+    config: req.params.episodeKinds === '1' ? { ...fullConfig, flagEpisodeKinds: true } : fullConfig,
   };
   
   try {
@@ -6055,8 +6079,8 @@ addon.post("/stremio/:userUUID/rating", async function (req, res) {
       mdblist: { success: false, error: null }
     };
 
-    const isImdbIdAnime = stremioId.startsWith('tt') && !!idMapper.getTraktAnimeMovieByImdbId(stremioId) && type.toLowerCase() === 'movie';
-    const isTmdbIdAnime = stremioId.startsWith('tmdb:') && !!idMapper.getTraktAnimeMovieByTmdbId(stremioId.replace('tmdb:', '')) && type.toLowerCase() === 'movie';
+    const isImdbIdAnime = stremioId.startsWith('tt') && type.toLowerCase() === 'movie' && !!idMapper.filmMappingFor({ imdbId: stremioId });
+    const isTmdbIdAnime = stremioId.startsWith('tmdb:') && type.toLowerCase() === 'movie' && !!idMapper.filmMappingFor({ tmdbId: stremioId.replace('tmdb:', '') });
     // Check if the Stremio ID is from an anime provider (anilist, mal, kitsu, anidb)
     const isAnimeId = stremioId && typeof stremioId === 'string' && (
       stremioId.startsWith('anilist:') || 
@@ -6071,8 +6095,9 @@ addon.post("/stremio/:userUUID/rating", async function (req, res) {
     const allIds = await resolveAllIds(stremioId, finalType, config);
     if (type.toLowerCase() === 'movie') {
       if (allIds?.malId) {
-        allIds.imdbId = idMapper.getTraktAnimeMovieByMalId(allIds.malId)?.externals.imdb;
-        allIds.tmdbId = idMapper.getTraktAnimeMovieByMalId(allIds.malId)?.externals.tmdb || allIds.tmdbId;
+        const film = idMapper.filmIdsFor(idMapper.getMappingByMalId(allIds.malId) ?? { type: 'MOVIE', mal_id: allIds.malId });
+        allIds.imdbId = film.imdbId;
+        allIds.tmdbId = film.tmdbId || allIds.tmdbId;
         allIds.tvdbId = (idMappings.getByImdbId(allIds.imdbId, 'movie'))?.tvdbId || null;
       }
     }
@@ -6147,12 +6172,12 @@ addon.post("/stremio/:userUUID/rating", async function (req, res) {
           }
 
           if (isImdbIdAnime) {
-            const malId =  idMapper.getTraktAnimeMovieByImdbId(stremioId)?.myanimelist.id;
+            const malId = idMapper.filmMappingFor({ imdbId: stremioId })?.mal_id;
             if (malId) {
               anilistId = idMapper.getMappingByMalId(malId)?.anilist_id;
             }
           } else if (isTmdbIdAnime) {
-            const malId = idMapper.getTraktAnimeMovieByTmdbId(stremioId.replace('tmdb:', ''))?.myanimelist.id;
+            const malId = idMapper.filmMappingFor({ tmdbId: stremioId.replace('tmdb:', '') })?.mal_id;
             if (malId) {
               anilistId = idMapper.getMappingByMalId(malId)?.anilist_id;
             }
@@ -6657,8 +6682,8 @@ addon.get("/stremio/:userUUID/rating", async function (req, res) {
       mdblist: false
     };
     consola.debug(`[Rating Page] Checking if ID is anime - id: ${id}, metaType: ${metaType}, gettraktanimemoviebyimdbid: ${JSON.stringify(idMapper.getTraktAnimeMovieByImdbId(id))}`);  
-    const isImdbIdAnime = id && id.startsWith('tt') && !!idMapper.getTraktAnimeMovieByImdbId(id) && metaType === 'Movie';
-    const isTmdbIdAnime = id && id.startsWith('tmdb:') && !!idMapper.getTraktAnimeMovieByTmdbId(id.replace('tmdb:', '')) && metaType === 'Movie';
+    const isImdbIdAnime = id && id.startsWith('tt') && metaType === 'Movie' && !!idMapper.filmMappingFor({ imdbId: id });
+    const isTmdbIdAnime = id && id.startsWith('tmdb:') && metaType === 'Movie' && !!idMapper.filmMappingFor({ tmdbId: id.replace('tmdb:', '') });
     // Check if the Stremio ID in URL is from an anime provider (anilist, mal, kitsu, anidb)
     const isAnimeId = id && typeof id === 'string' && (
       id.startsWith('anilist:') || 
@@ -8636,6 +8661,11 @@ addon.post("/api/dashboard/maintenance/execute", requireDashboardAdmin, async (r
           consola.error('[Maintenance Task] Error updating ID Mappings:', error);
           result = { success: false, message: `Failed to update ID Mappings: ${error.message}` };
         }
+      }
+    } else if (taskId === 14) { // Update filler data
+      if (action === 'restart' || action === 'enable') {
+        const { forceUpdateFillerData } = require('./lib/fillerData');
+        result = await forceUpdateFillerData();
       }
     } else if (taskId === 13) { // Update anime release schedule
       if (action === 'restart' || action === 'enable') {

@@ -330,6 +330,26 @@ function providerArtFitsPolicy(metaProvider, providerArt, config) {
 
 const ALL_ART = ['poster', 'background', 'logo', 'landscapePoster'];
 
+const TMDB_DETAIL_APPENDS = {
+  movie: 'videos,credits,external_ids,images,translations,watch/providers,release_dates,keywords',
+  series: 'videos,credits,external_ids,images,translations,watch/providers,content_ratings,keywords',
+};
+
+function fetchTmdbDetails(kind, tmdbId, language, config) {
+  const langCode = language.split('-')[0];
+  const languages = Array.from(new Set([langCode, 'en', 'null'])).join(',');
+  const params = { id: tmdbId, language, append_to_response: TMDB_DETAIL_APPENDS[kind], include_image_language: languages, include_video_language: languages };
+  return kind === 'movie' ? moviedb.movieInfo(params, config) : moviedb.tvInfo(params, config);
+}
+
+function tmdbLocalizedText(data, kind, language) {
+  const movie = kind === 'movie';
+  return {
+    name: Utils.processTitleTranslations(data.translations, language, movie ? data.title : data.name, kind, data.original_language, movie ? data.original_title : data.original_name),
+    description: Utils.processOverviewTranslations(data.translations, language, data.overview),
+  };
+}
+
 // The art a builder would have chosen for this configuration. Mirrors the builders' dispatch.
 async function resolveArtworkForProfile({ type, ids, metaProvider, providerArt, wanted = ALL_ART }, config) {
   const mediaType = type === 'movie' ? 'movie' : 'series';
@@ -380,19 +400,17 @@ async function getMeta(type, language, stremioId, config = {}, userUUID, include
     let isImdbIdAnime = false;
     let detectedAnimeMapping = null;
     if (stremioId.startsWith('tt')) {
-        const found = idMapper.getMappingByImdbId(stremioId);
+        const found = type === 'movie' ? idMapper.filmMappingFor({ imdbId: stremioId }) : idMapper.getMappingByImdbId(stremioId);
         const fribbMapping = idMapper.mappingIsType(found, type) ? found : null;
-        const traktMapping = type === 'movie' ? idMapper.getTraktAnimeMovieByImdbId(stremioId) : null;
-        isImdbIdAnime = !!fribbMapping || !!traktMapping;
+        isImdbIdAnime = !!fribbMapping;
         detectedAnimeMapping = fribbMapping;
     }
 
     let isTmdbIdAnime = false;
     if (stremioId.startsWith('tmdb:')) {
         const tmdbId = stremioId.replace('tmdb:', '');
-        const fribbMapping = idMapper.getMappingByTmdbId(tmdbId, type);
-        const traktMapping = type === 'movie' ? idMapper.getTraktAnimeMovieByTmdbId(tmdbId) : null;
-        isTmdbIdAnime = !!fribbMapping || !!traktMapping;
+        const fribbMapping = type === 'movie' ? idMapper.filmMappingFor({ tmdbId }) : idMapper.getMappingByTmdbId(tmdbId, type);
+        isTmdbIdAnime = !!fribbMapping;
         detectedAnimeMapping = fribbMapping;
     }
 
@@ -818,16 +836,7 @@ async function getMovieMeta(stremioId, preferredProvider, language, config, user
   // Try TMDB as fallback
   if (allIds?.tmdbId) {
     try {
-      const langCode = language.split('-')[0];
-      const imageLanguages = Array.from(new Set([langCode, 'en', 'null'])).join(',');
-      const videoLanguages = Array.from(new Set([langCode, 'en', 'null'])).join(',');
-      const movieData = await moviedb.movieInfo({ 
-        id: allIds.tmdbId, 
-        language, 
-        append_to_response: "videos,credits,external_ids,images,translations,watch/providers,release_dates,keywords", 
-        include_image_language: imageLanguages,
-        include_video_language: videoLanguages
-      }, config);
+      const movieData = await fetchTmdbDetails('movie', allIds.tmdbId, language, config);
       
       if (movieData) {
         return await buildTmdbMovieResponse(stremioId, movieData, language, config, userUUID, { allIds });
@@ -877,16 +886,7 @@ async function getSeriesMeta(preferredProvider, stremioId, language, config, use
   // Try preferred provider
   if (preferredProvider === 'tmdb' && allIds?.tmdbId) {
     try {
-      const langCode = language.split('-')[0];
-      const imageLanguages = Array.from(new Set([langCode, 'en', 'null'])).join(',');
-      const videoLanguages = Array.from(new Set([langCode, 'en', 'null'])).join(',');
-      const seriesData = await moviedb.tvInfo({ 
-        id: allIds.tmdbId, 
-        language, 
-        append_to_response: "videos,credits,external_ids,images,translations,watch/providers,content_ratings,keywords", 
-        include_image_language: imageLanguages,
-        include_video_language: videoLanguages
-      }, config);
+      const seriesData = await fetchTmdbDetails('series', allIds.tmdbId, language, config);
       
       if (seriesData) {
         return _markDegraded(await buildTmdbSeriesResponse(stremioId, seriesData, language, config, userUUID, { allIds }, false, includeVideos), degraded);
@@ -1497,13 +1497,15 @@ async function buildTmdbMovieResponse(stremioId, movieData, language, config, us
   const directorDetails = !credits || !Array.isArray(credits.crew) ? [] : credits.crew.filter((x) => x.job === "Director").map(d => ({
     name: d.name,
     character: d.name,
-    photo: d.profile_path ? `https://image.tmdb.org/t/p/w276_and_h350_face${d.profile_path}` : null
+    photo: d.profile_path ? `https://image.tmdb.org/t/p/w276_and_h350_face${d.profile_path}` : null,
+    tmdbId: d.id
   })).filter(d => d.name);
 
   const writerDetails = !credits || !Array.isArray(credits.crew) ? [] : credits.crew.filter((x) => x.job === "Writer").map(w => ({
     name: w.name,
     character: w.name,
-    photo: w.profile_path ? `https://image.tmdb.org/t/p/w276_and_h350_face${w.profile_path}` : null
+    photo: w.profile_path ? `https://image.tmdb.org/t/p/w276_and_h350_face${w.profile_path}` : null,
+    tmdbId: w.id
   })).filter(w => w.name);
 
   let overview = movieData.overview;
@@ -1627,13 +1629,15 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
   const directorDetails = !credits || !Array.isArray(credits.crew) ? [] : credits.crew.filter((x) => x.job === "Director").map(d => ({
     name: d.name,
     character: d.name,
-    photo: d.profile_path ? `https://image.tmdb.org/t/p/w276_and_h350_face${d.profile_path}` : null
+    photo: d.profile_path ? `https://image.tmdb.org/t/p/w276_and_h350_face${d.profile_path}` : null,
+    tmdbId: d.id
   })).filter(d => d.name);
 
   const writerDetails = !credits || !Array.isArray(credits.crew) ? [] : credits.crew.filter((x) => x.job === "Writer").map(w => ({
     name: w.name,
     character: w.name,
-    photo: w.profile_path ? `https://image.tmdb.org/t/p/w276_and_h350_face${w.profile_path}` : null
+    photo: w.profile_path ? `https://image.tmdb.org/t/p/w276_and_h350_face${w.profile_path}` : null,
+    tmdbId: w.id
   })).filter(w => w.name);
   let videos = [];
   const tmdbSeasons = (seasons || []).filter(season => season.season_number != 0);
@@ -2066,7 +2070,8 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
       .map(c => ({
         name: c.personName,
         character: c.name,
-        photo: c.image || c.personImgURL 
+        photo: c.image || c.personImgURL,
+        peopleId: c.peopleId
       }))
       .filter(c => c.name),
     crew: []
@@ -2085,13 +2090,15 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
   const directorDetails = (characters || []).filter(c => c.peopleType === 'Director').map(d => ({
     name: d.personName,
     character: d.name,
-    photo: d.image || d.personImgURL 
+    photo: d.image || d.personImgURL,
+    tvdbId: d.peopleId
   })).filter(d => d.name);
 
   const writerDetails = (characters || []).filter(c => c.peopleType === 'Writer').map(w => ({
     name: w.personName,
     character: w.name,
-    photo: w.image || w.personImgURL 
+    photo: w.image || w.personImgURL,
+    tvdbId: w.peopleId
   })).filter(w => w.name);
 
   const writerLinks = writers.map(w => ({
@@ -2144,6 +2151,7 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
     _completeness: { ...classifyTvdbLocalization(movieData, langChain), langResolved },
     runtime: Utils.parseRunTime(movieData.runtime),
     country: movieData.originalCountry,
+    _originalLanguage: movieData.originalLanguage || null,
     imdbRating,
     poster: Utils.isPosterRatingEnabled(config) ? posterProxyUrl : poster,
     _rawPosterUrl: _rawPosterUrl,
@@ -2321,7 +2329,8 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
       .map(c => ({
         name: c.personName,
         character: c.name,
-        photo: c.image || c.personImgURL 
+        photo: c.image || c.personImgURL,
+        peopleId: c.peopleId
       }))
       .filter(c => c.name),
     crew: []
@@ -2334,13 +2343,15 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
   const directorDetails = (characters || []).filter(c => c.peopleType === 'Director').map(d => ({
     name: d.personName,
     character: d.name,
-    photo: d.image || d.personImgURL 
+    photo: d.image || d.personImgURL,
+    tvdbId: d.peopleId
   })).filter(d => d.name);
 
   const writerDetails = (characters || []).filter(c => c.peopleType === 'Writer').map(w => ({
     name: w.personName,
     character: w.name,
-    photo: w.image || w.personImgURL 
+    photo: w.image || w.personImgURL,
+    tvdbId: w.peopleId
   })).filter(w => w.name);
 
   const directorLinks = directors.map(d => ({
@@ -2526,6 +2537,7 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
               available: isReleasedBy(releasedAt, nowMs),
               runtime: Utils.parseRunTime(episode.runtime),
               ...(episode.originalSeasonNumber != null ? { _tvdbSeason: episode.originalSeasonNumber } : {}),
+              ...(isAnime && episode.id && !['default', 'official'].includes(config.tvdbSeasonType || 'default') ? { _tvdbEpisodeId: episode.id } : {}),
           };
         })
     );
@@ -2580,6 +2592,7 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
     _stability: deriveStabilityStamp('tvdb', tvdbShow, 'series'),
     _completeness: { ...classifyTvdbLocalization(tvdbShow, langChain), langResolved },
     country: tvdbShow.originalCountry,
+    _originalLanguage: tvdbShow.originalLanguage || null,
     imdbRating,
     poster: Utils.isPosterRatingEnabled(config) ? posterProxyUrl : poster,
     _rawPosterUrl: _rawPosterUrl,
@@ -3055,15 +3068,6 @@ async function buildAnimeResponse(stremioId, malData, language, characterData, e
           ? `${host}/api/image/blur?url=${encodeURIComponent(thumbnailUrl)}`
           : thumbnailUrl;
 
-        if (config.mal?.allowEpisodeMarking) {
-          if (ep.filler) {
-            episodeSynopsis = `[Filler] ${episodeSynopsis}`;
-          }
-          if (ep.recap) {
-            episodeSynopsis = `[Recap] ${episodeSynopsis}`;
-          }
-        }
-        
         return {
           id: episodeId,
           title: episodeTitle,
@@ -3552,4 +3556,4 @@ async function buildKitsuAnimeResponse(stremioId, kitsuData, genres, includeObje
   }
 }
 
-module.exports = { getMeta, resolveArtworkForProfile };
+module.exports = { getMeta, resolveArtworkForProfile, fetchTmdbDetails, tmdbLocalizedText };

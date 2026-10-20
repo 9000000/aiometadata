@@ -263,6 +263,7 @@ export interface AppConfig {
     skipFiller: boolean;
     skipRecap: boolean;
     allowEpisodeMarking: boolean;
+    skipMixedFiller?: boolean;
     /** If true, prefer IMDb IDs for catalog and search items when available */
     useImdbIdForCatalogAndSearch?: boolean;
   };
@@ -443,6 +444,8 @@ export interface AppConfig {
   jellyfinStreamUrl?: string;
   jellyfinResolveOnOpen?: boolean;
   jellyfinUpcomingMode?: 'airing';
+  /** Where a title's similar titles come from. TMDB when unset. */
+  jellyfinSimilarSource?: 'simkl';
   jellyfinLatestRows?: boolean;
   jellyfinMarkUnaired?: boolean;
   /** Playback is reported by the client, so the subtitle trigger is not used. */

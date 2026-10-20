@@ -24,6 +24,7 @@ const {
 }: any = require('./imdbRatingProjection');
 const { applyTrailerAddonProjection }: any = require('./trailerProjection');
 const { applyAnimeEpisodeDatesProjection }: any = require('./animeEpisodeDates');
+const { applyAnimeFillerProjection }: any = require('./animeFillerProjection');
 const {
   RELEASE_AVAILABILITY_FIELD,
   normalizeMetaReleaseAvailability,
@@ -1009,6 +1010,8 @@ function getMetaSmartLockContextHash(config: any, metaId: string, type: string |
       blurThumbs: config.blurThumbs || false,
       displayAgeRating: config.displayAgeRating || false,
       ...(config.animeEpisodeDates && config.animeEpisodeDates !== 'provider' ? { animeEpisodeDates: config.animeEpisodeDates } : {}),
+      ...(config.mal?.skipMixedFiller ? { skipMixedFiller: true } : {}),
+      ...(config.flagEpisodeKinds ? { flagEpisodeKinds: true } : {}),
       ...(seasonNumbering ? { seasonNumbering } : {}),
     },
     includeVideos: !!includeVideos,
@@ -1280,7 +1283,14 @@ async function projectMetaForUser(meta: any, config: any, opts: { addonTrailers?
   applyLinksUserScopeProjection(meta, config);
   await applyImdbRatingProjection(meta);
   await applyAnimeEpisodeDatesProjection(meta, config);
+  await applyAnimeFillerProjection(meta, config);
+  stripVideoInternals(meta);
   return meta;
+}
+
+function stripVideoInternals(meta: any): void {
+  if (!Array.isArray(meta?.videos) || !meta.videos.some((video: any) => video?._tvdbEpisodeId != null)) return;
+  meta.videos = meta.videos.map(({ _tvdbEpisodeId, ...video }: any) => video);
 }
 
 const CATALOG_META_FIELDS = [
@@ -1973,6 +1983,7 @@ async function writeMetaComponentsWithConfig({ config, metaId, result, ttl = MET
     [RELEASE_AVAILABILITY_FIELD]: meta[RELEASE_AVAILABILITY_FIELD],
     runtime: meta.runtime,
     country: meta.country,
+    _originalLanguage: meta._originalLanguage,
     status: meta.status,
     imdbRating: meta.imdbRating,
     behaviorHints: meta.behaviorHints,
@@ -2434,6 +2445,7 @@ async function cacheWrapMetaSmart(userUUID: string, metaId: string, method: () =
       applySeasonNumberingProjection(meta, config);
       applyContentRatingProjection(meta, config);
       applyDisplayAgeRatingProjection(meta, config);
+      stripVideoInternals(meta);
       return result;
     }
 

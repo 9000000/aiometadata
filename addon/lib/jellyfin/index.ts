@@ -40,7 +40,8 @@ import { refreshSeriesIndex, seriesIndex, warmSeriesIndex } from './episodeIndex
 import { authorizeQuickConnect, claimQuickConnect, initiateQuickConnect, quickConnectResult, readQuickConnect } from './quickConnect';
 import { avatarTag, keepsUnderProfileCap, listProfiles, profileById, profileByName, profileByUserId, profileKey, profileTags, scopeConfigToProfile, type Profile } from './profiles';
 import { malEpisodeFor, segmentId, segmentsFor, type SegmentType } from './segments';
-import { personByName, personCredits, previewMeta, similarTitles } from './people';
+import { hasCreditDate, personByName, personCredits, resolvePerson, similarTitles } from './people';
+import { titleCards } from '../titleCards';
 import { allBoxSets, boxSetGenres, boxSetMembers, boxSetsDeep, boxSetsFor, boxSetsUnder, collectionById, collectionView, folderById } from './collections';
 import { entryItemType, setWatchlisted, watchlistEntries, watchlistItems } from './watchlist';
 import { applyRatings, applyWatchedState, finishedSeries, ownNextUpRows, seriesCountsAmong, upcomingFollowed, watchedAmong, watchedHistory, watchedSnapshot, type NextUpRow, type UpcomingRow } from './watched';
@@ -48,7 +49,7 @@ import { cachedArtwork } from './artwork';
 import { SIZED_WIDTH, resizeToWidth, widthStep } from '../posterCache/resize';
 import { IMAGE_CSP } from '../posterCache/proxyResponse';
 import { registerStubs } from './stubs';
-import { recordPlayed, recordPlayedUpTo, recordPlaying, recordProgress, recordStopped, recordUnplayed, recordUserData, sessionTouchDue, touchSessions } from './playstate';
+import { forgetUserSettings, recordPlayed, recordPlayedUpTo, recordPlaying, recordProgress, recordStopped, recordUnplayed, recordUserData, sessionTouchDue, touchSessions } from './playstate';
 
 const database: any = require('../database');
 
@@ -320,8 +321,8 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     }
     return out;
   };
-  // An Apple client opens the YouTube app's scheme, not a web link; the web client embeds the web link.
-  const APPLE_CLIENT = /swiftfin|tvos|apple ?tv|ios|ipad|iphone/i;
+  // Apple TV has no browser to open a web link, so its trailers open in the YouTube app.
+  const APPLE_TV = /tvos|apple ?tv/i;
   const appTrailers = (value: any): any => {
     if (Array.isArray(value)) return value.map(appTrailers);
     if (!value || typeof value !== 'object') return value;
@@ -343,8 +344,13 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
       seenClients.add(label);
       logger.info(`Client seen: ${label} (${info.version})`);
     }
-    const apple = APPLE_CLIENT.test(info.client) || APPLE_CLIENT.test(info.device);
-    res.json = (body: any) => json(dashIds(apple ? appTrailers(body) : body));
+    const started = Date.now();
+    res.on('finish', () => {
+      const from = info.client !== 'Unknown' ? `${label} (${info.version})` : `ua ${req.get('user-agent') || 'none'}`;
+      logger.debug(`${req.method} ${String(req.originalUrl || '').split('?')[0]} ${res.statusCode} ${Date.now() - started}ms from ${from}`);
+    });
+    const appleTv = APPLE_TV.test(info.client) || APPLE_TV.test(info.device);
+    res.json = (body: any) => json(dashIds(appleTv ? appTrailers(body) : body));
     next();
   });
 
@@ -602,6 +608,7 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
       await database.savePreferences(userUUID, profile.id ?? '', USER_CONFIGURATION_ID, '', req.body).catch((error: any) =>
         logger.debug(`User configuration save failed: ${error?.message || error}`)
       );
+      forgetUserSettings(userUUID);
     }
     res.status(204).end();
   });
@@ -791,6 +798,10 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
         const { groupBySpelling } = require('./aliases');
         const rows: any[] = await database.listPlaystatePlayedFor(userUUID, envInt('JELLYFIN_HISTORY_LOCAL_LIMIT', 5000, 1), profile).catch(() => []);
         const onTracker = await watchedAmong(snapshot, rows.map((row) => String(row.video_id)));
+        const finishedAt = new Map<string, number>();
+        for (const watch of await database.listWatchesFor(userUUID, profile, rows.map((row) => String(row.video_id))).catch(() => [])) {
+          finishedAt.set(watch.video_id, Math.max(finishedAt.get(watch.video_id) ?? 0, watch.watched_at));
+        }
         for (const group of (await groupBySpelling(rows)) as any[][]) {
           if (group.some((row: any) => onTracker.has(String(row.video_id)))) continue;
           const row = group.find((r: any) => String(r.video_id).startsWith('tt')) ?? group[0];
@@ -799,7 +810,8 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
           if (!parsed) continue;
           const isEpisode = parsed.episode !== null;
           if (!kinds.has(isEpisode ? 'episode' : 'movie')) continue;
-          const at = Math.max(...group.map((r: any) => Number(r.last_played_at) || 0));
+          const finished = Math.max(0, ...group.map((r: any) => finishedAt.get(String(r.video_id)) ?? 0));
+          const at = finished || Math.max(...group.map((r: any) => Number(r.last_played_at) || 0));
           played.push(
             isEpisode
               ? { kind: 'episode', id: videoId, metaId: parsed.base, mediaType: videoId.startsWith('kitsu:') ? 'anime' : 'series', at }
@@ -1221,11 +1233,14 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
   const clientFor = (req: any, config: any): StreamClient | undefined =>
     streamClient(`${req.params.userUUID}:${profileKey(config)}`, clientInfo(req), req.get?.('user-agent'));
 
+  const headerSources = new WeakSet<any>();
+
   const resolveMediaSources = async (
     req: any,
     descriptor: any,
     runtimeTicks: number | null,
-    refresh = false
+    refresh = false,
+    allowHeaders = false
   ): Promise<any[]> => {
     if (!descriptor || (descriptor.k !== 'movie' && descriptor.k !== 'episode')) return [];
 
@@ -1256,7 +1271,7 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     const sources: any[] = [];
     const notices: any[] = [];
     for (const stream of streams) {
-      const playable = toPlayable(stream);
+      const playable = toPlayable(stream, allowHeaders);
       if (!playable) {
         if (!streamNoticesOffered()) continue;
         const notice = toNotice(stream);
@@ -1267,7 +1282,9 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
       }
       if (seen.has(playable.id)) continue;
       seen.add(playable.id);
-      sources.push(mediaSourceFor(playable, runtimeTicks));
+      const source = mediaSourceFor(playable, runtimeTicks);
+      if (playable.needsHeaders) headerSources.add(source);
+      sources.push(source);
     }
 
     logger.debug(`Streams ${stremioType}/${stremioId}: ${streams.length} offered, ${sources.length} playable, ${notices.length} to read`);
@@ -1346,10 +1363,10 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     const numeric = parseInt(parsed.base.split(':')[1], 10);
     const mapping =
       parsed.idType === 'kitsu' ? idMapper.getMappingByKitsuId(numeric)
-      : parsed.idType === 'mal' ? idMapper.getMappingByMalId(numeric)
+      : parsed.idType === 'mal' ? idMapper.getMappingByMalId(numeric) ?? { type: 'MOVIE', mal_id: numeric }
       : parsed.idType === 'anilist' ? idMapper.getMappingByAnilistId(numeric)
       : null;
-    const imdb = mapping?.imdb_id || (mapping?.mal_id ? idMapper.getTraktAnimeMovieByMalId?.(mapping.mal_id)?.externals?.imdb : null);
+    const imdb = idMapper.filmIdsFor(mapping).imdbId;
     return imdb ? String(imdb) : videoId;
   };
 
@@ -1462,14 +1479,15 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
    * selectable.
    */
   const withDefaultSourceId = async (sources: any[], itemId: string): Promise<any[]> => {
-    if (!sources.length) return sources;
+    const first = sources.findIndex((source) => !headerSources.has(source));
+    if (first < 0) return sources;
     const id = normaliseJellyfinId(itemId);
     // A play report then names the item, not the hash the duration sits under.
-    const ms = await recallDuration(sources[0].Id).catch(() => null);
+    const ms = await recallDuration(sources[first].Id).catch(() => null);
     if (ms) rememberDuration(id, ms);
     else forgetDuration(id);
     return sources.map((source, index) =>
-      index === 0 ? { ...source, Id: id, ETag: id } : source
+      index === first ? { ...source, Id: id, ETag: id } : source
     );
   };
 
@@ -1495,7 +1513,7 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     const requested = await requestedSource(req.query.MediaSourceId ?? req.body?.MediaSourceId);
     // A named version keeps the list it came from.
     const named = typeof requested === 'string' && !!requested && normaliseJellyfinId(requested) !== normaliseJellyfinId(itemId);
-    const all = await resolveMediaSources(req, descriptor, null, req.body?.Refresh === true && !named);
+    const all = await resolveMediaSources(req, descriptor, null, req.body?.Refresh === true && !named, req.body?.EnableRequiredHttpHeaders === true);
     const withIds = await withDefaultSourceId(all, itemId);
 
     let sources = withIds;
@@ -1534,7 +1552,7 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     const index = parseInt(String(req.params.index), 10);
     const format = formatOf(String(req.params.format));
 
-    const sources = await withDefaultSourceId(await resolveMediaSources(req, descriptor, null), itemId);
+    const sources = await withDefaultSourceId(await resolveMediaSources(req, descriptor, null, false, true), itemId);
     const source = sources.find((s: any) => normaliseJellyfinId(s.Id) === normaliseJellyfinId(sourceId));
     if (!source) {
       res.status(404).end();
@@ -1710,22 +1728,20 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
   ): Promise<{ items: any[]; total: number }> => {
     const descriptor = await decodeJellyfinId(personId);
     if (!descriptor || descriptor.k !== 'person') return { items: [], total: 0 };
-    const person = await personByName(config, descriptor.n);
+    const person = await resolvePerson(config, descriptor);
     if (!person) return { items: [], total: 0 };
     const wanted = includeItemTypes ? String(includeItemTypes) : undefined;
-    const newest = (await personCredits(config, person.id)).filter(
+    const newest = (await personCredits(config, person)).filter(
       (meta: any) =>
         (!wanted || wanted.split(',').map((t) => t.trim()).includes(meta.type === 'movie' ? 'Movie' : 'Series')) &&
         (!personTypes.length || personTypes.some((kind) => meta._personTypes.includes(kind)))
     );
     const listed = ascending
-      ? [...newest.filter((meta: any) => meta.released).reverse(), ...newest.filter((meta: any) => !meta.released)]
+      ? [...newest.filter(hasCreditDate).reverse(), ...newest.filter((meta: any) => !hasCreditDate(meta))]
       : newest;
-    const page = await mapWithConcurrency(listed.slice(startIndex, startIndex + take), shelfConcurrency(), async (meta: any) => {
-      const card = await previewMeta(config, userUUID, meta.type, meta.id).catch(() => null);
-      return metaToBaseItem(card ?? meta, meta.type, serverId, null);
-    });
-    const items = page.filter(keepsUnderProfileCap(config));
+    const page = listed.slice(startIndex, startIndex + take);
+    const cards = await titleCards(config, userUUID, page);
+    const items = cards.map((card: any, i: number) => metaToBaseItem(card, page[i].type, serverId, null)).filter(keepsUnderProfileCap(config));
     await applyWatchedState(items, await watchedSnapshot(userUUID, config), userUUID, profileKey(config), config);
     return { items, total: listed.length };
   };
@@ -1802,7 +1818,7 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
       res.json(itemList([], 0, 0));
       return;
     }
-    const id = encodeJellyfinId({ k: 'person', n: person.name });
+    const id = encodeJellyfinId({ k: 'person', n: person.name, s: person.source, x: person.id });
     res.json(itemList([personItem(id, serverIdFor(req.params.userUUID), person.name, person)], 1, 0));
   });
 
@@ -2789,6 +2805,25 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     return { snapshot, caughtUp, followed, sequels };
   };
 
+  const onePerEpisode = async (episodes: any[], config: any): Promise<any[]> => {
+    const { videoIdAliases } = require('./aliases');
+    const { stremioIdFor } = require('./idsCodec');
+    const { perEntryAnime } = require('./watchlistSources');
+    const keepsAnime = perEntryAnime(config);
+    const spelled = await Promise.all(episodes.map(async (episode) => {
+      const descriptor = await decodeJellyfinId(String(episode.Id));
+      const videoId = descriptor ? stremioIdFor(descriptor) : null;
+      return { episode, anime: descriptor?.k === 'episode' && descriptor.t === 'anime', spellings: videoId ? [videoId, ...(await videoIdAliases(videoId))] : [String(episode.Id)] };
+    }));
+    const kept: typeof spelled = [];
+    for (const entry of spelled) {
+      const held = kept.findIndex((other) => other.spellings.some((spelling) => entry.spellings.includes(spelling)));
+      if (held === -1) kept.push(entry);
+      else if (kept[held].anime !== entry.anime && entry.anime === keepsAnime) kept[held] = entry;
+    }
+    return kept.map((entry) => entry.episode);
+  };
+
   const sequelPremieres = async (userUUID: string, rows: UpcomingRow[], keep: (at: number) => boolean, seen: Set<string>): Promise<any[]> => {
     const serverId = serverIdFor(userUUID);
     const out: any[] = [];
@@ -3089,7 +3124,7 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     premieres.push(...(await sequelPremieres(userUUID, sequels, within, seen)));
     const films = await watchlistFilms(userUUID, config, within, seen);
 
-    return [...premieres, ...films]
+    return [...(await onePerEpisode(premieres, config)), ...films]
       .filter(keepsUnderProfileCap(config))
       .sort((a, b) => premiereAt(a) - premiereAt(b));
   };
@@ -3105,19 +3140,17 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     }
 
     const meta = await fetchMeta(userUUID, descriptor.k, descriptor.i);
-    if (!meta?._tmdbId) {
+    if (!meta) {
       res.json(itemList([], 0, 0));
       return;
     }
 
     const serverId = serverIdFor(userUUID);
-    const rows = await similarTitles(config, String(meta._tmdbId), descriptor.k);
+    const rows = await similarTitles(config, meta, descriptor.k);
     const capped = hasAgeRatingCap(config);
-    const built = await mapWithConcurrency(capped ? rows : rows.slice(0, limit), shelfConcurrency(), async (row: any) => {
-      const full = await previewMeta(config, userUUID, row.type, row.id).catch(() => null);
-      return metaToBaseItem(full ?? row, row.type, serverId, null);
-    });
-    const items = built
+    const picked = capped ? rows : rows.slice(0, limit);
+    const cards = await titleCards(config, userUUID, picked);
+    const items = cards.map((card: any, i: number) => metaToBaseItem(card, picked[i].type, serverId, null))
       .filter(keepsUnderProfileCap(config))
       .slice(0, limit);
     await applyWatchedState(items, await watchedSnapshot(userUUID, config), userUUID, profileKey(config), config);
@@ -3218,7 +3251,7 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
 
     if (descriptor.k === 'person') {
       const config = await loadConfig(req);
-      const person = config ? await personByName(config, descriptor.n) : null;
+      const person = config ? await resolvePerson(config, descriptor) : null;
       res.json(personItem(String(req.params.itemId), serverIdFor(userUUID), descriptor.n, person));
       return;
     }
@@ -3588,6 +3621,12 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
       logger.warn(`Rating failed for ${itemId}: ${error?.message || error}`);
       return false;
     });
+    if (clear && (await userDataOf(req, itemId).catch(() => null))?.Rating != null) {
+      const { rateItem } = require('./ratings');
+      await rateItem(userUUID, config, descriptor, null).catch((error: any) =>
+        logger.warn(`Clearing the rating failed for ${itemId}: ${error?.message || error}`)
+      );
+    }
     // A like puts the title on the watchlist and a cleared rating takes it off, for a
     // client that keeps one; a dislike stays a drop, and clearing one only undrops.
     if (clientHasOwnWatchlist() && likes !== false && !(likes === null && undropped)) {

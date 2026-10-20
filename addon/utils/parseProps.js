@@ -995,7 +995,9 @@ function parseCast(credits, count, metaProvider = 'tmdb') {
     return {
       name: el.name,
       character: el.character,
-      photo: photoUrl
+      photo: photoUrl,
+      ...(metaProvider === 'tmdb' && el.id ? { tmdbId: el.id } : {}),
+      ...(metaProvider === 'tvdb' && el.peopleId ? { tvdbId: el.peopleId } : {})
     };
   });
 }
@@ -2010,14 +2012,16 @@ async function parseAnimeCatalogMeta(anime, config, language, descriptionFallbac
   } else if (artProvider === 'tvdb' && malId) {
     try {
       const mapping = idMapper.getMappingByMalId(malId);
-      if (mapping && mapping.tvdb_id) {
+      const filmImdb = stremioType === 'movie' ? idMapper.filmIdsFor(mapping ?? { type: 'MOVIE', mal_id: malId }, { shown: true }).imdbId : null;
+      const tvdbId = stremioType === 'movie' ? (filmImdb ? idMappings.getByImdbId(filmImdb, 'movie')?.tvdbId || null : null) : mapping?.tvdb_id;
+      if (tvdbId) {
         // Use the appropriate TVDB function based on media type
         const tvdbPoster = stremioType === 'movie'
-          ? await tvdb.getMoviePoster(mapping.tvdb_id, config)
-          : await tvdb.getSeriesPoster(mapping.tvdb_id, config);
+          ? await tvdb.getMoviePoster(tvdbId, config)
+          : await tvdb.getSeriesPoster(tvdbId, config);
         
         if (tvdbPoster) {
-          // logger.debug(`[parseAnimeCatalogMeta] Using TVDB poster for MAL ID: ${malId} (TVDB ID: ${mapping.tvdb_id}, Type: ${stremioType})`);
+          // logger.debug(`[parseAnimeCatalogMeta] Using TVDB poster for MAL ID: ${malId} (TVDB ID: ${tvdbId}, Type: ${stremioType})`);
           finalPosterUrl = tvdbPoster;
         }
       }
@@ -2027,14 +2031,15 @@ async function parseAnimeCatalogMeta(anime, config, language, descriptionFallbac
   } else if (artProvider === 'tmdb' && malId) {
     try {
       const mapping = idMapper.getMappingByMalId(malId);
-      if (mapping && mapping.themoviedb_id) {
+      const tmdbId = stremioType === 'movie' ? idMapper.filmIdsFor(mapping ?? { type: 'MOVIE', mal_id: malId }, { shown: true }).tmdbId : mapping?.themoviedb_id;
+      if (tmdbId) {
         // Use TMDB poster for anime
         const tmdbPoster = stremioType === 'movie' 
-          ? await tmdb.getTmdbMoviePoster(mapping.themoviedb_id, config)
-          : await tmdb.getTmdbSeriesPoster(mapping.themoviedb_id, config);
+          ? await tmdb.getTmdbMoviePoster(tmdbId, config)
+          : await tmdb.getTmdbSeriesPoster(tmdbId, config);
         
         if (tmdbPoster) {
-          // logger.debug(`[parseAnimeCatalogMeta] Using TMDB poster for MAL ID: ${malId} (TMDB ID: ${mapping.themoviedb_id}, Type: ${stremioType})`);
+          // logger.debug(`[parseAnimeCatalogMeta] Using TMDB poster for MAL ID: ${malId} (TMDB ID: ${tmdbId}, Type: ${stremioType})`);
           finalPosterUrl = tmdbPoster;
         }
       }
@@ -2099,7 +2104,7 @@ async function parseAnimeCatalogMeta(anime, config, language, descriptionFallbac
     trailers: trailers,
     released: anime.aired?.from ? new Date(anime.aired.from) : undefined,
     behavioralHints: {
-      defaultVideoId: stremioType === 'movie' ? mapping?.imdb_id ? mapping?.imdb_id: (kitsuId ? `kitsu:${kitsuId}` : `mal:${malId}`): null,
+      defaultVideoId: stremioType === 'movie' ? idMapper.filmIdsFor(mapping ?? { type: 'MOVIE', mal_id: malId }, { shown: true }).imdbId || (kitsuId ? `kitsu:${kitsuId}` : `mal:${malId}`) : null,
       hasScheduledVideos: stremioType === 'series',
     },
   });
@@ -2243,8 +2248,9 @@ async function parseAnimeCatalogMetaBatch(animes, config, language, includeVideo
           throw new Error(`Missing Kitsu data for Kitsu ID ${mapping.kitsu_id}`);
         }
         const stremioType = item.attributes.subtype === 'movie' ? 'movie' : 'series';
-        let tmdbId = stremioType === 'movie' ? idMapper.getTraktAnimeMovieByMalId(id)?.externals.tmdb : mapping?.themoviedb_id;
-        let imdbId = stremioType === 'movie' ? idMapper.getTraktAnimeMovieByMalId(id)?.externals.imdb : mapping?.imdb_id;
+        const film = stremioType === 'movie' ? idMapper.filmIdsFor(mapping, { shown: true }) : null;
+        let tmdbId = film ? film.tmdbId : mapping?.themoviedb_id;
+        let imdbId = film ? film.imdbId : mapping?.imdb_id;
         let tvdbId = stremioType === 'movie' ? (idMappings.getByImdbId(imdbId, stremioType))?.tvdbId || null : mapping?.tvdb_id;
         let finalPosterUrl = await getAnimePosterUrl(id, mapping, stremioType, config, language, anilistArtworkMap, item.attributes.posterImage?.original, kitsuArtworkMap);
         let kitsuReleaseInfo = item.attributes.startDate ? item.attributes.startDate.substring(0, 4) : null;
@@ -2357,8 +2363,9 @@ async function parseAnimeCatalogMetaBatch(animes, config, language, includeVideo
     }
 
     const mapping = idMapper.getMappingByMalId(malId);
-    let tmdbId = stremioType === 'movie' ? idMapper.getTraktAnimeMovieByMalId(malId)?.externals.tmdb : mapping?.themoviedb_id;
-    let imdbId = stremioType === 'movie' ? idMapper.getTraktAnimeMovieByMalId(malId)?.externals.imdb : mapping?.imdb_id;
+    const film = stremioType === 'movie' ? idMapper.filmIdsFor(mapping ?? { type: 'MOVIE', mal_id: malId }, { shown: true }) : null;
+    let tmdbId = film ? film.tmdbId : mapping?.themoviedb_id;
+    let imdbId = film ? film.imdbId : mapping?.imdb_id;
     let tvdbId = stremioType === 'movie' ? (idMappings.getByImdbId(imdbId, stremioType))?.tvdbId || null : mapping?.tvdb_id;
     
     /*if(mapping && !mapping.imdb_id && mapping.themoviedb_id){
@@ -2588,7 +2595,7 @@ async function getTmdbMovieArtBatch(tmdbId, config, isLandscape = false, origina
   const englishOnly = config.artProviders?.englishArtOnly ? '1' : '0';
   const origLangFb = config.artProviders?.originalLangFallback ? '1' : '0';
   const landscape = isLandscape ? '1' : '0';
-  const cacheKey = `tmdb-movie-images:${tmdbId}:${langCode}:${englishOnly}:${origLangFb}:${landscape}`;
+  const cacheKey = `tmdb-movie-images:${tmdbId}:${langCode}:${englishOnly}:${origLangFb}:${landscape}:${originalLanguage || ''}`;
 
   if (tmdbMovieImagesInflight.has(cacheKey)) {
     return tmdbMovieImagesInflight.get(cacheKey);
@@ -2648,18 +2655,14 @@ async function getTmdbMovieArtBatch(tmdbId, config, isLandscape = false, origina
 const TMDB_IMAGE_KINDS = ['posters', 'backdrops', 'logos'];
 
 /**
- * Refill image kinds the meta call came back empty on, from a second request scoped to
- * the title's original language. Meta calls can't request it up front since they learn
- * it from their own response. Skipped under englishArtOnly, which keeps falling through
- * to the next provider instead.
+ * Adds the title's original-language images to the ones a meta call returned, which
+ * a meta call can't ask for up front since it learns the language from its own
+ * response. Skipped under englishArtOnly.
  */
 async function mergeTmdbOriginalLanguageImages(mediaType, tmdbId, images, originalLanguage, langCode, config) {
   if (!tmdbId || !originalLanguage) return images;
   if (config?.artProviders?.englishArtOnly) return images;
   if (originalLanguage === 'en' || originalLanguage === langCode) return images;
-
-  const missing = TMDB_IMAGE_KINDS.filter(kind => !images?.[kind]?.length);
-  if (missing.length === 0) return images;
 
   try {
     const params = { id: tmdbId, include_image_language: originalLanguage };
@@ -2669,8 +2672,11 @@ async function mergeTmdbOriginalLanguageImages(mediaType, tmdbId, images, origin
     if (!extra) return images;
 
     const merged = { ...(images || {}) };
-    for (const kind of missing) {
-      if (extra[kind]?.length) merged[kind] = extra[kind];
+    for (const kind of TMDB_IMAGE_KINDS) {
+      const held = Array.isArray(merged[kind]) ? merged[kind] : [];
+      const seen = new Set(held.map(image => image?.file_path));
+      const added = (extra[kind] || []).filter(image => image?.file_path && !seen.has(image.file_path));
+      if (added.length) merged[kind] = [...held, ...added];
     }
     return merged;
   } catch (error) {
@@ -2968,7 +2974,7 @@ async function getTmdbSeriesArtBatch(tmdbId, config, isLandscape = false, origin
   const englishOnly = config.artProviders?.englishArtOnly ? '1' : '0';
   const origLangFb = config.artProviders?.originalLangFallback ? '1' : '0';
   const landscape = isLandscape ? '1' : '0';
-  const cacheKey = `tmdb-tv-images:${tmdbId}:${langCode}:${englishOnly}:${origLangFb}:${landscape}`;
+  const cacheKey = `tmdb-tv-images:${tmdbId}:${langCode}:${englishOnly}:${origLangFb}:${landscape}:${originalLanguage || ''}`;
 
   if (tmdbTvImagesInflight.has(cacheKey)) {
     return tmdbTvImagesInflight.get(cacheKey);

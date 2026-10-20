@@ -29,11 +29,19 @@ export interface PlayableStream {
   title: string;
   description: string;
   bingeGroup: string | null;
+  needsHeaders: boolean;
+  requestHeaders: Record<string, string> | null;
 }
 
 // The stream addon adds what it parsed from a release only for a user agent it knows.
-export function streamUserAgent(forwarded?: string): string {
-  return process.env.JELLYFIN_STREAM_USER_AGENT?.trim() || forwarded?.trim() || `AIOStreams/aiometadata-${buildInfo.version}`;
+export function streamUserAgent(client?: Pick<StreamClient, 'client' | 'version' | 'userAgent'>): string {
+  const override = process.env.JELLYFIN_STREAM_USER_AGENT?.trim();
+  if (override) return override;
+  const own = `AIOStreams/aiometadata-${buildInfo.version}`;
+  const app = [client?.client ? `${client.client}/${client.version || ''}`.replace(/\/$/, '') : '', client?.userAgent?.trim() || '']
+    .filter(Boolean)
+    .join('; ');
+  return app ? `${own} (${headerValue(app)})` : own;
 }
 
 export interface StreamClient {
@@ -91,8 +99,8 @@ function containerOf(stream: any): string | null {
   return ext && ext !== 'json' ? ext : null;
 }
 
-// A client fetches the media URL itself and cannot attach headers, so a stream
-// needing them is dropped rather than offered and failing at play time.
+// A client fetches the media URL itself, so a stream needing headers is offered
+// only to one that says its player sends a source's RequiredHttpHeaders.
 function needsHeaders(stream: any): boolean {
   const hints = stream?.behaviorHints?.proxyHeaders;
   if (!hints) return false;
@@ -234,9 +242,17 @@ export function toNotice(stream: any): StreamNotice | null {
   return { id: createHash('md5').update(`notice\u0000${seed}`).digest('hex'), name };
 }
 
-export function toPlayable(stream: any): PlayableStream | null {
+function requestHeadersOf(stream: any): Record<string, string> | null {
+  const request = stream?.behaviorHints?.proxyHeaders?.request;
+  if (!request || typeof request !== 'object') return null;
+  const entries = Object.entries(request).filter((entry): entry is [string, string] => typeof entry[1] === 'string');
+  return entries.length ? Object.fromEntries(entries) : null;
+}
+
+export function toPlayable(stream: any, allowHeaders = false): PlayableStream | null {
   if (!stream || typeof stream.url !== 'string' || !stream.url) return null;
-  if (needsHeaders(stream)) return null;
+  const headers = needsHeaders(stream);
+  if (headers && !allowHeaders) return null;
 
   const label = [stream.name, stream.title || stream.description]
     .filter(Boolean)
@@ -263,6 +279,8 @@ export function toPlayable(stream: any): PlayableStream | null {
     title: String(stream.name || '').trim(),
     description: String(stream.title || stream.description || '').trim(),
     bingeGroup: typeof stream?.behaviorHints?.bingeGroup === 'string' && stream.behaviorHints.bingeGroup ? stream.behaviorHints.bingeGroup : null,
+    needsHeaders: headers,
+    requestHeaders: headers ? requestHeadersOf(stream) : null,
   };
 }
 
@@ -353,7 +371,7 @@ export async function fetchStreams(
   const timer = setTimeout(() => controller.abort(), requestTimeoutMs());
 
   try {
-    const headers: Record<string, string> = { accept: 'application/json', 'user-agent': streamUserAgent(client?.userAgent) };
+    const headers: Record<string, string> = { accept: 'application/json', 'user-agent': streamUserAgent(client) };
     if (client) {
       headers['x-jellyfin-client'] = headerValue(`${client.client}/${client.version}`);
       headers['x-jellyfin-device'] = headerValue(client.device);
@@ -616,7 +634,7 @@ export function mediaSourceFor(
     MediaStreams: buildMediaStreams(playable),
     MediaAttachments: [],
     Formats: [],
-    RequiredHttpHeaders: {},
+    RequiredHttpHeaders: playable.requestHeaders ?? {},
     // The first version takes its item's id, so this is the one that stays the same.
     aiostreams: {
       id: playable.id,

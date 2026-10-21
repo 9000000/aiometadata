@@ -26,6 +26,7 @@ const { cp } = require("fs");
 const idMappings = require('./id-mappings.js');
 const { withEpisodeOrder } = require('../utils/episodeOrder');
 const { buildCertificationMap } = require('../utils/contentRating');
+const { tmdbDetails, tvdbSeriesDetails, tvdbMovieDetails, tvmazeDetails, jikanDetails } = require('./metaDetails');
 
 
 const logger = consola.withTag('Meta');
@@ -1301,6 +1302,7 @@ async function buildImdbSeriesResponse(stremioId, imdbData, enrichmentData = {},
   if (tmdbId){
     imdbData.app_extras = imdbData.app_extras || {};
     if(seriesData){
+      Object.assign(imdbData, tmdbDetails(seriesData));
       imdbData.keywords = moviedb.keywordNamesOf(seriesData);
       const certifications = buildCertificationMap({ tmdbTv: seriesData.content_ratings });
       imdbData.app_extras.certifications = certifications;
@@ -1381,6 +1383,7 @@ async function buildImdbMovieResponse(stremioId, imdbData, enrichmentData = {}, 
   }
   if (tmdbId){
     if (movieData) {
+    Object.assign(imdbData, tmdbDetails(movieData));
     imdbData.keywords = moviedb.keywordNamesOf(movieData);
     imdbData.app_extras = imdbData.app_extras || {};
     imdbData.released = movieData.release_date ? resolveReleaseTimestamp(movieData.release_date, { originCountry: movieData.production_countries?.[0]?.iso_3166_1 }) : null;
@@ -1560,6 +1563,7 @@ async function buildTmdbMovieResponse(stremioId, movieData, language, config, us
     links: links,
     behaviorHints: { defaultVideoId: kitsuId && idProvider === 'kitsu' ? `kitsu:${kitsuId}` : imdbId || stremioId, hasScheduledVideos: false },
     app_extras: { cast: Utils.parseCast(credits), directors: directorDetails, writers: writerDetails, releaseDates: movieData.release_dates, certifications, certification },
+    ...tmdbDetails(movieData),
     ...stampIds(allIds),
   };
 }
@@ -1996,6 +2000,7 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
       hasScheduledVideos: true,
     },
     app_extras: { cast: Utils.parseCast(credits), directors: directorDetails, writers: writerDetails, seasonPosters: tmdbSeasonPosters, certifications, certification },
+    ...tmdbDetails(seriesData),
     ...stampIds(allIds),
   };
   if (runtime) {
@@ -2166,6 +2171,7 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
     },
     links: links,
     app_extras: { cast: Utils.parseCast(movieCredits, undefined, 'tvdb'), directors: directorDetails, writers: writerDetails, releaseDates: release_dates, certifications, certification },
+    ...tvdbMovieDetails(movieData),
     ...stampIds(allIds),
   };
 }
@@ -2606,6 +2612,7 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
     links: links,
     behaviorHints: { defaultVideoId: null, hasScheduledVideos: true },
     app_extras: { cast: Utils.parseCast(tvdbCredits, undefined, 'tvdb'), directors: directorDetails, writers: writerDetails, seasonPosters: seasonPosters, certifications, certification },
+    ...tvdbSeriesDetails(tvdbShow),
     ...stampIds(allIds),
   };
   //console.log(Utils.parseCast(tmdbLikeCredits, castCount));
@@ -2856,7 +2863,8 @@ async function buildSeriesResponseFromTvmaze(stremioId, tvmazeShow, episodes, la
     videos,
     links: links,
     behaviorHints: { defaultVideoId: null, hasScheduledVideos: true },
-    app_extras: { cast: Utils.parseCast(tvmazeCredits, undefined, 'tvmaze'), producers: producerDetails, writers: writerDetails, certifications, certification }
+    app_extras: { cast: Utils.parseCast(tvmazeCredits, undefined, 'tvmaze'), producers: producerDetails, writers: writerDetails, certifications, certification },
+    ...tvmazeDetails(tvmazeShow),
   };
 
   return meta;
@@ -3221,7 +3229,8 @@ async function buildAnimeResponse(stremioId, malData, language, characterData, e
         writers: [],
         watchProviders: watchProviders,
         ...(malCertification ? { certification: malCertification, certificationLocal: malData.rating } : {})
-      }
+      },
+      ...jikanDetails(malData),
     };
 
     return meta;

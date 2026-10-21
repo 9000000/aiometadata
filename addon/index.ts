@@ -228,10 +228,8 @@ addon.use(createAliasResolutionMiddleware({
 const { createTagPathMiddleware } = require('./lib/tagPathMiddleware');
 addon.use(createTagPathMiddleware());
 
-// Add request tracking middleware (disabled in LITE_MODE)
-if (!isLiteMode()) {
-  addon.use(requestTracker.middleware());
-}
+// Add request tracking middleware (dynamically checked via isMetricsDisabled)
+addon.use(requestTracker.middleware());
 
 addon.use((req, res, next) => {
   const m = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i.exec(req.path);

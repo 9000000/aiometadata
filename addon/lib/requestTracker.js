@@ -155,9 +155,7 @@ class RequestTracker {
 
   // Track incoming request
   async trackRequest(req) {
-    // Skip metrics collection if disabled or in LITE_MODE (saves Upstash Redis quota)
-    const { isLiteMode } = require('./metricsConfig');
-    if (isMetricsDisabled() || isLiteMode()) {
+    if (isMetricsDisabled()) {
       return;
     }
     try {
@@ -195,9 +193,7 @@ class RequestTracker {
 
   // Track response
   async trackResponse(req, res, responseTime) {
-    // Skip metrics collection if disabled or in LITE_MODE (saves Upstash Redis quota)
-    const { isLiteMode } = require('./metricsConfig');
-    if (isMetricsDisabled() || isLiteMode()) {
+    if (isMetricsDisabled()) {
       return;
     }
     try {
@@ -630,8 +626,7 @@ class RequestTracker {
   }
   // Capture metadata from complete meta components
   async captureMetadataFromComponents(metaId, meta, metaType, buildLanguage = null) {
-    const { isLiteMode, isMetricsDisabled } = require('./metricsConfig');
-    if (isLiteMode() || isMetricsDisabled() || process.env.DISABLE_CONTENT_METADATA === 'true') {
+    if (isMetricsDisabled() || process.env.DISABLE_CONTENT_METADATA === 'true') {
       return;
     }
 
@@ -1217,8 +1212,7 @@ class RequestTracker {
   }
 
   async getActivityHeatmap(days = 7, tz = null) {
-    const { isLiteMode } = require('./metricsConfig');
-    if (isMetricsDisabled() || isLiteMode()) {
+    if (isMetricsDisabled()) {
       return { grid: Array.from({ length: 7 }, () => new Array(24).fill(0)), peak: 0 };
     }
 

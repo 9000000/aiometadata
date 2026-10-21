@@ -2575,9 +2575,9 @@ class DashboardAPI {
         }
       }
 
-      // Check request tracker for active users / requests only if metrics are active (skip in LITE_MODE to save Redis quota)
-      const { isLiteMode, isMetricsDisabled } = require('./metricsConfig');
-      const metricsActive = !isLiteMode() && !isMetricsDisabled();
+      // Check request tracker for active users / requests only if metrics are active
+      const { isMetricsDisabled } = require('./metricsConfig');
+      const metricsActive = !isMetricsDisabled();
 
       if (metricsActive && this.requestTracker) {
         try {

@@ -67,8 +67,7 @@ class TimingMetrics {
   }
 
   recordTiming(metric: string, duration: number, metadata: Record<string, any> = {}): void {
-    const { isLiteMode }: any = require('./metricsConfig');
-    if (isMetricsDisabled() || isLiteMode()) {
+    if (isMetricsDisabled()) {
       return;
     }
     try {

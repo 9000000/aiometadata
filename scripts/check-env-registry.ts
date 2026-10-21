@@ -18,6 +18,7 @@ const INTERNAL_ALLOWLIST = new Set<string>([
   'TMDB_POSTER_SIZE',
   'DISABLE_CONTENT_METADATA',
   'DISABLE_IMDB_RATINGS',
+  'ENABLE_METRICS',
 ]);
 
 /** Known debt: warned about, never grown. A setting not listed here fails the check. */

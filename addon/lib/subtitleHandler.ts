@@ -27,6 +27,7 @@ interface ResolvedSeriesIds {
   fallbackData?: any;
   season: number;
   episode: number;
+  episodeIds?: Record<string, number>;
 }
 
 function parseMediaId(id: any): ParsedMediaId | null {
@@ -299,6 +300,30 @@ function normalizeIdsForMovie(parsedId: ParsedMediaId): Record<string, any> | nu
   }
 }
 
+async function byTvdbEpisode(tvdbId: number, season: number, episode: number, config: any): Promise<ResolvedSeriesIds> {
+  const listed = await require('./tvdb').getSeriesEpisodes(String(tvdbId), 'en-US', 'default', config).catch(() => null);
+  const found = (listed?.episodes ?? []).find((entry: any) => Number(entry?.seasonNumber) === season && Number(entry?.number) === episode);
+  return { ids: { tvdb: tvdbId }, season, episode, ...(found?.id ? { episodeIds: { tvdb: Number(found.id) } } : {}) };
+}
+
+async function inTmdbNumbers(resolution: ResolvedSeriesIds, config: any, provider: string): Promise<ResolvedSeriesIds> {
+  const apiKey = config?.apiKeys?.mdblist;
+  if (!apiKey || (provider === 'imdb' && config?.providers?.series !== 'tvdb')) return resolution;
+  let tmdb = Number(resolution.ids.tmdb) || null;
+  let tvdb = Number(resolution.ids.tvdb) || null;
+  if (!tmdb) {
+    const seed = resolution.ids.imdb ? String(resolution.ids.imdb) : tvdb ? `tvdb:${tvdb}` : null;
+    const all = seed ? await require('./id-resolver').resolveAllIds(seed, 'series', config, {}, ['tmdb', 'tvdb']).catch(() => null) : null;
+    tmdb = Number(all?.tmdbId) || null;
+    tvdb = tvdb || Number(all?.tvdbId) || null;
+  }
+  if (!tmdb) return resolution;
+  const { withEpisodeOrder } = require('../utils/episodeOrder');
+  if ((withEpisodeOrder(config, tvdb).tvdbSeasonType || 'default') !== 'default') return resolution;
+  const moved = await require('../utils/mdbList').tmdbEpisodeFromTvdb(tmdb, resolution.season, resolution.episode, apiKey).catch(() => null);
+  return moved ? { ...resolution, ids: { ...resolution.ids, tmdb }, season: moved.season, episode: moved.episode } : resolution;
+}
+
 async function resolveSeriesIds(parsedId: ParsedMediaId, config: any = {}, isSimkl: boolean = false): Promise<ResolvedSeriesIds | null> {
   switch (parsedId.provider) {
     case 'imdb': {
@@ -321,6 +346,9 @@ async function resolveSeriesIds(parsedId: ParsedMediaId, config: any = {}, isSim
                 const resolved = await resolveTmdbEpisodeFromKitsu(
                   anilistMapping.kitsu_id, anidbInfo.anidbEpisode, config
                 );
+                if (resolved?.isFranchiseFallback && (Number(resolved.seasonNumber) !== (parsedId.season || 1) || Number(resolved.episodeNumber) !== Number(parsedId.episode))) {
+                  return byTvdbEpisode(Number(animeMapping.tvdb_id), parsedId.season || 1, Number(parsedId.episode), config);
+                }
                 if (resolved) {
                   logger.debug(
                     `[Watch Tracking] Resolved anime IMDB ${parsedId.id} → TVDB ${animeMapping.tvdb_id} → AniDB ${anidbInfo.anidbId} → AniList ${anidbMapping.anilist_id} → Kitsu ${anilistMapping.kitsu_id} → TMDB ${resolved.tmdbId} S${resolved.seasonNumber}E${resolved.episodeNumber}`
@@ -338,18 +366,13 @@ async function resolveSeriesIds(parsedId: ParsedMediaId, config: any = {}, isSim
           logger.debug(`[Watch Tracking] Anime IMDB resolution failed for ${parsedId.id}: ${error.message}`);
         }
       }
-      return {
-        ids: { imdb: parsedId.id },
-        season: parsedId.season!,
-        episode: parsedId.episode!
-      };
+      const byImdb = { ids: { imdb: parsedId.id }, season: parsedId.season!, episode: parsedId.episode! };
+      return isSimkl ? byImdb : inTmdbNumbers(byImdb, config, 'imdb');
     }
-    case 'tvdb':
-      return {
-        ids: { tvdb: parseInt(parsedId.id, 10) },
-        season: parsedId.season!,
-        episode: parsedId.episode!
-      };
+    case 'tvdb': {
+      const byTvdb = { ids: { tvdb: parseInt(parsedId.id, 10) }, season: parsedId.season!, episode: parsedId.episode! };
+      return isSimkl ? byTvdb : inTmdbNumbers(byTvdb, config, 'tvdb');
+    }
     case 'tmdb': {
       const mapping = idMapper.getMappingByTmdbId(parsedId.id, 'series');
       if (!mapping) {
@@ -376,6 +399,19 @@ async function resolveSeriesIds(parsedId: ParsedMediaId, config: any = {}, isSim
           parseInt(String(parsedId.episode), 10),
           config
         );
+
+        const kitsuMapping = idMapper.getMappingByKitsuId(parseInt(parsedId.id, 10));
+        const tmdbGone = !resolved && kitsuMapping?.themoviedb_id
+          ? !(await require('./getTmdb').tvInfo({ id: kitsuMapping.themoviedb_id }, config).catch(() => true))
+          : false;
+        if (tmdbGone || resolved?.isFranchiseFallback) {
+          const anidbId = kitsuMapping?.anidb_id;
+          const tvdbInfo = anidbId ? resolveTvdbEpisodeFromAnidbEpisode(anidbId, 1, parseInt(String(parsedId.episode), 10)) : null;
+          if (tvdbInfo && (!resolved || Number(tvdbInfo.tvdbSeason) !== Number(resolved.seasonNumber) || Number(tvdbInfo.tvdbEpisode) !== Number(resolved.episodeNumber))) {
+            logger.debug(`[Watch Tracking] Kitsu ${parsedId.id} sent by its TVDB episode S${tvdbInfo.tvdbSeason}E${tvdbInfo.tvdbEpisode}`);
+            return byTvdbEpisode(Number(tvdbInfo.tvdbId), Number(tvdbInfo.tvdbSeason), Number(tvdbInfo.tvdbEpisode), config);
+          }
+        }
 
         if (!resolved) {
           logger.debug(`[Watch Tracking] Could not resolve Kitsu → TMDB for Kitsu series ${parsedId.id}`);
@@ -551,7 +587,8 @@ async function eachHistoryService(
         const resolution = await resolveSeriesIds(parsedId, config, service === 'simkl');
         if (resolution) {
           const ids = await withTmdbId(resolution.ids, 'series');
-          await utils[method](ids, credential, resolution.season, resolution.episode);
+          const byId = resolution.episodeIds ? [{ season: resolution.season, episode: resolution.episode, ids: resolution.episodeIds }] : undefined;
+          await utils[method](ids, credential, resolution.season, resolution.episode, byId);
         } else {
           logger.debug(`[${service}] ${what} skipped: no ids for ${parsedId.provider}:${parsedId.id}`);
         }
@@ -591,14 +628,14 @@ async function markEpisodes(
       }
       if (!credential) continue;
 
-      const groups = new Map<string, { ids: Record<string, any>; episodes: Array<{ season: number; episode: number }> }>();
+      const groups = new Map<string, { ids: Record<string, any>; episodes: Array<{ season: number; episode: number; ids?: Record<string, number> }> }>();
       for (const id of parsed) {
         const resolution = await resolveSeriesIds(id, config, service === 'simkl');
         if (!resolution) continue;
         const ids = await withTmdbId(resolution.ids, 'series');
         const key = JSON.stringify(ids);
         const group = groups.get(key) ?? { ids, episodes: [] };
-        group.episodes.push({ season: resolution.season, episode: resolution.episode });
+        group.episodes.push({ season: resolution.season, episode: resolution.episode, ...(resolution.episodeIds ? { ids: resolution.episodeIds } : {}) });
         groups.set(key, group);
       }
       for (const group of groups.values()) {

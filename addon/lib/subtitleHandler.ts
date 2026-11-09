@@ -321,6 +321,7 @@ async function inTmdbNumbers(resolution: ResolvedSeriesIds, config: any, provide
   const { withEpisodeOrder } = require('../utils/episodeOrder');
   if ((withEpisodeOrder(config, tvdb).tvdbSeasonType || 'default') !== 'default') return resolution;
   const moved = await require('../utils/mdbList').tmdbEpisodeFromTvdb(tmdb, resolution.season, resolution.episode, apiKey).catch(() => null);
+  if (moved?.showTmdb) return { ...resolution, ids: { tmdb: moved.showTmdb }, season: moved.season, episode: moved.episode };
   return moved ? { ...resolution, ids: { ...resolution.ids, tmdb }, season: moved.season, episode: moved.episode } : resolution;
 }
 
@@ -376,8 +377,13 @@ async function resolveSeriesIds(parsedId: ParsedMediaId, config: any = {}, isSim
     case 'tmdb': {
       const mapping = idMapper.getMappingByTmdbId(parsedId.id, 'series');
       if (!mapping) {
-        logger.debug(`[Watch Tracking] No mapping found for TMDB series ${parsedId.id}`);
-        return null;
+        const regular = require('./id-mappings').getByTmdbId(parsedId.id, 'series');
+        const all = regular?.imdbId || regular?.tvdbId
+          ? null
+          : await require('./id-resolver').resolveAllIds(`tmdb:${parsedId.id}`, 'series', config, {}, ['imdb', 'tvdb']).catch(() => null);
+        const imdb = regular?.imdbId || all?.imdbId || null;
+        const tvdb = Number(regular?.tvdbId || all?.tvdbId) || null;
+        return { ids: { tmdb: parseInt(parsedId.id, 10), ...(imdb ? { imdb } : {}), ...(tvdb ? { tvdb } : {}) }, season: parsedId.season!, episode: parsedId.episode! };
       }
       const ids: Record<string, any> = {};
       if (mapping.imdb_id) ids.imdb = mapping.imdb_id;
@@ -773,7 +779,7 @@ async function clearMdblistResumePoint(
 async function checkinSimkl(
   parsedId: ParsedMediaId,
   config: any,
-  options: { action?: 'checkin' | 'start' | 'pause' | 'stop'; progress?: number } = {}
+  options: { action?: 'checkin' | 'start' | 'pause' | 'stop'; progress?: number; minProgress?: number } = {}
 ): Promise<void> {
   try {
     const { checkinSeries, checkinMovie, getSimklToken } = require('../utils/simklUtils');
@@ -789,6 +795,8 @@ async function checkinSimkl(
       logger.warn(`[Simkl Checkin] Skipping checkin - missing or invalid Simkl token for tokenId ${tokenId}`);
       return;
     }
+    const marks = options.action !== 'start' && options.action !== 'pause';
+    const sent = { ...options, rewatch: marks && await require('../utils/simklUtils').simklKeepsRewatches(accessToken) };
 
     if (parsedId.type === 'movie') {
       const normalized = normalizeIdsForMovie(parsedId);
@@ -799,7 +807,7 @@ async function checkinSimkl(
       const ids = await withTmdbId(normalized, 'movie');
 
       logger.debug(`[Simkl Checkin] Tracking movie (${buildIdSummary(ids)})`);
-      await checkinMovie(ids, accessToken, options);
+      await checkinMovie(ids, accessToken, sent);
       return;
     }
 
@@ -814,7 +822,7 @@ async function checkinSimkl(
       logger.debug(
         `[Simkl Checkin] Checkin in episode (${buildIdSummary(ids)}) S${resolution.season}E${resolution.episode}`
       );
-      await checkinSeries(ids, resolution.season, resolution.episode, accessToken, resolution.fallbackData, options);
+      await checkinSeries(ids, resolution.season, resolution.episode, accessToken, resolution.fallbackData, sent);
       return;
     }
 

@@ -11,13 +11,13 @@ const addon = express();
 
 const { getCatalog } = require("./lib/getCatalog");
 const { applyCatalogFilters, catalogFiltersActive } = require("./utils/catalogFilters");
-const { cursorKey, resolveStartPage, fillFilteredPage, fillOnce } = require("./lib/catalogPagination");
+const { cursorKey, resolveStartPage, fillFilteredPage, fillOnce, isEndOfList } = require("./lib/catalogPagination");
 const { registerInProcessRoute } = require("./lib/inProcessRoutes");
-const { defaultsToNoneGenre } = require("./lib/genreNoneDefault");
 const anilist = require("./lib/anilist");
 const { getSearch } = require("./lib/getSearch");
 const { getManifest, resolveManifestTags, DEFAULT_LANGUAGE } = require("./lib/getManifest");
 const { resolveInstallFilters, uniformTagRating, allowsUnrated, scopeTagsToCatalog } = require("./utils/ageRating");
+const { withTagExclusions } = require("./utils/tagExclusions");
 const { getMeta } = require("./lib/getMeta");
 const { cacheWrapMetaSmart, cacheWrapCatalog, cacheWrapSearch, cacheWrapJikanApi, cacheWrapGlobal, classifyResultAllowEmpty, getCacheHealth, clearCacheHealth, logCacheHealth, stableStringify, deleteKeysByPattern, scanKeys } = require("./lib/getCache");
 const { hasPermission } = require("./lib/authSession");
@@ -35,11 +35,9 @@ const consola = require('consola');
 const aiCatalogLogger = consola.withTag('AICatalog');
 const { stripReleaseAvailabilityForResponse } = require('./utils/releaseAvailability');
 
-const { supportsMdblistScoreFilters } = require("./utils/mdbList");
-
 const configApi = require('./lib/configApi');
 const database = require('./lib/database');
-const { loadConfigFromDatabase } = require('./lib/configApi');
+const { loadConfigFromDatabase, loadRouteConfig } = require('./lib/configApi');
 const { getTrending } = require("./lib/getTrending");
 const { resolveProxyRatingPosterUrl, parseAnimeCatalogMetaBatch } = require("./utils/parseProps");
 const { extractIdsFromMeta, extractCanonicalIdFromDynamicUpNextId } = require("./utils/metaIds");
@@ -53,7 +51,7 @@ const { shuffleMetas } = require("./utils/mergedCatalog");
 const { isLandscapeCatalogConfig } = require("./utils/catalogPosterShape");
 const { getFavorites, getWatchList } = require("./lib/getPersonalLists");
 const { resolveDynamicTmdbDiscoverParams } = require('./lib/tmdbDiscoverDateTokens');
-const { isDiscoverCatalogId, applyDiscoverSignature } = require('./lib/discoverCatalogSignature');
+const { applyCatalogKeyArgs, applyCatalogKeyStamps, hiddenCatalogGenre } = require('./lib/catalogKeyArgs');
 const { blurImage, convertBannerToBackground } = require('./utils/imageProcessor');
 const { getAiTriggerKeyword, applyAiTrigger } = require('./utils/aiSearchTrigger');
 const { TraktClient } = require('./lib/trakt');
@@ -436,6 +434,9 @@ function applyImageCachePrefix(data) {
   };
 
   applyToMeta(data.meta);
+  if (Array.isArray(data.meta?.credits)) {
+    for (const credit of data.meta.credits) applyToMeta(credit);
+  }
   if (Array.isArray(data.metas)) {
     for (const meta of data.metas) applyToMeta(meta);
   }
@@ -511,6 +512,21 @@ const getCacheHeaders = function (opts) {
   return headerParts.length > 0 ? headerParts.join(", ") : false;
 };
 
+/** A named viewer's own tags take the place of the install URL's, as on this addon's own server. */
+function tagsAsked(req) {
+  return req.viewerTags ?? req.query.tag;
+}
+
+function withViewerAccounts(config, scoped) {
+  return { ...config, jellyfinAccounts: scoped.jellyfinAccounts, jellyfinAccountOwner: scoped.jellyfinAccountOwner };
+}
+
+/** A request naming nobody here is refused rather than served as yours. */
+function refuseUnknownViewer(res, area, userUUID, name, quiet = false) {
+  consola[quiet ? 'debug' : 'info'](`[${area}] Unknown viewer "${String(name).slice(0, 64)}" for ${userUUID}`);
+  return res.status(404).json({ error: "Unknown viewer" });
+}
+
 /**
  * The filtering an install URL asks for, from the profiles it names and from the raw
  * parameters. One UUID can then serve both an unrestricted and a family install.
@@ -521,7 +537,7 @@ const getCacheHeaders = function (opts) {
 function applyRatingOverrides(config, req, userUUID) {
   const rawRating = req.query.contentrating ?? req.query.contentRating;
   const rawUnrated = req.query.unrated;
-  const rawTag = req.query.tag;
+  const rawTag = tagsAsked(req);
   if (rawRating === undefined && rawUnrated === undefined && rawTag === undefined) return config;
 
   const { tags: urlTags } = resolveManifestTags(config, rawTag);
@@ -537,9 +553,10 @@ function applyRatingOverrides(config, req, userUUID) {
 
   const hidesUnrated = allowUnrated === false && allowsUnrated(config);
   const showsUnrated = allowUnrated === true && !allowsUnrated(config);
-  if (!ageRating && !hidesUnrated && !showsUnrated) return config;
+  const excluded = withTagExclusions(config, tags);
+  if (!ageRating && !hidesUnrated && !showsUnrated) return excluded;
 
-  const next = { ...config };
+  const next = { ...excluded };
   if (ageRating) {
     next.ageRating = ageRating;
     next._ratingOverride = ageRating;
@@ -2625,7 +2642,8 @@ addon.get("/api/tmdb/collections/resolve", async (req, res) => {
 });
 
 // AI-powered catalog creation
-const aiCatalogRateLimit = new Map();
+const { LRUCache: AiRateCache } = require('lru-cache');
+const aiCatalogRateLimit = new AiRateCache({ max: 10000, ttl: 60000 });
 addon.post("/api/ai/create-catalog", async (req, res) => {
   try {
     const { userUUID, password, query, provider, generationMode, model: requestedModel, geminiKey: clientGeminiKey, openrouterKey: clientOpenrouterKey } = req.body;
@@ -3234,6 +3252,9 @@ addon.get("/api/recommendations/status", async (req: any, res: any) => {
   try {
     const userUUID = String(req.query.userUUID || '').trim();
     if (!userUUID) return res.status(400).json({ error: "userUUID is required" });
+    if (!(await resolveConfigAccess(req, userUUID, req.get('x-config-password')))) {
+      return res.status(401).json({ error: "Invalid UUID or password" });
+    }
 
     const storedConfig = await loadConfigFromDatabase(userUUID);
     if (!storedConfig) return res.status(404).json({ error: "User configuration not found" });
@@ -3251,30 +3272,35 @@ addon.get("/api/recommendations/status", async (req: any, res: any) => {
       } catch { /* a malformed override falls back to what is saved */ }
     }
 
-    const { collectWatchedRows, isWatched, resolveSources }: any = require('./utils/recommendations/history');
+    const { collectWatchedRows, isWatched, resolveSources, trackerAvailability, runAsProfile }: any = require('./utils/recommendations/history');
     const { summarise }: any = require('./utils/recommendations/rows');
     const { resolveProvider }: any = require('./utils/recommendations/provider');
-
-    const sources = resolveSources(config);
-    const rows = (await collectWatchedRows(config, userUUID)).filter(isWatched);
-    const chosen = resolveProvider(config);
-
     const { profileCacheKey }: any = require('./utils/recommendations/profile');
-    const redis = require('./lib/redisClient').default || require('./lib/redisClient');
-    const profileKey = `global:e2:${profileCacheKey(config, userUUID)}`;
-    let profile: any = null;
-    try {
-      const raw = await redis.get(profileKey);
-      if (raw) profile = JSON.parse(raw);
-    } catch { /* a missing profile is the normal state before the first build */ }
+    const { readGlobalCache }: any = require('./lib/getCache');
 
-    return res.json({
-      sources: sources.choice,
-      connected: { simkl: sources.simkl, mdblist: sources.mdblist },
-      provider: chosen ? { provider: chosen.provider, model: chosen.model } : null,
-      counts: summarise(rows, require('./utils/recommendations/rows').tuningFrom(config)),
-      profile: profile ? { summary: profile.summary, builtAt: profile.builtAt, builtFrom: profile.builtFrom } : null,
+    const { listProfiles }: any = require('./lib/jellyfin/profiles');
+    const profiles = listProfiles(config, userUUID)
+      .filter((entry: any) => entry.id && !entry.sharesHistory)
+      .map((entry: any) => {
+        const keys = (config.jellyfinUsers || []).find((user: any) => user?.id === entry.id)?.accounts?.apiKeys || {};
+        return { id: entry.id, name: entry.name, avatar: entry.avatar, linked: [keys.simklTokenId && 'Simkl', keys.mdblist && 'MDBList'].filter(Boolean) };
+      });
+
+    const report = await runAsProfile(config, userUUID, String(req.query.profile || ''), async (viewerConfig: any) => {
+      const sources = resolveSources(viewerConfig);
+      const rows = (await collectWatchedRows(viewerConfig, userUUID)).filter(isWatched);
+      const chosen = resolveProvider(viewerConfig);
+      const profile: any = await readGlobalCache(profileCacheKey(viewerConfig, userUUID));
+      return {
+        sources: sources.choice,
+        connected: { simkl: sources.simkl, mdblist: sources.mdblist, local: sources.local },
+        available: trackerAvailability(viewerConfig),
+        provider: chosen ? { provider: chosen.provider, model: chosen.model } : null,
+        counts: summarise(rows, require('./utils/recommendations/rows').tuningFrom(viewerConfig)),
+        profile: profile ? { summary: profile.summary, builtAt: profile.builtAt, builtFrom: profile.builtFrom } : null,
+      };
     });
+    return res.json({ ...report, profiles });
   } catch (error: any) {
     consola.withTag('Recommendations').warn(`Status failed: ${error.message}`);
     return res.status(500).json({ error: "Could not read recommendation status" });
@@ -3290,6 +3316,9 @@ addon.post("/api/recommendations/generate", async (req: any, res: any) => {
     if (!userUUID || !catalogId) {
       return res.status(400).json({ error: "userUUID and catalogId are required" });
     }
+    if (!(await resolveConfigAccess(req, userUUID, req.body?.password))) {
+      return res.status(401).json({ error: "Invalid UUID or password" });
+    }
 
     const storedConfig = await loadConfigFromDatabase(userUUID);
     if (!storedConfig) return res.status(404).json({ error: "User configuration not found" });
@@ -3302,19 +3331,32 @@ addon.post("/api/recommendations/generate", async (req: any, res: any) => {
     }
 
     const { startJob }: any = require('./utils/recommendations/jobs');
-    const job = startJob(config, userUUID, catalogId);
+    const { hasOwnHistory, runAsProfile }: any = require('./utils/recommendations/history');
+    const profileId = String(req.body?.profile || '');
+    if (profileId && !hasOwnHistory(config, userUUID, profileId)) {
+      return res.status(404).json({ error: "This profile no longer has a history of its own" });
+    }
+    const job = runAsProfile(config, userUUID, profileId, (viewerConfig: any) => startJob(viewerConfig, userUUID, catalogId, req.body?.force === true));
     return res.json({ job });
   } catch (error: any) {
     return res.status(400).json({ error: error.message });
   }
 });
 
-addon.get("/api/recommendations/jobs", (req: any, res: any) => {
+addon.get("/api/recommendations/jobs", async (req: any, res: any) => {
   const userUUID = String(req.query.userUUID || '').trim();
   if (!userUUID) return res.status(400).json({ error: "userUUID is required" });
+  try {
+    if (!(await resolveConfigAccess(req, userUUID, req.get('x-config-password')))) {
+      return res.status(401).json({ error: "Invalid UUID or password" });
+    }
+  } catch {
+    return res.status(500).json({ error: "Could not read recommendation jobs" });
+  }
   const { listJobs, pruneJobs }: any = require('./utils/recommendations/jobs');
   pruneJobs();
-  return res.json({ jobs: listJobs(userUUID) });
+  const profile = String(req.query.profile || '').trim();
+  return res.json({ jobs: listJobs(profile ? `${userUUID}#${profile}` : userUUID) });
 });
 
 // --- Trakt Proxy Endpoints ---
@@ -4759,6 +4801,7 @@ addon.delete("/api/cache/clear/:key", requireDashboardAdmin, async (req, res) =>
     } else {
       // Clear specific key
       const result = await redis.del(key);
+      require('./lib/metaMemory').forgetAllHeld();
       consola.info(`[Cache] Cleared cache key: ${key} (result: ${result})`);
       res.json({
         success: true,
@@ -4825,7 +4868,12 @@ addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
             return res.status(404).send({ err: "User configuration not found." });
         }
         
-        const { tags, unknown: unknownTags } = resolveManifestTags(config, req.query.tag);
+        const { profileForViewer, scopeConfigToProfile } = require('./lib/jellyfin/profiles');
+        const profile = profileForViewer(config, userUUID, req.query.viewer);
+        if (profile === undefined) return refuseUnknownViewer(res, 'Manifest', userUUID, req.query.viewer);
+        if (profile?.tags.length) req.viewerTags = profile.tags;
+
+        const { tags, unknown: unknownTags } = resolveManifestTags(config, tagsAsked(req));
         req.manifestTags = tags;
         // The cap itself applies to catalog and search requests, not to the manifest.
         // It is resolved here anyway so an install URL can be checked before it is used.
@@ -4844,7 +4892,8 @@ addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
         if (unknownTags.length > 0) {
             consola.warn(`[Manifest] User ${userUUID} asked for ${unknownTags.join(', ')}, which no catalog is tagged with`);
         }
-        const manifest = await getManifest(config, { tags });
+        const viewer = profile?.id ? scopeConfigToProfile(config, userUUID, profile.id) : undefined;
+        const manifest = await getManifest(config, { tags, userUUID, viewer });
             if (!manifest) {
                 res.setHeader('Access-Control-Allow-Origin', '*');
                 res.setHeader('Access-Control-Allow-Headers', '*');
@@ -4911,15 +4960,20 @@ addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
 
 
 // --- Catalog Route under /stremio/:userUUID prefix ---
+function withCatalogCriticRatings(metas: any[], config: any, req: any): Promise<any[]> | any[] {
+  const { criticRatingsWanted, metasWithCriticRatings } = require('./lib/stremioCriticRatings');
+  return criticRatingsWanted(config, req) ? metasWithCriticRatings(metas) : metas;
+}
+
 const catalogRoute = async function (req, res) {
   const { userUUID, type, id, extra } = req.params;
-  const storedConfig = await loadConfigFromDatabase(userUUID);
-  
+  // `viewerConfig` is set only for a named viewer and `accountOwner` only by the Jellyfin server's reads, never from the request.
+  const storedConfig = req.viewerConfig ?? await loadRouteConfig(userUUID);
+
   if (!storedConfig) {
     return res.status(404).send({ error: "User configuration not found" });
   }
   const { viewerConfigFor } = require('./lib/accounts');
-  // Set only by the Jellyfin server's in-process reads, never from the request.
   const config = applyRatingOverrides(viewerConfigFor(storedConfig, req.params.accountOwner, id), req, userUUID);
   config.userUUID = userUUID;
 
@@ -4927,11 +4981,11 @@ const catalogRoute = async function (req, res) {
     const { collectionCatalogMetas, isCollectionCatalogId } = require('./lib/collectionBuilder/aiostreamsCollections');
     if (isCollectionCatalogId(id)) {
       const skip = parseInt(new URLSearchParams(extra || '').get('skip') || '0', 10) || 0;
-      const { tags } = resolveManifestTags(storedConfig, req.query.tag);
+      const { tags } = resolveManifestTags(storedConfig, tagsAsked(req));
       const metas = await collectionCatalogMetas(userUUID, config, tags, id, skip);
       if (!metas) return res.status(404).send({ error: "Collection not found" });
       req.userConfig = config;
-      return respond(req, res, { metas });
+      return respond(req, res, { metas: await withCatalogCriticRatings(metas, config, req) });
     }
   }
 
@@ -4941,7 +4995,7 @@ const catalogRoute = async function (req, res) {
       const sourceId = new URLSearchParams(extra || '').get('similar') || '';
       const metas = sourceId ? await similarCatalogMetas(userUUID, config, type, sourceId) : [];
       req.userConfig = config;
-      return respond(req, res, { metas });
+      return respond(req, res, { metas: await withCatalogCriticRatings(metas, config, req) });
     }
   }
 
@@ -5101,114 +5155,13 @@ const catalogRoute = async function (req, res) {
   const cacheWrapper = cacheWrapCatalog;
 
   extraArgs = extraArgs || {};
-  // A client following the manifest sends the 'None' it leads with; one that
+  // A client following the manifest sends the genre it leads with; one that
   // leaves the genre out gets the same page, and the entry the warmer wrote.
-  if (!extraArgs.genre && catalogConfig?.showInHome === false && defaultsToNoneGenre(cleanId)) {
-    extraArgs.genre = 'None';
+  if (!extraArgs.genre && catalogConfig?.showInHome === false) {
+    const hidden = await hiddenCatalogGenre(config, userUUID, cleanId, actualType);
+    if (hidden) extraArgs.genre = hidden;
   }
-  // Ensure sort options are included in cache key
-  // Claimed before the provider prefixes; anilist.discover would otherwise match anilist.
-  if (isDiscoverCatalogId(cleanId)) {
-    applyDiscoverSignature(extraArgs, catalogConfig);
-  }
-  // Trakt uses: sort, sortDirection
-  else if (cleanId.startsWith('trakt.')) {
-    if (catalogConfig?.sort) extraArgs.sort = catalogConfig.sort;
-    if (catalogConfig?.sortDirection) extraArgs.sortDirection = catalogConfig.sortDirection;
-  }
-  // MDBList uses: sort, order
-  else if (cleanId.startsWith('mdblist.')) {
-    if (catalogConfig?.sort) extraArgs.sort = catalogConfig.sort;
-    if (catalogConfig?.order) extraArgs.order = catalogConfig.order;
-    if (supportsMdblistScoreFilters(catalogConfig)) {
-      if (typeof catalogConfig.filter_score_min === 'number') {
-        extraArgs.filter_score_min = catalogConfig.filter_score_min;
-      }
-      if (typeof catalogConfig.filter_score_max === 'number') {
-        extraArgs.filter_score_max = catalogConfig.filter_score_max;
-      }
-    }
-  }
-  // Streaming uses: sort
-  else if (cleanId.startsWith('streaming.') || cleanId.startsWith('tmdb.year') || cleanId.startsWith('tmdb.language')) {
-    if (catalogConfig?.sort) extraArgs.sort = catalogConfig.sort;
-    if (catalogConfig?.sortDirection) extraArgs.sortDirection = catalogConfig.sortDirection;
-    if (cleanId.startsWith('tmdb.year') && typeof catalogConfig?.minVotes === 'number') {
-      extraArgs.minVotes = catalogConfig.minVotes;
-    }
-  }
-  // AniList uses: sort, sortDirection
-  else if (cleanId.startsWith('anilist.')) {
-    if (catalogConfig?.sort) extraArgs.sort = catalogConfig.sort;
-    if (catalogConfig?.sortDirection) extraArgs.sortDirection = catalogConfig.sortDirection;
-  }
-  // MAL user lists use: sort
-  else if (cleanId.startsWith('mal.userlist.')) {
-    if (catalogConfig?.sort) extraArgs.sort = catalogConfig.sort;
-  }
-  // MovieLens uses: sortBy, sortDirection, tags, minYear, maxYear, minPop, maxDaysAgo, maxFutureDays
-  else if (cleanId.startsWith('movielens.')) {
-    const mlMeta: any = catalogConfig?.metadata || {};
-    if (mlMeta.sortBy) extraArgs.sort = mlMeta.sortBy;
-    if (mlMeta.sortDirection) extraArgs.sortDirection = mlMeta.sortDirection;
-    if (mlMeta.tags) extraArgs.tags = mlMeta.tags;
-    if (mlMeta.minYear) extraArgs.minYear = mlMeta.minYear;
-    if (mlMeta.maxYear) extraArgs.maxYear = mlMeta.maxYear;
-    if (mlMeta.minPop) extraArgs.minPop = mlMeta.minPop;
-    if (mlMeta.maxDaysAgo) extraArgs.maxDaysAgo = mlMeta.maxDaysAgo;
-    if (mlMeta.maxFutureDays !== undefined) extraArgs.maxFutureDays = mlMeta.maxFutureDays;
-    if (mlMeta.includeRated) extraArgs.includeRated = true;
-  }
-  // Up next catalogs need poster preference and filter settings in cache key
-  if (cleanId === 'trakt.upnext' || cleanId === 'mdblist.upnext' || cleanId.startsWith('simkl.upnext')) {
-      extraArgs.useShowPoster = typeof catalogConfig?.metadata?.useShowPosterForUpNext === 'boolean'
-        ? catalogConfig.metadata.useShowPosterForUpNext
-        : false;
-  }
-  if (cleanId === 'simkl.upnext') {
-      extraArgs.includeAnime = catalogConfig?.metadata?.includeAnimeInUpNext !== false;
-  }
-  if (cleanId === 'mdblist.upnext') {
-      if (catalogConfig?.metadata?.hideUnreleased !== undefined) {
-        extraArgs.hideUnreleased = catalogConfig.metadata.hideUnreleased;
-      }
-  }
-  // Trakt calendar needs today's date and days in cache key
-  if (cleanId === 'trakt.calendar') {
-    const getUserTimezone = () => config.timezone || process.env.TZ || 'UTC';
-    const getTodayInTimezone = (tz) => {
-      const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' });
-      return formatter.format(new Date());
-    };
-    extraArgs.date = getTodayInTimezone(getUserTimezone());
-    extraArgs.days = typeof catalogConfig?.metadata?.airingSoonDays === 'number' 
-      ? catalogConfig.metadata.airingSoonDays 
-      : 1;
-  }
-  // Simkl calendar needs today's date and days in cache key
-  if (cleanId.startsWith('simkl.calendar')) {
-    const getUserTimezone = () => config.timezone || process.env.TZ || 'UTC';
-    const getTodayInTimezone = (tz) => {
-      const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' });
-      return formatter.format(new Date());
-    };
-    extraArgs.date = getTodayInTimezone(getUserTimezone());
-    extraArgs.days = typeof catalogConfig?.metadata?.airingSoonDays === 'number' 
-      ? catalogConfig.metadata.airingSoonDays 
-      : 1;
-  }
-  if (cleanId === 'tvmaze.schedule') {
-    // Format date in user's configured timezone (or server timezone as fallback)
-    const getUserTimezone = () => config.timezone || process.env.TZ || 'UTC';
-    const getTodayInTimezone = (tz) => {
-      const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' });
-      return formatter.format(new Date());
-    };
-    
-    const dateString = extraArgs.date || getTodayInTimezone(getUserTimezone());
-    extraArgs.date = dateString;
-    extraArgs.genre = !extraArgs.genre || extraArgs.genre === 'None' ? '' : extraArgs.genre.toUpperCase();
-  }
+  applyCatalogKeyArgs(extraArgs, cleanId, catalogConfig, config);
 
   // Compute pageSize and derive page from skip BEFORE building the cache key.
   // This normalizes skip values so that different skip values mapping to the same
@@ -5222,7 +5175,7 @@ const catalogRoute = async function (req, res) {
     catalogPageSize = parseInt(process.env.MAL_PAGE_SIZE || '25');
   } else if (cleanId === 'anilist.trending' || cleanId.startsWith('anilist.discover')) {
     catalogPageSize = 50;
-  } else if (cleanId.startsWith('rt.') || cleanId.startsWith('simkl.watchlist.') || cleanId.startsWith('simkl.list.') || cleanId.startsWith('simkl.upnext') || cleanId.startsWith('simkl.dvd.') || cleanId.startsWith('simkl.trending.') || cleanId.startsWith('simkl.recipe.') || cleanId.startsWith('stremthru.') || cleanId.startsWith('mdblist.') || cleanId.startsWith('custom.') || cleanId.startsWith('trakt.') || cleanId.startsWith('anilist.') || cleanId.startsWith('letterboxd.') || cleanId.startsWith('movielens.') || cleanId.startsWith('lumiere.') || cleanId.startsWith('aiom.watchlist.') || (cleanId.startsWith('tvdb.') && !cleanId.startsWith('tvdb.collection.'))) {
+  } else if (cleanId.startsWith('rt.') || cleanId.startsWith('simkl.watchlist.') || cleanId.startsWith('simkl.list.') || cleanId.startsWith('simkl.upnext') || cleanId.startsWith('simkl.dvd.') || cleanId.startsWith('simkl.trending.') || cleanId.startsWith('simkl.recipe.') || cleanId.startsWith('stremthru.') || cleanId.startsWith('mdblist.') || cleanId.startsWith('custom.') || cleanId.startsWith('trakt.') || cleanId.startsWith('anilist.') || cleanId.startsWith('letterboxd.') || cleanId.startsWith('movielens.') || cleanId.startsWith('lumiere.') || cleanId.startsWith('aiom.watchlist.') || cleanId.startsWith('recommendations.') || (cleanId.startsWith('tvdb.') && !cleanId.startsWith('tvdb.collection.'))) {
     catalogPageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE || '20');
   } else {
     catalogPageSize = 20;
@@ -5239,57 +5192,7 @@ const catalogRoute = async function (req, res) {
   delete cacheExtraArgs.skip;
   if (catalogPage > 1) cacheExtraArgs.page = catalogPage;
 
-  if (cleanId.startsWith('simkl.watchlist.') || cleanId.startsWith('simkl.upnext')) {
-    try {
-      const { getSimklToken, getSimklActivityFingerprint } = require('./utils/simklUtils');
-      const tokenId = config.apiKeys?.simklTokenId;
-      if (tokenId) {
-        const token = await getSimklToken(tokenId);
-        if (token?.access_token) {
-          // Up Next reads whichever buckets it renders, so its key has to move when
-          // any of them does, not just when the shows bucket does.
-          let pairs;
-          if (cleanId === 'simkl.upnext.anime') {
-            pairs = [['anime', 'watching']];
-          } else if (cleanId === 'simkl.upnext') {
-            pairs = extraArgs.includeAnime === false
-              ? [['shows', 'watching']]
-              : [['shows', 'watching'], ['anime', 'watching']];
-          } else {
-            const parts = cleanId.split('.');
-            pairs = [[parts[2], parts[3]]];
-          }
-          const fps = await Promise.all(
-            pairs.map(([t, s]) => getSimklActivityFingerprint(token.access_token, t, s, config))
-          );
-          const fp = fps.filter(Boolean).join('+');
-          if (fp) cacheExtraArgs._simklAct = fp;
-        }
-      }
-    } catch (e) {
-      consola.warn(`[Catalog] Simkl activity fingerprint failed for ${cleanId}: ${e.message}`);
-    }
-  }
-
-  if (cleanId.startsWith('movielens.explore')) {
-    try {
-      const credId = config.apiKeys?.movieLensCredId;
-      const catCfg = config.catalogs?.find(c => c.id === cleanId);
-      const explicitTags = String(catCfg?.metadata?.tags || '')
-        .split(',').map(s => s.trim()).filter(Boolean).join(',');
-      if (credId && !explicitTags) {
-        const metaTtl = parseInt(
-          process.env.MOVIELENS_USERMETA_TTL_SECONDS || process.env.MOVIELENS_GROUPTAGS_TTL_SECONDS || '43200', 10);
-        const userMeta = await cacheWrapGlobal(`movielens-usermeta:${credId}`,
-          async () => movielens.getUserMeta(credId), metaTtl);
-        if (userMeta?.engineId === 'bard' && Array.isArray(userMeta.groupTags) && userMeta.groupTags.length) {
-          cacheExtraArgs._mlTags = userMeta.groupTags.map(t => t.trim()).filter(Boolean).join(',');
-        }
-      }
-    } catch (e) {
-      consola.warn(`[Catalog] MovieLens group tags failed for ${cleanId}: ${e.message}`);
-    }
-  }
+  await applyCatalogKeyStamps(cacheExtraArgs, cleanId, catalogConfig, config);
 
   const cacheOptions = {
     enableErrorCaching: true,
@@ -5427,6 +5330,7 @@ const catalogRoute = async function (req, res) {
       const { genre: genreName, type_filter } = extraArgs;
       const runCatalogPage = async (page, skipOverride) => {
         let metas = [];
+        let ended = false;
         const args = [actualType, language, page];
         switch (cleanId) {
           case "tmdb.trending":
@@ -5475,10 +5379,11 @@ const catalogRoute = async function (req, res) {
           }
           default: {
             metas = (await getCatalog(actualType, language, page, cleanId, genreName, config, userUUID, false, skipOverride)).metas;
+            ended = isEndOfList(metas);
             break;
           }
       }
-      return { metas: metas || [] };
+      return { metas: metas || [], ...(ended ? { endOfList: true } : {}) };
     };
 
     const keyForPage = (page) => {
@@ -5497,7 +5402,10 @@ const catalogRoute = async function (req, res) {
       filtersAlreadyApplied = true;
     } else if (catalogFiltersActive({ config, catalogConfig, cleanId })) {
       const { accountOwner } = require('./lib/accounts');
-      const key = cursorKey(userUUID, cleanId, actualType, genreName, accountOwner(config));
+      const { viewerProfile } = require('./lib/jellyfin/viewer');
+      const filteredFor = [viewerProfile() || accountOwner(config), config._ratingOverride, ...resolveManifestTags(storedConfig, tagsAsked(req)).tags]
+        .filter(Boolean).join('|');
+      const key = cursorKey(userUUID, cleanId, actualType, genreName, filteredFor);
       const skipValue = legacySkip || 0;
       // Deduped here rather than after, so what a page serves, and so where the
       // next one starts, is the same whether it is filled for this request or on
@@ -5562,42 +5470,58 @@ const catalogRoute = async function (req, res) {
 
 
     if (catalogConfig?.randomizePerPage && Array.isArray(responseData?.metas) && responseData.metas.length > 1) {
-      responseData = {
-        ...responseData,
-        metas: shuffleMetas(responseData.metas)
-      };
+      responseData = req.params.forJellyfin === '1'
+        ? { ...responseData, randomize: true }
+        : { ...responseData, metas: shuffleMetas(responseData.metas) };
     }
 
     // Art URL pattern overrides for catalog items
     // Skip poster override for up next catalogs unless useShowPosterForUpNext is enabled
     // (when disabled, up next uses episode thumbnails as posters which shouldn't be overridden)
     const host = process.env.HOST_NAME?.startsWith('http') ? process.env.HOST_NAME : `https://${process.env.HOST_NAME}`;
-    const upstreamArt = !config._currentSearchCatalogId && catalogConfig?.metadata?.useUpstreamArt === true;
-    const posterPatternsEnabled = config._currentSearchCatalogId
-      ? (config.search?.engineRatingPosters?.[config._currentSearchCatalogId] === true)
-      : (catalogConfig?.enableRatingPosters !== false && !upstreamArt);
-    const posterPattern = posterPatternsEnabled ? require('./utils/parseProps').resolvePosterPattern(config) : null;
-    const backgroundPattern = upstreamArt ? null : config.customBackgroundUrlPattern;
-    const logoPattern = upstreamArt ? null : config.customLogoUrlPattern;
-    const landscapeUrlPattern = upstreamArt ? null : config.customLandscapeUrlPattern;
-    if ((posterPattern || backgroundPattern || landscapeUrlPattern || logoPattern) && responseData?.metas && Array.isArray(responseData.metas)) {
-      const isUpNextCatalog = cleanId.includes('up_next') || cleanId.includes('upnext');
-      const upNextUsesShowPoster = isUpNextCatalog && catalogConfig?.metadata?.useShowPosterForUpNext === true;
-      const { resolveCustomArtUrl, getPosterRatingApiKey, resolveLandscapePattern, posterShapeOf } = require('./utils/parseProps');
-      const proxyApiKey = config.usePosterProxy ? getPosterRatingApiKey(config) : null;
+    const { resolveCustomArtUrl, getPosterRatingApiKey, resolvePosterPattern, resolveLandscapePattern, posterShapeOf } = require('./utils/parseProps');
+    const artSettings = (entry, entryId, starred) => {
+      const upstreamArt = !config._currentSearchCatalogId && entry?.metadata?.useUpstreamArt === true;
+      const posterPatternsEnabled = config._currentSearchCatalogId
+        ? (config.search?.engineRatingPosters?.[config._currentSearchCatalogId] === true)
+        : (starred && entry?.enableRatingPosters !== false && !upstreamArt);
+      const posterPattern = posterPatternsEnabled ? resolvePosterPattern(config) : null;
+      const isUpNextCatalog = entryId.includes('up_next') || entryId.includes('upnext');
+      const upNextUsesShowPoster = isUpNextCatalog && entry?.metadata?.useShowPosterForUpNext === true;
       const posterApplies = !!posterPattern && (!isUpNextCatalog || upNextUsesShowPoster);
+      const backgroundPattern = upstreamArt ? null : config.customBackgroundUrlPattern;
+      const logoPattern = upstreamArt ? null : config.customLogoUrlPattern;
       const landscapePattern = upstreamArt ? null : resolveLandscapePattern(config, posterApplies ? posterPattern : null);
+      const applies = !!(posterPattern || backgroundPattern || landscapePattern || logoPattern);
+      return { upstreamArt, posterPattern, posterApplies, backgroundPattern, logoPattern, landscapePattern, applies };
+    };
+    const catalogArt = artSettings(catalogConfig, cleanId, true);
+    const sourceArts = new Map();
+    const artOf = (meta) => {
+      const source = meta?._artSource;
+      if (!source) return catalogArt;
+      if (!sourceArts.has(source)) {
+        const entry = config.catalogs?.find((c) => `${c.id}:${c.type}` === source);
+        sourceArts.set(source, entry ? artSettings(entry, entry.id, catalogConfig?.enableRatingPosters !== false) : catalogArt);
+      }
+      return sourceArts.get(source);
+    };
+    const merged = cleanId.startsWith('merged.');
+    if ((merged || catalogArt.applies) && responseData?.metas && Array.isArray(responseData.metas)) {
+      const proxyApiKey = config.usePosterProxy ? getPosterRatingApiKey(config) : null;
       for (const meta of responseData.metas) {
+        const art = artOf(meta);
+        if (!art.applies) continue;
         const ids = extractIdsFromMeta(meta);
         const type = meta.type || actualType;
-        if (posterApplies) {
+        if (art.posterApplies) {
           if (proxyApiKey) {
             const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
             if (proxyId) {
               meta.poster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, ratingKey: proxyApiKey, lang: config.language });
             }
           } else {
-            const resolved = resolveCustomArtUrl(posterPattern, ids, type, config, { shape: posterShapeOf(meta) });
+            const resolved = resolveCustomArtUrl(art.posterPattern, ids, type, config, { shape: posterShapeOf(meta) });
             if (resolved) {
               if (config.usePosterProxy) {
                 const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
@@ -5612,8 +5536,8 @@ const catalogRoute = async function (req, res) {
             }
           }
         }
-        if (backgroundPattern) {
-          const resolved = resolveCustomArtUrl(backgroundPattern, ids, type, config, { shape: 'landscape' });
+        if (art.backgroundPattern) {
+          const resolved = resolveCustomArtUrl(art.backgroundPattern, ids, type, config, { shape: 'landscape' });
           if (resolved) {
             if (config.usePosterProxy) {
               const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
@@ -5627,8 +5551,8 @@ const catalogRoute = async function (req, res) {
             }
           }
         }
-        if (landscapePattern) {
-          const resolved = resolveCustomArtUrl(landscapePattern, ids, type, config, { shape: 'landscape' });
+        if (art.landscapePattern) {
+          const resolved = resolveCustomArtUrl(art.landscapePattern, ids, type, config, { shape: 'landscape' });
           if (resolved) {
             if (config.usePosterProxy) {
               const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
@@ -5642,8 +5566,8 @@ const catalogRoute = async function (req, res) {
             }
           }
         }
-        if (logoPattern) {
-          const resolved = resolveCustomArtUrl(logoPattern, ids, type, config);
+        if (art.logoPattern) {
+          const resolved = resolveCustomArtUrl(art.logoPattern, ids, type, config);
           if (resolved) {
             if (config.usePosterProxy) {
               const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
@@ -5670,11 +5594,15 @@ const catalogRoute = async function (req, res) {
     const isSearchCatalog = cleanId === 'search' || cleanId === 'people_search' || cleanId === 'gemini.search';
     if (isLandscapeCatalogConfig(config, catalogConfig) && !isSearchCatalog && req.params.forJellyfin !== '1' && Array.isArray(responseData?.metas)) {
       for (const meta of responseData.metas) {
-        const landscape = upstreamArt ? (meta.background || meta.landscapePoster) : (meta.landscapePoster || meta.background);
+        const landscape = artOf(meta).upstreamArt ? (meta.background || meta.landscapePoster) : (meta.landscapePoster || meta.background);
         if (meta.posterShape === 'landscape' || !landscape) continue;
         meta.poster = landscape;
         meta.posterShape = 'landscape';
       }
+    }
+
+    if (merged && Array.isArray(responseData?.metas)) {
+      for (const meta of responseData.metas) delete meta?._artSource;
     }
 
     if ((responseData as any)?.error) {
@@ -5686,6 +5614,11 @@ const catalogRoute = async function (req, res) {
       }
     }
 
+    if (Array.isArray(responseData?.metas)) {
+      const metas = await withCatalogCriticRatings(responseData.metas, config, req);
+      if (metas !== responseData.metas) responseData = { ...responseData, metas };
+    }
+
     const httpCacheOpts = { cacheMaxAge: 0, staleRevalidate: 5 * 60 }; // No cache for regular catalogs, 5 min stale-while-revalidate
     respond(req, res, responseData, httpCacheOpts);
 
@@ -5694,7 +5627,38 @@ const catalogRoute = async function (req, res) {
     return res.status(500).send("Internal Server Error");
   }
 };
-addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", catalogRoute);
+/** A read naming its household user, as watch state does, gets that user's history and accounts rows;
+ *  a read naming nobody here is refused rather than served as yours. */
+const catalogRouteForViewer = async function (req, res) {
+  const named = req.query.viewer;
+  if (named === undefined || named === '') return catalogRoute(req, res);
+  const { userUUID } = req.params;
+  const storedConfig = await loadRouteConfig(userUUID);
+  if (!storedConfig) return catalogRoute(req, res);
+
+  const { profileForViewer, profileKey, scopeConfigToProfile } = require('./lib/jellyfin/profiles');
+  const profile = profileForViewer(storedConfig, userUUID, named);
+  if (profile === undefined) return refuseUnknownViewer(res, 'Catalog', userUUID, named, true);
+  if (!profile) return catalogRoute(req, res);
+  if (profile.tags.length) req.viewerTags = profile.tags;
+  if (!profile.id) return catalogRoute(req, res);
+
+  const { accountOwner, catalogEntryFor, servesCatalog } = require('./lib/accounts');
+  const scoped = scopeConfigToProfile(storedConfig, userUUID, profile.id);
+  if (!servesCatalog(scoped, catalogEntryFor(storedConfig, req.params.id))) {
+    req.userConfig = storedConfig;
+    return respond(req, res, { metas: [] });
+  }
+
+  req.viewerConfig = withViewerAccounts(storedConfig, scoped);
+  const { noteAccountOwner, noteProfile, runInViewerScope } = require('./lib/jellyfin/viewer');
+  return runInViewerScope(false, () => {
+    noteProfile(profileKey(scoped));
+    noteAccountOwner(accountOwner(scoped));
+    return catalogRoute(req, res);
+  });
+};
+addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", catalogRouteForViewer);
 registerInProcessRoute('catalog', "/stremio/:userUUID/catalog/:type/:id{/:extra}.json", catalogRoute);
 // --- Meta Route (with enhanced caching) ---
 const metaRoute = async function (req, res) {
@@ -5707,7 +5671,7 @@ const metaRoute = async function (req, res) {
   }
   
   // Load config from database
-  const config = await loadConfigFromDatabase(userUUID);
+  const config = await loadRouteConfig(userUUID);
   if (!config) {
     return res.status(404).send({ error: "User configuration not found" });
   }
@@ -5727,8 +5691,13 @@ const metaRoute = async function (req, res) {
   {
     const { collectionMeta, COLLECTION_META_PREFIX } = require('./lib/collectionBuilder/aiostreamsCollections');
     if (stremioId.startsWith(COLLECTION_META_PREFIX)) {
-      const { tags } = resolveManifestTags(config, req.query.tag);
-      const meta = await collectionMeta(userUUID, config, tags, stremioId);
+      const { profileForViewer, scopeConfigToProfile } = require('./lib/jellyfin/profiles');
+      const profile = profileForViewer(config, userUUID, req.query.viewer);
+      if (profile === undefined) return refuseUnknownViewer(res, 'Meta', userUUID, req.query.viewer, true);
+      if (profile?.tags.length) req.viewerTags = profile.tags;
+      const view = profile?.id ? withViewerAccounts(config, scopeConfigToProfile(config, userUUID, profile.id)) : config;
+      const { tags } = resolveManifestTags(config, tagsAsked(req));
+      const meta = await collectionMeta(userUUID, view, tags, stremioId);
       if (!meta) return res.status(404).send({ error: "Collection not found" });
       req.userConfig = config;
       return respond(req, res, { meta });
@@ -5863,6 +5832,11 @@ const metaRoute = async function (req, res) {
       };
     }
 
+    {
+      const { criticRatingsWanted, metaWithCriticRatings } = require('./lib/stremioCriticRatings');
+      if (criticRatingsWanted(config, req)) result = { ...result, meta: await metaWithCriticRatings(result.meta) };
+    }
+
     // Use aggressive cache control for meta routes to ensure fresh data when config changes
     // Don't pass cacheOpts to let the respond function use the aggressive cache control
     respond(req, res, result);
@@ -5951,10 +5925,7 @@ addon.post(["/stremio/:userUUID/watch_state/push/:type/:id.json", "/stremio/:use
   const { configForViewer } = require('./lib/jellyfin/profiles');
   const named = req.body?.viewer ?? req.query.viewer;
   const viewer = configForViewer(config, userUUID, named);
-  if (!viewer) {
-    consola.info(`[Playback] Unknown viewer "${String(named).slice(0, 64)}" for ${userUUID}, dropping ${type}/${id}`);
-    return res.status(404).json({ error: "Unknown viewer" });
-  }
+  if (!viewer) return refuseUnknownViewer(res, 'Playback', userUUID, named);
 
   try {
     const { handlePlaybackReport } = require('./lib/playbackHandler');
@@ -5988,10 +5959,7 @@ addon.get("/stremio/:userUUID/watch_state/pull.json", async function (req, res) 
 
   const { configForViewer } = require('./lib/jellyfin/profiles');
   const viewer = configForViewer(config, userUUID, req.query.viewer);
-  if (!viewer) {
-    consola.info(`[Watch State] Unknown viewer "${String(req.query.viewer).slice(0, 64)}" for ${userUUID}`);
-    return res.status(404).json({ error: "Unknown viewer" });
-  }
+  if (!viewer) return refuseUnknownViewer(res, 'Watch State', userUUID, req.query.viewer);
 
   try {
     const { buildWatchStatePull } = require('./lib/watchState');
@@ -6458,8 +6426,8 @@ const handlePosterProxy = async function (req, res) {
       imageClass: 'poster',
       url: posterUrl,
       bypassed,
-      open: async (validators) => {
-        const imageResponse = await openUpstream(validators);
+      open: async (validators, signal) => {
+        const imageResponse = await openUpstream(validators, signal);
         if (bypassed && posterCacheConfig.isBuiltinPosterCacheEnabled()) {
           require('./lib/posterCache/handler.js').recordServe('poster', 'BYPASS', 0, req.method, posterUrl);
         }
@@ -6514,8 +6482,8 @@ function streamArtWithFallback(assetName) {
         imageClass: assetName,
         url: customUrl,
         bypassed,
-        open: async (validators) => {
-          const imageResponse = await openUpstream(validators);
+        open: async (validators, signal) => {
+          const imageResponse = await openUpstream(validators, signal);
           if (bypassed && posterCacheConfig.isBuiltinPosterCacheEnabled()) {
             require('./lib/posterCache/handler.js').recordServe(assetName, 'BYPASS', 0, req.method, customUrl);
           }
@@ -7044,7 +7012,7 @@ addon.get("/api/debug/catalogs/:userUUID", requireDashboardAdmin, async function
         enabled: c.enabled,
         showInHome: c.showInHome
       })),
-      manifest: await getManifest(config)
+      manifest: await getManifest(config, { userUUID })
     });
   } catch (error) {
     consola.error(`[Debug] Error for user ${userUUID}:`, error);

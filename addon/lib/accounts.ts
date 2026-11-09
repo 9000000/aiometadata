@@ -67,9 +67,15 @@ const SLOTS: Array<[AccountService, RegExp]> = [
   ['publicmetadb', /^publicmetadb\.(upnext|watchlist)$/],
 ];
 
+export function rowOwner(catalog: { metadata?: any } | null | undefined): string {
+  const owner = catalog?.metadata?.accountOwner;
+  return typeof owner === 'string' ? owner : '';
+}
+
 /** The service a catalog belongs to as "this account's own list"; null for public and named lists. */
 export function slotServiceOf(catalog: { id?: string; metadata?: any } | null | undefined): AccountService | null {
   const id = String(catalog?.id ?? '').replace(/_(movie|series|anime|all)$/, '');
+  if (id.startsWith('publicmetadb.pick.')) return rowOwner(catalog) ? 'publicmetadb' : null;
   if (id.startsWith('publicmetadb.list.') && catalog?.metadata?.listType === 'watchlist') return 'publicmetadb';
   if (id.startsWith('anilist.') && catalog?.metadata?.isCustomList) return null;
   for (const [service, pattern] of SLOTS) if (pattern.test(id)) return service;
@@ -77,6 +83,9 @@ export function slotServiceOf(catalog: { id?: string; metadata?: any } | null | 
 }
 
 export function servesCatalog(config: any, catalog: any): boolean {
+  const owner = rowOwner(catalog);
+  if (owner) return config?.jellyfinAccountOwner === owner && Boolean(credentialOf(config, 'publicmetadb'));
+  if (String(catalog?.id ?? '').startsWith('publicmetadb.pick.') && config?.jellyfinAccounts) return false;
   const service = slotServiceOf(catalog);
   if (!service) return true;
   const holder = Boolean(config?.jellyfinAccounts);
@@ -101,13 +110,17 @@ export function pmdbListIdFor(config: any, catalogId: string): string {
   return catalogId.replace('publicmetadb.list.', '');
 }
 
+/** A catalog's entry under its id without the display suffix; a bare stand-in when the configuration has none. */
+export function catalogEntryFor(config: any, catalogId: string): any {
+  const bare = String(catalogId).replace(/_(movie|series|anime|all)$/, '');
+  return (config?.catalogs ?? []).find((c: any) => c?.id === bare) ?? { id: bare };
+}
+
 /** A holder's own account on its slots; the installation's keys everywhere else, still carrying the holder for filters and merged sources. */
 export function viewerConfigFor(config: any, owner: unknown, catalogId: string): any {
   const viewer = withAccountOwner(config, typeof owner === 'string' ? owner : '');
   if (!viewer.jellyfinAccounts) return config;
-  const bare = String(catalogId).replace(/_(movie|series|anime|all)$/, '');
-  const entry = (viewer.catalogs ?? []).find((c: any) => c?.id === bare) ?? { id: bare };
-  const service = slotServiceOf(entry);
+  const service = slotServiceOf(catalogEntryFor(viewer, catalogId));
   return service ? trackerConfig(viewer, service) : viewer;
 }
 

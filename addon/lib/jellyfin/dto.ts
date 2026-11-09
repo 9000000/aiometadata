@@ -28,6 +28,7 @@ const EXTENSIONS = {
   ranked: 1,
   watchlistFavorites: 1,
   fillers: 1,
+  playlists: 1,
 } as const;
 
 export function extensionInfo(origin: string): any {
@@ -35,7 +36,7 @@ export function extensionInfo(origin: string): any {
     logo: process.env.ADDON_LOGO_URL?.trim() || `${origin}/logo.png`,
     configureUrl: `${origin}/configure`,
     pinSignIn: false,
-    features: EXTENSIONS,
+    features: require('../criticRatings').criticRatingsEnabled() ? { ...EXTENSIONS, criticRatings: 1 } : EXTENSIONS,
     version: { tag: `v${buildInfo.version}` },
   };
 }
@@ -112,7 +113,7 @@ export function userPolicy(): any {
     ForceRemoteSourceTranscoding: false,
     EnableContentDeletion: false,
     EnableContentDeletionFromFolders: [],
-    EnableContentDownloading: false,
+    EnableContentDownloading: true,
     EnableSyncTranscoding: false,
     EnableMediaConversion: false,
     EnabledDevices: [],
@@ -185,6 +186,11 @@ export function sessionInfo(
 
 export function itemList(items: any[], total: number, startIndex: number): any {
   return { Items: items, TotalRecordCount: total, StartIndex: startIndex };
+}
+
+/** Plays of a title as a client is told them: none once it is unmarked, as Jellyfin resets them, and at least one while it is played. */
+export function playCountOf(played: boolean, stored: unknown): number {
+  return played ? Math.max(1, Number(stored) || 0) : 0;
 }
 
 const EMPTY_USER_DATA = {

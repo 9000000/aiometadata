@@ -67,14 +67,14 @@ Every browsable catalog in the configuration becomes a library. Movie and series
 
 ### Collections
 
-The collection builder's entries are served in the order they hold on the home screen, ahead of the plain catalogs:
+Libraries are served in the order of the **Catalogs** list, which holds your collections too: drag a collection anywhere in it, between any two catalogs, and clients show it there. A collection that was never moved sits ahead of every catalog.
 
-- A **classic row** is a catalog placed early: its catalog becomes one of the first libraries, and does not appear a second time further down.
+- A **catalog** can carry **Row options**, from its menu in the list: a row title that only Jellyfin clients see, a hidden title, and numbering for a top-ten style row. Its tags decide which users see it.
 - A **collection** becomes a library of its own, typed as a box set library so clients draw it as one, with the collection's backdrop as its artwork. Each **folder** in it is one box set, carrying the folder's cover, backdrop and logo, drawn in the folder's shape (poster, landscape or square). Opening a box set lists the folder's **sources** walked in order, one after the other, with a source's genre applied where one is set and duplicates dropped, paged the way any library is. A folder whose sources are all outside the user's catalogs is not shown, and a collection with no folder left is not shown either.
 
 ![A collection in the builder, its Users field marked Jellyfin only](images/jellyfin/collection-users.jpg)
 
-Both can be restricted to users through the **Users** field in the editor. An entry with no users is for everyone. A collection or row cannot be created or edited from a client; the server declines the request and points at the configuration.
+A collection can be restricted to users through the **Users** field in the editor. A collection with no users is for everyone. A collection cannot be created or edited from a client; the server declines the request and points at the configuration. Rows in an imported design become row options on their catalogs when the import is applied.
 
 ### Search
 
@@ -212,6 +212,10 @@ The watchlist is the client's favourites. Marking a title favourite adds it to t
 
 **Watchlist catalogs follow the user.** A catalog that means "this account's own list" (MDBList's watchlist, up next and recommendations; Simkl's watchlists and up next; MyAnimeList's lists and suggestions; AniList's own status lists, such as Planning; PublicMetaDB's up next and watchlist) is read from the signed-in user's account when they have one, so one **Watchlist** library shows each user their own list. A user with accounts of their own does not see such catalogs for services they have not connected. Lists picked by id, your AniList custom lists, trending and discover catalogs are the same for everyone, and so are catalogs of accounts a user cannot connect, such as Trakt or TMDB, which show your lists to whoever's tags include them. When a user connects a service whose watchlist is not among the catalogs, their card offers to add it; a catalog added that way is shown only to users holding that service's account, and, while you hold it yourself, to you and to users without accounts, who read yours. A user's PublicMetaDB watchlist is read through your PublicMetaDB watchlist catalog, so they have that shelf only while it is among your catalogs.
 
+## Playlists
+
+Clients keep playlists with Jellyfin's standard `/Playlists` API, and each user or profile has their own. Adding a show adds its aired episodes season by season, leaving out specials unless you add that season itself. Adding a collection folder adds its films and its shows' episodes in the folder's order, as far as the playlist holds. A title is in a playlist once. Once a user has a playlist, a **Playlists** folder appears beside the libraries, pictured by each playlist's first title. Playlists are not shared between users.
+
 ## AIOMetadata inside AIOStreams' Jellyfin server
 
 AIOStreams has a Jellyfin server of its own. In that setup the client signs in to AIOStreams, not to this addon, and AIOMetadata is one of the addons installed in it, supplying the catalogs and title pages. Nothing in this guide's sign-in, users or shelves sections applies then; AIOStreams builds those. What AIOMetadata still does is the tracking, through two resources it declares in its manifest once **Playback reporting** under **General** is set to **When playback starts and stops**:
@@ -219,7 +223,15 @@ AIOStreams has a Jellyfin server of its own. In that setup the client signs in t
 - **playback.** AIOStreams sends the plays its clients report as start, stop, mark-played and mark-unplayed events, with the title known under every id it holds, so a show keyed on MyAnimeList with episodes keyed on Kitsu is still recorded once. A stop past the trackers' 80 percent counts as a watch; an earlier one is a resume point. Each event is reported to every tracker with watch tracking on, the same way a play through this addon's own server is. A repeated event within `PLAYBACK_MARK_REPEAT_WINDOW` is an echo and dropped.
 - **watch_state.** AIOStreams reads back what the trackers and this addon hold, so its Continue Watching reflects other devices. The answer is the same merged view this addon's own resume shelf uses, following the **Trackers** pick, newest first, `WATCH_STATE_PULL_ITEMS` titles at a time, and may be reused for `WATCH_STATE_PULL_TTL` seconds before AIOStreams asks again.
 
-**Several people on AIOStreams' server.** Once the configuration has a user card, or a name under **Also known as (AIOStreams)** on your own card, the manifest tells AIOStreams it may name the viewer (`watchState.viewers`). An event carrying a `viewer`, or a read asking `?viewer=`, is matched to a user here by name, case aside: your own user's name, a user card's name, or one of the names listed under **Also known as (AIOStreams)** on a card. A matched user's plays, marks, drops and hearts go to their own accounts, and the read answers from their accounts and picks, as on this addon's own server. The handoff keeps no positions of its own, so the plays of a user without accounts are accepted and recorded nowhere; AIOStreams keeps their Continue Watching. An event without a viewer is yours, as before, and so is every event while the configuration has no user cards or AIOStreams names. Otherwise an event naming nobody here is refused and recorded nowhere, so a family member without a card never lands on your trackers; the log shows the name. Anyone holding the install URL can act as any user through these two resources, the same trust the URL already carried for yours.
+**Several people on AIOStreams' server.** Once the configuration has a user card, or a name under **Also known as (AIOStreams)** on your own card, the manifest tells AIOStreams it may name the viewer (`watchState.viewers`). An event carrying a `viewer`, or a read asking `?viewer=`, is matched to a user here by name, case aside: your own user's name, a user card's name, or one of the names listed under **Also known as (AIOStreams)** on a card. A matched user's plays, marks, drops and hearts go to their own accounts, and the read answers from their accounts and picks, as on this addon's own server. The handoff keeps no positions of its own, so the plays of a user without accounts are accepted and recorded nowhere; AIOStreams keeps their Continue Watching. An event without a viewer is yours, as before, and so is every event while the configuration has no user cards or AIOStreams names. Otherwise an event naming nobody here is refused and recorded nowhere, so a family member without a card never lands on your trackers; the log shows the name. Anyone holding the install URL can act as any user through these two resources and the catalog reads below, the same trust the URL already carried for yours.
+
+**Catalog rows can follow the user too.** A catalog read asking `?viewer=` is matched the same way and answered as that user: the **Recommendations** rows from their own history and picks, and the catalogs that mean "this account's own list" from their accounts, as on this addon's own server. AIOStreams forwards the query of an addon's URL to every read, so the address only has to name the user. Keep one install of this addon and, in the variant each user picks in AIOStreams, point it at their name:
+
+```
+set presets[instanceId=<this addon's instance id>].options.manifestUrl = "https://<your instance>/stremio/<uuid>/manifest.json?viewer=<name>"
+```
+
+The catalogs keep their arrangement, since the addon is still the same instance. Adding a second copy of the addon for a user instead shows them both their rows and yours. A read without a viewer is yours, as before, and one naming nobody here is refused; the manifest logs the name it did not know.
 
 AIOStreams sends and reads these only with its `WATCH_STATE_HANDOFF_ENABLED` switched on. With **Playback reporting** left on **When a title is opened**, neither resource is declared and AIOStreams records nothing through this addon; opening a title is then the only signal, as for any other client.
 
@@ -295,7 +307,12 @@ All of these are in the dashboard under **Server**, or as environment variables,
 | `JELLYFIN_UPCOMING_TTL` | `21600` | How long the list of followed shows is kept. |
 | `JELLYFIN_UPCOMING_LOCAL_SHOWS` | `60` | Shows known only from local plays checked for an upcoming episode. |
 | `JELLYFIN_UPCOMING_WATCHLIST_LIMIT` (env) | `100` | Watchlist shows checked for an upcoming episode, and watchlist films for a release date. |
-| `JELLYFIN_WATCHLIST_MEMO_TTL` | `60` | How long the merged watchlist is held in memory after a read, on top of the watchlist catalogs' cache. |
+| `JELLYFIN_WATCHLIST_MEMO_TTL` | `60` | How long the merged watchlist counts as fresh after a read, on top of the watchlist catalogs' cache. |
+| `JELLYFIN_WATCHLIST_HELD_TTL` | `21600` | How long a watchlist past its memo still answers item favourite flags while it is read again. |
+| `JELLYFIN_WATCHLIST_MEMORY_MB` | `32` | Memory held for tracker watchlists across all configurations. |
+| `JELLYFIN_PLAYLISTS_MAX` | `200` | Playlists each user or profile can make. |
+| `JELLYFIN_PLAYLIST_ITEMS_MAX` | `1000` | Titles one playlist holds; a show or season added counts each episode. |
+| `JELLYFIN_PLAYLIST_BUILD_CONCURRENCY` | `6` | Titles of a playlist page, or playlists in the list, built at once. |
 | `WATCH_STATE_PULL_TTL` | `300` | How long a front end reading watch state from the addon may reuse an answer. |
 | `WATCH_STATE_PULL_ITEMS` | `100` | In-progress titles a watch state read returns. |
 

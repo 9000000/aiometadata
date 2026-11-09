@@ -1,3 +1,4 @@
+import consola from 'consola';
 import { fetchMeta, metaToBaseItem } from './items';
 import { clientHasOwnWatchlist } from './context';
 import { profileKey, writesTrackers } from './profiles';
@@ -9,6 +10,7 @@ import { envInt } from '../../utils/envNumber';
 
 const database: any = require('../database');
 const idMapper: any = require('../id-mapper');
+const logger = consola.withTag('Jellyfin');
 
 interface HeldWatchlist {
   rows: WatchlistEntry[];
@@ -16,29 +18,47 @@ interface HeldWatchlist {
   complete: boolean;
 }
 
-const trackerMemo = new LRUCache<string, HeldWatchlist>({
+interface MemoWatchlist extends HeldWatchlist {
+  need: number;
+  readAt: number;
+}
+
+// A held row costs about 220 to 300 bytes of heap.
+const ROW_BYTES = 256;
+
+// Held past its freshness up to a ceiling, so a copy past its time can still answer a caller that takes one;
+// the budget bounds what an instance with many users holds.
+const trackerMemo = new LRUCache<string, MemoWatchlist>({
   max: envInt('JELLYFIN_RESUME_CACHE_MAX', 500, 1),
-  ttl: envInt('JELLYFIN_WATCHLIST_MEMO_TTL', 60, 1) * 1000,
+  maxSize: envInt('JELLYFIN_WATCHLIST_MEMORY_MB', 32, 1) * 1024 * 1024,
+  sizeCalculation: (held) => ROW_BYTES * (held.rows.length + 1),
+  ttlAutopurge: true,
 });
 const trackerInFlight = new Map<string, Promise<HeldWatchlist>>();
+
+const memoFreshMs = () => envInt('JELLYFIN_WATCHLIST_MEMO_TTL', 60, 1) * 1000;
+const memoHeldMs = () => Math.max(envInt('JELLYFIN_WATCHLIST_HELD_TTL', 21600, 60) * 1000, memoFreshMs());
+
+const covers = (held: HeldWatchlist, need: number): boolean => held.exhausted || held.rows.length >= need;
 
 function trackerMemoKey(config: any, userUUID: string): string {
   return `${userUUID}:${profileKey(config)}:${JSON.stringify(config?.jellyfinWatchlistServices ?? null)}`;
 }
 
-/** A shelf is read only as far as the caller needs; a held read serves any smaller window. */
-function trackerWatchlistShared(config: any, userUUID: string, need: number): Promise<HeldWatchlist> {
-  const key = `${trackerMemoKey(config, userUUID)}:${need}`;
-  for (const [candidate, held] of trackerMemo.entries()) {
-    if (!candidate.startsWith(`${trackerMemoKey(config, userUUID)}:`)) continue;
-    if (held.exhausted || held.rows.length >= need) return Promise.resolve(held);
-  }
+function readTrackerWatchlist(config: any, userUUID: string, need: number): Promise<HeldWatchlist> {
+  const prefix = `${trackerMemoKey(config, userUUID)}:`;
+  const key = `${prefix}${need}`;
   const running = trackerInFlight.get(key);
   if (running) return running;
   const work = trackerWatchlist(config, userUUID, need)
     .then((built) => {
       const held = { rows: built.rows, exhausted: built.exhausted, complete: built.complete };
-      if (built.complete) trackerMemo.set(key, held);
+      if (built.complete) {
+        // An older copy this one covers would only ever be passed over for it.
+        const covered = [...trackerMemo.entries()].filter(([candidate, older]) => candidate !== key && candidate.startsWith(prefix) && covers(held, older.need));
+        for (const [candidate] of covered) trackerMemo.delete(candidate);
+        trackerMemo.set(key, { ...held, need, readAt: Date.now() }, { ttl: memoHeldMs() });
+      }
       return held;
     })
     .finally(() => {
@@ -46,6 +66,25 @@ function trackerWatchlistShared(config: any, userUUID: string, need: number): Pr
     });
   trackerInFlight.set(key, work);
   return work;
+}
+
+/**
+ * A shelf is read only as far as the caller needs; a held read serves any smaller window.
+ * Past its time it is read again; with [takesHeld], the held copy answers meanwhile.
+ */
+function trackerWatchlistShared(config: any, userUUID: string, need: number, takesHeld = false): Promise<HeldWatchlist> {
+  const prefix = `${trackerMemoKey(config, userUUID)}:`;
+  let stale: MemoWatchlist | null = null;
+  for (const [candidate, held] of trackerMemo.entries()) {
+    if (!candidate.startsWith(prefix) || !covers(held, need)) continue;
+    if (Date.now() - held.readAt < memoFreshMs()) return Promise.resolve(held);
+    stale ??= held;
+  }
+  if (!stale || !takesHeld) return readTrackerWatchlist(config, userUUID, need);
+  readTrackerWatchlist(config, userUUID, stale.need).catch((error: any) =>
+    logger.debug(`Watchlist refresh failed: ${error?.message || error}`)
+  );
+  return Promise.resolve(stale);
 }
 
 async function identityOf(metaId: string, mediaType: 'movie' | 'series' | 'anime', config: any): Promise<string> {
@@ -58,9 +97,10 @@ const showOf = (identity: string): string => identity.split('#')[0];
 
 const sameTitle = (a: string, b: string): boolean => a === b || showOf(a) === b || showOf(b) === a;
 
+/** The held copies count as past their time; a change made here is already in the server's own rows. */
 export function invalidateWatchlist(userUUID: string): void {
-  for (const key of [...trackerMemo.keys()]) {
-    if (String(key).startsWith(`${userUUID}:`)) trackerMemo.delete(key);
+  for (const [key, held] of trackerMemo.entries()) {
+    if (String(key).startsWith(`${userUUID}:`)) held.readAt = 0;
   }
 }
 
@@ -74,11 +114,14 @@ async function fillMetaTypes(table: 'jellyfin_watchlist', userUUID: string, prof
   });
 }
 
-// Picked shelves are the favourites; a change made here stands only until their caches catch up.
-export async function watchlistEntries(userUUID: string, config: any, need = Number.MAX_SAFE_INTEGER): Promise<{ entries: WatchlistEntry[]; exhausted: boolean; complete: boolean }> {
+/**
+ * Picked shelves are the favourites; a change made here stands only until their caches catch up.
+ * [takesHeld] answers from a held read past its time, for a title's flag, which must not wait on a tracker.
+ */
+export async function watchlistEntries(userUUID: string, config: any, need = Number.MAX_SAFE_INTEGER, takesHeld = false): Promise<{ entries: WatchlistEntry[]; exhausted: boolean; complete: boolean }> {
   const profile = profileKey(config);
   const rows: any[] = await database.listWatchlist(userUUID, profile).catch(() => []);
-  const held = await trackerWatchlistShared(config, userUUID, need);
+  const held = await trackerWatchlistShared(config, userUUID, need, takesHeld);
   const tracker = held.rows;
 
   const since = watchlistPicks(config).size ? Date.now() - (await shelfCacheWindowMs(config)) : -Infinity;
@@ -147,7 +190,7 @@ export async function applyWatchlistState(items: any[], userUUID: string, config
   });
   if (!titles.length) return;
 
-  const entries = (await watchlistEntries(userUUID, config)).entries;
+  const entries = (await watchlistEntries(userUUID, config, Number.MAX_SAFE_INTEGER, true)).entries;
   const listed = new Set(entries.map((entry) => entry.metaId));
   const identities = new Set(entries.flatMap((entry) => (entry.identity ? [entry.identity] : [])));
   const shows = new Set([...identities].map(showOf));
@@ -235,6 +278,40 @@ export async function setWatchlisted(userUUID: string, config: any, descriptor: 
     })));
   }
   return true;
+}
+
+/**
+ * A title watched here leaves this server's own watchlist, as it would a tracker's: a film once watched, a show
+ * once any episode is. That holds while the list is not picked too, so it is current whenever it is picked again.
+ * A tracker's watchlist is left to the tracker, which applies its own rule.
+ */
+export function leaveWatchlistOnWatch(userUUID: string, config: any, descriptors: any[]): void {
+  const titles = [...new Map(descriptors.filter((d) => d?.i && (d.k === 'movie' || d.k === 'episode')).map((d) => [`${d.k}:${d.i}`, d])).values()];
+  if (!titles.length) return;
+  (async () => {
+    const profile = profileKey(config);
+    const listed: any[] = (await database.listWatchlist(userUUID, profile)).filter((row: any) => Number(row.listed));
+    if (!listed.length) return;
+    const isFilm = (row: any) => row.media_type === 'movie' || row.meta_type === 'movie';
+    let removed = 0;
+    for (const title of titles) {
+      const film = title.k === 'movie';
+      const rows = listed.filter((row) => isFilm(row) === film && Number(row.listed));
+      if (!rows.length) continue;
+      const target = await identityOf(String(title.i), film ? 'movie' : mediaTypeOf(title.t), config);
+      for (const row of rows) {
+        const same = String(row.meta_id) === String(title.i) || sameTitle(await identityOf(String(row.meta_id), mediaTypeOf(row.media_type), config), target);
+        if (!same) continue;
+        await database.setWatchlisted(userUUID, profile, String(row.meta_id), row.media_type, false, isFilm(row) ? 'movie' : 'series');
+        row.listed = 0;
+        removed++;
+      }
+    }
+    if (removed) {
+      invalidateWatchlist(userUUID);
+      invalidateDatedShelves(userUUID);
+    }
+  })().catch((error: any) => logger.debug(`Leaving the watchlist on a watch failed: ${error?.message || error}`));
 }
 
 /** Copies the services' watchlists into this server's own, keeping each title's date added there. */

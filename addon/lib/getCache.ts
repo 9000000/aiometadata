@@ -11,9 +11,11 @@ const { isMetricsDisabled }: any = require('./metricsConfig');
 const { allowsUnrated, hasAgeRatingCap }: any = require('../utils/ageRating');
 const {
   decodeCachePayload,
+  decodeCacheText,
   encodeCachePayload,
 }: any = require('./cacheCodec');
 const { readMetaHash, writeMetaHashReplace, writeMetaHashFill }: any = require('./metaHashStore');
+const { readHeldHash, readHeldAlias, readHeldPage, markUnsettled, forgetHeld, forgetAllHeld }: any = require('./metaMemory');
 const {
   canonicalizeLinksForCache,
   applyLinksUserScopeProjection,
@@ -63,6 +65,7 @@ function parsePositiveIntEnv(envValue: any, defaultValue: number, minValue: numb
 
 const { withEpoch, withGlobalEpoch }: any = require('./cacheEpoch');
 const { clampTtlToWarmWindow }: any = require('./catalogWarmWindow');
+const { endPageTtlSeconds }: any = require('./catalogPagination');
 const { clampMetaTtlToAirWindow }: any = require('./metaAirWindow');
 const {
   isRefreshAheadEnabled,
@@ -160,6 +163,7 @@ function cloneJsonCompatibleResult(value: any): any {
 
 async function deleteKeysByPattern(pattern: string, options: any = {}): Promise<number> {
   if (!redis) return 0;
+  forgetAllHeld();
   const scanCount = options.scanCount || 1000;
   const batchSize = options.batchSize || 500;
   let cursor = '0';
@@ -180,6 +184,7 @@ async function deleteKeysByPattern(pattern: string, options: any = {}): Promise<
     }
   } while (cursor !== '0');
 
+  forgetAllHeld();
   return totalDeleted;
 }
 
@@ -450,6 +455,7 @@ function classifyResult(result: any, error: any = null, cacheKey: string | null 
     cacheKey.includes('anilist_') ||
     cacheKey.includes('kitsu-') ||
     cacheKey.includes('mdblist-') ||
+    cacheKey.includes('publicmetadb-api:') ||
     cacheKey.includes('trakt-') ||
     cacheKey.includes('trakt_') ||
     cacheKey.includes('mdblist_') ||
@@ -829,6 +835,7 @@ function getCatalogContentScope(idOnly: string, catalogType: string, config: any
   // Mixed, not series: the row can carry anime too, so the anime providers have to
   // reach the config hash or a provider change would serve stale episode numbers.
   if (idOnly === 'simkl.upnext') return 'mixed';
+  if (idOnly.startsWith('simkl.watchlist.all.')) return 'mixed';
 
   if (idOnly === 'mdblist.upnext') return 'series';
   if (idOnly === 'mdblist.watchlist') return 'mixed';
@@ -1553,7 +1560,8 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
   // the previous one's picks being served for the rest of the catalog TTL, which
   // reads as the setting having done nothing.
   if (idOnly.startsWith('recommendations.')) {
-    const { RECOMMENDATION_EPOCH, pickOrder, voteFloor }: any = require('../utils/recommendations/provider');
+    const { RECOMMENDATION_EPOCH, pickOrder, voteFloor, reasonLanguage }: any = require('../utils/recommendations/provider');
+    const language = reasonLanguage(config);
     catalogConfig.recommendations = {
       epoch: RECOMMENDATION_EPOCH,
       provider: config.recommendations?.provider || '',
@@ -1561,7 +1569,7 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
       openrouterModel: config.recommendations?.openrouter_model || '',
       hasGemini: !!config.apiKeys?.gemini,
       hasOpenrouter: !!config.apiKeys?.openrouter,
-      sources: config.recommendations?.sources || '',
+      sources: require('../utils/recommendations/history').resolveSources(config).choice,
       // Every setting that moves the picks has to move the page as well.
       webSearch: config.recommendations?.web_search === true,
       reasoningEffort: config.recommendations?.reasoning_effort || '',
@@ -1575,6 +1583,7 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
       // simply unset still has to notice when the default itself moves.
       order: pickOrder(config, idOnly),
       minVotes: voteFloor(config, idOnly),
+      ...(language ? { reasonLanguage: language } : {}),
     };
   }
 
@@ -1661,6 +1670,13 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
     cacheLogger.debug(`[Catalog] Skipping outer cache for merged catalog ${idOnly} (sources cache internally)`);
   }
 
+  // Rows built from one account's history or picks: equal settings must not share a page.
+  const isUserBuiltCatalog = idOnly.includes('stremthru.') || idOnly.startsWith('custom.') || idOnly.startsWith('letterboxd.')
+    || idOnly.startsWith('recommendations.');
+  const isRecommendationCatalog = idOnly.startsWith('recommendations.');
+  const recommendationViewer = isRecommendationCatalog ? require('../utils/recommendations/history').viewerKey(config, userUUID || '') : '';
+  const recommendationStamp = isRecommendationCatalog ? await require('../utils/recommendations/refresh').rowStamp(recommendationViewer) : '';
+
   let key: string;
   if (isAuthCatalog) {
     const sessionId = config.sessionId || '';
@@ -1672,14 +1688,16 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
     const day = String(now.getDate()).padStart(2, '0');
     const today = `${year}-${month}-${day}`;
     key = `catalog:${today}:${configHash}:${cacheTTL}:${catalogKey}`;
-  } else if (idOnly.includes('stremthru.') || idOnly.startsWith('custom.') || idOnly.startsWith('letterboxd.')) {
+  } else if (isRecommendationCatalog) {
+    key = `catalog:${recommendationViewer}${recommendationStamp ? `@${recommendationStamp}` : ''}:${configHash}:${cacheTTL}:${catalogKey}`;
+  } else if (isUserBuiltCatalog) {
     key = `catalog:${userUUID}:${configHash}:${cacheTTL}:${catalogKey}`;
   } else {
     key = `catalog:${configHash}:${cacheTTL}:${catalogKey}`;
   }
 
-  const isUserScopedCatalog = isAuthCatalog || idOnly.includes('stremthru.') || idOnly.startsWith('custom.') || idOnly.startsWith('letterboxd.');
-  const cacheKeyIdentifier = isAuthCatalog ? (config.sessionId || 'no-session') : (isUserScopedCatalog ? (userUUID || '') : '');
+  const isUserScopedCatalog = isAuthCatalog || isUserBuiltCatalog;
+  const cacheKeyIdentifier = isAuthCatalog ? (config.sessionId || 'no-session') : (isRecommendationCatalog ? recommendationViewer : (isUserScopedCatalog ? (userUUID || '') : ''));
   const catalogSig = shortSignature(`${cacheKeyIdentifier}|${idOnly}|${configHash}|ttl:${cacheTTL}`);
   cacheLogger.debug(`[Catalog] Key detail (${idOnly}) [sig:${catalogSig}] scope:${contentScope} userScoped:${isUserScopedCatalog} ttl:${cacheTTL}s catalogConfig:${catalogConfigShown} catalogKey:${catalogKey}`);
 
@@ -1714,6 +1732,17 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
   if (writeTTL !== cacheTTL) {
     cacheLogger.debug(`[Catalog] Holding ${idOnly} to ${writeTTL}s so it lapses before the next warm run (configured ${cacheTTL}s)`);
   }
+  const classifyPage = options.resultClassifier || classifyResult;
+  const endTtl = Math.min(writeTTL, endPageTtlSeconds());
+  options = {
+    ...options,
+    resultClassifier: (result: any, error: any, cacheKey: string) => {
+      if (!error && result?.endOfList === true && Array.isArray(result.metas) && result.metas.length === 0) {
+        return { type: 'EMPTY_RESULT', ttl: endTtl };
+      }
+      return classifyPage(result, error, cacheKey);
+    },
+  };
 
   const result = cachingDisabled
     ? normalizeReleaseAvailabilityInPayload(await method())
@@ -1724,6 +1753,7 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
   normalizeCreditsInPayload(result);
 
   const projected = projectRatingsInPayload(result, config, true);
+  if (projected && typeof projected === 'object') delete projected.endOfList;
 
   await applyImdbRatingProjectionToList(projected?.metas);
 
@@ -2081,8 +2111,11 @@ async function writeMetaComponentsBatchWithConfig({ config, metas, ttl = META_TT
 async function readMetaAlias({ config, metaId, type = null, useShowPoster = false }: { config: any; metaId: string; type?: string | null; useShowPoster?: boolean }): Promise<string | null> {
   if (!redis) return null;
   try {
-    const aliased = await redis.get(withEpoch(buildMetaAliasCacheKey({ config, metaId, type, useShowPoster })));
-    return typeof aliased === 'string' && aliased ? aliased : null;
+    const key = withEpoch(buildMetaAliasCacheKey({ config, metaId, type, useShowPoster }));
+    return await readHeldAlias(key, async () => {
+      const aliased = await redis.get(key);
+      return typeof aliased === 'string' && aliased ? aliased : null;
+    });
   } catch (error: any) {
     cacheLogger.warn(`[Meta] Alias read failed for ${metaId}: ${error?.message}`);
     return null;
@@ -2091,8 +2124,10 @@ async function readMetaAlias({ config, metaId, type = null, useShowPoster = fals
 
 async function writeMetaAlias({ config, metaId, aliasTo, ttl = META_TTL(), type = null, useShowPoster = false }: { config: any; metaId: string; aliasTo: string; ttl?: number; type?: string | null; useShowPoster?: boolean }): Promise<void> {
   if (!redis || !metaId || !aliasTo || metaId === aliasTo) return;
+  const key = withEpoch(buildMetaAliasCacheKey({ config, metaId, type, useShowPoster }));
   try {
-    await redis.set(withEpoch(buildMetaAliasCacheKey({ config, metaId, type, useShowPoster })), aliasTo, 'EX', ttl);
+    await redis.set(key, aliasTo, 'EX', ttl);
+    forgetHeld(key);
   } catch (error: any) {
     cacheLogger.warn(`[Meta] Alias write failed for ${metaId} -> ${aliasTo}: ${error?.message}`);
   }
@@ -2126,11 +2161,23 @@ async function reconstructMetaFromComponents(userUUID: string, metaId: string, t
   });
 }
 
+async function readComponentTexts(hashKey: string, fields: string[]): Promise<{ texts: Array<string | null>; basicTtl: number }> {
+  return readHeldHash(hashKey, fields, async (wanted: string[]) => {
+    const read = await readMetaHash(hashKey, wanted);
+    const texts = await Promise.all(read.values.map((value: Buffer | null, index: number) =>
+      decodeCacheText(value).catch((error: any) => {
+        cacheLogger.warn(`Error decoding component ${wanted[index]} of ${hashKey}:`, error);
+        return null;
+      })));
+    return { texts, basicTtl: read.basicTtl };
+  });
+}
+
 async function readVideosComponent({ config, metaId, type, useShowPoster, hashKey, basicTtl }: { config: any; metaId: string; type: string | null; useShowPoster: boolean; hashKey: string; basicTtl: number }): Promise<any> {
   const { field, legacyKey } = buildMetaHashLayout({ config, metaId, type, useShowPoster }).fields.videos;
   try {
-    const read = await readMetaHash(hashKey, [field]);
-    if (read.values[0]) return await decodeCachePayload(read.values[0]);
+    const read = await readComponentTexts(hashKey, [field]);
+    if (read.texts[0]) return JSON.parse(read.texts[0]);
     const coldStore = require('./metaColdStore');
     if (!coldStore.isEnabled()) return null;
     const hit = (await coldStore.readThrough([legacyKey])).get(legacyKey);
@@ -2161,26 +2208,43 @@ async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = 
   let basicTtl = -2;
 
   try {
-    const read = await readMetaHash(hashKey, componentNames.map((componentName) => layout.fields[componentName].field));
+    const read = await readComponentTexts(hashKey, componentNames.map((componentName) => layout.fields[componentName].field));
     basicTtl = read.basicTtl;
-    componentResults = await Promise.all(componentNames.map(async (componentName: string, index: number) => {
-      const cached = read.values[index];
-      if (!cached) return { componentName, data: null };
+    componentResults = componentNames.map((componentName: string, index: number) => {
+      const text = read.texts[index];
+      if (!text) return { componentName, data: null };
       try {
-        return { componentName, data: await decodeCachePayload(cached) };
+        return { componentName, data: JSON.parse(text) };
       } catch (parseError: any) {
         cacheLogger.warn(`Error parsing component ${componentName}:`, parseError);
         return { componentName, data: null };
       }
-    }));
+    });
   } catch (error: any) {
     cacheLogger.warn(`Error reading meta hash for ${metaId}:`, error);
+  }
+
+  if (followAlias && !componentResults.find((result: any) => result.componentName === 'basic')?.data) {
+    const aliasedId = await readMetaAlias({ config, metaId, type, useShowPoster });
+    if (aliasedId && aliasedId !== metaId) {
+      return reconstructMetaFromComponentsWithConfig({
+        config,
+        metaId: aliasedId,
+        type,
+        includeVideos,
+        useShowPoster,
+        countColdStoreMiss,
+        followAlias: false,
+      });
+    }
   }
 
   try {
     const coldStore = require('./metaColdStore');
     if (coldStore.isEnabled()) {
-      const missing = componentResults.filter((result: any) => result.data === null);
+      const basicRead = componentResults.find((result: any) => result.componentName === 'basic')?.data;
+      const written = Array.isArray(basicRead?._components) ? new Set(['basic', ...basicRead._components]) : null;
+      const missing = componentResults.filter((result: any) => result.data === null && (!written || written.has(result.componentName)));
       if (missing.length > 0) {
         const found = await coldStore.readThrough(missing.map((result: any) => layout.fields[result.componentName].legacyKey));
         if (found.size > 0) {
@@ -2212,21 +2276,6 @@ async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = 
   // Every read needs basic, and nothing written for this profile outlives it,
   // so without it there is nothing to reconstruct here.
   if (!basicComponent) {
-    if (followAlias) {
-      const aliasedId = await readMetaAlias({ config, metaId, type, useShowPoster });
-      if (aliasedId && aliasedId !== metaId) {
-        return reconstructMetaFromComponentsWithConfig({
-          config,
-          metaId: aliasedId,
-          type,
-          includeVideos,
-          useShowPoster,
-          countColdStoreMiss,
-          followAlias: false,
-        });
-      }
-    }
-
     updateCacheHealth(`meta:reconstructed:${metaId}`, 'miss', true);
     return { errorReason: 'no cached components' };
   }
@@ -2377,6 +2426,55 @@ async function reconstructMetaFromComponentsWithConfig({ config, metaId, type = 
   return { meta: await projectMetaForUser(reconstructedMeta, config, { addonTrailers: includeVideos }) };
 }
 
+const CATALOG_VIEW_SKIPPED = new Set([
+  'userUUID',
+  'addonIdentifier',
+  'sessionId',
+  'configHash',
+  'lastModified',
+  'configVersion',
+  'catalogs',
+  'collections',
+  'collectionCatalogs',
+  'tags',
+  'managerAccounts',
+  'search',
+  'searchEnabled',
+  'recommendations',
+  'ai_catalog',
+  'timezone',
+  'catalogSetupComplete',
+  'addonName',
+  'showDisabledCatalogs',
+  'playbackReporting',
+  'showRateMeButton',
+]);
+const CATALOG_VIEW_SKIPPED_KEYS = new Set(['malTokenId', 'anilistTokenId', 'simklTokenId', 'traktTokenId', 'movieLensCredId', 'trakt', 'simkl', 'gemini', 'openrouter']);
+
+function catalogViewSignature(config: any): string {
+  const view: any = { enableRatingPosters: config._currentCatalogConfig?.enableRatingPosters ?? null };
+  for (const [field, value] of Object.entries(config)) {
+    if (CATALOG_VIEW_SKIPPED.has(field) || field.startsWith('_current') || field.startsWith('jellyfin') || field.startsWith('hideWatched') || field.endsWith('WatchTracking')) continue;
+    view[field] = field === 'apiKeys' && value && typeof value === 'object'
+      ? Object.fromEntries(Object.entries(value).filter(([name]) => !CATALOG_VIEW_SKIPPED_KEYS.has(name)))
+      : value;
+  }
+  return crypto.createHash('sha256').update(stableStringify(view)).digest('hex').slice(0, 32);
+}
+
+async function readCatalogItemsPage(config: any, items: any[], variant: string, build: () => Promise<any[]>): Promise<any[]> {
+  const itemsHash = crypto.createHash('sha256').update(JSON.stringify(items)).digest('hex').slice(0, 32);
+  const metas = await readHeldPage(`${catalogViewSignature(config)}:${variant}:${itemsHash}`, async () => {
+    const built = await build();
+    for (const meta of built) {
+      if (Array.isArray(meta?.links)) meta.links = canonicalizeLinksForCache(meta.links);
+    }
+    return built;
+  });
+  for (const meta of metas) applyLinksUserScopeProjection(meta, config);
+  return metas;
+}
+
 async function cacheWrapMetaSmart(userUUID: string, metaId: string, method: () => Promise<any>, ttl: number = META_TTL(), options: any = {}, type: string | null = null, includeVideos: boolean = true, useShowPoster: boolean = false): Promise<any> {
   cacheLogger.debug(`[Meta] Smart caching for ${metaId} (type:${type}, videos:${includeVideos}, showPoster:${useShowPoster})`);
 
@@ -2413,11 +2511,12 @@ async function cacheWrapMetaSmart(userUUID: string, metaId: string, method: () =
 
   const failureReason = reconstructedMeta && reconstructedMeta.errorReason ? ` (reason: ${reconstructedMeta.errorReason})` : '';
   cacheLogger.debug(`[Meta] Component reconstruction failed for ${metaId}${failureReason}`);
+  markUnsettled();
 
   const lockContextHash = getMetaSmartLockContextHash(config, metaId, type, includeVideos, useShowPoster);
   const lockKey = withEpoch(`meta-smart:${userUUID || 'global'}:${type || 'unknown'}:${lockContextHash}:videos=${includeVideos ? 1 : 0}:showPoster=${useShowPoster ? 1 : 0}:${metaId}`);
 
-  return singleFlight(lockKey, async () => {
+  const buildOwn = () => singleFlight(lockKey, async () => {
     const reconstructedAfterWait = await reconstructMetaFromComponentsWithConfig({
       config,
       metaId,
@@ -2484,6 +2583,35 @@ async function cacheWrapMetaSmart(userUUID: string, metaId: string, method: () =
       authoritative: includeVideos,
     });
   }, cloneJsonCompatibleResult);
+
+  const buildKey = metaBuildKey(config, metaId, type, includeVideos, useShowPoster);
+  if (!inFlightRequests.has(buildKey)) return singleFlight(buildKey, buildOwn);
+  await singleFlight(buildKey, buildOwn).catch(() => null);
+
+  const afterShared = await reconstructMetaFromComponentsWithConfig({
+    config,
+    metaId,
+    type,
+    includeVideos,
+    useShowPoster,
+    countColdStoreMiss: false,
+  });
+  if (afterShared && afterShared.meta) {
+    cacheLogger.debug(`[Meta] Component reconstruction successful after a shared build for ${metaId}`);
+    return afterShared;
+  }
+  return buildOwn();
+}
+
+function metaBuildKey(config: any, metaId: string, type: string | null, includeVideos: boolean, useShowPoster: boolean): string {
+  const layout = buildMetaHashLayout({ config, metaId, type, useShowPoster });
+  const fields = Object.entries(layout.fields)
+    .filter(([name]) => includeVideos || name !== 'videos')
+    .map(([, { field }]) => field)
+    .sort();
+  const identity = [layout.key, buildMetaAliasCacheKey({ config, metaId, type, useShowPoster }), ...fields].join('|');
+  const digest = crypto.createHash('sha256').update(identity).digest('hex').slice(0, 32);
+  return withEpoch(`meta-build:${type || 'unknown'}:${digest}:videos=${includeVideos ? 1 : 0}:showPoster=${useShowPoster ? 1 : 0}:${metaId}`);
 }
 
 /** The upstream image behind a rating-poster or proxy URL, which is what a component stores. */
@@ -2773,6 +2901,7 @@ export {
   applyDisplayAgeRatingProjection,
   projectRatingsInPayload,
   cacheWrapMetaSmart,
+  readCatalogItemsPage,
   getCacheHealth,
   clearCacheHealth,
   clearCache,
@@ -2813,6 +2942,7 @@ module.exports = {
   applyDisplayAgeRatingProjection,
   projectRatingsInPayload,
   cacheWrapMetaSmart,
+  readCatalogItemsPage,
   getCacheHealth,
   clearCacheHealth,
   clearCache,

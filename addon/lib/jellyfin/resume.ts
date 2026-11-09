@@ -341,7 +341,7 @@ async function rowsFrom(service: Capable, credential: string, config: any): Prom
 }
 
 // No id mapping: the video id was recorded in the space the client played it in.
-async function ownRows(userUUID: string, profile: string): Promise<ResumeRow[]> {
+async function ownRows(userUUID: string, profile: string, config: any): Promise<ResumeRow[]> {
   const database: any = require('../database');
   const { parseStremioId } = require('./ids');
   const limit = envInt('JELLYFIN_RESUME_OWN_LIMIT', 100, 1);
@@ -380,9 +380,25 @@ async function ownRows(userUUID: string, profile: string): Promise<ResumeRow[]> 
   }
 
   // The earliest write of a batch is the spelling the client played under.
-  const { dedupeByAlias } = require('./aliases');
+  const { dedupeByAlias, videoIdAliases } = require('./aliases');
+  const { movieSpellings } = require('./watched');
   const deduped: ResumeRow[] = await dedupeByAlias([...rows].sort((a, b) => (a.writtenAt ?? 0) - (b.writtenAt ?? 0)));
-  return deduped.sort((a, b) => b.updatedAt - a.updatedAt);
+  const spellingsOf = new Map<string, string[]>();
+  for (const row of deduped) {
+    spellingsOf.set(row.videoId, row.kind === 'movie' ? await movieSpellings(row.videoId, config) : await videoIdAliases(row.videoId));
+  }
+  let held = new Map<string, any>();
+  try {
+    held = await database.getPlaystates(userUUID, [...new Set([...spellingsOf.values()].flat())], profile);
+  } catch (error: any) {
+    logger.debug(`Own resume spellings unavailable: ${error?.message || error}`);
+  }
+  const finishedSince = (row: ResumeRow): boolean =>
+    (spellingsOf.get(row.videoId) ?? []).some((spelling) => {
+      const other = held.get(spelling);
+      return Boolean(other) && Number(other.played) === 1 && !(Number(other.position_ms) > 0) && Number(other.updated_at) > (row.writtenAt ?? 0);
+    });
+  return deduped.filter((row) => !finishedSince(row)).sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export async function resumeSnapshot(userUUID: string, config: any): Promise<ResumeRow[]> {
@@ -391,7 +407,7 @@ export async function resumeSnapshot(userUUID: string, config: any): Promise<Res
   const profile = profileKey(config);
 
   const tracker = readsTrackers(config) ? await trackerSnapshot(userUUID, config) : [];
-  const own = await ownRows(userUUID, profile);
+  const own = await ownRows(userUUID, profile, config);
   let known = new Map<string, any>();
   try {
     const { getPlaystatesAcross } = require('./aliases');
@@ -460,8 +476,10 @@ export async function trackerSnapshot(userUUID: string, config: any): Promise<Re
       return { ok: part.ok, rows: part.rows.map((row) => ({ ...row, service })) };
     })
   );
+  const { homedRows } = require('./episodeHome');
+  const homed: ResumeRow[] = await homedRows(userUUID, config, parts.flatMap((part) => part.rows));
   const merged = new Map<string, ResumeRow>();
-  for (const row of parts.flatMap((part) => part.rows)) {
+  for (const row of homed) {
     const held = merged.get(row.videoId);
     if (!held || row.updatedAt > held.updatedAt) merged.set(row.videoId, row);
   }
@@ -578,7 +596,9 @@ async function clearDropped(userUUID: string, profile: string, config: any, befo
     const rows = [...(await database.getPlaystates(userUUID, spellings, profile)).values()].filter((row: any) => Number(row.position_ms) > 0);
     if (!rows.length || rows.some((row: any) => Number(row.last_played_at) > seenAt)) continue;
 
-    for (const row of rows) await database.upsertPlaystate(userUUID, row.video_id, { positionMs: 0 }, profile);
+    const at = Date.now();
+    rows.sort((a: any, b: any) => (Number(a.updated_at) || 0) - (Number(b.updated_at) || 0));
+    for (const [index, row] of rows.entries()) await database.upsertPlaystate(userUUID, row.video_id, { positionMs: 0 }, profile, at + index);
     cleared += 1;
   }
   return cleared;
@@ -593,10 +613,15 @@ function forgetShelves(userUUID: string): void {
 }
 
 export function invalidateResume(userUUID: string): void {
-  generations.set(userUUID, generationOf(userUUID) + 1);
+  forgetOwnWatches(userUUID);
   for (const key of [...snapshots.keys()]) {
     if (String(key).startsWith(`${userUUID}:`)) snapshots.delete(key);
   }
+}
+
+/** A watch this server recorded: what is built from its table is rebuilt, the tracker reads are kept. */
+export function forgetOwnWatches(userUUID: string): void {
+  generations.set(userUUID, generationOf(userUUID) + 1);
   for (const cache of [nextUpPages, lastNextUp]) {
     for (const key of [...cache.keys()]) {
       if (String(key).startsWith(`${userUUID}:`)) cache.delete(key);
@@ -626,6 +651,11 @@ const lastNextUp = new LRUCache<string, any[]>({
 export interface NextUpDeadline {
   ms: number;
   shelfKey: string;
+}
+
+/** A Next Up list already held under this key, without building one. */
+export function heldNextUp(key: string): any[] | undefined {
+  return nextUpPages.get(key);
 }
 
 /** One Next Up list per shelf shape, shared by concurrent asks and kept briefly; a play drops it. */

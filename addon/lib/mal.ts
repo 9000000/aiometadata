@@ -860,10 +860,9 @@ async function getSeasonTopNew(page: number = 1, config: any = {}): Promise<any[
 }
 
 async function fetchDiscover(params: Record<string, any> = {}, page: number = 1): Promise<{ items: any[]; hasMore: boolean; total: number; currentPage: number }> {
-  const JIKAN_PAGE_LIMIT = 25;
   const queryParams: Record<string, any> = {
     page: page,
-    limit: JIKAN_PAGE_LIMIT,
+    limit: malPageSize(),
   };
 
   if (params.order_by) queryParams.order_by = params.order_by;
@@ -948,6 +947,7 @@ async function fetchDiscover(params: Record<string, any> = {}, page: number = 1)
 }
 
 export {
+  detailsTtl,
   malPageSize,
   jikanApiBase,
   isJikanEnabled,
@@ -976,6 +976,7 @@ export {
   fetchDiscover,
 };
 module.exports = {
+  detailsTtl,
   malPageSize,
   jikanApiBase,
   isJikanEnabled,

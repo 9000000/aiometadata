@@ -6,6 +6,7 @@ import { dashedGuid, decodeJellyfinId, encodeJellyfinId, normaliseJellyfinId, pa
 import { mapWithConcurrency } from '../../utils/concurrency';
 import { fetchMeta } from './items';
 import { upsertPlaystateEverywhere } from './aliases';
+import { playCountOf } from './dto';
 
 const logger = consola.withTag('JellyfinPlaystate');
 
@@ -21,28 +22,54 @@ export function forgetUserSettings(userUUID: string): void {
   for (const key of playedThresholds.keys()) if (key.startsWith(`${userUUID}:`)) playedThresholds.delete(key);
 }
 
-/** The share of a title played that counts as watched: the user's own setting, else the server's. */
-async function watchedAtPercent(req: any): Promise<number> {
-  const fallback = envInt('JELLYFIN_PLAYED_THRESHOLD', 80, 1);
-  const userUUID = req?.params?.userUUID;
-  if (!userUUID) return fallback;
-  const key = `${userUUID}:${req.jellyfin?.profileId ?? ''}`;
+const USER_CONFIGURATION_ID = 'user-configuration';
+
+export function serverPlayedThreshold(): number {
+  return envInt('JELLYFIN_PLAYED_THRESHOLD', 80, 1);
+}
+
+export function validPlayedThreshold(value: unknown): number | null {
+  const percent = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(percent) && percent >= 50 && percent <= 100 ? percent : null;
+}
+
+export async function storedPlayedThreshold(userUUID: string, profileId: string | null): Promise<number | null> {
+  const key = `${userUUID}:${profileId ?? ''}`;
   let held = playedThresholds.get(key);
   if (!held) {
     try {
       const database = require('../database');
       const { profileById } = require('./profiles');
       const config = await database.getUserConfig(userUUID);
-      const profile = profileById(config, userUUID, req.jellyfin?.profileId ?? null);
-      const stored = await database.getPreferences(userUUID, profile?.id ?? '', 'user-configuration', '');
-      const value = Number(stored?.PlayedThresholdPercent);
-      held = { percent: Number.isFinite(value) && value >= 50 && value <= 100 ? value : null };
+      const profile = profileById(config, userUUID, profileId);
+      const stored = await database.getPreferences(userUUID, profile?.id ?? '', USER_CONFIGURATION_ID, '');
+      held = { percent: validPlayedThreshold(stored?.PlayedThresholdPercent) };
     } catch {
       held = { percent: null };
     }
     playedThresholds.set(key, held);
   }
-  return held.percent ?? fallback;
+  return held.percent;
+}
+
+export async function playedThresholdFor(userUUID: string, profileId: string | null): Promise<number> {
+  return (await storedPlayedThreshold(userUUID, profileId)) ?? serverPlayedThreshold();
+}
+
+export async function savePlayedThreshold(userUUID: string, profileId: string | null, percent: number | null): Promise<void> {
+  const database = require('../database');
+  const stored = (await database.getPreferences(userUUID, profileId ?? '', USER_CONFIGURATION_ID, '')) || {};
+  const next = { ...stored };
+  if (percent === null) delete next.PlayedThresholdPercent;
+  else next.PlayedThresholdPercent = percent;
+  await database.savePreferences(userUUID, profileId ?? '', USER_CONFIGURATION_ID, '', next);
+  forgetUserSettings(userUUID);
+}
+
+/** The share of a title played that counts as watched: the user's own setting, else the server's. */
+async function watchedAtPercent(req: any): Promise<number> {
+  const userUUID = req?.params?.userUUID;
+  return userUUID ? playedThresholdFor(userUUID, req.jellyfin?.profileId ?? null) : serverPlayedThreshold();
 }
 
 interface SessionPosition {
@@ -377,7 +404,7 @@ async function announce(userUUID: string, config: any, profile: string, session:
     Key: itemId,
     ItemId: itemId,
     Played: played,
-    PlayCount: Math.max(played ? 1 : 0, Number(row?.play_count) || 0),
+    PlayCount: playCountOf(played, row?.play_count),
     PlaybackPositionTicks: positionMs * TICKS_PER_MS,
     PlayedPercentage: positionMs > 0 && runtimeMs > 0 ? Math.min(100, (positionMs / runtimeMs) * 100) : played ? 100 : 0,
     LastPlayedDate: row?.last_played_at ? new Date(Number(row.last_played_at)).toISOString() : null,
@@ -393,9 +420,14 @@ async function recordPlaystate(
   positionMs: number,
   played: boolean | null,
   config: any,
-  finished = false
+  finished = false,
+  resetAll = false
 ): Promise<void> {
   await writePlaystate(userUUID, profile, session, event, positionMs, played, finished);
+  // Dropped before a client is told, so the read-back it makes sees the change.
+  const { forgetOwnWatches, invalidateResume } = require('./resume');
+  if (resetAll) invalidateResume(userUUID);
+  else if (played === true || event === 'unplayed') forgetOwnWatches(userUUID);
   announce(userUUID, config, profile, session).catch((error: any) =>
     logger.debug(`User data push failed for ${session.videoId}: ${error?.message || error}`)
   );
@@ -518,17 +550,14 @@ async function settle(
   resumedFrom: number | null = null
 ): Promise<void> {
   // The table is written before any tracker is told, so a read never waits on one.
-  await recordPlaystate(userUUID, profile, session, event, positionMs, played, config, event === 'stop' && played === true);
+  await recordPlaystate(userUUID, profile, session, event, positionMs, played, config, event === 'stop' && played === true, !tellsTrackers(config));
   if (played === true && session.descriptor.k === 'episode') {
     const { undropOnWatch } = require('./dropped');
     undropOnWatch(userUUID, config, [session.descriptor.i]);
   }
+  if (played === true) require('./watchlist').leaveWatchlistOnWatch(userUUID, config, [session.descriptor]);
 
-  if (!tellsTrackers(config)) {
-    const { invalidateResume } = require('./resume');
-    invalidateResume(userUUID);
-    return;
-  }
+  if (!tellsTrackers(config)) return;
 
   // A pause at zero is what a collapsed position looks like, and a real one says
   // nothing a tracker can use, so it is remembered without writing a resume
@@ -621,24 +650,29 @@ async function markEach(req: any, body: any, event: 'played' | 'unplayed', upTo 
       return null;
     }
     deletePosition(`${userUUID}:${profile}:${id}`);
-    await recordPlaystate(userUUID, profile, session, event, 0, played, config);
+    await writePlaystate(userUUID, profile, session, event, 0, played);
     return session;
   })).filter((s): s is ResolvedSession => s !== null);
+
+  // Every row is written before anything is dropped or a client told, so none reads half a season.
+  const { forgetOwnWatches, invalidateResume } = require('./resume');
+  if (tellsTrackers(config)) forgetOwnWatches(userUUID);
+  else invalidateResume(userUUID);
+  for (const session of sessions) {
+    announce(userUUID, config, profile, session).catch((error: any) =>
+      logger.debug(`User data push failed for ${session.videoId}: ${error?.message || error}`)
+    );
+  }
 
   if (played) {
     const { undropOnWatch } = require('./dropped');
     undropOnWatch(userUUID, config, sessions.filter((session) => session.descriptor.k === 'episode').map((session) => session.descriptor.i));
+    require('./watchlist').leaveWatchlistOnWatch(userUUID, config, sessions.map((session) => session.descriptor));
   }
-  if (!tellsTrackers(config)) {
-    const { invalidateResume } = require('./resume');
-    invalidateResume(userUUID);
-    return;
-  }
+  if (!tellsTrackers(config)) return;
   // A season or series goes to the trackers as one batch, not an event per episode.
   if (marked.scope) {
     const { handlePlaybackReport } = require('../playbackHandler');
-    const { invalidateResume } = require('./resume');
-    invalidateResume(userUUID);
     handlePlaybackReport('series', marked.metaId, {
       scope: marked.scope,
       event,

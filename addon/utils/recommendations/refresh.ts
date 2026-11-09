@@ -8,25 +8,42 @@ const { runWithRequestContext }: any = require('../../lib/logBuffer');
 let timer: ReturnType<typeof setInterval> | null = null;
 let sweeping = false;
 
-function seenKey(userUUID: string): string {
-  return `recommendations:seen:${userUUID}`;
+function seenKey(viewer: string): string {
+  return `recommendations:seen:${viewer}`;
 }
 
 /** A row that was opened is kept warm; one nobody reads is left to lapse. */
-export async function markSeen(userUUID: string): Promise<void> {
+export async function markSeen(viewer: string): Promise<void> {
   if (!redis) return;
   try {
-    await redis.set(seenKey(userUUID), '1', 'EX', envInt('RECOMMENDATION_ACTIVE_DAYS', 7, 1) * 24 * 60 * 60);
+    await redis.set(seenKey(viewer), '1', 'EX', envInt('RECOMMENDATION_ACTIVE_DAYS', 7, 1) * 24 * 60 * 60);
   } catch (error: any) {
-    logger.debug(`Could not mark ${userUUID} as active: ${error?.message || error}`);
+    logger.debug(`Could not mark ${viewer} as active: ${error?.message || error}`);
   }
 }
 
-function usable(config: any): boolean {
-  const hasHistory = !!(config?.apiKeys?.simklTokenId || config?.apiKeys?.mdblist);
+export async function rowStamp(viewer: string): Promise<string> {
+  if (!redis) return '';
+  try {
+    return (await redis.get(`recommendations:stamp:${viewer}`)) || '';
+  } catch {
+    return '';
+  }
+}
+
+export async function bumpRowStamp(viewer: string): Promise<void> {
+  if (!redis) return;
+  try {
+    await redis.set(`recommendations:stamp:${viewer}`, String(Date.now()), 'EX', 90 * 24 * 60 * 60);
+  } catch (error: any) {
+    logger.debug(`Could not mark rows of ${viewer} as rebuilt: ${error?.message || error}`);
+  }
+}
+
+async function usable(config: any, userUUID: string): Promise<boolean> {
   const hasModel = !!(config?.apiKeys?.gemini || config?.apiKeys?.openrouter
     || process.env.GEMINI_API_KEY || process.env.BUILT_IN_GEMINI_API_KEY || process.env.OPENROUTER_API_KEY);
-  return hasHistory && hasModel;
+  return hasModel && require('./history').canReadHistory(config, userUUID);
 }
 
 export async function sweepRecommendations(): Promise<{ checked: number; refreshed: number }> {
@@ -40,6 +57,7 @@ export async function sweepRecommendations(): Promise<{ checked: number; refresh
     const { RECOMMENDATION_CATALOGS, isRecommendationCatalog }: any = require('./catalog');
     const { picksKey, recommend }: any = require('./rank');
     const { getTasteProfile }: any = require('./profile');
+    const { hasOwnHistory, runAsProfile }: any = require('./history');
     const leadMs = envInt('RECOMMENDATION_REFRESH_LEAD', 3600, 60) * 1000;
 
     const seen: string[] = [];
@@ -50,8 +68,9 @@ export async function sweepRecommendations(): Promise<{ checked: number; refresh
       for (const key of keys) seen.push(key.slice('recommendations:seen:'.length));
     } while (cursor !== '0');
 
-    for (const userId of seen) {
+    for (const viewer of seen) {
       await new Promise((resolve) => setImmediate(resolve));
+      const [userId, profileId] = viewer.split('#');
       let config: any;
       try {
         config = await database.getUserConfig(userId);
@@ -59,29 +78,36 @@ export async function sweepRecommendations(): Promise<{ checked: number; refresh
         continue;
       }
       if (!config) continue;
+      // Deleted, or now reading the main user's history: refreshing it would refresh the main user's rows.
+      if (profileId && !hasOwnHistory(config, userId, profileId)) {
+        await redis.del(seenKey(viewer)).catch(() => undefined);
+        continue;
+      }
       const user = { id: userId };
       const wanted = (config?.catalogs || [])
         .filter((catalog: any) => catalog?.enabled && isRecommendationCatalog(catalog.id))
         .map((catalog: any) => catalog.id);
-      if (!wanted.length || !usable(config)) continue;
+      if (!wanted.length || !(await usable(config, user.id))) continue;
 
-      let profile: any = null;
-      for (const id of wanted) {
-        const kind = RECOMMENDATION_CATALOGS.find((entry: any) => entry.id === id)?.kind;
-        if (!kind) continue;
-        out.checked += 1;
-        const ttlMs = await redis.pttl(withGlobalEpoch(picksKey(config, user.id, kind)));
-        if (!(ttlMs > 0 && ttlMs <= leadMs)) continue;
-        try {
-          profile = profile ?? (await runWithRequestContext(user.id, () => getTasteProfile(config, user.id)));
-          if (!profile) break;
-          const picks = await runWithRequestContext(user.id, () => runWithSourceRefetch(() => recommend(config, user.id, profile, kind)));
-          out.refreshed += 1;
-          logger.info(`Refreshed ${id} for ${user.id} ${Math.round(ttlMs / 60000)} min before it lapsed: ${picks.length} picks`);
-        } catch (error: any) {
-          logger.warn(`Could not refresh ${id} for ${user.id}: ${error?.message || error}`);
+      await runAsProfile(config, user.id, profileId || null, async (viewerConfig: any) => {
+        let profile: any = null;
+        for (const id of wanted) {
+          const kind = RECOMMENDATION_CATALOGS.find((entry: any) => entry.id === id)?.kind;
+          if (!kind) continue;
+          out.checked += 1;
+          const ttlMs = await redis.pttl(withGlobalEpoch(picksKey(viewerConfig, user.id, kind)));
+          if (!(ttlMs > 0 && ttlMs <= leadMs)) continue;
+          try {
+            profile = profile ?? (await runWithRequestContext(user.id, () => getTasteProfile(viewerConfig, user.id)));
+            if (!profile) break;
+            const picks = await runWithRequestContext(user.id, () => runWithSourceRefetch(() => recommend(viewerConfig, user.id, profile, kind)));
+            out.refreshed += 1;
+            logger.info(`Refreshed ${id} for ${viewer} ${Math.round(ttlMs / 60000)} min before it lapsed: ${picks.length} picks`);
+          } catch (error: any) {
+            logger.warn(`Could not refresh ${id} for ${viewer}: ${error?.message || error}`);
+          }
         }
-      }
+      });
     }
   } catch (error: any) {
     logger.warn(`Recommendation refresh sweep failed: ${error?.message || error}`);
@@ -101,4 +127,4 @@ export function startRecommendationRefresh(): void {
   logger.info(`Recommendation refresh sweep every ${Math.round(every / 60000)} min, ${envInt('RECOMMENDATION_REFRESH_LEAD', 3600, 60) / 60} min before a row lapses`);
 }
 
-module.exports = { markSeen, sweepRecommendations, startRecommendationRefresh };
+module.exports = { markSeen, rowStamp, bumpRowStamp, sweepRecommendations, startRecommendationRefresh };

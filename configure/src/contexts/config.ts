@@ -1,4 +1,5 @@
-import type { BuilderEntry } from '@shared/types';
+import type { BuilderEntry, CatalogRowOptions } from '@shared/types';
+import type { MergeMode } from '@shared/mergeModes';
 
 export type TagColorKey =
   | 'blue' | 'green' | 'red' | 'violet' | 'amber' | 'cyan'
@@ -13,6 +14,11 @@ export interface TagDef {
   ageRating?: string;
   /** Only meaningful alongside ageRating. Absent means unrated titles show. */
   allowUnratedContent?: boolean;
+  viewingHours?: { start: string; end: string };
+  allowDownloads?: boolean;
+  hideKeywords?: string[];
+  hideWords?: string[];
+  hideGenres?: string[];
 }
 
 export type CardService = 'simkl' | 'mdblist' | 'publicmetadb' | 'anilist' | 'mal';
@@ -93,6 +99,7 @@ export interface CatalogConfig {
   pageSize?: number;
   /** If set, this catalog is absorbed into a merged catalog and hidden from UI/manifest */
   mergedInto?: string;
+  row?: CatalogRowOptions;
   // List metadata (item count, privacy, author, description, AniList-specific fields, Trakt Up Next settings, Letterboxd-specific fields, TMDB-specific fields)
   metadata?: {
     itemCount?: number;
@@ -107,6 +114,7 @@ export interface CatalogConfig {
     useUpstreamArt?: boolean;
     // Trakt Up Next metadata
     useShowPosterForUpNext?: boolean;
+    upNextSort?: 'watched' | 'aired';
     includeAnimeInUpNext?: boolean;
     // Trakt Calendar metadata
     airingSoonDays?: number;
@@ -143,6 +151,7 @@ export interface CatalogConfig {
     interval?: 'today' | 'week' | 'month';
     pageSize?: number; // Results per page for Simkl trending and watchlist catalogs (default: 50)
     status?: 'watching' | 'plantowatch' | 'hold' | 'completed' | 'dropped'; // Status for Simkl watchlist catalogs
+    watchlistSort?: 'added' | 'released' | 'released_asc';
     /** Source references for merged catalogs (id starts with 'merged.') */
     mergedSources?: Array<{
       catalogId: string;       // source catalog id, e.g. "tmdb.top"
@@ -150,7 +159,7 @@ export interface CatalogConfig {
       originalEnabled: boolean;
       originalShowInHome: boolean;
     }>;
-    mergeMode?: 'interleaved' | 'sequential' | 'alternating';
+    mergeMode?: MergeMode;
     // MovieLens-specific metadata
     sortBy?: string;
     sortDirection?: string;
@@ -171,6 +180,7 @@ export interface CatalogConfig {
     pickMinVotes?: number;
     /** Only offered to a Jellyfin card that holds the account backing this catalog. */
     accountsOnly?: boolean;
+    accountOwner?: string;
   };
 }
 
@@ -224,6 +234,7 @@ export interface AppConfig {
   showPrefix: boolean;
   showMetaProviderAttribution: boolean;
   hideErrors?: boolean;
+  criticRatings?: boolean;
   castCount: number;
   displayAgeRating: boolean;
   contentRatingCountry?: string;
@@ -345,7 +356,8 @@ export interface AppConfig {
     gemini_model?: string;
     openrouter_model?: string;
     /** Which watch histories the profile is built from. */
-    sources?: 'simkl' | 'mdblist' | 'both';
+    sources?: 'simkl' | 'mdblist' | 'both' | 'local';
+    profiles?: Record<string, { sources?: 'same' | 'simkl' | 'mdblist' | 'both' | 'local' }>;
     /** Gemini google_search grounding, or the OpenRouter :online suffix. Off unless set. */
     web_search?: boolean;
     /**
@@ -353,7 +365,7 @@ export interface AppConfig {
      * counted against the same reply budget as the answer, so a high setting
      * can leave a long list with no room to finish. OpenRouter only.
      */
-    reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high';
+    reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high';
     /**
      * How much a series left unfinished counts against it. Stalling is weak
      * evidence: people stop because a season ended or they forgot, not only

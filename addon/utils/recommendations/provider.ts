@@ -1,3 +1,5 @@
+import { envInt } from '../envNumber';
+
 export type AiProvider = 'gemini' | 'openrouter';
 
 export interface ResolvedProvider {
@@ -6,6 +8,7 @@ export interface ResolvedProvider {
   model: string;
   /** Gemini grounding, or the :online suffix already applied to the model. */
   webSearch: boolean;
+  preset: boolean;
   /** Import path for the client, so callers do not repeat the branch. */
   clientPath: string;
 }
@@ -16,7 +19,7 @@ export interface ResolvedProvider {
  *  pages built from them, which expire on separate clocks. */
 export const RECOMMENDATION_EPOCH = 3;
 
-export const REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high'] as const;
+export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high'] as const;
 
 /** How often a row is written again. Each rewrite is a billed model call, so
  *  nothing shorter than six hours is offered. */
@@ -55,18 +58,27 @@ export function refreshTtl(config: any): number {
   return Number.isFinite(fallback) && fallback > 0 ? fallback : 24 * 60 * 60;
 }
 
-const REASONING_SHARE: Record<string, number> = { high: 0.8, medium: 0.5, low: 0.2, minimal: 0.1 };
+const REASONING_SHARE: Record<string, number> = { high: 0.8, medium: 0.5, low: 0.2, minimal: 0.1, none: 0 };
 
-export function budgetFor(replyTokens: number, effort: string, ceiling = 16384): number {
+/** OpenRouter holds the cost of this many tokens against the balance while a call runs. */
+const maxReplyTokens = (): number => envInt('RECOMMENDATION_MAX_TOKENS', 16384, 2048);
+
+export function budgetFor(replyTokens: number, effort: string, floor = 2048): number {
   const share = REASONING_SHARE[effort] ?? 0.2;
-  return Math.min(ceiling, Math.max(2048, Math.ceil(replyTokens / (1 - share))));
+  return Math.min(maxReplyTokens(), Math.max(floor, Math.ceil(replyTokens / (1 - share))));
 }
 
 /** Thinking is billed and drawn from the reply budget, and some models refuse to
- *  disable it, so it is capped rather than turned off. */
+ *  disable it, so it is capped by default and turned off only when chosen. */
 export function reasoningEffort(config: any): string {
   const chosen = config?.recommendations?.reasoning_effort;
-  return (REASONING_EFFORTS as readonly string[]).includes(chosen) ? chosen : 'low';
+  if ((REASONING_EFFORTS as readonly string[]).includes(chosen)) return chosen;
+  return resolveProvider(config)?.preset ? '' : 'low';
+}
+
+export function reasonLanguage(config: any): string {
+  const language = config?.language || 'en-US';
+  return language.toLowerCase().startsWith('en') ? '' : language;
 }
 
 export function resolveProvider(config: any): ResolvedProvider | null {
@@ -84,28 +96,26 @@ export function resolveProvider(config: any): ResolvedProvider | null {
   else if (openrouterKey) provider = 'openrouter';
   else return null;
 
-  const { resolveRecommendationModel }: any = require('../ai-model-resolver');
+  const { resolveRecommendationModel, isPresetModel, withWebSearch }: any = require('../ai-model-resolver');
   const webSearch = config?.recommendations?.web_search === true;
 
   // Gemini takes grounding as a request flag, OpenRouter as a model suffix, so
   // the suffix is settled here rather than at the call site.
   let model = resolveRecommendationModel({ config, provider });
-  if (provider === 'openrouter') {
-    model = webSearch
-      ? (model.endsWith(':online') ? model : `${model}:online`)
-      : model.replace(/:online$/, '');
-  }
+  const preset = provider === 'openrouter' && isPresetModel(model);
+  if (provider === 'openrouter') model = withWebSearch(model, webSearch);
 
   return {
     provider,
     apiKey: provider === 'openrouter' ? openrouterKey : geminiKey,
     model,
-    webSearch,
+    webSearch: webSearch && !preset,
+    preset,
     clientPath: provider === 'openrouter' ? '../openrouter-client' : '../gemini-client',
   };
 }
 
 module.exports = {
-  resolveProvider, reasoningEffort, budgetFor, REASONING_EFFORTS, RECOMMENDATION_EPOCH,
+  resolveProvider, reasoningEffort, reasonLanguage, budgetFor, REASONING_EFFORTS, RECOMMENDATION_EPOCH,
   refreshTtl, REFRESH_HOURS, pickOrder, PICK_ORDERS, voteFloor,
 };

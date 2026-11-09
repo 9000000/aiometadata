@@ -37,11 +37,61 @@ interface Stats {
   peakOutstanding: number;
 }
 
-const queue: WarmTarget[] = [];
+/** First in, first out, dropping what it has handed out in batches so taking from the front stays cheap. */
+class Lane {
+  private items: WarmTarget[] = [];
+  private head = 0;
+
+  get size(): number {
+    return this.items.length - this.head;
+  }
+
+  push(target: WarmTarget): void {
+    this.items.push(target);
+  }
+
+  take(): WarmTarget | undefined {
+    if (this.size === 0) return undefined;
+    const target = this.items[this.head];
+    this.head += 1;
+    if (this.head > 4096 && this.head * 2 >= this.items.length) {
+      this.items.splice(0, this.head);
+      this.head = 0;
+    }
+    return target;
+  }
+
+  clear(): void {
+    this.items.length = 0;
+    this.head = 0;
+  }
+}
+
+// Classes with many images to a title, such as a thumbnail for every episode, wait behind the rest in a lane of
+// their own: they never push a poster out of the queue, and stop well short of the budget so posters keep room.
+const BULK_CLASSES: ReadonlySet<ImageClass> = new Set(['thumbnail']);
+const FULL_AT = 0.98;
+const BULK_FULL_AT = 0.9;
+// A full cache is its usual state, and eviction takes what was used longest ago first, so past those marks
+// warming goes on while what this run has used still fits under the level eviction trims to.
+const HELD_FULL_AT = store.EVICT_TO;
+const BULK_HELD_FULL_AT = store.EVICT_TO - 0.1;
+const HELD_RECOUNT_MS = 5000;
+let runStartedAt = Date.now();
+let held = { at: 0, since: 0, bytes: 0 };
+
+function heldRatio(max: number): number {
+  const now = Date.now();
+  if (held.since !== runStartedAt || now - held.at > HELD_RECOUNT_MS) {
+    held = { at: now, since: runStartedAt, bytes: store.bytesHeldSince(runStartedAt) };
+  }
+  return held.bytes / max;
+}
+const main = new Lane();
+const bulk = new Lane();
 const pending = new Set<string>();
 /** Images already counted this run, so one poster in twenty catalogs counts once. */
 const counted = new Set<string>();
-let head = 0;
 
 let active = 0;
 let desired = 0;
@@ -205,14 +255,7 @@ function notePeak(): void {
 const LAG_INTERVAL_MS = 250;
 
 function depth(): number {
-  return queue.length - head;
-}
-
-function compact(): void {
-  if (head > 4096 && head * 2 >= queue.length) {
-    queue.splice(0, head);
-    head = 0;
-  }
+  return main.size + bulk.size;
 }
 
 function startLagProbe(): void {
@@ -288,12 +331,15 @@ export function offer(targets: WarmTarget[]): void {
 
   const max = getWarmQueueMax();
   const capacity = store.capacityUsed();
-  const full = capacity.max > 0 && capacity.ratio >= 0.98;
+  const nearFull = capacity.max > 0 && capacity.ratio >= BULK_FULL_AT;
+  const heldShare = nearFull ? heldRatio(capacity.max) : 0;
+  const full = nearFull && capacity.ratio >= FULL_AT && heldShare >= HELD_FULL_AT;
+  const bulkFull = nearFull && heldShare >= BULK_HELD_FULL_AT;
 
   if (full && !capacityWarned) {
     capacityWarned = true;
     logger.warn(
-      `Image cache is at ${(capacity.ratio * 100).toFixed(0)}% of its ${formatSize(capacity.max)} budget. ` +
+      `Image cache is at ${(capacity.ratio * 100).toFixed(0)}% of its ${formatSize(capacity.max)} budget, and images used since this warm run began fill ${(heldShare * 100).toFixed(0)}% of it. ` +
       `Warming new images would evict images it just warmed, so they are being skipped. ` +
       `Raise POSTER_CACHE_MAX_SIZE or disable image classes you do not need.`
     );
@@ -315,20 +361,24 @@ export function offer(targets: WarmTarget[]): void {
     const freshKey = target.http ? target.checkKey : target.url;
     if (freshClass && freshKey && store.isCachedFresh(freshClass, freshKey)) {
       if (firstSight) stats.skipped += 1;
+      // Still wanted, so what this run warms next pushes out older images before it.
+      store.markWanted(freshClass, freshKey);
       continue;
     }
-    if (full) {
+    const inBulk = BULK_CLASSES.has(target.imageClass);
+    if (inBulk ? bulkFull : full) {
       stats.atCapacity += 1;
       continue;
     }
-    if (depth() >= max) {
+    const lane = inBulk ? bulk : main;
+    if (lane.size >= max) {
       stats.dropped += 1;
       continue;
     }
 
     if (pending.has(key)) continue;
     pending.add(key);
-    queue.push(target);
+    lane.push(target);
     stats.queued += 1;
   }
 
@@ -375,9 +425,8 @@ function pump(): void {
   const limit = Math.min(Math.max(desired, getWarmConcurrencyMin()), max);
 
   while (active < limit && depth() > 0) {
-    const target = queue[head];
-    head += 1;
-    compact();
+    const target = main.take() ?? bulk.take();
+    if (!target) break;
     active += 1;
     draining = true;
     notePeak();
@@ -421,6 +470,7 @@ export function getStats(): Stats & {
  * this the counters ran for the life of the process and read as a single run.
  */
 export function resetStats(): void {
+  runStartedAt = Date.now();
   counted.clear();
   failureReasons.clear();
   byClass.clear();
@@ -430,8 +480,8 @@ export function resetStats(): void {
 }
 
 export function reset(): void {
-  queue.length = 0;
-  head = 0;
+  main.clear();
+  bulk.clear();
   pending.clear();
   resetStats();
 }

@@ -158,34 +158,46 @@ const getTimezoneOffsetFormatter = (timezone) => {
   return formatter;
 };
 
+// `format` is about twice as fast as `formatToParts`, and en-US output is "MM/DD/YYYY, HH:mm:ss".
+const TIMEZONE_FORMAT_PATTERN = /^(\d+)\/(\d+)\/(\d+),? (\d+):(\d+):(\d+)$/;
+
 const getTimezoneOffsetMinutes = (utcDate, timezone) => {
   try {
     const formatter = getTimezoneOffsetFormatter(timezone);
-    const parts = formatter.formatToParts(utcDate);
-    const lookup = {};
-    for (const p of parts) { lookup[p.type] = p.value; }
-    const hour = lookup.hour === '24' ? '00' : lookup.hour;
-    const asUTC = Date.UTC(
-      Number(lookup.year), Number(lookup.month) - 1, Number(lookup.day),
-      Number(hour), Number(lookup.minute), Number(lookup.second)
-    );
+    const m = TIMEZONE_FORMAT_PATTERN.exec(formatter.format(utcDate));
+    if (!m) return 0;
+    const hour = m[4] === '24' ? 0 : Number(m[4]);
+    const asUTC = Date.UTC(Number(m[3]), Number(m[1]) - 1, Number(m[2]), hour, Number(m[5]), Number(m[6]));
     return (asUTC - utcDate.getTime()) / 60000;
   } catch {
     return 0;
   }
 };
 
+const RESOLVED_LOCAL_TIMESTAMP_LIMIT = 50000;
+const resolvedLocalTimestamps = new Map();
+
 const resolveLocalReleaseTimestamp = (localDate, timezone) => {
   const localMs = localDate.getTime();
   if (!Number.isFinite(localMs)) return new Date(localMs);
+  const cacheKey = `${timezone}|${localMs}`;
+  const cached = resolvedLocalTimestamps.get(cacheKey);
+  if (cached !== undefined) return new Date(cached);
   const before = getTimezoneOffsetMinutes(new Date(localMs - TIMEZONE_DAY_MS), timezone);
   const after = getTimezoneOffsetMinutes(new Date(localMs + TIMEZONE_DAY_MS), timezone);
-  if (before === after) return new Date(localMs - before * 60000);
-  const matches = [...new Set([before, after])]
-    .map(offset => localMs - offset * 60000)
-    .filter(instant => instant + getTimezoneOffsetMinutes(new Date(instant), timezone) * 60000 === localMs);
-  // Repeated local times use the first occurrence; a skipped time advances by the gap.
-  return new Date(matches.length ? Math.min(...matches) : localMs - before * 60000);
+  let resolvedMs;
+  if (before === after) {
+    resolvedMs = localMs - before * 60000;
+  } else {
+    const matches = [...new Set([before, after])]
+      .map(offset => localMs - offset * 60000)
+      .filter(instant => instant + getTimezoneOffsetMinutes(new Date(instant), timezone) * 60000 === localMs);
+    // Repeated local times use the first occurrence; a skipped time advances by the gap.
+    resolvedMs = matches.length ? Math.min(...matches) : localMs - before * 60000;
+  }
+  if (resolvedLocalTimestamps.size >= RESOLVED_LOCAL_TIMESTAMP_LIMIT) resolvedLocalTimestamps.clear();
+  resolvedLocalTimestamps.set(cacheKey, resolvedMs);
+  return new Date(resolvedMs);
 };
 
 const getTimeValue = (dateValue) => {
@@ -879,6 +891,18 @@ async function getMovieMeta(stremioId, preferredProvider, language, config, user
   return null;
 }
 
+async function cinemetaForEpisodelessTvdbSeries(seriesData, episodes, allIds, includeVideos, language, config) {
+  if (seriesData.firstAired || !allIds?.imdbId) return null;
+  const tvdbEpisodes = includeVideos
+    ? episodes
+    : await tvdb.getSeriesEpisodes(allIds.tvdbId, language, config.tvdbSeasonType, config);
+  if (tvdbEpisodes?.episodes?.length) return null;
+  const imdbData = await imdb.getMetaFromImdb(allIds.imdbId, 'series');
+  if (!imdbData?.videos?.length) return null;
+  logger.info(`[SeriesMeta] TVDB ${allIds.tvdbId} has no episodes; using Cinemeta ${allIds.imdbId} (${imdbData.videos.length} videos).`);
+  return imdbData;
+}
+
 async function getSeriesMeta(preferredProvider, stremioId, language, config, userUUID, allIds, includeVideos) {
   logger.debug(`[SeriesMeta] Starting process for ${stremioId}. Preferred: ${preferredProvider}`);
 
@@ -957,6 +981,10 @@ async function getSeriesMeta(preferredProvider, stremioId, language, config, use
 
       // Check if we got valid data
       if (seriesData) {
+        const cinemetaData = await cinemetaForEpisodelessTvdbSeries(seriesData, episodes, allIds, includeVideos, language, config);
+        if (cinemetaData) {
+          return _markDegraded(await buildImdbSeriesResponse(stremioId, cinemetaData, { allIds }, config), degraded);
+        }
         return _markDegraded(await buildTvdbSeriesResponse(stremioId, seriesData, episodes, language, config, userUUID, { allIds }, false, includeVideos), degraded);
       } else {
         logger.debug(`[SeriesMeta] TVDB returned null data for ${allIds.tvdbId} (expected when content doesn't exist on TVDB)`);
@@ -2481,6 +2509,11 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
                   episodeId = `kitsu:${kitsuMapping.kitsu_id}:${anidbEpisodeInfo.anidbEpisode}`;
                 }
               }
+              if (!episodeId) {
+                const listed = idMapper.resolveKitsuEpisodeFromTvdbMapping(tvdbId, episode.seasonNumber, episode.number);
+                const listedAnidb = listed ? idMapper.getMappingByKitsuId(listed.kitsuId)?.anidb_id : null;
+                if (listed && (!listedAnidb || !anidbEpisodeInfo?.anidbId || Number(listedAnidb) === Number(anidbEpisodeInfo.anidbId))) episodeId = `kitsu:${listed.kitsuId}:${listed.episodeNumber}`;
+              }
             } else if (config.tvdbSeasonType === 'absolute') {
               const seasonalInfo = absoluteToSeasonalMap.get(episode.number);
               if (seasonalInfo) {
@@ -2500,6 +2533,12 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
                 if (malMapping?.mal_id) {
                   episodeId = `mal:${malMapping.mal_id}:${anidbEpisodeInfo.anidbEpisode}`;
                 }
+              }
+              if (!episodeId) {
+                const listed = idMapper.resolveKitsuEpisodeFromTvdbMapping(tvdbId, episode.seasonNumber, episode.number);
+                const listedMapping = listed ? idMapper.getMappingByKitsuId(listed.kitsuId) : null;
+                const sameAnidb = !listedMapping?.anidb_id || !anidbEpisodeInfo?.anidbId || Number(listedMapping.anidb_id) === Number(anidbEpisodeInfo.anidbId);
+                if (listedMapping?.mal_id && sameAnidb) episodeId = `mal:${listedMapping.mal_id}:${listed.episodeNumber}`;
               }
             } else if (config.tvdbSeasonType === 'absolute') {
               const seasonalInfo = absoluteToSeasonalMap.get(episode.number);
@@ -2921,6 +2960,9 @@ async function buildAnimeResponse(stremioId, malData, language, characterData, e
     if (stremioType === 'series' && malData.status === 'Finished Airing' && (!episodeData || episodeData.length === 0) && Number(malData.episodes) > 0) {
       const aired = malData.aired?.from || null;
       episodeData = Array.from({ length: Number(malData.episodes) }, (_, i) => ({ mal_id: i + 1, title: null, synopsis: '', aired }));
+    }
+    if (stremioType === 'series' && malData.status === 'Finished Airing' && Number(malData.episodes) > 0 && episodeData?.length > Number(malData.episodes)) {
+      episodeData = episodeData.filter((ep) => Number(ep.mal_id) <= Number(malData.episodes));
     }
 
     // Process episodes while API calls are running

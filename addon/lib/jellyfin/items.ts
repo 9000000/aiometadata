@@ -6,13 +6,16 @@ import { LRUCache } from 'lru-cache';
 import { envInt } from '../../utils/envNumber';
 import { encodeJellyfinId, parseStremioId } from './ids';
 import { normaliseJellyfinId } from './idsCodec';
+import { rememberSeriesRatingIds } from './seriesRatingIds';
 import { EMPTY_USER_DATA } from './dto';
 import { placeholderSources } from './streams';
 import redis from '../redisClient';
 import type { CatalogRef } from './views';
-import { viewerAccountOwner, viewerMarksUnaired, viewerProfile, viewerReadsExtensions } from './viewer';
+import { viewerAccountOwner, viewerMarksUnaired, viewerProfile, viewerReadsExtensions, viewerWantsPeople } from './viewer';
 import { SERVER_WATCHLIST_PREFIX } from '../serverWatchlist';
 import { isLandscapeCatalogConfig } from '../../utils/catalogPosterShape';
+import { configCatalogFor } from '../collectionBuilder/homeOrder';
+import { shuffleMetas } from '../../utils/mergedCatalog';
 
 const logger = consola.withTag('Jellyfin');
 
@@ -31,17 +34,56 @@ const imageCache = new LRUCache<string, ItemImages>({
 });
 
 /**
- * Scoped per server id, which is derived from the configuration: art depends on
- * a user's providers and language, so two configurations must not read each
+ * Scoped by the configuration's settings: art depends on a user's providers,
+ * language and keys, so two configurations that differ must not read each
  * other's. Held in Redis as well as in process, because a client keeps its item
  * ids across a restart and asks for their art before anything has rebuilt them.
  */
 function imageKey(scope: string, itemId: string): string {
-  return `${scope}|${normaliseJellyfinId(itemId)}`;
+  return `${artScope(scope)}|${normaliseJellyfinId(itemId)}`;
 }
 
-const imageHash = (scope: string): string => `jf:img:${scope}`;
-const artHash = (scope: string): string => `jf:img:tag:${scope}`;
+const ART_SCOPE_SKIPPED = new Set([
+  'userUUID',
+  'addonIdentifier',
+  'sessionId',
+  'configHash',
+  'lastModified',
+  'configVersion',
+  'catalogSetupComplete',
+  'jellyfinUsers',
+  'jellyfinUserName',
+  'jellyfinUserAvatar',
+  'jellyfinUserPin',
+  'jellyfinAppPassword',
+  'playbackReporting',
+]);
+const ART_SCOPE_SKIPPED_KEYS = new Set(['malTokenId', 'anilistTokenId', 'simklTokenId', 'traktTokenId', 'movieLensCredId', 'trakt', 'simkl']);
+const artSignatures = new WeakMap<object, string>();
+const artScopes = new LRUCache<string, string>({ max: envInt('JELLYFIN_IMAGE_CACHE_MAX', 20000, 1) });
+
+function artSignature(config: any): string {
+  const held = artSignatures.get(config);
+  if (held) return held;
+  const view: Record<string, any> = {};
+  for (const [field, value] of Object.entries(config)) {
+    if (ART_SCOPE_SKIPPED.has(field) || field.startsWith('_') || field.endsWith('WatchTracking')) continue;
+    view[field] = field === 'apiKeys' && value && typeof value === 'object'
+      ? Object.fromEntries(Object.entries(value).filter(([name]) => !ART_SCOPE_SKIPPED_KEYS.has(name)))
+      : value;
+  }
+  const signature = `art-${createHash('sha256').update(JSON.stringify(view)).digest('hex').slice(0, 32)}`;
+  artSignatures.set(config, signature);
+  return signature;
+}
+
+export function noteArtScope(serverId: string, config: any): void {
+  if (serverId && config && typeof config === 'object') artScopes.set(serverId, artSignature(config));
+}
+
+const artScope = (serverId: string): string => artScopes.get(serverId) ?? serverId;
+const imageHash = (scope: string): string => `jf:img:${artScope(scope)}`;
+const artHash = (tag: string): string => `jf:img:tag:all:${tag.slice(0, 2)}`;
 
 const artByTag = new LRUCache<string, string>({
   max: envInt('JELLYFIN_IMAGE_CACHE_MAX', 20000, 1) * 2,
@@ -57,6 +99,7 @@ function imageTtl(): number {
 // as one command per scope rather than five per item.
 const pendingImages = new Map<string, Map<string, string>>();
 let imageFlushTimer: NodeJS.Timeout | null = null;
+const IMAGE_FIELDS_PER_COMMAND = 500;
 
 function scheduleImageFlush(): void {
   if (imageFlushTimer) return;
@@ -78,24 +121,23 @@ export async function flushRememberedImages(): Promise<void> {
   pendingImages.clear();
 
   const ttl = imageTtl();
-  await Promise.all(
-    batches.map(async ([hash, fields]) => {
-      const flat: string[] = [];
-      for (const [field, value] of fields) flat.push(field, value);
-      try {
-        // One hash per scope rather than a key per item: a key each grew to six
-        // figures on a busy instance and slowed every scan of the keyspace.
-        await redis
-          .multi()
-          .hsetex(hash, 'EX', ttl, 'FIELDS', fields.size, ...flat)
-          .expire(hash, ttl, 'NX')
-          .expire(hash, ttl, 'GT')
-          .exec();
-      } catch {
-        // Art is a cache; a lost write is read from the meta again.
+  // One hash per scope rather than a key per item: a key each grew to six
+  // figures on a busy instance and slowed every scan of the keyspace.
+  try {
+    const tx = redis.multi();
+    for (const [hash, fields] of batches) {
+      // Spread arguments are bounded by the stack, so a burst of art goes in slices.
+      const entries = [...fields];
+      for (let at = 0; at < entries.length; at += IMAGE_FIELDS_PER_COMMAND) {
+        const slice = entries.slice(at, at + IMAGE_FIELDS_PER_COMMAND);
+        tx.hsetex(hash, 'EX', ttl, 'FIELDS', slice.length, ...slice.flat());
       }
-    })
-  );
+      tx.expire(hash, ttl, 'NX').expire(hash, ttl, 'GT');
+    }
+    await tx.exec();
+  } catch {
+    // Art is a cache; a lost write is read from the meta again.
+  }
 }
 
 function queueImageWrite(hash: string, field: string, value: string): void {
@@ -108,40 +150,39 @@ function queueImageWrite(hash: string, field: string, value: string): void {
   scheduleImageFlush();
 }
 
-export function rememberArt(scope: string, url: string | undefined): void {
+export function rememberArt(url: string | undefined): void {
   if (!url) return;
   const tag = imageTag(url);
-  const key = `${scope}|${tag}`;
-  if (artByTag.get(key) === url) return;
-  artByTag.set(key, url);
-  if (redis) queueImageWrite(artHash(scope), tag, url);
+  if (artByTag.get(tag) === url) return;
+  artByTag.set(tag, url);
+  if (redis) queueImageWrite(artHash(tag), tag, url);
 }
 
 export function rememberImages(scope: string, itemId: string, images: ItemImages): void {
   if (!images.primary && !images.backdrop && !images.logo && !images.thumb) return;
 
-  rememberArt(scope, images.primary);
-  rememberArt(scope, images.backdrop);
-  rememberArt(scope, images.logo);
-  rememberArt(scope, images.thumb);
-
   const key = imageKey(scope, itemId);
   const held = imageCache.get(key);
   if (held && held.primary === images.primary && held.backdrop === images.backdrop && held.logo === images.logo && held.thumb === images.thumb) return;
+
+  rememberArt(images.primary);
+  rememberArt(images.backdrop);
+  rememberArt(images.logo);
+  rememberArt(images.thumb);
+
   imageCache.set(key, images);
 
   if (redis) queueImageWrite(imageHash(scope), imageField(itemId), JSON.stringify(images));
 }
 
-export async function recallArt(scope: string, tag: string): Promise<string | undefined> {
-  const key = `${scope}|${tag}`;
-  const local = artByTag.get(key);
+export async function recallArt(tag: string): Promise<string | undefined> {
+  const local = artByTag.get(tag);
   if (local) return local;
   if (!redis) return undefined;
   try {
-    const stored = await redis.hget(artHash(scope), tag);
+    const stored = await redis.hget(artHash(tag), tag);
     if (!stored) return undefined;
-    artByTag.set(key, stored);
+    artByTag.set(tag, stored);
     return stored;
   } catch {
     return undefined;
@@ -221,6 +262,7 @@ export async function fetchCatalogPage(
     if (typeof body?.rawLength === 'number') rawLengths.set(metas, body.rawLength);
     if (typeof body?.pageSize === 'number' && body.pageSize > 0) pageSizes.set(metas, body.pageSize);
     if (body?.served === true) servedPages.add(metas);
+    if (body?.randomize === true) randomizedPages.add(metas);
     return metas;
   } catch (error: any) {
     failedPages.set(memo, true);
@@ -232,6 +274,7 @@ export async function fetchCatalogPage(
 const rawLengths = new WeakMap<any[], number>();
 const pageSizes = new WeakMap<any[], number>();
 const servedPages = new WeakSet<any[]>();
+const randomizedPages = new WeakSet<any[]>();
 const servedCatalogs = new LRUCache<string, true>({
   max: envInt('JELLYFIN_PAGE_LENGTH_CACHE_MAX', 2000, 1),
   ttl: envInt('JELLYFIN_CATALOG_LENGTH_TTL', 3600, 60) * 1000,
@@ -251,6 +294,11 @@ export interface Window {
   items: any[];
   hasMore: boolean;
   failed?: boolean;
+  randomize?: boolean;
+}
+
+export function servedOrder(items: any[], window: Partial<Window>): any[] {
+  return window.randomize ? shuffleMetas(items) : items;
 }
 
 /**
@@ -276,14 +324,35 @@ const catalogLengths = new LRUCache<string, number>({
   ttl: envInt('JELLYFIN_CATALOG_LENGTH_TTL', 3600, 60) * 1000,
 });
 
+// A rebuilt recommendation row can change length and order, so its lengths and
+// walk positions are keyed by the rebuild it was served from. Read before the
+// keys are built, so every process moves to a rebuild on its next request.
+const rowGenerations = new LRUCache<string, string>({ max: envInt('JELLYFIN_PAGE_LENGTH_CACHE_MAX', 2000, 1) });
+const isRecommendationRow = (catalog: CatalogRef): boolean => catalog.id.startsWith('recommendations.');
+const rowViewer = (userUUID: string): string => (viewerProfile() ? `${userUUID}#${viewerProfile()}` : userUUID);
+
+async function readRowGeneration(userUUID: string, catalogs: CatalogRef[]): Promise<void> {
+  if (!catalogs.some(isRecommendationRow)) return;
+  const viewer = rowViewer(userUUID);
+  const stamp = await require('../../utils/recommendations/refresh').rowStamp(viewer).catch(() => '');
+  rowGenerations.set(viewer, stamp);
+}
+
 function lengthKeyFor(userUUID: string, catalog: CatalogRef, extras: Record<string, string>, tags: string[], keepKey = ''): string {
   const owner = viewerAccountOwner();
-  const viewer = catalog.id.startsWith(SERVER_WATCHLIST_PREFIX) ? viewerProfile() : '';
-  return `${userUUID}|${catalog.type}|${catalog.id}|${extras.genre ?? ''}|${extras.search ?? ''}|${tags.join(',')}|${keepKey}${owner ? `|@${owner}` : ''}${viewer ? `|#${viewer}` : ''}`;
+  const row = isRecommendationRow(catalog);
+  const viewer = catalog.id.startsWith(SERVER_WATCHLIST_PREFIX) || row ? viewerProfile() : '';
+  const generation = row ? rowGenerations.get(rowViewer(userUUID)) : '';
+  return `${userUUID}|${catalog.type}|${catalog.id}|${extras.genre ?? ''}|${extras.search ?? ''}|${tags.join(',')}|${keepKey}${owner ? `|@${owner}` : ''}${viewer ? `|#${viewer}` : ''}${generation ? `|g${generation}` : ''}`;
 }
 
 export function knownCatalogLength(userUUID: string, catalog: CatalogRef, extras: Record<string, string> = {}, tags: string[] = [], keepKey = ''): number | undefined {
   return catalogLengths.get(lengthKeyFor(userUUID, catalog, extras, tags, keepKey));
+}
+
+/** How many titles one page of the catalog holds, once a window has read one. */
+export function knownPageLength(userUUID: string, catalog: CatalogRef, extras: Record<string, string> = {}, tags: string[] = []): number | undefined {
+  return pageLengths.get(lengthKeyFor(userUUID, catalog, extras, tags));
 }
 
 const walkConcurrency = (): number => envInt('JELLYFIN_CATALOG_WALK_CONCURRENCY', 4, 1);
@@ -300,6 +369,7 @@ function rememberLength(kind: 'catalog' | 'page', key: string, value: number): v
 
 export async function warmCatalogLengths(userUUID: string, catalogs: CatalogRef[], extras: Record<string, string> = {}, tags: string[] = [], keepKey = ''): Promise<void> {
   if (!redis || catalogs.length === 0) return;
+  await readRowGeneration(userUUID, catalogs);
   const wanted: Array<{ kind: 'catalog' | 'page'; key: string; at: string }> = [];
   for (const catalog of catalogs) {
     const lengthKey = lengthKeyFor(userUUID, catalog, extras, tags, keepKey);
@@ -357,6 +427,7 @@ export async function fetchWindow(
   pick?: (metas: any[]) => Promise<any[]>
 ): Promise<Window> {
   const filtering = !!keep || !!pick;
+  await readRowGeneration(userUUID, [catalog]);
   const lengthKey = lengthKeyFor(userUUID, catalog, extras, tags, keepKey);
   const pageKey = lengthKeyFor(userUUID, catalog, extras, tags);
   let pageLength = pageLengths.get(pageKey);
@@ -385,6 +456,7 @@ export async function fetchWindow(
   let pages = 0;
   let exhausted = false;
   let failed = false;
+  let randomize = false;
   let budget = maxPages((offset + limit) * (filtering ? 2 : 1), pageLength || 0);
 
   // A length counts what a client was shown, which runs behind the catalog's own
@@ -421,6 +493,7 @@ export async function fetchWindow(
         stop = true;
         break;
       }
+      if (randomizedPages.has(page)) randomize = true;
       if (servedPages.has(page) && !sequential) {
         sequential = true;
         servedCatalogs.set(pageKey, true);
@@ -496,10 +569,11 @@ export async function fetchWindow(
     // A walk cut short by its page budget has more behind it, even if the window is short.
     hasMore: collected.length > offset + limit || (!exhausted && !failed),
     ...(failed ? { failed: true } : {}),
+    ...(randomize ? { randomize: true } : {}),
   };
 }
 
-function parseRuntimeTicks(runtime: any): number | null {
+export function parseRuntimeTicks(runtime: any): number | null {
   if (typeof runtime !== 'string') return null;
   const hours = /(\d+)\s*h/.exec(runtime);
   const minutes = /(\d+)\s*min/.exec(runtime);
@@ -642,6 +716,13 @@ function itemTypeOf(meta: any, mediaType: string): 'Movie' | 'Series' | 'BoxSet'
   return isBoxSetMeta(meta) ? 'BoxSet' : jellyfinTypeFor(meta?.type || mediaType);
 }
 
+function ratingFields(meta: any): { OfficialRating: string | null; CustomRating?: string | null } {
+  const extras = meta?.app_extras;
+  const rating = extras?.certification || null;
+  const local = extras?.certifications ? extras.certificationLocal || rating : rating;
+  return local === rating ? { OfficialRating: rating } : { OfficialRating: local, CustomRating: rating };
+}
+
 export function metaToBaseItem(
   meta: any,
   mediaType: string,
@@ -667,6 +748,7 @@ export function metaToBaseItem(
   if (images.thumb) imageTags.Thumb = imageTag(images.thumb);
   if (wide) imageTags.Primary = wideTag(imageTags.Thumb);
   const ids = providerIds(meta);
+  if (itemType === 'Series') rememberSeriesRatingIds(id, meta);
 
   return {
     Name: meta.name,
@@ -688,11 +770,11 @@ export function metaToBaseItem(
       Id: encodeJellyfinId({ k: 'genre', t: mediaType, c: 'all', g }),
     })),
     CommunityRating: parseRating(meta.imdbRating),
-    OfficialRating: meta.app_extras?.certification || null,
+    ...ratingFields(meta),
     RunTimeTicks: itemType === 'BoxSet' ? null : parseRuntimeTicks(meta.runtime),
     ProviderIds: ids,
     ExternalUrls: externalUrls(ids, itemType === 'Series'),
-    People: peopleFrom(meta, serverId),
+    People: viewerWantsPeople() ? peopleFrom(meta, serverId) : [],
     Studios: studiosOf(meta),
     Tags: Array.isArray(meta.keywords) ? meta.keywords : [],
     Taglines: typeof meta.tagline === 'string' && meta.tagline ? [meta.tagline] : [],
@@ -731,19 +813,8 @@ function airScheduleOf(meta: any): any {
   return { AirDays: meta.airDays, ...(typeof meta.airTime === 'string' && meta.airTime ? { AirTime: meta.airTime } : {}) };
 }
 
-function catalogSettingsFor(config: any, catalog: { id: string; type: string }): any {
-  const catalogs: any[] = Array.isArray(config?.catalogs) ? config.catalogs : [];
-  const exact = catalogs.find((c) => c.id === catalog.id && (c.type === catalog.type || c.displayType === catalog.type));
-  if (exact) return exact;
-  const suffix = catalog.id.match(/_(movie|series|anime|all)$/);
-  if (!suffix) return undefined;
-  const stripped = catalog.id.slice(0, -suffix[0].length);
-  return catalogs.find((c) => c.id === stripped && c.type === suffix[1])
-    ?? catalogs.find((c) => c.id === stripped && (c.type === catalog.type || c.displayType === catalog.type));
-}
-
 export function isLandscapeCatalog(config: any, catalog: { id: string; type: string }): boolean {
-  return isLandscapeCatalogConfig(config, catalogSettingsFor(config, catalog));
+  return isLandscapeCatalogConfig(config, configCatalogFor(config, catalog));
 }
 
 export function showLandscape(items: any[]): void {
@@ -796,17 +867,128 @@ export async function pageChildren(
   return { page, total: kept.length };
 }
 
+/** A Jellyfin list parameter, sent separated or repeated. */
+function listParam(value: unknown, separator: RegExp): string[] {
+  return (Array.isArray(value) ? value : [value])
+    .filter((entry) => entry !== undefined && entry !== null)
+    .flatMap((entry) => String(entry).split(separator))
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+const timeOf = (value: unknown): number | null => {
+  const at = Date.parse(String(value ?? ''));
+  return Number.isFinite(at) ? at : null;
+};
+
+const SORT_VALUES: Record<string, (item: any) => number | string | null> = {
+  communityrating: (item) => (typeof item?.CommunityRating === 'number' ? item.CommunityRating : null),
+  premieredate: (item) => timeOf(item?.PremiereDate),
+  productionyear: (item) => (typeof item?.ProductionYear === 'number' ? item.ProductionYear : null),
+  datecreated: (item) => timeOf(item?.DateCreated),
+  sortname: (item) => item?.SortName ?? item?.Name ?? null,
+};
+
+// A missing value sorts lowest, so it comes last when descending.
+function compareSortValues(a: number | string | null, b: number | string | null): number {
+  if (a === null || b === null) return a === b ? 0 : a === null ? -1 : 1;
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+}
+
+/** Orders a list by SortBy and SortOrder; a key without its own order takes the first, and unknown keys change nothing. */
+export function sortItems(items: any[], sortBy: unknown, sortOrder: unknown): any[] {
+  const orders = listParam(sortOrder, /,/).map((order) => (order.toLowerCase() === 'descending' ? -1 : 1));
+  const plan: { value: (item: any) => number | string | null; sign: number }[] = [];
+  for (const [index, key] of listParam(sortBy, /,/).entries()) {
+    const sign = orders[index] ?? orders[0] ?? 1;
+    if (key.toLowerCase() === 'random') {
+      const draw = new Map(items.map((item) => [item, Math.random()]));
+      plan.push({ value: (item) => draw.get(item) ?? null, sign });
+      continue;
+    }
+    const value = SORT_VALUES[key.toLowerCase()];
+    if (value) plan.push({ value, sign });
+  }
+  if (!plan.length) return items;
+  return [...items].sort((a, b) => {
+    for (const { value, sign } of plan) {
+      const order = compareSortValues(value(a), value(b));
+      if (order) return order * sign;
+    }
+    return 0;
+  });
+}
+
+/** The tags a request filters on, lowercased; null when it names none. */
+export function wantedTags(value: unknown): Set<string> | null {
+  const tags = listParam(value, /[|,]/).map((tag) => tag.toLowerCase());
+  return tags.length ? new Set(tags) : null;
+}
+
+export const ANIME_TAG = 'anime';
+
+/** Whether an item carries one of the tags; anime is also known from where a title is listed. */
+export function hasWantedTag(item: any, tags: Set<string>, anime: boolean): boolean {
+  if (anime && tags.has(ANIME_TAG)) return true;
+  return (Array.isArray(item?.Tags) ? item.Tags : []).some((tag: unknown) => tags.has(String(tag).toLowerCase()));
+}
+
+export function isAnimeCatalogType(type: unknown): boolean {
+  return type === 'anime' || String(type ?? '').startsWith('anime.');
+}
+
 /** The same decision filterByIncludeTypes makes, taken on a meta. */
+/** The item types a request filters to, when it names any of the kinds a catalog holds. */
+function wantedTypes(includeItemTypes: string | undefined): Set<string> | null {
+  if (!includeItemTypes) return null;
+  const wanted = new Set(includeItemTypes.split(',').map((t) => t.trim()).filter(Boolean));
+  return wanted.has('Movie') || wanted.has('Series') || wanted.has('BoxSet') ? wanted : null;
+}
+
+/** The ratings a request keeps, from Jellyfin's pipe-separated OfficialRatings; null keeps every title. */
+function wantedRatings(officialRatings: unknown): Set<string> | null {
+  const list = String(officialRatings ?? '').split(/[|,]/).map((rating) => rating.trim().toUpperCase()).filter(Boolean);
+  return list.length ? new Set(list) : null;
+}
+
+/** The rating a title is shown with, as its OfficialRating. */
+export function officialRatingOf(meta: any): string | null {
+  return ratingFields(meta).OfficialRating;
+}
+
+/** Keeps the titles of the asked types and, when asked, ratings; a title with no rating matches no rating. */
 export function includeTypesFilter(
   mediaType: string,
-  includeItemTypes: string | undefined
+  includeItemTypes: string | undefined,
+  officialRatings?: unknown
 ): ((meta: any) => boolean) | undefined {
-  if (!includeItemTypes) return undefined;
+  const wanted = wantedTypes(includeItemTypes);
+  const ratings = wantedRatings(officialRatings);
+  if (!wanted && !ratings) return undefined;
 
-  const wanted = new Set(includeItemTypes.split(',').map((t) => t.trim()).filter(Boolean));
-  if (!wanted.size || (!wanted.has('Movie') && !wanted.has('Series') && !wanted.has('BoxSet'))) return undefined;
+  return (meta: any) =>
+    (!wanted || wanted.has(itemTypeOf(meta, mediaType)))
+    && (!ratings || ratings.has(String(officialRatingOf(meta) ?? '').toUpperCase()));
+}
 
-  return (meta: any) => wanted.has(itemTypeOf(meta, mediaType));
+/** What a filtered list's lengths and cursors are held under: its types, and its ratings when it names any. */
+export function listFilterKey(includeItemTypes: unknown, officialRatings?: unknown): string {
+  const ratings = wantedRatings(officialRatings);
+  return `${includeItemTypes ? String(includeItemTypes) : ''}${ratings ? `|ratings:${[...ratings].sort().join('|')}` : ''}`;
+}
+
+// A catalog built here holds only its declared type: films and TVDB collections in a movie one, shows in a
+// series one. An external addon's catalog is not held to its type, so it is filtered item by item.
+const CATALOG_SERVES: Record<string, string[]> = { movie: ['Movie', 'BoxSet'], series: ['Series'] };
+const EXTERNAL_CATALOG = /^(custom|stremthru)\./;
+
+/** Whether a catalog can hold none of the asked types, so a filtered read passes it by unread. */
+export function catalogCannotServe(catalog: { id: string; type: string }, includeItemTypes: string | undefined): boolean {
+  const serves = CATALOG_SERVES[catalog.type];
+  const wanted = wantedTypes(includeItemTypes);
+  if (!serves || !wanted || EXTERNAL_CATALOG.test(catalog.id)) return false;
+  return !serves.some((type) => wanted.has(type));
 }
 
 export function filterByIncludeTypes(items: any[], includeItemTypes: string | undefined): any[] {
@@ -823,6 +1005,7 @@ const metaMemo = new LRUCache<string, any>({
   ttl: envInt('JELLYFIN_META_MEMO_TTL', 60, 1) * 1000,
 });
 const metaInFlight = new Map<string, Promise<any | null>>();
+const NO_META = Symbol('no meta');
 
 function episodeKindExtension(video: any): any {
   const filler = (video.isFiller ?? video.filler) === true;
@@ -850,6 +1033,7 @@ async function readMeta(
 ): Promise<any | null> {
   const key = `${userUUID}|${stremioType}|${id}${beforeArt ? '|raw' : ''}`;
   const held = metaMemo.get(key);
+  if (held === NO_META) return null;
   if (held) return held;
   const running = metaInFlight.get(key);
   if (running) return running;
@@ -858,7 +1042,7 @@ async function readMeta(
   const work = (async () => {
     try {
       const { invokeRoute } = require('../inProcessRoutes');
-      const reply = await invokeRoute('meta', url, { userUUID, type: stremioType, id, ...(beforeArt ? { beforeArt: '1' } : {}) }, routeTimeout());
+      const reply = await invokeRoute('meta', url, { userUUID, type: stremioType, id, forJellyfin: '1', ...(beforeArt ? { beforeArt: '1' } : {}) }, routeTimeout());
       if (reply.status < 200 || reply.status >= 300) {
         logger.debug(`Meta ${stremioType}/${id} returned ${reply.status}`);
         return null;
@@ -868,6 +1052,8 @@ async function readMeta(
       if (meta) {
         metaMemo.set(key, meta);
         if (stremioType === 'series' && !beforeArt) require('./episodeIndex').rememberSeriesIndex(userUUID, id, meta);
+      } else {
+        metaMemo.set(key, NO_META);
       }
       return meta;
     } catch (error: any) {
@@ -1062,6 +1248,7 @@ export function buildEpisode(
   parentImages?: Record<string, any>
 ): any {
   const art = parentImages ?? parentArt(meta, seriesId, serverId);
+  rememberSeriesRatingIds(seriesId, meta);
   {
     const hasSeason = Number.isInteger(video.season);
 
@@ -1104,7 +1291,7 @@ export function buildEpisode(
       SeriesId: seriesId,
       SeriesName: meta.name,
       OriginalLanguage: originalLanguage(meta),
-      OfficialRating: meta.app_extras?.certification || null,
+      ...ratingFields(meta),
       ParentIndexNumber: hasSeason ? video.season : null,
       IndexNumber: Number(video.episode),
       Overview: video.overview || null,

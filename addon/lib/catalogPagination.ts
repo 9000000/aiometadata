@@ -11,6 +11,22 @@ export interface CatalogCursor {
   pageOffset: number;
 }
 
+const END_OF_LIST = Symbol('endOfList');
+
+export function endOfList(): any[] {
+  const metas: any = [];
+  metas[END_OF_LIST] = true;
+  return metas;
+}
+
+export function isEndOfList(metas: unknown): boolean {
+  return Array.isArray(metas) && metas.length === 0 && (metas as any)[END_OF_LIST] === true;
+}
+
+export function endPageTtlSeconds(): number {
+  return envInt('CATALOG_END_PAGE_TTL', 24 * 60 * 60, 60);
+}
+
 export function fillMaxPages(): number {
   return envInt('CATALOG_FILTER_FILL_MAX_PAGES', 5, 1);
 }
@@ -28,15 +44,15 @@ const memoryCursors = new LRUCache<string, Map<number, CatalogCursor>>({
   ttl: cursorTtlSeconds() * 1000,
 });
 
-/** `owner` is the Jellyfin user whose own account serves the catalog; '' for the installation. */
+/** `filteredFor` is the user, cap and tags the pages are filtered for; '' for the installation as it is. */
 export function cursorKey(
   userUUID: string,
   cleanId: string,
   type: string,
   genre: string | undefined | null,
-  owner: string = ''
+  filteredFor: string = ''
 ): string {
-  const scope = owner ? `${userUUID}@${owner}` : userUUID;
+  const scope = filteredFor ? `${userUUID}@${filteredFor}` : userUUID;
   return `catalog-cursor:v3:${scope}:${cleanId}:${type}:${genre || 'all'}`;
 }
 

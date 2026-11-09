@@ -10,9 +10,10 @@ import catalogsTranslationsJson from "../static/translations.json";
 import catalogTypesJson from "../static/catalog-types.json";
 import { PLAYBACK_MANIFEST_EVENTS, WATCH_STATE_PUSH_EVENTS, WATCH_STATE_VERSION } from "./playbackHandler";
 import { watchStatePullTtl } from "./watchState";
-import { collectionCatalogs, collectionsServed, COLLECTION_META_PREFIX } from "./collectionBuilder/aiostreamsCollections";
+import { collectionCatalogs, collectionsServed, COLLECTION_CATALOG_PREFIX, COLLECTION_META_PREFIX } from "./collectionBuilder/aiostreamsCollections";
+import { configCatalogFor, placeCollections } from "./collectionBuilder/homeOrder";
 import { similarCatalogs } from "./similarCatalog";
-import { holderCards, servesCatalog, withAccountOwner } from "./accounts";
+import { holderCards, rowOwner, servesCatalog, withAccountOwner } from "./accounts";
 import { hasNamedViewers } from "./jellyfin/profiles";
 const jikan: any = require('./mal');
 const DEFAULT_LANGUAGE = "en-US";
@@ -945,7 +946,8 @@ async function lumiereGenreOptions(): Promise<Record<'movie' | 'series', string[
   }
 }
 
-async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise<any> {
+/** `viewer`, a named user's scoped config, decides which account rows are listed. */
+async function getManifest(config: any, opts: { tags?: string[]; userUUID?: string; viewer?: any } = {}): Promise<any> {
   const startTime = Date.now();
   logger.start('Starting manifest generation...');
 
@@ -961,7 +963,7 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
   const tagSet = new Set(tags.map((t: string) => t.toLowerCase()));
   const jikanEnabled = jikan.isJikanEnabled();
   const enabledCatalogs = userCatalogs.filter((c: any) =>
-    c.enabled && servesCatalog(config, c) && (jikanEnabled || !jikan.isJikanCatalogId(c.id)) && (tagSet.size === 0 || (Array.isArray(c.tags) && c.tags.some((t: any) => tagSet.has(String(t).toLowerCase()))))
+    c.enabled && servesCatalog(opts.viewer ?? config, c) && (jikanEnabled || !jikan.isJikanCatalogId(c.id)) && (tagSet.size === 0 || rowOwner(c) || (Array.isArray(c.tags) && c.tags.some((t: any) => tagSet.has(String(t).toLowerCase()))))
   );
 
   // Absorbed merge sources must be built (even if disabled) so their genres feed the parent.
@@ -1147,6 +1149,9 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
     }
   }
 
+  const readsHistory = userCatalogs.some((c: any) => c.id?.startsWith('recommendations.'))
+    && await require('../utils/recommendations/history').canReadHistory(config, opts.userUUID ?? config.userUUID ?? '');
+
   const pass1UserCatalogs = [...enabledCatalogs, ...absorbedSourceCatalogs].filter((userCatalog: any) => {
       if (userCatalog.id.startsWith('merged.')) {
         return false; // handled in pass 2 (needs source manifest entries to be built first)
@@ -1163,7 +1168,7 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
       }
       if (userCatalog.id.startsWith('recommendations.')) {
         // Needs a history to read and a model to read it with.
-        const hasHistory = !!(config.apiKeys?.simklTokenId || config.apiKeys?.mdblist);
+        const hasHistory = readsHistory;
         const hasModel = !!(config.apiKeys?.gemini || config.apiKeys?.openrouter
           || process.env.GEMINI_API_KEY || process.env.BUILT_IN_GEMINI_API_KEY || process.env.OPENROUTER_API_KEY);
         return hasHistory && hasModel;
@@ -1763,8 +1768,13 @@ async function getManifest(config: any, opts: { tags?: string[] } = {}): Promise
     });
   }
 
-  // Listed first, as on the Jellyfin server.
-  catalogs.unshift(...collectionCatalogs(config, tags));
+  catalogs = placeCollections(
+    config,
+    catalogs,
+    (catalog: any) => configCatalogFor(config, catalog),
+    collectionCatalogs(config, tags),
+    (catalog: any) => catalog.id.slice(COLLECTION_CATALOG_PREFIX.length)
+  );
   catalogs.push(...similarCatalogs(config));
 
   const nameSuffix = process.env.ADDON_NAME_SUFFIX || "";

@@ -119,17 +119,42 @@ async function fromMdblist(rows: WatchedRow[], config: any): Promise<FactMap> {
   return facts;
 }
 
-/** Audience size and score. The instance already holds IMDb's ratings file; one
- *  MDBList batch per type supplies the imdb ids to look them up by. */
-export async function attachRatings(items: any[], config: any): Promise<void> {
-  const withIds = items.filter(item => item?.tmdbId);
-  if (!withIds.length) return;
+/** From the mappings this instance already holds, the mapping file and then the id resolver's cache. Never asks upstream. */
+async function knownImdbId(item: any): Promise<string | undefined> {
+  const type = item.kind === 'movie' ? 'movie' : 'series';
+  const tmdbId = String(item.tmdbId);
+  try {
+    const mapped = require('../../lib/id-mappings').getByTmdbId(tmdbId, type)?.imdbId;
+    if (mapped) return mapped;
+  } catch { /* the mapping file is not loaded yet */ }
+  const cached = await require('../../lib/redis-id-cache').getCachedIdMapping(type, tmdbId).catch(() => null);
+  return cached?.imdb_id || undefined;
+}
 
+/** Audience size and score. The instance already holds IMDb's ratings file; the
+ *  local id mappings, then one MDBList batch per type, supply the imdb ids to look them up by. */
+export async function attachRatings(items: any[], config: any): Promise<void> {
+  const { getImdbRating }: any = require('../../lib/imdbRatings');
+  const rate = async (item: any) => {
+    const rating = await getImdbRating(item.imdbId).catch(() => null);
+    if (!rating) return;
+    item.votes = rating.votes;
+    item.score = rating.rating;
+    item.votesFrom = 'imdb';
+  };
+  await Promise.all(items.filter(item => item?.imdbId || item?.tmdbId).map(async (item) => {
+    if (!item.imdbId) item.imdbId = await knownImdbId(item);
+    if (item.imdbId) await rate(item);
+  }));
+
+  const withIds = items.filter(item => item?.tmdbId && !item.imdbId);
   const apiKey = config?.apiKeys?.mdblist;
-  if (!apiKey) return;
+  if (!withIds.length || !apiKey) {
+    logger.debug(`Ratings: ${items.filter(item => item.votesFrom === 'imdb').length} of ${items.length} from IMDb, the rest from TMDB`);
+    return;
+  }
 
   const { fetchMDBListBatchMediaInfo }: any = require('../mdbList');
-  const { getImdbRating }: any = require('../../lib/imdbRatings');
 
   for (const mediaType of ['movie', 'show'] as const) {
     const group = withIds.filter(item => (mediaType === 'movie' ? item.kind === 'movie' : item.kind !== 'movie'));
@@ -150,11 +175,7 @@ export async function attachRatings(items: any[], config: any): Promise<void> {
         const imdbId = imdbByTmdb.get(Number(item.tmdbId));
         if (!imdbId) return;
         item.imdbId = imdbId;
-        const rating = await getImdbRating(imdbId).catch(() => null);
-        if (!rating) return;
-        item.votes = rating.votes;
-        item.score = rating.rating;
-        item.votesFrom = 'imdb';
+        await rate(item);
       }));
     } catch (error: any) {
       logger.debug(`Could not read ratings for ${mediaType}s, keeping TMDB counts: ${error.message}`);

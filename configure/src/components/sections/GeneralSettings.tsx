@@ -114,7 +114,7 @@ export function GeneralSettings() {
   };
 
   const handleOverviewLanguageChange = (value: string) => {
-    setConfig(prevConfig => ({ ...prevConfig, overviewLanguage: value }));
+    setConfig(prevConfig => ({ ...prevConfig, overviewLanguage: value === 'auto' ? undefined : value }));
   };
 
   const handleIncludeAdultChange = (checked: boolean) => {
@@ -262,11 +262,12 @@ export function GeneralSettings() {
                 <Label htmlFor="overview-language" className="font-medium">Description Language</Label>
                 <p className="text-sm text-muted-foreground">Language for meta descriptions (defaults to Display Language).</p>
               </div>
-              <Select value={config.overviewLanguage || config.language || 'en-US'} onValueChange={handleOverviewLanguageChange}>
+              <Select value={config.overviewLanguage || 'auto'} onValueChange={handleOverviewLanguageChange}>
                 <SelectTrigger id="overview-language" className="w-full sm:w-[200px] shrink-0">
-                  <SelectValue placeholder="Select description language" />
+                  <SelectValue placeholder="Same as display language" />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="auto">Same as display language</SelectItem>
                   {languageOptions.map(opt => (
                     <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
                   ))}

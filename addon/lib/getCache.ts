@@ -1012,7 +1012,7 @@ function getMetaSmartLockContextHash(config: any, metaId: string, type: string |
   const seasonNumbering = seasonNumberingProfile(config);
   return hashConfig({
     cacheContext: getMetaCacheContext(config, metaId, type, useShowPoster),
-    overviewLanguage: config.overviewLanguage || config.language || 'en-US',
+    overviewLanguage: (config.overviewLanguage && config.overviewLanguage !== 'auto') || config.language || 'en-US',
     projection: {
       blurThumbs: config.blurThumbs || false,
       displayAgeRating: config.displayAgeRating || false,
@@ -1027,7 +1027,7 @@ function getMetaSmartLockContextHash(config: any, metaId: string, type: string |
 function metaIdentityProfile(ctx: any, config: any): any {
   return {
     ...ctx.base,
-    overviewLanguage: config.overviewLanguage || config.language || 'en-US',
+    overviewLanguage: (config.overviewLanguage && config.overviewLanguage !== 'auto') || config.language || 'en-US',
     metaProvider: ctx.metaProvider,
     animeIdProvider: ctx.animeIdProvider,
     providerOptions: ctx.providerOptions,

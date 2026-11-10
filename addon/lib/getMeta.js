@@ -363,6 +363,11 @@ function tmdbLocalizedText(data, kind, language) {
   };
 }
 
+function getEffectiveOverviewLanguage(config) {
+  const custom = config?.overviewLanguage;
+  return (custom && custom !== 'auto') ? custom : null;
+}
+
 // The art a builder would have chosen for this configuration. Mirrors the builders' dispatch.
 async function resolveArtworkForProfile({ type, ids, metaProvider, providerArt, wanted = ALL_ART }, config) {
   const mediaType = type === 'movie' ? 'movie' : 'series';
@@ -561,7 +566,8 @@ async function handleTvdbCollection(collectionId, language, config, userUUID) {
       if (!details || !Array.isArray(details.entities)) return { meta: null };
 
       const langCode3 = await to3LetterCode(language, config);
-      const overviewLangCode3 = config.overviewLanguage ? (await to3LetterCodeResolved(config.overviewLanguage, config)).code3 : langCode3;
+      const customOverviewLang = getEffectiveOverviewLanguage(config);
+      const overviewLangCode3 = customOverviewLang ? (await to3LetterCodeResolved(customOverviewLang, config)).code3 : langCode3;
 
       // Walk the language chain rather than dropping straight to English
       let translation = null;
@@ -571,7 +577,7 @@ async function handleTvdbCollection(collectionId, language, config, userUUID) {
       }
 
       let overviewTranslation = translation;
-      if (config.overviewLanguage && overviewLangCode3 !== langCode3) {
+      if (customOverviewLang && overviewLangCode3 !== langCode3) {
         for (const code of tvdbLanguageChain(overviewLangCode3)) {
           overviewTranslation = await tvdb.getCollectionTranslations(collectionId, code, config);
           if (overviewTranslation?.overview) break;
@@ -1540,7 +1546,7 @@ async function buildTmdbMovieResponse(stremioId, movieData, language, config, us
   })).filter(w => w.name);
 
   let overview = movieData.overview;
-  const overviewLanguage = config.overviewLanguage || language || 'en-US';
+  const overviewLanguage = getEffectiveOverviewLanguage(config) || language || 'en-US';
   overview = Utils.processOverviewTranslations(movieData.translations, overviewLanguage, overview);
   const finalTitle = Utils.processTitleTranslations(
     movieData.translations,
@@ -1966,7 +1972,7 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
   }
   const runtime = seriesData.episode_run_time?.[0] ?? seriesData.last_episode_to_air?.runtime ?? seriesData.next_episode_to_air?.runtime ?? null;
   let overview = seriesData.overview;
-  const overviewLanguage = config.overviewLanguage || language || 'en-US';
+  const overviewLanguage = getEffectiveOverviewLanguage(config) || language || 'en-US';
   overview = Utils.processOverviewTranslations(seriesData.translations, overviewLanguage, overview);
   let finalName = seriesData.name;
   finalName = Utils.processTitleTranslations(
@@ -2047,9 +2053,10 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
 
   const { year, image: tvdbPosterPath, remoteIds, characters } = movieData;
   const { code3: langCode3, resolved: langResolved } = await to3LetterCodeResolved(language, config);
-  const overviewLangCode3 = config.overviewLanguage ? (await to3LetterCodeResolved(config.overviewLanguage, config)).code3 : langCode3;
+  const customOverviewLang = getEffectiveOverviewLanguage(config);
+  const overviewLangCode3 = customOverviewLang ? (await to3LetterCodeResolved(customOverviewLang, config)).code3 : langCode3;
   const langChain = tvdbLanguageChain(langCode3);
-  const overviewLangChain = config.overviewLanguage ? tvdbLanguageChain(overviewLangCode3) : langChain;
+  const overviewLangChain = customOverviewLang ? tvdbLanguageChain(overviewLangCode3) : langChain;
   const nameTranslations = movieData.translations?.nameTranslations || [];
   const overviewTranslations = movieData.translations?.overviewTranslations || [];
   const translatedName = pickTranslation(nameTranslations, langChain, 'name')
@@ -2299,11 +2306,12 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
   }
   
   const { code3: langCode3, resolved: langResolved } = await to3LetterCodeResolved(language, config);
-  const overviewLangCode3 = config.overviewLanguage ? (await to3LetterCodeResolved(config.overviewLanguage, config)).code3 : langCode3;
+  const customOverviewLang = getEffectiveOverviewLanguage(config);
+  const overviewLangCode3 = customOverviewLang ? (await to3LetterCodeResolved(customOverviewLang, config)).code3 : langCode3;
   const nameTranslations = tvdbShow.translations?.nameTranslations || [];
   const overviewTranslations = tvdbShow.translations?.overviewTranslations || [];
   const langChain = tvdbLanguageChain(langCode3);
-  const overviewLangChain = tvdbLanguageChain(overviewLangCode3);
+  const overviewLangChain = customOverviewLang ? tvdbLanguageChain(overviewLangCode3) : langChain;
   const translatedName = pickTranslation(nameTranslations, langChain, 'name') || tvdbShow.name;
   const overview = pickTranslation(overviewTranslations, overviewLangChain, 'overview') || tvdbShow.overview;
   let imdbId = allIds?.imdbId;

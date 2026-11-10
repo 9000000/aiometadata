@@ -123,7 +123,6 @@ function initializeConfigFromSources(): AppConfig | null {
 // --- Define the initial, default state for a new user ---
 const initialConfig: AppConfig = {
   language: "en-US",
-  overviewLanguage: "en-US",
   addonName: "",
   includeAdult: false,
   blurThumbs: false,

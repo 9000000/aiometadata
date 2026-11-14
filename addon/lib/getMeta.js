@@ -1493,17 +1493,18 @@ async function buildTmdbMovieResponse(stremioId, movieData, language, config, us
   if (!credits) {
     credits = { cast: [], crew: [] };
   }
+  const originCountries = Utils.tmdbOriginCountries(movieData);
   const images = await Utils.mergeTmdbOriginalLanguageImages('movie', tmdbId, rawImages, originalLanguage, langCode, config);
-  const selectedPoster = Utils.selectTmdbImageByLang(images?.posters, config, 'iso_639_1', originalLanguage);
+  const selectedPoster = Utils.selectTmdbImageByLang(images?.posters, config, 'iso_639_1', originalLanguage, originCountries);
   const tmdbPosterUrl = selectedPoster?.file_path ? tmdbImageUrl(tmdbPosterSize(), selectedPoster?.file_path) : poster_path ? tmdbImageUrl(tmdbPosterSize(), poster_path) : `${host}/missing_poster.png`;
   const selectedBg = images?.backdrops?.find(b => b.iso_639_1 === 'xx')
     || images?.backdrops?.find(b => b.iso_639_1 === null)
     || images?.backdrops?.find(b => b.iso_639_1 === langCode)
     || images?.backdrops?.[0];
-  const selectedLandscapePoster = Utils.selectTmdbImageByLang(images?.backdrops, config, 'iso_639_1', originalLanguage);
+  const selectedLandscapePoster = Utils.selectTmdbImageByLang(images?.backdrops, config, 'iso_639_1', originalLanguage, originCountries);
   const tmdbLandscapePosterUrl = selectedLandscapePoster?.file_path ? tmdbImageUrl(tmdbLandscapeSize(selectedLandscapePoster?.width), selectedLandscapePoster?.file_path) : null;
   const tmdbBackgroundUrl = selectedBg?.file_path ? tmdbImageUrl(tmdbBackdropSize(selectedBg?.width), selectedBg?.file_path) : backdrop_path ? tmdbImageUrl(tmdbBackdropSize(), backdrop_path) : null;
-  const selectedLogo = Utils.selectTmdbImageByLang(images?.logos, config, 'iso_639_1', originalLanguage);
+  const selectedLogo = Utils.selectTmdbImageByLang(images?.logos, config, 'iso_639_1', originalLanguage, originCountries);
   let tmdbLogoUrl = selectedLogo?.file_path ? tmdbImageUrl(tmdbLogoSize(selectedLogo?.width), selectedLogo?.file_path) : null;
 
   let poster, background, logoUrl, imdbRatingValue, landscapePosterUrl;
@@ -1625,17 +1626,18 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
   }
   const langCode = language.split('-')[0];
 
+  const originCountries = Utils.tmdbOriginCountries(seriesData);
   const images = await Utils.mergeTmdbOriginalLanguageImages('tv', tmdbId, rawImages, originalLanguage, langCode, config);
-  const selectedPoster = Utils.selectTmdbImageByLang(images?.posters, config, 'iso_639_1', originalLanguage);
+  const selectedPoster = Utils.selectTmdbImageByLang(images?.posters, config, 'iso_639_1', originalLanguage, originCountries);
   const tmdbPosterUrl = selectedPoster?.file_path ? tmdbImageUrl(tmdbPosterSize(), selectedPoster?.file_path) : poster_path ? tmdbImageUrl(tmdbPosterSize(), poster_path) : `${host}/missing_poster.png`;
   const selectedBg = images?.backdrops?.find(b => b.iso_639_1 === 'xx')
     || images?.backdrops?.find(b => b.iso_639_1 === null)
     || images?.backdrops?.find(b => b.iso_639_1 === langCode)
     || images?.backdrops?.[0];
-  const selectedLandscapePoster = Utils.selectTmdbImageByLang(images?.backdrops, config, 'iso_639_1', originalLanguage);
+  const selectedLandscapePoster = Utils.selectTmdbImageByLang(images?.backdrops, config, 'iso_639_1', originalLanguage, originCountries);
   const tmdbLandscapePosterUrl = selectedLandscapePoster?.file_path ? tmdbImageUrl(tmdbLandscapeSize(selectedLandscapePoster?.width), selectedLandscapePoster?.file_path) : null;
   const tmdbBackgroundUrl = selectedBg?.file_path ? tmdbImageUrl(tmdbBackdropSize(selectedBg?.width), selectedBg?.file_path) : backdrop_path ? tmdbImageUrl(tmdbBackdropSize(), backdrop_path) : null;
-  const selectedLogo = Utils.selectTmdbImageByLang(images?.logos, config, 'iso_639_1', originalLanguage);
+  const selectedLogo = Utils.selectTmdbImageByLang(images?.logos, config, 'iso_639_1', originalLanguage, originCountries);
   let tmdbLogoUrl = selectedLogo?.file_path ? tmdbImageUrl(tmdbLogoSize(selectedLogo?.width), selectedLogo?.file_path) : null;
   let poster, background, logoUrl, imdbRatingValue, landscapePosterUrl;
 
@@ -2049,6 +2051,7 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
   let kitsuId = allIds?.kitsuId;
   let imdbId = allIds?.imdbId;
   let tmdbId = allIds?.tmdbId;
+  const prefersImdb = isAnime && !!config.mal?.useImdbIdForCatalogAndSearch;
   kitsuId = kitsuId || idMapper.getMappingByTmdbId(tmdbId, 'movie')?.kitsu_id;
 
   const { year, image: tvdbPosterPath, remoteIds, characters } = movieData;
@@ -2173,7 +2176,8 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
  
   //console.log(tvdbShow.artworks?.find(a => a.type === 2)?.image);
   return {
-    id: isAnime ? config.mal?.useImdbIdForCatalogAndSearch ? imdbId : stremioId : imdbId || stremioId,
+    id: isAnime && !(prefersImdb && imdbId) ? stremioId : imdbId || stremioId,
+    ...(prefersImdb && !imdbId ? { _awaitingImdb: true } : {}),
     type: 'movie',
     _metaProvider: 'tvdb',
     keywords: tmdbKeywords,
@@ -2320,6 +2324,7 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
   const malId = allIds?.malId;
   const castCount = config.castCount;
   imdbId = imdbId || tvdbShow.remoteIds?.find(id => id.sourceName === 'IMDB')?.id
+  const prefersImdb = isAnime && !!config.mal?.useImdbIdForCatalogAndSearch;
 
   // Get artwork based on art provider preference
   const tvdbPosterUrl = findArtwork(tvdbShow.artworks, 2, langCode3, config) || `${host}/missing_poster.png`;
@@ -2474,6 +2479,10 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
     }
     
     
+    // Without an IMDb id, an anime under the IMDb provider numbers its episodes by the id it was asked by, as its meta id does.
+    const askedEpisodeIds = isAnime && !imdbId && idProvider !== 'kitsu' && idProvider !== 'mal'
+      ? (stremioId.startsWith('mal:') ? 'mal' : stremioId.startsWith('kitsu:') ? 'kitsu' : null)
+      : null;
     const nowMs = Date.now();
     videos = await Promise.all(
       episodeList.map(async (episode) => {
@@ -2507,7 +2516,7 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
           if (episode.seasonNumber === 0) {
             episodeId = `${imdbId || `tvdb:${tvdbId}`}:0:${episode.number}`;
           } 
-          else if (idProvider === 'kitsu' && isAnime) {
+          else if ((idProvider === 'kitsu' && isAnime) || askedEpisodeIds === 'kitsu') {
             if ((config.tvdbSeasonType === 'default' || config.tvdbSeasonType === 'official')){
               const anidbEpisodeInfo = await resolveAnidbEpisodeFromTvdbEpisode(tvdbId, episode.seasonNumber, episode.number);
               if (anidbEpisodeInfo) {
@@ -2532,7 +2541,7 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
               }
             }
           }
-          else if(idProvider === 'mal' && !config.mal?.useImdbIdForCatalogAndSearch) {
+          else if((idProvider === 'mal' && (!config.mal?.useImdbIdForCatalogAndSearch || (prefersImdb && !imdbId))) || askedEpisodeIds === 'mal') {
             if ((config.tvdbSeasonType === 'default' || config.tvdbSeasonType === 'official')){
               const anidbEpisodeInfo = await resolveAnidbEpisodeFromTvdbEpisode(tvdbId, episode.seasonNumber, episode.number);
               if (anidbEpisodeInfo) {
@@ -2626,7 +2635,8 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
   //console.log(tvdbShow.artworks?.find(a => a.type === 2)?.image);
   logger.debug(`[TvdbSeriesMeta] imdbId: ${imdbId}, stremioId: ${stremioId}`);
   const meta = {
-    id: isAnime ? config.mal?.useImdbIdForCatalogAndSearch ? imdbId : stremioId : imdbId || stremioId,
+    id: isAnime && !(prefersImdb && imdbId) ? stremioId : imdbId || stremioId,
+    ...(prefersImdb && !imdbId ? { _awaitingImdb: true } : {}),
     type: 'series',
     _metaProvider: 'tvdb',
     keywords: tmdbKeywords,

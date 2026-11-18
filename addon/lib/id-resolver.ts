@@ -49,15 +49,34 @@ let performanceStats: PerformanceStats = {
   animeResolutions: 0
 };
 
+const NUMERIC_PREFIXES = new Set(['tmdb', 'tvdb', 'tvmaze', 'mal', 'kitsu', 'anidb', 'anilist']);
+const NUMERIC_ID_REGEX = /^\d+$/;
+const IMDB_ID_REGEX = /^tt\d+$/;
+
 function _parseStremioId(stremioId: string): AllIds {
   const ids: AllIds = { tmdbId: null, tvdbId: null, imdbId: null, tvmazeId: null, malId: null, kitsuId: null, anidbId: null, anilistId: null };
+  if (!stremioId || typeof stremioId !== 'string') {
+    return ids;
+  }
   if (stremioId.startsWith('tt')) {
-    ids.imdbId = stremioId;
+    const imdbPart = stremioId.split(':')[0];
+    if (IMDB_ID_REGEX.test(imdbPart)) {
+      ids.imdbId = imdbPart;
+    }
     return ids;
   }
   const [prefix, sourceId] = stremioId.split(':');
+  if (!sourceId) {
+    return ids;
+  }
+  if (prefix === 'imdb') {
+    if (IMDB_ID_REGEX.test(sourceId)) {
+      ids.imdbId = sourceId;
+    }
+    return ids;
+  }
   const key = `${prefix}Id`;
-  if (key in ids) {
+  if (key in ids && (!NUMERIC_PREFIXES.has(prefix) || NUMERIC_ID_REGEX.test(sourceId))) {
     ids[key] = sourceId;
   }
   return ids;

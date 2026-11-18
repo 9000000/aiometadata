@@ -31,7 +31,7 @@ const proxyUrl = getProxyUrl();
 export const directDispatcher = new Agent({ allowH2: false, ...KEEP_ALIVE });
 
 if (proxyUrl) {
-  setGlobalDispatcher(new ProxyAgent({ uri: proxyUrl, allowH2: false }));
+  setGlobalDispatcher(new ProxyAgent({ uri: proxyUrl, allowH2: false, connections: 32, ...KEEP_ALIVE }));
 } else {
   setGlobalDispatcher(directDispatcher);
 }
@@ -40,8 +40,8 @@ const DEFAULT_RETRY_ATTEMPTS = 1;
 const BOOTSTRAP_CONNECT_TIMEOUT_MS = 3_000;
 
 const bootstrapDispatcher = proxyUrl
-  ? new ProxyAgent({ uri: proxyUrl, allowH2: false, connect: { timeout: BOOTSTRAP_CONNECT_TIMEOUT_MS } })
-  : new Agent({ allowH2: false, connect: { timeout: BOOTSTRAP_CONNECT_TIMEOUT_MS } });
+  ? new ProxyAgent({ uri: proxyUrl, allowH2: false, connections: 32, connect: { timeout: BOOTSTRAP_CONNECT_TIMEOUT_MS }, ...KEEP_ALIVE })
+  : new Agent({ allowH2: false, connect: { timeout: BOOTSTRAP_CONNECT_TIMEOUT_MS }, ...KEEP_ALIVE });
 
 /** Spread into startup downloads that must survive a transient network blip. */
 export const BOOTSTRAP_HTTP_OPTIONS = { retryAttempts: 3, dispatcher: bootstrapDispatcher };

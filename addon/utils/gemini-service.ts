@@ -100,9 +100,12 @@ async function performGeminiSearch(apiKey: string, query: string, type: string, 
   }
 }
 
+const GROUNDING_TIMEOUT_MS = 20000;
+const STANDARD_TIMEOUT_MS = 12000;
+
 async function geminiSearch(apiKey: string, query: string, type: string, selectedModel: string, useGrounding: boolean): Promise<Suggestion[]> {
   const startTime = Date.now();
-  const timeout = useGrounding ? 45000 : 30000;
+  const timeout = useGrounding ? GROUNDING_TIMEOUT_MS : STANDARD_TIMEOUT_MS;
 
   logger.debug(`Using model: ${selectedModel}, grounding: ${useGrounding}, timeout: ${timeout}ms`);
 

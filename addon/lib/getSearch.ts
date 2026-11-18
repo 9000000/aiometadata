@@ -25,7 +25,7 @@ const { getSetting }: any = require('./settingsService');
 import { fetchImdbSuggestions, type ImdbSuggestion } from '../utils/imdbSuggestions.js';
 import { fetchLumiereSearch, fetchLumierePeopleSearch, type LumiereResult } from '../utils/lumiereSearch.js';
 import { lumiereApiBase } from '../utils/lumiereLists.js';
-import { mapWithLimit } from '../utils/concurrency.js';
+import { mapWithConcurrency } from '../utils/concurrency.js';
 const idMappings: any = require('./id-mappings');
 
 
@@ -33,6 +33,22 @@ const logger = consola.withTag('Search');
 const timingMetrics: any = require('./timing-metrics');
 const { parse }: any = require("path");
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w342';
+const SEARCH_HYDRATION_CONCURRENCY = 6;
+const CJK_HANGUL_RE = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/;
+
+function isShortKeywordQuery(trimmed: string): boolean {
+  if (!trimmed) return true;
+  const chars = Array.from(trimmed);
+  if (chars.length >= 2) return false;
+  return !CJK_HANGUL_RE.test(trimmed);
+}
+
+function isShortAiQuery(trimmed: string): boolean {
+  if (!trimmed) return true;
+  const chars = Array.from(trimmed);
+  if (CJK_HANGUL_RE.test(trimmed)) return chars.length < 2;
+  return chars.length < 3;
+}
 
 
 
@@ -271,8 +287,32 @@ async function performKitsuSearch(type: string, query: string, language: string,
 
     logger.debug(`Found ${searchResults.length} Kitsu results for query: "${query}" of type ${type}`);
 
-    const metas = await Promise.all(
-      searchResults.map(async (item: any) => {
+    const light = config._searchLight === true;
+    const allKitsuIds = searchResults.map((item: any) => String(item.id)).filter(Boolean);
+    const batchDetails = !light && allKitsuIds.length > 0
+      ? await kitsu.getMultipleAnimeDetails(allKitsuIds, 'categories').catch(() => null)
+      : null;
+    const genresByKitsuId = new Map<string, string[]>();
+    if (batchDetails?.data) {
+      const categoriesById = new Map<string, string>();
+      for (const inc of batchDetails.included || []) {
+        if (inc?.type === 'categories' && inc?.id && inc?.attributes?.title) {
+          categoriesById.set(String(inc.id), inc.attributes.title);
+        }
+      }
+      for (const anime of batchDetails.data) {
+        const catRefs = anime?.relationships?.categories?.data || [];
+        const genres = catRefs
+          .map((ref: any) => categoriesById.get(String(ref.id)))
+          .filter((g: any): g is string => Boolean(g));
+        genresByKitsuId.set(String(anime.id), genres);
+      }
+    }
+
+    const metas = await mapWithConcurrency(
+      searchResults,
+      SEARCH_HYDRATION_CONCURRENCY,
+      async (item: any) => {
         try {
           const kitsuId = item.id;
           const mapping = await idMapper.getMappingByKitsuId(kitsuId);
@@ -297,16 +337,30 @@ async function performKitsuSearch(type: string, query: string, language: string,
 
           let id = imdbId || `kitsu:${kitsuId}`;
           const preferredProvider = config.providers?.anime || 'mal';
-          if(preferredProvider === 'kitsu') {
-            id = `kitsu:${kitsuId}`;
-          } else if(preferredProvider === 'mal') {
-            id = `mal:${mapping?.mal_id}`;
+          const jikanEnabled = jikan.isJikanEnabled();
+          const usesKitsuAnimeBackend = preferredProvider === 'kitsu' || (preferredProvider === 'mal' && !jikanEnabled);
+          if (preferredProvider === 'kitsu') {
+            id = config.mal?.useImdbIdForCatalogAndSearch && imdbId && !config.providers?.forceAnimeForDetectedImdb
+              ? imdbId
+              : `kitsu:${kitsuId}`;
+          } else if (preferredProvider === 'mal') {
+            if (mapping?.mal_id && jikanEnabled) {
+              id = `mal:${mapping.mal_id}`;
+            } else if (!imdbId) {
+              id = `kitsu:${kitsuId}`;
+            }
           }
-          const light = config._searchLight === true;
-          if((config.mal?.useImdbIdForCatalogAndSearch && !isMovie) && !light){
+          const canDelegateToImdbMeta = Boolean(
+            config.mal?.useImdbIdForCatalogAndSearch
+            && imdbId
+            && !isMovie
+            && !light
+            && !(config.providers?.forceAnimeForDetectedImdb && usesKitsuAnimeBackend)
+          );
+          if (canDelegateToImdbMeta) {
             return (await cacheWrapMetaSmart(config.userUUID, id, async () => {
               const { getMeta } = await import("../lib/getMeta");
-              return await getMeta(itemType, language, `kitsu:${kitsuId}`, config, config.userUUID, false);
+              return await getMeta(itemType, language, id, config, config.userUUID, false);
             }, undefined, {enableErrorCaching: true, maxRetries: 2, config}, itemType, false))?.meta || null;
           }
 
@@ -339,14 +393,14 @@ async function performKitsuSearch(type: string, query: string, language: string,
           }
 
           return {
-            id: light && config.mal?.useImdbIdForCatalogAndSearch && !isMovie ? id : `kitsu:${kitsuId}`,
+            id: config.mal?.useImdbIdForCatalogAndSearch && imdbId && !isMovie ? id : `kitsu:${kitsuId}`,
             type: mediaType,
             name: Utils.getKitsuLocalizedTitle(item.titles, language) || item.canonicalTitle,
             poster: finalPoster,
             logo: logo || null,
             background: isMovie ? item.coverImage?.original : background || null,
             description: Utils.addMetaProviderAttribution(item.synopsis || item.description || '', 'Kitsu', config),
-            genres: [],
+            genres: genresByKitsuId.get(String(kitsuId)) || [],
             year: item.startDate ? item.startDate.substring(0, 4) : null,
             released: item.startDate ? new Date(item.startDate) : undefined,
             imdbRating: imdbRating,
@@ -360,7 +414,7 @@ async function performKitsuSearch(type: string, query: string, language: string,
           logger.error(`Error parsing Kitsu result for ${item.id}:`, error.message);
           return null;
         }
-      })
+      }
     );
 
     let finalMetas = metas.filter(Boolean);
@@ -578,7 +632,7 @@ async function performTmdbSearch(type: string, query: string, language: string, 
     && !(type === 'movie' && config.hideUnreleasedDigitalSearch);
   const lightGenres = light ? await getGenreList('tmdb', language, type === 'movie' ? 'movie' : 'series', config).catch(() => []) : [];
 
-  const hydrationPromises = sortedRawResults.map(async (media: any) => {
+  const hydratedItems = await mapWithConcurrency(sortedRawResults, SEARCH_HYDRATION_CONCURRENCY, async (media: any) => {
     try {
         const mediaType = media.media_type === 'movie' ? 'movie' : 'series';
         if(mediaType !== type) {
@@ -660,7 +714,7 @@ async function performTmdbSearch(type: string, query: string, language: string, 
     }
   });
 
-  const hydratedResults = (await Promise.all(hydrationPromises)).filter(Boolean);
+  const hydratedResults = hydratedItems.filter(Boolean);
   logger.info(`Hydration complete in ${Date.now() - startTime}ms. Found ${hydratedResults.length} valid items.`);
 
   let keywordFilteredResults;
@@ -747,7 +801,7 @@ function hydrateImdbId(type: string, imdbId: string, language: string, config: a
 
 // Results keep the provider's order, since its ranking is the reason to use it.
 async function hydrateImdbIds(type: string, results: Array<{ imdbId: string; title: string }>, language: string, config: any): Promise<any[]> {
-  const hydrated = await mapWithLimit(results, (result) =>
+  const hydrated = await mapWithConcurrency(results, SEARCH_HYDRATION_CONCURRENCY, (result) =>
     hydrateImdbId(type, result.imdbId, language, config)
       .catch((error: any) => {
         logger.debug(`Could not hydrate ${result.imdbId} (${result.title}): ${error.message}`);
@@ -998,7 +1052,7 @@ async function performSimklSearch(type: string, query: string, language: string,
 
   let detailLookups = 0;
 
-  const built = await mapWithLimit(results, async (item: any) => {
+  const built = await mapWithConcurrency(results, SEARCH_HYDRATION_CONCURRENCY, async (item: any) => {
     try {
       const simklId = item?.ids?.simkl_id || item?.ids?.simkl;
       const mapped = item?.ids?.tmdb ? null : simklIdsFromMapper(simklId);
@@ -1238,9 +1292,10 @@ async function performTmdbPeopleSearch(type: string, query: string, language: st
     }
 
     const fallbackImage = `${host}/missing_poster.png`;
-    const metas = (await Promise.all(
-      pageResults
-      .map(async (media: any) => {
+    const metas = (await mapWithConcurrency(
+      pageResults,
+      SEARCH_HYDRATION_CONCURRENCY,
+      async (media: any) => {
         const mediaType = media.media_type === 'movie' ? 'movie' : 'series';
         if (mediaType !== type) return null;
 
@@ -1283,7 +1338,7 @@ async function performTmdbPeopleSearch(type: string, query: string, language: st
           vote_average: media.vote_average || 0,
           vote_count: media.vote_count || 0,
         };
-      })
+      }
     )).filter(Boolean);
 
     logger.success(`[People Search] Completed in ${Date.now() - startTime}ms. Returning ${metas.length} ${type} results (${allCredits.length} total credits).`);
@@ -1445,6 +1500,12 @@ async function matchAndEnrichFromTMDB(suggestion: { title: string; year: string 
 
 
 async function performAiSearch(query: string, language: string, config: any): Promise<{ metas: any[]; error?: string }> {
+  const effectiveQuery = (query || '').trim();
+  if (isShortAiQuery(effectiveQuery)) {
+    logger.debug(`Skipping AI search for short query: "${effectiveQuery}"`);
+    return { metas: [] };
+  }
+
   const startTime = Date.now();
   const aiProvider = config.search?.ai_provider || 'gemini';
   const aiModel = aiProvider === 'openrouter'
@@ -1454,7 +1515,7 @@ async function performAiSearch(query: string, language: string, config: any): Pr
     ? config.search?.ai_openrouter_web_search !== false
     : config.search?.ai_web_search === true;
 
-  logger.info(`Starting AI search for query: "${query}" (provider: ${aiProvider}, model: ${aiModel}, webSearch: ${aiWebSearch})`);
+  logger.info(`Starting AI search for query: "${effectiveQuery}" (provider: ${aiProvider}, model: ${aiModel}, webSearch: ${aiWebSearch})`);
 
   try {
     let suggestions: any[];
@@ -1462,10 +1523,10 @@ async function performAiSearch(query: string, language: string, config: any): Pr
     if (aiProvider === 'openrouter') {
       const openrouterKey = config.apiKeys?.openrouter;
       const effectiveModel = withWebSearch(aiModel, aiWebSearch);
-      suggestions = await performOpenRouterSearch(openrouterKey, query, 'mixed', language, effectiveModel);
+      suggestions = await performOpenRouterSearch(openrouterKey, effectiveQuery, 'mixed', language, effectiveModel);
     } else {
       const geminiKey = config.apiKeys?.gemini || process.env.BUILT_IN_GEMINI_API_KEY;
-      suggestions = await performGeminiSearch(geminiKey, query, 'mixed', language, aiModel, aiWebSearch);
+      suggestions = await performGeminiSearch(geminiKey, effectiveQuery, 'mixed', language, aiModel, aiWebSearch);
     }
 
     if (!suggestions || suggestions.length === 0) {
@@ -1478,11 +1539,11 @@ async function performAiSearch(query: string, language: string, config: any): Pr
     logger.info(`Starting combined TMDB match+enrich for ${suggestions.length} suggestions`);
     const enrichStart = Date.now();
 
-    const enrichPromises = suggestions.map((suggestion: any) =>
-      matchAndEnrichFromTMDB(suggestion, language, config)
+    const enrichedResults = await mapWithConcurrency(
+      suggestions,
+      SEARCH_HYDRATION_CONCURRENCY,
+      (suggestion: any) => matchAndEnrichFromTMDB(suggestion, language, config)
     );
-
-    const enrichedResults = await Promise.all(enrichPromises);
     const enrichTime = Date.now() - enrichStart;
 
     const validResults = enrichedResults.filter(Boolean);
@@ -1533,8 +1594,10 @@ async function performTvdbCollectionsSearch(query: string, language: string, con
 
     logger.debug(`Found ${collectionsResults.length} collection results.`);
 
-    const metas = await Promise.all(
-      collectionsResults.map(async (collection: any) => {
+    const metas = await mapWithConcurrency(
+      collectionsResults,
+      SEARCH_HYDRATION_CONCURRENCY,
+      async (collection: any) => {
         try {
           const collectionId = collection.tvdb_id || collection.id;
           if (!collectionId) return null;
@@ -1566,7 +1629,7 @@ async function performTvdbCollectionsSearch(query: string, language: string, con
           logger.warn(`Error parsing collection ${collection.id}:`, error.message);
           return null;
         }
-      })
+      }
     );
 
     const finalMetas = metas.filter(Boolean);
@@ -1647,23 +1710,21 @@ async function performTvdbSearch(type: string, query: string, language: string, 
   }
   logger.debug(`Found ${uniqueIds.length} unique TVDB IDs to fetch details for.`);
 
-  const detailPromises = uniqueIds.map((id: string) => {
-    return type === 'movie'
+  const fetchedDetails = await mapWithConcurrency(uniqueIds, SEARCH_HYDRATION_CONCURRENCY, (id: string) =>
+    (type === 'movie'
       ? tvdb.getMovieExtended(id, config)
-      : tvdb.getSeriesExtended(id, config);
-  });
-
-  const detailedResults = (await Promise.allSettled(detailPromises))
-    .filter((res): res is PromiseFulfilledResult<any> => res.status === 'fulfilled' && res.value)
-    .map(res => res.value);
+      : tvdb.getSeriesExtended(id, config)
+    ).catch(() => null)
+  );
+  const detailedResults = fetchedDetails.filter(Boolean);
 
   logger.debug(`Successfully fetched extended details for ${detailedResults.length} items.`);
 
-  const parsePromises = detailedResults.map((record: any) =>
+  const parsedItems = await mapWithConcurrency(detailedResults, SEARCH_HYDRATION_CONCURRENCY, (record: any) =>
     parseTvdbSearchResult(type, record, language, config)
   );
 
-  const finalResults = (await Promise.all(parsePromises)).filter(Boolean);
+  const finalResults = parsedItems.filter(Boolean);
   for (const meta of finalResults) {
     if (youtubeIds.has(meta._tvdbId)) meta._isYouTube = true;
   }
@@ -1733,23 +1794,21 @@ async function performTvdbPeopleSearch(type: string, query: string, language: st
   }
   logger.debug(`Found ${uniqueIds.length} unique TVDB IDs to fetch details for.`);
 
-  const detailPromises = uniqueIds.map((id: string) => {
-    return type === 'movie'
+  const fetchedPeopleDetails = await mapWithConcurrency(uniqueIds, SEARCH_HYDRATION_CONCURRENCY, (id: string) =>
+    (type === 'movie'
       ? tvdb.getMovieExtended(id, config)
-      : tvdb.getSeriesExtended(id, config);
-  });
-
-  const detailedResults = (await Promise.allSettled(detailPromises))
-    .filter((res): res is PromiseFulfilledResult<any> => res.status === 'fulfilled' && res.value)
-    .map(res => res.value);
+      : tvdb.getSeriesExtended(id, config)
+    ).catch(() => null)
+  );
+  const detailedResults = fetchedPeopleDetails.filter(Boolean);
 
   logger.debug(`Successfully fetched extended details for ${detailedResults.length} items.`);
 
-  const parsePromises = detailedResults.map((record: any) =>
+  const parsedPeopleItems = await mapWithConcurrency(detailedResults, SEARCH_HYDRATION_CONCURRENCY, (record: any) =>
     parseTvdbSearchResult(type, record, language, config)
   );
 
-  const finalResults = (await Promise.all(parsePromises)).filter(Boolean);
+  const finalResults = parsedPeopleItems.filter(Boolean);
   logger.info(`Successfully parsed ${finalResults.length} items into Stremio metas.`);
 
 
@@ -1850,12 +1909,12 @@ async function performTvmazeSearch(query: string, language: string, config: any,
     }
   };
 
-  await Promise.all(titleResults.map((result: any) => addResult(result.show, result.score)));
+  await mapWithConcurrency(titleResults, SEARCH_HYDRATION_CONCURRENCY, (result: any) => addResult(result.show, result.score));
 
   if (peopleResults.length > 0) {
     const personId = peopleResults[0].person.id;
     const castCredits = await tvmaze.getPersonCastCredits(personId);
-    await Promise.all(castCredits.map((credit: any) => addResult(credit._embedded.show, 0)));
+    await mapWithConcurrency(castCredits, SEARCH_HYDRATION_CONCURRENCY, (credit: any) => addResult(credit._embedded.show, 0));
   }
 
   if (searchResults.size > 0) {
@@ -1972,8 +2031,10 @@ async function performTraktSearch(type: string, query: string, language: string,
 
     logger.debug(`Trakt limiting results to ${limitedResults.length}, sorted by votes`);
 
-    const metas = await Promise.all(
-      limitedResults.map(async (media: any) => {
+    const metas = await mapWithConcurrency(
+      limitedResults,
+      SEARCH_HYDRATION_CONCURRENCY,
+      async (media: any) => {
         try {
           const ids = media.ids || {};
           const imdbId = ids.imdb;
@@ -2081,7 +2142,7 @@ async function performTraktSearch(type: string, query: string, language: string,
           logger.error(`Error parsing Trakt result:`, error.message);
           return null;
         }
-      })
+      }
     );
 
     const validMetas = metas.filter(Boolean);
@@ -2166,7 +2227,7 @@ async function performMdbListSearch(type: string, query: string, language: strin
       if (!rankedMediaInfo.includes(media)) rankedMediaInfo.push(media);
     }
 
-    const metas = await Promise.all(rankedMediaInfo.map(async (media: any) => {
+    const metas = await mapWithConcurrency(rankedMediaInfo, SEARCH_HYDRATION_CONCURRENCY, async (media: any) => {
 
       let releaseDates: any = null;
       if (type === 'movie' && media.ids?.tmdb && config.hideUnreleasedDigitalSearch) {
@@ -2216,7 +2277,7 @@ async function performMdbListSearch(type: string, query: string, language: strin
         meta.app_extras = { releaseDates: releaseDates };
       }
       return meta;
-    }));
+    });
     const validMetas = metas.filter(Boolean);
 
     let finalMetas = validMetas;
@@ -2319,8 +2380,10 @@ async function performTraktPeopleSearch(type: string, query: string, language: s
     const personCount = limitedResults.filter((r: any) => r.matchType === 'person').length;
     logger.debug(`Trakt limiting results to ${limitedResults.length} (${titleCount} title, ${personCount} person), sorted by votes`);
 
-    const metas = await Promise.all(
-      limitedResults.map(async (media: any) => {
+    const metas = await mapWithConcurrency(
+      limitedResults,
+      SEARCH_HYDRATION_CONCURRENCY,
+      async (media: any) => {
         try {
           const ids = media.ids || {};
           const imdbId = ids.imdb;
@@ -2433,7 +2496,7 @@ async function performTraktPeopleSearch(type: string, query: string, language: s
           logger.error(`Error parsing Trakt result:`, error.message);
           return null;
         }
-      })
+      }
     );
 
     const validMetas = metas.filter(Boolean);
@@ -2479,7 +2542,7 @@ function getProviderFromSearchId(searchId: string): string {
     return 'imdb';
   } else if (searchId.includes('lumiere.')) {
     return 'lumiere';
-  } else if (searchId.includes('gemini.')) {
+  } else if (searchId.includes('gemini.') || searchId.includes('openrouter.')) {
     return 'ai';
   } else if (searchId === 'people_search') {
     return 'people_search';
@@ -2493,12 +2556,26 @@ function getProviderFromSearchId(searchId: string): string {
 async function getSearch(id: string, type: string, language: string, extra: any, config: any): Promise<{ metas: any[]; error?: string }> {
   const searchStartTime = Date.now();
 
-  const queryText = extra?.search || extra?.genre_id || extra?.va_id || 'N/A';
+  const rawSearch = typeof extra?.search === 'string' ? extra.search : undefined;
+  const trimmedSearch = rawSearch !== undefined ? rawSearch.trim() : undefined;
+  const queryText = trimmedSearch || extra?.genre_id || extra?.va_id || 'N/A';
 
   try {
     if (!extra) {
       logger.warn(`Search request for id '${id}' received with no 'extra' argument.`);
       return { metas: [] };
+    }
+
+    if (id === 'gemini.search' || id === 'openrouter.search') {
+      if (!trimmedSearch || isShortAiQuery(trimmedSearch)) {
+        logger.debug(`Skipping AI search (${id}) for short query: "${trimmedSearch || ''}"`);
+        return { metas: [] };
+      }
+    } else if (id === 'search' || id === 'people_search' || id === 'tvdb_collections_search') {
+      if (!trimmedSearch || isShortKeywordQuery(trimmedSearch)) {
+        logger.debug(`Skipping search (${id}) for short query: "${trimmedSearch || ''}"`);
+        return { metas: [] };
+      }
     }
 
     let metas: any[] = [];
@@ -2527,23 +2604,23 @@ async function getSearch(id: string, type: string, language: string, extra: any,
         break;
 
       case 'tvdb_collections_search':
-        if (extra.search) {
-          metas = await performTvdbCollectionsSearch(extra.search, language, config);
+        if (trimmedSearch) {
+          metas = await performTvdbCollectionsSearch(trimmedSearch, language, config);
         }
         break;
 
       case 'gemini.search':
-        if (extra.search) {
-          const query = extra.search;
-          const aiResult = await performAiSearch(query, language, config);
+      case 'openrouter.search':
+        if (trimmedSearch) {
+          const aiResult = await performAiSearch(trimmedSearch, language, config);
           if (aiResult.error) return { metas: [], error: aiResult.error };
           metas = aiResult.metas;
         }
         break;
 
       case 'people_search':
-        if (extra.search) {
-          const query = extra.search;
+        if (trimmedSearch) {
+          const query = trimmedSearch;
           let providerId: string | undefined;
           logger.info(`Performing people search for type '${type}' with query '${query}'`);
           if (type === 'movie') {
@@ -2577,8 +2654,8 @@ async function getSearch(id: string, type: string, language: string, extra: any,
         break;
 
       case 'search':
-        if (extra.search) {
-          const query = extra.search;
+        if (trimmedSearch) {
+          const query = trimmedSearch;
           let providerId: string | undefined;
           logger.info(`Performing search for type '${type}' with query '${query}'`);
           if (type === 'movie') {

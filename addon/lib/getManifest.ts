@@ -910,8 +910,11 @@ function expandTagValue(value: string, known: Map<string, string>): string[] {
  * renamed tag would otherwise serve a near-empty manifest without saying why.
  */
 function resolveManifestTags(config: any, raw: unknown): { tags: string[]; unknown: string[] } {
+  if (raw === undefined || raw === null || raw === '' || (typeof raw === 'string' && raw.trim() === '') || (Array.isArray(raw) && raw.length === 0)) {
+    return { tags: [], unknown: [] };
+  }
   const known = knownTagNames(config);
-  const values = (raw === undefined || raw === null ? [] : Array.isArray(raw) ? raw : [raw])
+  const values = (Array.isArray(raw) ? raw : [raw])
     .filter((value: any) => typeof value === 'string')
     .flatMap((value: string) => expandTagValue(value.trim(), known));
 
@@ -1006,7 +1009,7 @@ async function getManifest(config: any, opts: { tags?: string[]; userUUID?: stri
   }
 
   fetchPromises.push(
-    cacheWrapGlobal('languages:v2', () => getLanguages(config), 60 * 60)
+    cacheWrapGlobal('languages:v2', () => getLanguages(config), 24 * 60 * 60)
   );
 
   const genreStart = Date.now();

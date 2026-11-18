@@ -2,6 +2,7 @@ const axios: any = require('axios');
 const cheerio: any = require('cheerio');
 const { httpGet, httpHead }: any = require('../utils/httpClient');
 const { cacheWrapGlobal }: any = require('./getCache');
+const { fetchImdbSuggestions }: any = require('../utils/imdbSuggestions');
 
 const imdbAxiosInstance = axios.create();
 
@@ -102,13 +103,12 @@ function getLogoFromImdb(imdbId: string): string | null {
 }
 
 async function metahubImageExists(imdbId: string, type: 'logo' | 'poster' | 'background' = 'logo'): Promise<boolean> {
-    let url: string | null = null;
-    if (type === 'logo') url = getLogoFromImdb(imdbId);
-    else if (type === 'poster') url = getPosterFromImdb(imdbId);
-    else if (type === 'background') url = getBackgroundFromImdb(imdbId);
-    if (!url) {
+    if (!imdbId || (type !== 'logo' && type !== 'poster' && type !== 'background')) {
         return false;
     }
+    // Probe live.metahub.space directly so missing images return 404 in one hop instead of 307-redirecting from images.metahub.space,
+    // while keeping images.metahub.space URLs in metadata for posterCache/imageProcessor domain matching.
+    const checkUrl = `https://live.metahub.space/${type}/medium/${imdbId}/img`;
     const ttl = parseInt(process.env.METAHUB_IMAGE_EXISTS_TTL_SECONDS || '86400', 10);
     const errorTtl = parseInt(process.env.METAHUB_IMAGE_ERROR_TTL_SECONDS || '300', 10);
     const timeout = parseInt(process.env.METAHUB_IMAGE_HEAD_TIMEOUT_MS || '4000', 10);
@@ -116,7 +116,7 @@ async function metahubImageExists(imdbId: string, type: 'logo' | 'poster' | 'bac
     const cached = await cacheWrapGlobal(`metahub-image-exists:${type}:${imdbId}`, async () => {
         try {
             // metahub's nginx sends no body on HEAD, so the connection is safe to reuse.
-            const res = await httpHead(url, { timeout, reset: false });
+            const res = await httpHead(checkUrl, { timeout, reset: false });
             return [res.status >= 200 && res.status < 300 ? 1 : 0];
         } catch (error: any) {
             const status = error?.response?.status;
@@ -161,9 +161,9 @@ async function fetchHtml(url: string, headers: Record<string, string> = {}): Pro
             timeout: 10000
         });
 
-        if (response.status >= 400) {
+        if (response.status !== 200) {
             throw new Error(
-                `HTTP Error: ${response.status} ${response.statusText} for URL: ${url}`
+                `HTTP Error: ${response.status} ${response.statusText || (response.status === 202 ? 'WAF Challenge' : '')} for URL: ${url}`
             );
         }
 
@@ -378,6 +378,36 @@ function processSearchResults($: any, searchResults: any, originalSearchTitle: s
     return bestFoundResult;
 }
 
+async function lookupImdbViaSuggestions(title: string, type: string): Promise<ImdbResult | null> {
+    try {
+        const suggestions = await fetchImdbSuggestions(type, title, 5000);
+        if (!Array.isArray(suggestions) || suggestions.length === 0) {
+            return null;
+        }
+        let best: ImdbResult | null = null;
+        let bestScore = 0;
+        let bestLen = Infinity;
+        for (const entry of suggestions) {
+            if (!entry?.imdbId || !entry?.title) continue;
+            const { score, nameLength } = getMatchScore(entry.title, entry.title, title);
+            if (score >= 800 && (score > bestScore || (score === bestScore && nameLength < bestLen))) {
+                bestScore = score;
+                bestLen = nameLength;
+                best = {
+                    imdbId: entry.imdbId,
+                    name: entry.title,
+                    href: `https://www.imdb.com/title/${entry.imdbId}/`
+                };
+                if (score === 1000) break;
+            }
+        }
+        return best;
+    } catch (err: any) {
+        console.warn(`[imdb-scraper] Suggestions JSON fallback failed for "${title}": ${err?.message || err}`);
+        return null;
+    }
+}
+
 async function scrapeSingleImdbResultByTitle(title: string, type: string): Promise<ImdbResult | null> {
     let title_type: string;
     if (type === 'movie') {
@@ -493,15 +523,16 @@ async function scrapeSingleImdbResultByTitle(title: string, type: string): Promi
 
         if (!foundResult) {
             console.log(
-                `[imdb-scraper] No relevant IMDb results found for "${title}" after all checks.`
+                `[imdb-scraper] No relevant IMDb results found in HTML for "${title}", trying suggestions API fallback.`
             );
+            foundResult = await lookupImdbViaSuggestions(title, type);
         }
         return foundResult;
     } catch (error: any) {
-        console.error(
-            `[imdb-scraper] Failed to get IMDb result for "${title}" due to: ${error.message}`
+        console.warn(
+            `[imdb-scraper] HTML search failed for "${title}" (${error.message}); falling back to IMDb suggestions API.`
         );
-        return null;
+        return lookupImdbViaSuggestions(title, type);
     }
 }
 

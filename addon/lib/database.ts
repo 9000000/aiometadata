@@ -1,5 +1,6 @@
 import { Pool } from 'pg';
 import BetterSqlite3 from 'better-sqlite3';
+import { LRUCache } from 'lru-cache';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -35,12 +36,73 @@ class Database {
   readDb: any;
   private connectedType: DbType | null;
   initialized: boolean;
+  private stmtCache: LRUCache<string, any>;
+  private maintenanceTimer: NodeJS.Timeout | null;
+  private lastRetentionSweepAt: number;
 
   constructor() {
     this.db = null;
     this.readDb = null;
     this.connectedType = null;
     this.initialized = false;
+    this.stmtCache = new LRUCache<string, any>({ max: 500 });
+    this.maintenanceTimer = null;
+    this.lastRetentionSweepAt = 0;
+  }
+
+  private prepareCached(query: string, targetDb: any = this.db): any {
+    if (targetDb !== this.db || !/^\s*(?:SELECT|INSERT|UPDATE|DELETE|WITH)\b/i.test(query)) {
+      return targetDb.prepare(query);
+    }
+    let stmt = this.stmtCache.get(query);
+    if (!stmt) {
+      stmt = this.db.prepare(query);
+      this.stmtCache.set(query, stmt);
+    }
+    return stmt;
+  }
+
+  private async withPostgresTransaction<T>(work: (client: any) => Promise<T>): Promise<T> {
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await work(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // Ignore rollback failure on broken connection
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private startMaintenanceLoop(): void {
+    if (this.maintenanceTimer) clearInterval(this.maintenanceTimer);
+    const INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+    const RETENTION_SWEEP_MS = 6 * 60 * 60 * 1000; // 6 hours
+    this.maintenanceTimer = setInterval(() => {
+      if (!this.initialized || !this.db) return;
+      if (this.type === 'sqlite') {
+        try {
+          this.db.pragma('wal_checkpoint(PASSIVE)');
+          this.db.pragma('optimize');
+        } catch (err: any) {
+          logger.debug(`[Database] SQLite periodic WAL maintenance skipped: ${err?.message || err}`);
+        }
+      }
+      if (Date.now() - this.lastRetentionSweepAt >= RETENTION_SWEEP_MS) {
+        this.lastRetentionSweepAt = Date.now();
+        this.pruneStaleJellyfinCaches(90).catch((err: any) => {
+          logger.debug(`[Database] Periodic Jellyfin cache retention sweep skipped: ${err?.message || err}`);
+        });
+      }
+    }, INTERVAL_MS);
+    this.maintenanceTimer.unref?.();
   }
 
   get type(): DbType | null {
@@ -114,6 +176,8 @@ class Database {
       logger.info('RUN_MIGRATIONS=false, skipping schema creation (expecting an already-migrated database)');
     }
 
+    this.startMaintenanceLoop();
+
     const usingReplica = this.readDb && this.readDb !== this.db;
     logger.info(`Initialized ${this.type} database${usingReplica ? ' with a separate read replica' : ''}`);
   }
@@ -134,6 +198,7 @@ class Database {
 
     this.db.pragma('foreign_keys = ON');
     this.db.pragma('journal_mode = WAL');
+    this.db.pragma('journal_size_limit = 67108864');
     this.db.pragma('busy_timeout = 5000');
     this.db.pragma('synchronous = NORMAL');
     this.db.pragma('cache_size = 10000');
@@ -144,7 +209,14 @@ class Database {
   }
 
   async initializePostgreSQL(uri: string): Promise<void> {
-    this.db = new Pool({ connectionString: uri });
+    this.db = new Pool({
+      connectionString: uri,
+      connectionTimeoutMillis: 10_000,
+      idleTimeoutMillis: 30_000,
+    });
+    this.db.on('error', (err: Error) => {
+      logger.error('[Database] PostgreSQL idle pool client error:', err?.message || err);
+    });
     this.type = 'postgres';
 
     await this.db.query('SELECT 1');
@@ -152,7 +224,15 @@ class Database {
     const readUri = process.env.DATABASE_READ_URI;
     if (readUri && readUri !== uri) {
       try {
-        this.readDb = new Pool({ connectionString: readUri });
+        const replicaPool = new Pool({
+          connectionString: readUri,
+          connectionTimeoutMillis: 10_000,
+          idleTimeoutMillis: 30_000,
+        });
+        replicaPool.on('error', (err: Error) => {
+          logger.error('[Database] PostgreSQL replica idle pool client error:', err?.message || err);
+        });
+        this.readDb = replicaPool;
         await this.readDb.query('SELECT 1');
         logger.info('Connected to read replica (DATABASE_READ_URI)');
       } catch (error: any) {
@@ -359,6 +439,7 @@ class Database {
         UNIQUE(content_type, tmdb_id, tvdb_id, imdb_id, tvmaze_id)
       )`,
       `CREATE INDEX IF NOT EXISTS idx_user_configs_created_at ON user_configs(created_at)`,
+      `CREATE INDEX IF NOT EXISTS idx_user_configs_updated_at ON user_configs(updated_at)`,
       `CREATE INDEX IF NOT EXISTS idx_id_mappings_tmdb ON id_mappings(tmdb_id)`,
       `CREATE INDEX IF NOT EXISTS idx_id_mappings_tvdb ON id_mappings(tvdb_id)`,
       `CREATE INDEX IF NOT EXISTS idx_id_mappings_imdb ON id_mappings(imdb_id)`,
@@ -370,6 +451,7 @@ class Database {
         codec_version INTEGER NOT NULL DEFAULT 1,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )`,
+      `CREATE INDEX IF NOT EXISTS idx_jellyfin_ids_created_at ON jellyfin_ids(created_at)`,
       `CREATE TABLE IF NOT EXISTS jellyfin_playstate (
         user_uuid TEXT NOT NULL,
         profile TEXT NOT NULL DEFAULT '',
@@ -405,6 +487,7 @@ class Database {
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (user_uuid, profile, meta_id)
       )`,
+      `CREATE INDEX IF NOT EXISTS idx_jellyfin_watchlist_listed ON jellyfin_watchlist(user_uuid, profile, listed, updated_at DESC)`,
       `CREATE TABLE IF NOT EXISTS jellyfin_tracker_mirror (
         source_key TEXT NOT NULL,
         item_key TEXT NOT NULL,
@@ -420,6 +503,7 @@ class Database {
         value TEXT NOT NULL,
         resolved_at INTEGER NOT NULL
       )`,
+      `CREATE INDEX IF NOT EXISTS idx_jellyfin_id_resolutions_at ON jellyfin_id_resolutions(resolved_at)`,
       `CREATE TABLE IF NOT EXISTS jellyfin_tracker_sync (
         source_key TEXT PRIMARY KEY,
         service TEXT NOT NULL,
@@ -448,6 +532,8 @@ class Database {
       )`,
       `CREATE INDEX IF NOT EXISTS idx_tracker_outbox_coalesce ON tracker_outbox(lane, coalesce_key)`,
       `CREATE INDEX IF NOT EXISTS idx_tracker_outbox_title ON tracker_outbox(lane, item_key, id)`,
+      `CREATE INDEX IF NOT EXISTS idx_tracker_outbox_ready ON tracker_outbox(next_at, claimed_until)`,
+      `CREATE INDEX IF NOT EXISTS idx_tracker_outbox_expires ON tracker_outbox(expires_at)`,
       `CREATE TABLE IF NOT EXISTS jellyfin_watch_index (
         source_key TEXT NOT NULL,
         video_id TEXT NOT NULL,
@@ -603,6 +689,7 @@ class Database {
         UNIQUE(content_type, tmdb_id, tvdb_id, imdb_id, tvmaze_id)
       )`,
       `CREATE INDEX IF NOT EXISTS idx_user_configs_created_at ON user_configs(created_at)`,
+      `CREATE INDEX IF NOT EXISTS idx_user_configs_updated_at ON user_configs(updated_at)`,
       `CREATE INDEX IF NOT EXISTS idx_id_mappings_tmdb ON id_mappings(tmdb_id)`,
       `CREATE INDEX IF NOT EXISTS idx_id_mappings_tvdb ON id_mappings(tvdb_id)`,
       `CREATE INDEX IF NOT EXISTS idx_id_mappings_imdb ON id_mappings(imdb_id)`,
@@ -614,6 +701,7 @@ class Database {
         codec_version INTEGER NOT NULL DEFAULT 1,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`,
+      `CREATE INDEX IF NOT EXISTS idx_jellyfin_ids_created_at ON jellyfin_ids(created_at)`,
       `CREATE TABLE IF NOT EXISTS jellyfin_playstate (
         user_uuid VARCHAR(64) NOT NULL,
         profile TEXT NOT NULL DEFAULT '',
@@ -649,6 +737,7 @@ class Database {
         updated_at BIGINT NOT NULL,
         PRIMARY KEY (user_uuid, profile, meta_id)
       )`,
+      `CREATE INDEX IF NOT EXISTS idx_jellyfin_watchlist_listed ON jellyfin_watchlist(user_uuid, profile, listed, updated_at DESC)`,
       `CREATE TABLE IF NOT EXISTS jellyfin_tracker_mirror (
         source_key VARCHAR(64) NOT NULL,
         item_key TEXT NOT NULL,
@@ -664,6 +753,7 @@ class Database {
         value TEXT NOT NULL,
         resolved_at BIGINT NOT NULL
       )`,
+      `CREATE INDEX IF NOT EXISTS idx_jellyfin_id_resolutions_at ON jellyfin_id_resolutions(resolved_at)`,
       `CREATE TABLE IF NOT EXISTS jellyfin_tracker_sync (
         source_key VARCHAR(64) PRIMARY KEY,
         service TEXT NOT NULL,
@@ -692,6 +782,8 @@ class Database {
       )`,
       `CREATE INDEX IF NOT EXISTS idx_tracker_outbox_coalesce ON tracker_outbox(lane, coalesce_key)`,
       `CREATE INDEX IF NOT EXISTS idx_tracker_outbox_title ON tracker_outbox(lane, item_key, id)`,
+      `CREATE INDEX IF NOT EXISTS idx_tracker_outbox_ready ON tracker_outbox(next_at, claimed_until)`,
+      `CREATE INDEX IF NOT EXISTS idx_tracker_outbox_expires ON tracker_outbox(expires_at)`,
       `CREATE TABLE IF NOT EXISTS jellyfin_watch_index (
         source_key VARCHAR(64) NOT NULL,
         video_id TEXT NOT NULL,
@@ -830,7 +922,7 @@ class Database {
     }
 
     if (this.type === 'sqlite') {
-      const statement = this.db.prepare(query);
+      const statement = this.prepareCached(query, this.db);
       const result = this.executeSQLiteStatement(statement, 'run', params);
       return {
         lastID: Number(result.lastInsertRowid),
@@ -848,7 +940,7 @@ class Database {
     }
 
     if (this.type === 'sqlite') {
-      const statement = this.readDb.prepare(query);
+      const statement = this.prepareCached(query, this.readDb);
       return this.executeSQLiteStatement(statement, 'get', params) || null;
     } else {
       const result = await this.readDb.query(query, params);
@@ -862,7 +954,7 @@ class Database {
     }
 
     if (this.type === 'sqlite') {
-      const statement = this.readDb.prepare(query);
+      const statement = this.prepareCached(query, this.readDb);
       return this.executeSQLiteStatement(statement, 'all', params);
     } else {
       const result = await this.readDb.query(query, params);
@@ -876,7 +968,7 @@ class Database {
     }
 
     if (this.type === 'sqlite') {
-      return this.executeSQLiteStatement(this.db.prepare(query), 'all', params);
+      return this.executeSQLiteStatement(this.prepareCached(query, this.db), 'all', params);
     }
     const result = await this.db.query(query, params);
     return result.rows;
@@ -1296,39 +1388,45 @@ class Database {
   }
 
   async setUserAlias(userUUID: string, alias: string, aliasLower: string): Promise<void> {
-    // Check the alias is free BEFORE touching this user's existing row. Without
-    // this, claiming a taken alias would delete the user's current alias and
-    // then fail on the insert, leaving them with no alias at all.
-    const ownerQuery = this.type === 'sqlite'
-      ? 'SELECT user_uuid FROM user_aliases WHERE alias_lower = ?'
-      : 'SELECT user_uuid FROM user_aliases WHERE alias_lower = $1';
-    const owner = await this.getQuery(ownerQuery, [aliasLower]);
-    if (owner && owner.user_uuid !== userUUID) {
-      const error: any = new Error(`UNIQUE constraint failed: alias "${alias}" is already taken`);
-      error.code = 'ALIAS_TAKEN';
-      throw error;
-    }
-
-    // One alias per user: drop any existing row for this user before claiming
-    // the new alias, so reassigning does not leave the old alias resolvable.
-    const deleteQuery = this.type === 'sqlite'
-      ? 'DELETE FROM user_aliases WHERE user_uuid = ?'
-      : 'DELETE FROM user_aliases WHERE user_uuid = $1';
-    await this.runQuery(deleteQuery, [userUUID]);
+    if (!this.initialized) await this.initialize();
 
     if (this.type === 'sqlite') {
-      await this.runQuery(
-        `INSERT INTO user_aliases (alias_lower, alias, user_uuid, created_at)
-         VALUES (?, ?, ?, CURRENT_TIMESTAMP)`,
-        [aliasLower, alias, userUUID]
+      const selectStmt = this.prepareCached('SELECT user_uuid FROM user_aliases WHERE alias_lower = ?');
+      const deleteStmt = this.prepareCached('DELETE FROM user_aliases WHERE user_uuid = ?');
+      const insertStmt = this.prepareCached(
+        'INSERT INTO user_aliases (alias_lower, alias, user_uuid, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)'
       );
-    } else {
-      await this.runQuery(
-        `INSERT INTO user_aliases (alias_lower, alias, user_uuid, created_at)
-         VALUES ($1, $2, $3, CURRENT_TIMESTAMP)`,
-        [aliasLower, alias, userUUID]
-      );
+      const tx = this.db.transaction(() => {
+        const owner = selectStmt.get(aliasLower);
+        if (owner && owner.user_uuid !== userUUID) {
+          const error: any = new Error(`UNIQUE constraint failed: alias "${alias}" is already taken`);
+          error.code = 'ALIAS_TAKEN';
+          throw error;
+        }
+        deleteStmt.run(userUUID);
+        insertStmt.run(aliasLower, alias, userUUID);
+      });
+      tx();
+      return;
     }
+
+    await this.withPostgresTransaction(async (client) => {
+      const ownerRes = await client.query(
+        'SELECT user_uuid FROM user_aliases WHERE alias_lower = $1 FOR UPDATE',
+        [aliasLower]
+      );
+      const owner = ownerRes.rows[0];
+      if (owner && owner.user_uuid !== userUUID) {
+        const error: any = new Error(`UNIQUE constraint failed: alias "${alias}" is already taken`);
+        error.code = 'ALIAS_TAKEN';
+        throw error;
+      }
+      await client.query('DELETE FROM user_aliases WHERE user_uuid = $1', [userUUID]);
+      await client.query(
+        'INSERT INTO user_aliases (alias_lower, alias, user_uuid, created_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP)',
+        [aliasLower, alias, userUUID]
+      );
+    });
   }
 
   async deleteUserAlias(userUUID: string): Promise<boolean> {
@@ -1367,10 +1465,41 @@ class Database {
         return this.type === 'sqlite' ? '(?, ?, ?)' : `($${at + 1}, $${at + 2}, $${at + 3})`;
       });
       const query = this.type === 'sqlite'
-        ? `INSERT OR IGNORE INTO jellyfin_ids (id, payload, codec_version) VALUES ${values.join(', ')}`
-        : `INSERT INTO jellyfin_ids (id, payload, codec_version) VALUES ${values.join(', ')} ON CONFLICT (id) DO NOTHING`;
+        ? `INSERT INTO jellyfin_ids (id, payload, codec_version) VALUES ${values.join(', ')} ON CONFLICT (id) DO UPDATE SET created_at = CURRENT_TIMESTAMP`
+        : `INSERT INTO jellyfin_ids (id, payload, codec_version) VALUES ${values.join(', ')} ON CONFLICT (id) DO UPDATE SET created_at = CURRENT_TIMESTAMP`;
       await this.runQuery(query, params);
     }
+  }
+
+  async pruneStaleJellyfinCaches(retentionDays: number = 90): Promise<{ resolutionsDeleted: number; idsDeleted: number }> {
+    if (!this.initialized) await this.initialize();
+    const safeDays = Math.max(1, Math.floor(retentionDays));
+    const cutoffMs = Date.now() - safeDays * 24 * 60 * 60 * 1000;
+    let resolutionsDeleted = 0;
+    let idsDeleted = 0;
+
+    try {
+      const resResult = await this.runQuery(
+        this.type === 'sqlite'
+          ? 'DELETE FROM jellyfin_id_resolutions WHERE resolved_at < ?'
+          : 'DELETE FROM jellyfin_id_resolutions WHERE resolved_at < $1',
+        [cutoffMs]
+      );
+      resolutionsDeleted = Number(this.type === 'sqlite' ? resResult?.changes : resResult?.rowCount) || 0;
+    } catch (error: any) {
+      logger.warn(`[Database] Failed pruning jellyfin_id_resolutions: ${error?.message || error}`);
+    }
+
+    try {
+      const idsResult = this.type === 'sqlite'
+        ? await this.runQuery(`DELETE FROM jellyfin_ids WHERE created_at < datetime('now', ?)`, [`-${safeDays} days`])
+        : await this.runQuery('DELETE FROM jellyfin_ids WHERE created_at < $1', [new Date(cutoffMs).toISOString()]);
+      idsDeleted = Number(this.type === 'sqlite' ? idsResult?.changes : idsResult?.rowCount) || 0;
+    } catch (error: any) {
+      logger.warn(`[Database] Failed pruning jellyfin_ids: ${error?.message || error}`);
+    }
+
+    return { resolutionsDeleted, idsDeleted };
   }
 
   // The authority for what a client sees; trackers are told afterwards.
@@ -1544,40 +1673,123 @@ class Database {
     profile = '',
     writtenAt?: number
   ): Promise<void> {
-    const existing = await this.getPlaystate(userUUID, videoId, profile);
+    if (!this.initialized) await this.initialize();
     const now = writtenAt ?? Date.now();
 
-    const positionMs = patch.positionMs ?? existing?.position_ms ?? 0;
-    const runtimeMs = patch.runtimeMs ?? existing?.runtime_ms ?? 0;
-    const played = patch.played ?? Boolean(existing?.played);
-    const becamePlayed = patch.played === true && !existing?.played;
-    const origin = patch.origin === undefined ? (existing?.origin ?? null) : patch.origin;
-
-    let logged = false;
-    if (patch.played === false) {
-      await this.deleteWatches(userUUID, profile, videoId);
-    } else if (patch.watch && Number.isFinite(patch.watch.at) && patch.watch.at > 0) {
-      logged = await this.logWatch(userUUID, profile, videoId, patch.watch, Boolean(existing?.played), origin);
-    }
-    // An unmark takes the plays back, keeping its count only to mark the title unwatched, so a watch after it is the first again.
-    const playCount = becamePlayed ? 1 : (existing?.play_count ?? 0) + (logged && patch.watch?.kind === 'finish' ? 1 : 0);
-    const lastPlayedAt = patch.lastPlayedAt === undefined ? (existing?.last_played_at ?? null) : patch.lastPlayedAt;
-
-    const query = this.type === 'sqlite'
-      ? `INSERT INTO jellyfin_playstate (user_uuid, profile, video_id, position_ms, runtime_ms, played, play_count, last_played_at, updated_at, origin)
+    if (this.type === 'sqlite') {
+      const selectStmt = this.prepareCached(
+        'SELECT * FROM jellyfin_playstate WHERE user_uuid = ? AND profile = ? AND video_id = ?'
+      );
+      const deleteWatchesStmt = this.prepareCached(
+        'DELETE FROM jellyfin_watches WHERE user_uuid = ? AND profile = ? AND video_id = ?'
+      );
+      const heldWatchStmt = this.prepareCached(
+        'SELECT 1 AS held FROM jellyfin_watches WHERE user_uuid = ? AND profile = ? AND video_id = ? AND watched_at >= ? LIMIT 1'
+      );
+      const insertWatchStmt = this.prepareCached(
+        'INSERT INTO jellyfin_watches (user_uuid, profile, video_id, watched_at, origin) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING'
+      );
+      const upsertStmt = this.prepareCached(
+        `INSERT INTO jellyfin_playstate (user_uuid, profile, video_id, position_ms, runtime_ms, played, play_count, last_played_at, updated_at, origin)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (user_uuid, profile, video_id) DO UPDATE SET
            position_ms = excluded.position_ms, runtime_ms = excluded.runtime_ms, played = excluded.played,
            play_count = excluded.play_count, last_played_at = excluded.last_played_at, updated_at = excluded.updated_at,
            origin = excluded.origin`
-      : `INSERT INTO jellyfin_playstate (user_uuid, profile, video_id, position_ms, runtime_ms, played, play_count, last_played_at, updated_at, origin)
+      );
+
+      const tx = this.db.transaction(() => {
+        const existing = selectStmt.get(userUUID, profile, videoId) || null;
+        const positionMs = patch.positionMs ?? existing?.position_ms ?? 0;
+        const runtimeMs = patch.runtimeMs ?? existing?.runtime_ms ?? 0;
+        const played = patch.played ?? Boolean(existing?.played);
+        const becamePlayed = patch.played === true && !existing?.played;
+        const origin = patch.origin === undefined ? (existing?.origin ?? null) : patch.origin;
+
+        let logged = false;
+        if (patch.played === false) {
+          deleteWatchesStmt.run(userUUID, profile, videoId);
+        } else if (patch.watch && Number.isFinite(patch.watch.at) && patch.watch.at > 0) {
+          const wasPlayed = Boolean(existing?.played);
+          if (!(patch.watch.kind === 'first' && wasPlayed)) {
+            let held = false;
+            if (patch.watch.kind !== 'first') {
+              const since = patch.watch.kind === 'dated' ? 0 : Math.round(patch.watch.at - Math.max(0, patch.watch.gapMs ?? 0));
+              held = Boolean(heldWatchStmt.get(userUUID, profile, videoId, since));
+            }
+            if (!held) {
+              const res = insertWatchStmt.run(userUUID, profile, videoId, Math.round(patch.watch.at), origin);
+              logged = (Number(res?.changes) || 0) > 0;
+            }
+          }
+        }
+
+        const playCount = becamePlayed
+          ? 1
+          : Number(existing?.play_count ?? 0) + (logged && patch.watch?.kind === 'finish' ? 1 : 0);
+        const lastPlayedAt = patch.lastPlayedAt === undefined ? (existing?.last_played_at ?? null) : patch.lastPlayedAt;
+
+        upsertStmt.run(userUUID, profile, videoId, positionMs, runtimeMs, played ? 1 : 0, playCount, lastPlayedAt, now, origin);
+      });
+      tx();
+      return;
+    }
+
+    await this.withPostgresTransaction(async (client) => {
+      const existingRes = await client.query(
+        'SELECT * FROM jellyfin_playstate WHERE user_uuid = $1 AND profile = $2 AND video_id = $3 FOR UPDATE',
+        [userUUID, profile, videoId]
+      );
+      const existing = existingRes.rows[0] || null;
+      const positionMs = patch.positionMs ?? existing?.position_ms ?? 0;
+      const runtimeMs = patch.runtimeMs ?? existing?.runtime_ms ?? 0;
+      const played = patch.played ?? Boolean(existing?.played);
+      const becamePlayed = patch.played === true && !existing?.played;
+      const origin = patch.origin === undefined ? (existing?.origin ?? null) : patch.origin;
+
+      let logged = false;
+      if (patch.played === false) {
+        await client.query(
+          'DELETE FROM jellyfin_watches WHERE user_uuid = $1 AND profile = $2 AND video_id = $3',
+          [userUUID, profile, videoId]
+        );
+      } else if (patch.watch && Number.isFinite(patch.watch.at) && patch.watch.at > 0) {
+        const wasPlayed = Boolean(existing?.played);
+        if (!(patch.watch.kind === 'first' && wasPlayed)) {
+          let held = false;
+          if (patch.watch.kind !== 'first') {
+            const since = patch.watch.kind === 'dated' ? 0 : Math.round(patch.watch.at - Math.max(0, patch.watch.gapMs ?? 0));
+            const heldRes = await client.query(
+              'SELECT 1 AS held FROM jellyfin_watches WHERE user_uuid = $1 AND profile = $2 AND video_id = $3 AND watched_at >= $4 LIMIT 1',
+              [userUUID, profile, videoId, since]
+            );
+            held = heldRes.rows.length > 0;
+          }
+          if (!held) {
+            const insRes = await client.query(
+              'INSERT INTO jellyfin_watches (user_uuid, profile, video_id, watched_at, origin) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING',
+              [userUUID, profile, videoId, Math.round(patch.watch.at), origin]
+            );
+            logged = (Number(insRes?.rowCount) || 0) > 0;
+          }
+        }
+      }
+
+      const playCount = becamePlayed
+        ? 1
+        : Number(existing?.play_count ?? 0) + (logged && patch.watch?.kind === 'finish' ? 1 : 0);
+      const lastPlayedAt = patch.lastPlayedAt === undefined ? (existing?.last_played_at ?? null) : patch.lastPlayedAt;
+
+      await client.query(
+        `INSERT INTO jellyfin_playstate (user_uuid, profile, video_id, position_ms, runtime_ms, played, play_count, last_played_at, updated_at, origin)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (user_uuid, profile, video_id) DO UPDATE SET
            position_ms = EXCLUDED.position_ms, runtime_ms = EXCLUDED.runtime_ms, played = EXCLUDED.played,
            play_count = EXCLUDED.play_count, last_played_at = EXCLUDED.last_played_at, updated_at = EXCLUDED.updated_at,
-           origin = EXCLUDED.origin`;
-
-    await this.runQuery(query, [userUUID, profile, videoId, positionMs, runtimeMs, played ? 1 : 0, playCount, lastPlayedAt, now, origin]);
+           origin = EXCLUDED.origin`,
+        [userUUID, profile, videoId, positionMs, runtimeMs, played ? 1 : 0, playCount, lastPlayedAt, now, origin]
+      );
+    });
   }
 
   async logWatch(userUUID: string, profile: string, videoId: string, watch: WatchPatch, wasPlayed: boolean, origin: string | null): Promise<boolean> {
@@ -1834,25 +2046,67 @@ class Database {
 
   // Writes waiting for a tracker, delivered in order per account and retried until they land.
   async enqueueTrackerOutbox(rows: Array<{ lane: string; userUUID: string; profile: string; service: string; op: string; item: string; coalesce: string | null; payload: any; expiresAt: number }>): Promise<void> {
-    const sqlite = this.type === 'sqlite';
+    if (!rows.length) return;
+    if (!this.initialized) await this.initialize();
     const now = Date.now();
-    for (const row of rows) {
-      // A newer write for the same thing replaces one still waiting, never one being sent.
-      if (row.coalesce) {
-        await this.runQuery(
-          sqlite
-            ? 'DELETE FROM tracker_outbox WHERE lane = ? AND coalesce_key = ? AND claimed_until <= ?'
-            : 'DELETE FROM tracker_outbox WHERE lane = $1 AND coalesce_key = $2 AND claimed_until <= $3',
-          [row.lane, row.coalesce, now]
+
+    if (this.type === 'sqlite') {
+      const deleteStmt = this.prepareCached(
+        'DELETE FROM tracker_outbox WHERE lane = ? AND coalesce_key = ? AND claimed_until <= ?'
+      );
+      const insertStmt = this.prepareCached(
+        'INSERT INTO tracker_outbox (lane, user_uuid, profile, service, op, item_key, coalesce_key, payload, next_at, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      );
+      const tx = this.db.transaction(() => {
+        for (const row of rows) {
+          if (row.coalesce) {
+            deleteStmt.run(row.lane, row.coalesce, now);
+          }
+          insertStmt.run(
+            row.lane,
+            row.userUUID,
+            row.profile || '',
+            row.service,
+            row.op,
+            row.item,
+            row.coalesce,
+            JSON.stringify(row.payload),
+            now,
+            Math.round(row.expiresAt),
+            now
+          );
+        }
+      });
+      tx();
+      return;
+    }
+
+    await this.withPostgresTransaction(async (client) => {
+      for (const row of rows) {
+        if (row.coalesce) {
+          await client.query(
+            'DELETE FROM tracker_outbox WHERE lane = $1 AND coalesce_key = $2 AND claimed_until <= $3',
+            [row.lane, row.coalesce, now]
+          );
+        }
+        await client.query(
+          'INSERT INTO tracker_outbox (lane, user_uuid, profile, service, op, item_key, coalesce_key, payload, next_at, expires_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)',
+          [
+            row.lane,
+            row.userUUID,
+            row.profile || '',
+            row.service,
+            row.op,
+            row.item,
+            row.coalesce,
+            JSON.stringify(row.payload),
+            now,
+            Math.round(row.expiresAt),
+            now,
+          ]
         );
       }
-      await this.runQuery(
-        sqlite
-          ? `INSERT INTO tracker_outbox (lane, user_uuid, profile, service, op, item_key, coalesce_key, payload, next_at, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          : `INSERT INTO tracker_outbox (lane, user_uuid, profile, service, op, item_key, coalesce_key, payload, next_at, expires_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-        [row.lane, row.userUUID, row.profile || '', row.service, row.op, row.item, row.coalesce, JSON.stringify(row.payload), now, Math.round(row.expiresAt), now]
-      );
-    }
+    });
   }
 
   async readyTrackerOutbox(now: number, limit: number): Promise<any[]> {
@@ -2171,19 +2425,42 @@ class Database {
   }
 
   async setDropped(userUUID: string, profile: string, metaIds: string[], dropped: boolean): Promise<void> {
-    for (const metaId of metaIds) {
-      if (dropped) {
-        const query = this.type === 'sqlite'
-          ? 'INSERT INTO jellyfin_dropped (user_uuid, profile, meta_id, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (user_uuid, profile, meta_id) DO UPDATE SET updated_at = excluded.updated_at'
-          : 'INSERT INTO jellyfin_dropped (user_uuid, profile, meta_id, updated_at) VALUES ($1, $2, $3, $4) ON CONFLICT (user_uuid, profile, meta_id) DO UPDATE SET updated_at = EXCLUDED.updated_at';
-        await this.runQuery(query, [userUUID, profile, metaId, Date.now()]);
-      } else {
-        const query = this.type === 'sqlite'
-          ? 'DELETE FROM jellyfin_dropped WHERE user_uuid = ? AND profile = ? AND meta_id = ?'
-          : 'DELETE FROM jellyfin_dropped WHERE user_uuid = $1 AND profile = $2 AND meta_id = $3';
-        await this.runQuery(query, [userUUID, profile, metaId]);
-      }
+    if (!metaIds.length) return;
+    if (!this.initialized) await this.initialize();
+    const uniqueIds = [...new Set(metaIds)];
+    const now = Date.now();
+
+    if (this.type === 'sqlite') {
+      const stmt = dropped
+        ? this.prepareCached(
+            'INSERT INTO jellyfin_dropped (user_uuid, profile, meta_id, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (user_uuid, profile, meta_id) DO UPDATE SET updated_at = excluded.updated_at'
+          )
+        : this.prepareCached('DELETE FROM jellyfin_dropped WHERE user_uuid = ? AND profile = ? AND meta_id = ?');
+      const tx = this.db.transaction(() => {
+        for (const metaId of uniqueIds) {
+          if (dropped) stmt.run(userUUID, profile, metaId, now);
+          else stmt.run(userUUID, profile, metaId);
+        }
+      });
+      tx();
+      return;
     }
+
+    await this.withPostgresTransaction(async (client) => {
+      if (dropped) {
+        await client.query(
+          `INSERT INTO jellyfin_dropped (user_uuid, profile, meta_id, updated_at)
+           SELECT $1, $2, u.meta_id, $4 FROM UNNEST($3::text[]) AS u(meta_id)
+           ON CONFLICT (user_uuid, profile, meta_id) DO UPDATE SET updated_at = EXCLUDED.updated_at`,
+          [userUUID, profile, uniqueIds, now]
+        );
+      } else {
+        await client.query(
+          'DELETE FROM jellyfin_dropped WHERE user_uuid = $1 AND profile = $2 AND meta_id = ANY($3::text[])',
+          [userUUID, profile, uniqueIds]
+        );
+      }
+    });
   }
 
   // Read from the primary, so a client reading a playlist straight after changing it sees the change.
@@ -2255,19 +2532,45 @@ class Database {
   }
 
   async setRating(userUUID: string, profile: string, metaIds: string[], rating: number | null, metaType: string | null = null): Promise<void> {
-    for (const metaId of metaIds) {
-      if (rating !== null) {
-        const query = this.type === 'sqlite'
-          ? 'INSERT INTO jellyfin_ratings (user_uuid, profile, meta_id, rating, meta_type, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (user_uuid, profile, meta_id) DO UPDATE SET rating = excluded.rating, meta_type = COALESCE(excluded.meta_type, jellyfin_ratings.meta_type), updated_at = excluded.updated_at'
-          : 'INSERT INTO jellyfin_ratings (user_uuid, profile, meta_id, rating, meta_type, updated_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (user_uuid, profile, meta_id) DO UPDATE SET rating = EXCLUDED.rating, meta_type = COALESCE(EXCLUDED.meta_type, jellyfin_ratings.meta_type), updated_at = EXCLUDED.updated_at';
-        await this.runQuery(query, [userUUID, profile, metaId, rating, metaType, Date.now()]);
-      } else {
-        const query = this.type === 'sqlite'
-          ? 'DELETE FROM jellyfin_ratings WHERE user_uuid = ? AND profile = ? AND meta_id = ?'
-          : 'DELETE FROM jellyfin_ratings WHERE user_uuid = $1 AND profile = $2 AND meta_id = $3';
-        await this.runQuery(query, [userUUID, profile, metaId]);
-      }
+    if (!metaIds.length) return;
+    if (!this.initialized) await this.initialize();
+    const uniqueIds = [...new Set(metaIds)];
+    const now = Date.now();
+
+    if (this.type === 'sqlite') {
+      const stmt = rating !== null
+        ? this.prepareCached(
+            'INSERT INTO jellyfin_ratings (user_uuid, profile, meta_id, rating, meta_type, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (user_uuid, profile, meta_id) DO UPDATE SET rating = excluded.rating, meta_type = COALESCE(excluded.meta_type, jellyfin_ratings.meta_type), updated_at = excluded.updated_at'
+          )
+        : this.prepareCached('DELETE FROM jellyfin_ratings WHERE user_uuid = ? AND profile = ? AND meta_id = ?');
+      const tx = this.db.transaction(() => {
+        for (const metaId of uniqueIds) {
+          if (rating !== null) stmt.run(userUUID, profile, metaId, rating, metaType, now);
+          else stmt.run(userUUID, profile, metaId);
+        }
+      });
+      tx();
+      return;
     }
+
+    await this.withPostgresTransaction(async (client) => {
+      if (rating !== null) {
+        await client.query(
+          `INSERT INTO jellyfin_ratings (user_uuid, profile, meta_id, rating, meta_type, updated_at)
+           SELECT $1, $2, u.meta_id, $4, $5, $6 FROM UNNEST($3::text[]) AS u(meta_id)
+           ON CONFLICT (user_uuid, profile, meta_id) DO UPDATE SET
+             rating = EXCLUDED.rating,
+             meta_type = COALESCE(EXCLUDED.meta_type, jellyfin_ratings.meta_type),
+             updated_at = EXCLUDED.updated_at`,
+          [userUUID, profile, uniqueIds, rating, metaType, now]
+        );
+      } else {
+        await client.query(
+          'DELETE FROM jellyfin_ratings WHERE user_uuid = $1 AND profile = $2 AND meta_id = ANY($3::text[])',
+          [userUUID, profile, uniqueIds]
+        );
+      }
+    });
   }
 
   async setRatingRemoteId(userUUID: string, profile: string, metaIds: string[], pmdbId: string): Promise<number> {
@@ -2389,8 +2692,19 @@ class Database {
   }
 
   async close(): Promise<void> {
+    if (this.maintenanceTimer) {
+      clearInterval(this.maintenanceTimer);
+      this.maintenanceTimer = null;
+    }
+    this.stmtCache.clear();
     if (this.db) {
       if (this.type === 'sqlite') {
+        try {
+          this.db.pragma('wal_checkpoint(PASSIVE)');
+          this.db.pragma('optimize');
+        } catch {
+          // Ignore maintenance errors during close
+        }
         this.db.close();
         this.db = null;
         this.readDb = null;
@@ -2401,7 +2715,9 @@ class Database {
           await this.readDb.end();
         }
         await this.db.end();
+        this.db = null;
         this.readDb = null;
+        this.initialized = false;
       }
     }
   }
@@ -2458,7 +2774,7 @@ class Database {
     if (!this.initialized) await this.initialize();
     try {
       if (this.type === 'sqlite') {
-        const stmt = this.db.prepare(`
+        const stmt = this.prepareCached(`
           INSERT INTO user_stats (user_uuid, total_requests, last_active_at)
           VALUES (?, ?, ?)
           ON CONFLICT(user_uuid) DO UPDATE SET
@@ -2472,18 +2788,23 @@ class Database {
         });
         insertMany(batch);
       } else {
-        for (const item of batch) {
-          await this.runQuery(`
-            INSERT INTO user_stats (user_uuid, total_requests, last_active_at)
-            VALUES ($1, $2, $3)
-            ON CONFLICT(user_uuid) DO UPDATE SET
-              total_requests = user_stats.total_requests + EXCLUDED.total_requests,
-              last_active_at = EXCLUDED.last_active_at
-          `, [item.userUUID, item.requests, item.lastActive]);
-        }
+        const uuids = batch.map((item) => item.userUUID);
+        const requests = batch.map((item) => item.requests);
+        const lastActives = batch.map((item) => item.lastActive);
+        await this.runQuery(
+          `INSERT INTO user_stats (user_uuid, total_requests, last_active_at)
+           SELECT u.user_uuid, SUM(u.requests), MAX(u.last_active)
+           FROM UNNEST($1::text[], $2::bigint[], $3::timestamp[]) AS u(user_uuid, requests, last_active)
+           GROUP BY u.user_uuid
+           ON CONFLICT (user_uuid) DO UPDATE SET
+             total_requests = user_stats.total_requests + EXCLUDED.total_requests,
+             last_active_at = EXCLUDED.last_active_at`,
+          [uuids, requests, lastActives]
+        );
       }
     } catch (error: any) {
       logger.warn('Failed to record user stats batch:', error?.message);
+      throw error;
     }
   }
 
@@ -2568,7 +2889,7 @@ class Database {
     if (!this.initialized) await this.initialize();
     try {
       const rows = sqlite
-        ? this.executeSQLiteStatement(this.db.prepare(query), 'all', [...tokenIds, ...tokenIds])
+        ? this.executeSQLiteStatement(this.prepareCached(query, this.db), 'all', [...tokenIds, ...tokenIds])
         : (await this.db.query(query, tokenIds)).rows;
       const wanted = new Set(tokenIds);
       return rows.map((row: any) => {
@@ -2715,7 +3036,7 @@ class Database {
 
   async resetUserPassword(userUUID: string, newPassword?: string): Promise<string | null> {
     try {
-      const password = newPassword || Math.random().toString(36).slice(-8);
+      const password = newPassword || crypto.randomBytes(12).toString('base64url');
       const hashedPassword = await this.hashPassword(password);
 
       const query = this.type === 'sqlite'
@@ -2784,49 +3105,158 @@ class Database {
 
   async deleteInactiveUsers(daysOld: number = 30): Promise<number> {
     try {
+      if (!this.initialized) await this.initialize();
       const cutoffDate = new Date(Date.now() - daysOld * 24 * 60 * 60 * 1000);
-      const cutoffDateStr = cutoffDate.toISOString();
+      const cutoffIsoStr = cutoffDate.toISOString();
+      // SQLite CURRENT_TIMESTAMP uses 'YYYY-MM-DD HH:MM:SS' while user_stats.last_active_at uses ISO strings
+      const cutoffSqliteStr = cutoffIsoStr.replace('T', ' ').substring(0, 19);
 
-      const query = this.type === 'sqlite'
-        ? `DELETE FROM user_configs
-           WHERE updated_at < ?
-             AND (
-               user_uuid NOT IN (SELECT user_uuid FROM user_stats)
-               OR user_uuid IN (SELECT user_uuid FROM user_stats WHERE last_active_at < ?)
-             )`
-        : `DELETE FROM user_configs
-           WHERE updated_at < $1
-             AND (
-               user_uuid NOT IN (SELECT user_uuid FROM user_stats)
-               OR user_uuid IN (SELECT user_uuid FROM user_stats WHERE last_active_at < $1)
-             )`;
       const selectDoomedQuery = this.type === 'sqlite'
-        ? `SELECT user_uuid FROM user_configs
+        ? `SELECT user_uuid, config_data FROM user_configs
            WHERE updated_at < ?
              AND (
                user_uuid NOT IN (SELECT user_uuid FROM user_stats)
                OR user_uuid IN (SELECT user_uuid FROM user_stats WHERE last_active_at < ?)
              )`
-        : `SELECT user_uuid FROM user_configs
+        : `SELECT user_uuid, config_data FROM user_configs
            WHERE updated_at < $1
              AND (
                user_uuid NOT IN (SELECT user_uuid FROM user_stats)
                OR user_uuid IN (SELECT user_uuid FROM user_stats WHERE last_active_at < $1)
              )`;
 
-      const params = this.type === 'sqlite' ? [cutoffDateStr, cutoffDateStr] : [cutoffDateStr];
-      const doomed = await this.allQuery(selectDoomedQuery, params);
-      const result = await this.runQuery(query, params);
-      await require('./jellyfin/context').forgetSeen((doomed || []).map((row: any) => String(row.user_uuid))).catch(() => undefined);
+      const selectParams = this.type === 'sqlite' ? [cutoffSqliteStr, cutoffIsoStr] : [cutoffIsoStr];
+      const doomed = await this.allPrimaryQuery(selectDoomedQuery, selectParams);
 
-      await this.runAliasCleanup(
-        'DELETE FROM user_aliases WHERE user_uuid NOT IN (SELECT user_uuid FROM user_configs)'
-      );
-      await this.runQuery(
-        'DELETE FROM user_stats WHERE user_uuid NOT IN (SELECT user_uuid FROM user_configs)'
-      );
+      const USER_SCOPED_TABLES = [
+        'jellyfin_playstate',
+        'jellyfin_watches',
+        'jellyfin_watchlist',
+        'jellyfin_favourites',
+        'jellyfin_ratings',
+        'jellyfin_dropped',
+        'jellyfin_preferences',
+        'jellyfin_playlists',
+        'jellyfin_tokens',
+        'trusted_uuids',
+        'account_configs',
+        'tracker_outbox',
+        'user_aliases',
+        'user_stats',
+      ];
+      const TOKEN_FIELDS = ['traktTokenId', 'simklTokenId', 'anilistTokenId', 'malTokenId', 'movielensCredentialId'];
+      const candidateTokensByField = new Map<string, Set<string>>();
+      const managerKeyIds = new Set<string>();
 
-      return this.type === 'sqlite' ? result.changes : result.rowCount;
+      const doomedUuids: string[] = [];
+      for (const row of doomed || []) {
+        const uuid = String(row.user_uuid || '');
+        if (!uuid) continue;
+        doomedUuids.push(uuid);
+        try {
+          const cfg = typeof row.config_data === 'string' ? JSON.parse(row.config_data) : row.config_data;
+          for (const field of TOKEN_FIELDS) {
+            const topId = cfg?.apiKeys?.[field];
+            if (typeof topId === 'string' && topId) {
+              if (!candidateTokensByField.has(field)) candidateTokensByField.set(field, new Set());
+              candidateTokensByField.get(field)!.add(topId);
+            }
+            for (const card of Array.isArray(cfg?.jellyfinUsers) ? cfg.jellyfinUsers : []) {
+              const cardId = card?.accounts?.apiKeys?.[field];
+              if (typeof cardId === 'string' && cardId) {
+                if (!candidateTokensByField.has(field)) candidateTokensByField.set(field, new Set());
+                candidateTokensByField.get(field)!.add(cardId);
+              }
+            }
+          }
+          for (const acct of Array.isArray(cfg?.managerAccounts) ? cfg.managerAccounts : []) {
+            if (typeof acct?.keyId === 'string' && acct.keyId) {
+              managerKeyIds.add(acct.keyId);
+            }
+          }
+        } catch {
+          // Ignore unreadable config JSON when collecting token references
+        }
+      }
+
+      let deletedCount = 0;
+
+      if (this.type === 'sqlite') {
+        const tx = this.db.transaction(() => {
+          for (let i = 0; i < doomedUuids.length; i += 200) {
+            const chunk = doomedUuids.slice(i, i + 200);
+            const marks = chunk.map(() => '?').join(', ');
+            for (const table of USER_SCOPED_TABLES) {
+              this.db.prepare(`DELETE FROM ${table} WHERE user_uuid IN (${marks})`).run(...chunk);
+            }
+            this.db.prepare(`DELETE FROM oauth_tokens WHERE provider LIKE 'manager:%' AND user_id IN (${marks})`).run(...chunk);
+            const res = this.db.prepare(`DELETE FROM user_configs WHERE user_uuid IN (${marks})`).run(...chunk);
+            deletedCount += Number(res?.changes) || 0;
+          }
+          // Sweep any pre-existing orphan rows left by older versions
+          for (const table of USER_SCOPED_TABLES) {
+            this.db.prepare(`DELETE FROM ${table} WHERE user_uuid NOT IN (SELECT user_uuid FROM user_configs)`).run();
+          }
+          this.db.prepare(`DELETE FROM oauth_tokens WHERE provider LIKE 'manager:%' AND user_id NOT IN (SELECT user_uuid FROM user_configs)`).run();
+        });
+        tx();
+      } else {
+        await this.withPostgresTransaction(async (client) => {
+          if (doomedUuids.length > 0) {
+            for (const table of USER_SCOPED_TABLES) {
+              await client.query(`DELETE FROM ${table} WHERE user_uuid = ANY($1::text[])`, [doomedUuids]);
+            }
+            await client.query(`DELETE FROM oauth_tokens WHERE provider LIKE 'manager:%' AND user_id = ANY($1::text[])`, [doomedUuids]);
+            const res = await client.query(`DELETE FROM user_configs WHERE user_uuid = ANY($1::text[])`, [doomedUuids]);
+            deletedCount += Number(res?.rowCount) || 0;
+          }
+          for (const table of USER_SCOPED_TABLES) {
+            await client.query(`DELETE FROM ${table} WHERE user_uuid NOT IN (SELECT user_uuid FROM user_configs)`);
+          }
+          await client.query(`DELETE FROM oauth_tokens WHERE provider LIKE 'manager:%' AND user_id NOT IN (SELECT user_uuid FROM user_configs)`);
+        });
+      }
+
+      for (const keyId of managerKeyIds) {
+        await this.deleteOAuthToken(keyId).catch(() => undefined);
+      }
+      for (const [field, idsSet] of candidateTokensByField.entries()) {
+        const ids = [...idsSet];
+        for (let i = 0; i < ids.length; i += 100) {
+          const chunk = ids.slice(i, i + 100);
+          try {
+            const refs = await this.findTokenReferences(field, chunk);
+            const stillReferenced = new Set<string>();
+            for (const ref of refs) {
+              const topId = ref.config?.apiKeys?.[field];
+              if (typeof topId === 'string') stillReferenced.add(topId);
+              for (const card of Array.isArray(ref.config?.jellyfinUsers) ? ref.config.jellyfinUsers : []) {
+                const cardId = card?.accounts?.apiKeys?.[field];
+                if (typeof cardId === 'string') stillReferenced.add(cardId);
+              }
+            }
+            for (const tokenId of chunk) {
+              if (!stillReferenced.has(tokenId)) {
+                await this.deleteOAuthToken(tokenId).catch(() => undefined);
+              }
+            }
+          } catch {
+            // Keep tokens if reference lookup fails
+          }
+        }
+      }
+
+      if (doomedUuids.length > 0) {
+        await require('./jellyfin/context').forgetSeen(doomedUuids).catch(() => undefined);
+        const configCache = require('./configCache');
+        for (const uuid of doomedUuids) {
+          await configCache.del(uuid).catch(() => undefined);
+        }
+      }
+
+      await this.pruneStaleJellyfinCaches(90).catch(() => undefined);
+
+      return deletedCount;
     } catch (error) {
       logger.error('Error deleting inactive users:', error);
       return 0;

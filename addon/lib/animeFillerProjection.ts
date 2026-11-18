@@ -10,6 +10,7 @@ export async function applyAnimeFillerProjection(meta: any, config: any): Promis
   const skipMixed = skipFiller && !!options.skipMixedFiller;
   const skipRecap = !!options.skipRecap;
   const mark = !!options.allowEpisodeMarking;
+  if (!skipFiller && !skipRecap && !mark) return;
   if (!Array.isArray(meta?.videos) || !meta.videos.length) return;
 
   try {

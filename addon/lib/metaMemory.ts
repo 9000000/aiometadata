@@ -7,8 +7,20 @@ export interface HashRead {
   basicTtl: number;
 }
 
+export interface ParsedHashRead {
+  values: Array<any | null>;
+  basicTtl: number;
+}
+
+interface HeldField {
+  text?: string | null;
+  parsed?: any;
+  hasParsed: boolean;
+  bytes: number;
+}
+
 interface HeldHash {
-  fields: Map<string, string | null>;
+  fields: Map<string, HeldField>;
   basicTtl: number;
   readAt: number;
   expiresAt: number;
@@ -62,8 +74,60 @@ function ttlMs(): number {
 
 function sizeOf(entry: HeldHash): number {
   let bytes = 96;
-  for (const [field, text] of entry.fields) bytes += 32 + field.length + (text?.length ?? 0);
+  for (const [field, held] of entry.fields) bytes += 32 + field.length + held.bytes;
   return bytes;
+}
+
+function makeHeldField(text: string | null | undefined): HeldField {
+  if (text === null || text === undefined) {
+    return { text: null, parsed: null, hasParsed: true, bytes: 0 };
+  }
+  return { text, hasParsed: false, bytes: text.length * 2 };
+}
+
+function readFieldText(held: HeldField | undefined): string | null {
+  if (!held) return null;
+  if (held.text !== undefined) return held.text;
+  if (!held.hasParsed || held.parsed === null || held.parsed === undefined) return null;
+  return JSON.stringify(held.parsed);
+}
+
+function readFieldParsed(held: HeldField | undefined, field: string, onParseError?: (field: string, error: any) => void): any | null {
+  if (!held) return null;
+  if (held.hasParsed) return held.parsed;
+  if (held.text === null || held.text === undefined) {
+    held.parsed = null;
+    held.hasParsed = true;
+    return null;
+  }
+  try {
+    const value = JSON.parse(held.text);
+    held.parsed = value;
+    held.hasParsed = true;
+    // Release raw JSON text once parsed so L1 does not retain duplicate representations.
+    held.text = undefined;
+    return value;
+  } catch (error) {
+    held.parsed = null;
+    held.hasParsed = true;
+    held.text = undefined;
+    onParseError?.(field, error);
+    return null;
+  }
+}
+
+function parseDirectTexts(fields: string[], read: HashRead, onParseError?: (field: string, error: any) => void): ParsedHashRead {
+  const values = fields.map((field, index) => {
+    const text = read.texts[index];
+    if (text === null || text === undefined) return null;
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      onParseError?.(field, error);
+      return null;
+    }
+  });
+  return { values, basicTtl: read.basicTtl };
 }
 
 function store(): LRUCache<string, HeldHash> | null {
@@ -98,7 +162,7 @@ function heldEntry(cache: LRUCache<string, HeldHash>, key: string, now: number):
 
 function keep(cache: LRUCache<string, HeldHash>, key: string, previous: HeldHash | undefined, fields: string[], read: HashRead, now: number): HeldHash {
   const merged = new Map(previous?.fields ?? []);
-  fields.forEach((field, index) => merged.set(field, read.texts[index]));
+  fields.forEach((field, index) => merged.set(field, makeHeldField(read.texts[index])));
   const expiresAt = previous ? Math.min(previous.expiresAt, expiryFor(read.basicTtl, now)) : expiryFor(read.basicTtl, now);
   const entry: HeldHash = { fields: merged, basicTtl: read.basicTtl, readAt: now, expiresAt };
   if (expiresAt > now) cache.set(key, entry, { ttl: expiresAt - now });
@@ -116,7 +180,7 @@ export async function readHeldHash(key: string, fields: string[], load: Loader):
   if (held && missing.length === 0) {
     const basicTtl = remainingTtl(held, now);
     noteRead(key, basicTtl);
-    return { texts: fields.map((field) => held.fields.get(field) ?? null), basicTtl };
+    return { texts: fields.map((field) => readFieldText(held.fields.get(field))), basicTtl };
   }
 
   const startedAt = writes;
@@ -133,7 +197,49 @@ export async function readHeldHash(key: string, fields: string[], load: Loader):
   noteRead(key, read.basicTtl);
   const after = Date.now();
   const entry = keep(cache, key, heldEntry(cache, key, after), missing, read, after);
-  return { texts: fields.map((field) => entry.fields.get(field) ?? null), basicTtl: read.basicTtl };
+  return { texts: fields.map((field) => readFieldText(entry.fields.get(field))), basicTtl: read.basicTtl };
+}
+
+export async function readHeldHashParsed(
+  key: string,
+  fields: string[],
+  load: Loader,
+  onParseError?: (field: string, error: any) => void
+): Promise<ParsedHashRead> {
+  const cache = store();
+  if (!cache || fields.length === 0) return parseDirectTexts(fields, await load(fields), onParseError);
+  noteRead(key);
+
+  const now = Date.now();
+  const held = heldEntry(cache, key, now);
+  const missing = held ? fields.filter((field) => !held.fields.has(field)) : fields;
+  if (held && missing.length === 0) {
+    const basicTtl = remainingTtl(held, now);
+    noteRead(key, basicTtl);
+    return {
+      values: fields.map((field) => readFieldParsed(held.fields.get(field), field, onParseError)),
+      basicTtl,
+    };
+  }
+
+  const startedAt = writes;
+  const flightKey = `${key}\u0000${missing.join('\u0000')}`;
+  let flight = loading.get(flightKey);
+  if (!flight) {
+    flight = load(missing).finally(() => loading.delete(flightKey));
+    loading.set(flightKey, flight);
+  }
+  const read = await flight;
+
+  if (changedSince(key, startedAt)) return parseDirectTexts(fields, await load(fields), onParseError);
+
+  noteRead(key, read.basicTtl);
+  const after = Date.now();
+  const entry = keep(cache, key, heldEntry(cache, key, after), missing, read, after);
+  return {
+    values: fields.map((field) => readFieldParsed(entry.fields.get(field), field, onParseError)),
+    basicTtl: read.basicTtl,
+  };
 }
 
 export async function readHeldAlias(key: string, load: () => Promise<string | null>): Promise<string | null> {

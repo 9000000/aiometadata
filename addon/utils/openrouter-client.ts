@@ -1,4 +1,5 @@
 import { request, Agent, ProxyAgent } from 'undici';
+import { KEEP_ALIVE } from './httpClient';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -25,12 +26,11 @@ function getOpenRouterProxyUrl(): string | null {
 function createOpenRouterDispatcher() {
   const proxyUrl = getOpenRouterProxyUrl();
   if (proxyUrl) {
-    return new ProxyAgent({ uri: proxyUrl, allowH2: false });
+    return new ProxyAgent({ uri: proxyUrl, allowH2: false, connections: 32, ...KEEP_ALIVE });
   }
   return new Agent({
     allowH2: false,
-    keepAliveTimeout: 30000,
-    keepAliveMaxTimeout: 60000,
+    ...KEEP_ALIVE,
     connections: 50,
     pipelining: 1,
   });

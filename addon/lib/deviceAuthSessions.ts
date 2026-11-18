@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { LRUCache } from 'lru-cache';
 const consola = require('consola');
 const redis = require('./redisClient');
 
@@ -28,10 +29,10 @@ export interface DeviceAuthSession {
 // Redis writes are not awaited. With no server listening, ioredis sits on a
 // command for the better part of a minute before giving up, which would stall
 // every poll. Memory is updated first, so the request never waits on Redis.
-const memorySessions = new Map<string, DeviceAuthSession>();
+const memorySessions = new LRUCache<string, DeviceAuthSession>({ max: 5000, ttl: 30 * 60 * 1000 });
 
 function pruneMemorySessions(now: number): void {
-  for (const [id, session] of memorySessions) {
+  for (const [id, session] of memorySessions.entries()) {
     if (session.expiresAt <= now) memorySessions.delete(id);
   }
 }

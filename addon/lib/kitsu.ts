@@ -1,10 +1,24 @@
 import axios, { AxiosResponse } from 'axios';
+import { LRUCache } from 'lru-cache';
 import { cacheWrapGlobal } from './getCache.js';
 import { normalizeKitsuBatchResponseForCache, normalizeKitsuDetailResponseForCache } from './kitsuCacheNormalizers.js';
 import consola from 'consola';
 import { envInt } from '../utils/envNumber';
 
 const logger = consola.withTag('Kitsu');
+const KITSU_DETAIL_CACHE_MAX = 2000;
+const KITSU_DETAIL_CACHE_TTL_MS = 60 * 60 * 1000;
+const KITSU_BATCH_PAGE_SIZE = 20;
+
+interface CachedKitsuDetailEntry {
+  anime: any;
+  categories: any[];
+}
+
+const kitsuDetailsByIdCache = new LRUCache<string, CachedKitsuDetailEntry>({
+  max: KITSU_DETAIL_CACHE_MAX,
+  ttl: KITSU_DETAIL_CACHE_TTL_MS,
+});
 
 type KitsuClient = {
   fetch: (model: string, config?: any) => Promise<any>;
@@ -275,7 +289,7 @@ async function searchByName(query: string, subtypes: string[] = [], ageRating: s
         'filter[subtype]': subtype,
         'page[limit]': limit,
         'page[offset]': offset,
-        'fields[anime]': 'canonicalTitle,titles,abbreviatedTitles,coverImage,posterImage,synopsis,description,startDate,status,subtype,episodeCount,episodeLength,ageRating'
+        'fields[anime]': 'canonicalTitle,titles,abbreviatedTitles,coverImage,posterImage,synopsis,description,startDate,endDate,slug,youtubeVideoId,status,subtype,episodeCount,episodeLength,ageRating'
       };
       if(ageRating.toLowerCase() !== 'none') {
         params['filter[ageRating]'] = ageRating;
@@ -315,6 +329,28 @@ async function searchByName(query: string, subtypes: string[] = [], ageRating: s
 
 
 
+function assembleCachedKitsuDetails(requestedIds: string[], includeCategories: boolean) {
+  const data: any[] = [];
+  const includedMap = new Map<string, any>();
+
+  for (const id of requestedIds) {
+    const entry = kitsuDetailsByIdCache.get(id);
+    if (!entry) continue;
+    data.push(entry.anime);
+    if (includeCategories) {
+      for (const cat of entry.categories) {
+        if (cat?.id) includedMap.set(String(cat.id), cat);
+      }
+    }
+  }
+
+  return {
+    data,
+    included: includeCategories ? Array.from(includedMap.values()) : [],
+    meta: { count: data.length },
+  };
+}
+
 /**
  * Fetches the full details for multiple anime by their Kitsu IDs with pagination support.
  * @param ids - An array of Kitsu IDs.
@@ -324,78 +360,114 @@ async function getMultipleAnimeDetails(ids: (string | number)[], appends: string
   if (!ids || ids.length === 0) {
     return null;
   }
-  
+
+  const requestedIds = [...new Set(ids.map((id) => String(id).trim()).filter(Boolean))];
+  if (requestedIds.length === 0) {
+    return null;
+  }
+
+  const normalizedAppends = (appends || '').trim();
+  const canUseItemCache = normalizedAppends === 'categories' || normalizedAppends === '';
+  const fetchIds = canUseItemCache
+    ? requestedIds.filter((id) => !kitsuDetailsByIdCache.has(id))
+    : requestedIds;
+
+  if (canUseItemCache && fetchIds.length === 0) {
+    return assembleCachedKitsuDetails(requestedIds, normalizedAppends === 'categories');
+  }
+
   const startTime = Date.now();
-  
+
   try {
-    logger.info(`Fetching details for ${ids.length} IDs: ${ids.join(',')}`);
-    
-    // Use direct API call to bypass Kitsu library filter issues
-    const baseUrl = `https://kitsu.io/api/edge/anime?filter[id]=${ids.join(',')}&include=${appends}&page[limit]=20`;
-    
-    logger.debug(`Direct API URL: ${baseUrl}`);
-    
+    logger.info(`Fetching details for ${fetchIds.length} IDs: ${fetchIds.join(',')}`);
+
     const allData: KitsuAnime[] = [];
     const allIncluded: any[] = [];
-    let nextUrl: string | undefined = baseUrl;
     let pageCount = 0;
 
-    // Paginate through all results
-    while (nextUrl) {
-      pageCount++;
-      logger.debug(`Fetching page ${pageCount}...`);
-      
-      const response: AxiosResponse<KitsuDirectApiResponse> = await axios.get(nextUrl, {
-        headers: {
-          'Accept': 'application/vnd.api+json',
-          'Content-Type': 'application/vnd.api+json'
-        },
-        timeout: kitsuTimeoutMs()
-      });
-      
-      const pageData = response.data?.data || [];
-      const pageIncluded = response.data?.included || [];
-      logger.debug(`Page ${pageCount} received ${pageData.length} results, ${pageIncluded.length} included items`);
-      
-      allData.push(...pageData);
-      allIncluded.push(...pageIncluded);
-      
-      // Check for next page
-      nextUrl = response.data?.links?.next;
-      if (nextUrl) {
-        logger.debug(`Found next page, continuing pagination...`);
+    const effectiveInclude = canUseItemCache ? 'categories' : normalizedAppends;
+    const chunks: string[][] = [];
+    for (let i = 0; i < fetchIds.length; i += KITSU_BATCH_PAGE_SIZE) {
+      chunks.push(fetchIds.slice(i, i + KITSU_BATCH_PAGE_SIZE));
+    }
+
+    for (const chunk of chunks) {
+      const includeQuery = effectiveInclude ? `&include=${effectiveInclude}` : '';
+      let nextUrl: string | undefined = `https://kitsu.io/api/edge/anime?filter[id]=${chunk.join(',')}${includeQuery}&page[limit]=${KITSU_BATCH_PAGE_SIZE}`;
+      logger.debug(`Direct API URL: ${nextUrl}`);
+
+      while (nextUrl) {
+        pageCount++;
+        logger.debug(`Fetching page ${pageCount}...`);
+
+        const response: AxiosResponse<KitsuDirectApiResponse> = await axios.get(nextUrl, {
+          headers: {
+            'Accept': 'application/vnd.api+json',
+            'Content-Type': 'application/vnd.api+json'
+          },
+          timeout: kitsuTimeoutMs()
+        });
+
+        const pageData = response.data?.data || [];
+        const pageIncluded = response.data?.included || [];
+        logger.debug(`Page ${pageCount} received ${pageData.length} results, ${pageIncluded.length} included items`);
+
+        allData.push(...pageData);
+        allIncluded.push(...pageIncluded);
+
+        nextUrl = response.data?.links?.next;
+        if (nextUrl) {
+          logger.debug(`Found next page, continuing pagination...`);
+        }
       }
     }
 
     logger.debug(`Total results after pagination: ${allData.length} data items, ${allIncluded.length} included items across ${pageCount} page(s)`);
     const receivedIds = allData.map(item => item.id);
     logger.success(`Received IDs: ${receivedIds.join(',')}`);
-    
-    // Track successful request
+
     const responseTime = Date.now() - startTime;
     const requestTracker = require('./requestTracker');
     requestTracker.trackProviderCall('kitsu', responseTime, true);
-    
-    return normalizeKitsuBatchResponseForCache({
+
+    const normalized = normalizeKitsuBatchResponseForCache({
       data: allData,
       included: allIncluded,
       meta: { count: allData.length }
     });
-    
+
+    if (canUseItemCache && normalized?.data) {
+      const categoriesById = new Map<string, any>();
+      for (const inc of normalized.included || []) {
+        if (inc?.type === 'categories' && inc?.id) {
+          categoriesById.set(String(inc.id), inc);
+        }
+      }
+      for (const anime of normalized.data) {
+        if (!anime?.id) continue;
+        const catRefs = anime.relationships?.categories?.data || [];
+        const categories = catRefs
+          .map((ref: any) => categoriesById.get(String(ref.id)))
+          .filter(Boolean);
+        kitsuDetailsByIdCache.set(String(anime.id), { anime, categories });
+      }
+      return assembleCachedKitsuDetails(requestedIds, normalizedAppends === 'categories');
+    }
+
+    return normalized;
   } catch (error: any) {
-    // Track failed request
     const responseTime = Date.now() - startTime;
     const requestTracker = require('./requestTracker');
     requestTracker.trackProviderCall('kitsu', responseTime, false);
-    
+
     const status = error.response?.status;
     const errorType = status === 429 ? 'rate_limit' : status >= 500 ? 'server_error' : 'api_error';
     requestTracker.logProviderError('kitsu', errorType, `getMultipleAnimeDetails failed: ${error.message}`, {
-      ids: ids.slice(0, 5).join(','),
+      ids: fetchIds.slice(0, 5).join(','),
       status
     });
-    
-    logger.error(`Error fetching details for IDs ${ids.join(',')}:`, (error as Error).message);
+
+    logger.error(`Error fetching details for IDs ${fetchIds.join(',')}:`, (error as Error).message);
     return null;
   }
 }

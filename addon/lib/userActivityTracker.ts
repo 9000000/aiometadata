@@ -2,6 +2,7 @@ import consola from 'consola';
 import database from './database';
 
 const logger = consola.withTag('UserActivityTracker');
+const MAX_PENDING_USERS = 50_000;
 
 interface PendingUserStat {
   requests: number;
@@ -39,6 +40,12 @@ class UserActivityTracker {
       existing.requests++;
       existing.lastActive = new Date();
     } else {
+      if (this.pending.size >= MAX_PENDING_USERS) {
+        const oldestKey = this.pending.keys().next().value;
+        if (oldestKey !== undefined) {
+          this.pending.delete(oldestKey);
+        }
+      }
       this.pending.set(userUUID, { requests: 1, lastActive: new Date() });
     }
   }
@@ -62,12 +69,21 @@ class UserActivityTracker {
       await database.recordUserStatsBatch(batch);
     } catch (error: any) {
       logger.warn('Error flushing user activity stats:', error?.message);
-      // Re-insert failed counts back to pending
+      // Re-insert failed counts back to pending while keeping memory bounded
       for (const [uuid, stat] of snapshot) {
         const cur = this.pending.get(uuid);
         if (cur) {
           cur.requests += stat.requests;
+          if (stat.lastActive > cur.lastActive) {
+            cur.lastActive = stat.lastActive;
+          }
         } else {
+          if (this.pending.size >= MAX_PENDING_USERS) {
+            const oldestKey = this.pending.keys().next().value;
+            if (oldestKey !== undefined) {
+              this.pending.delete(oldestKey);
+            }
+          }
           this.pending.set(uuid, stat);
         }
       }
@@ -95,5 +111,16 @@ class UserActivityTracker {
 }
 
 export const userActivityTracker = new UserActivityTracker();
-module.exports = { userActivityTracker };
+export function flush(): Promise<void> {
+  return userActivityTracker.flush();
+}
+export function stop(): void {
+  userActivityTracker.stop();
+}
+module.exports = {
+  userActivityTracker,
+  default: userActivityTracker,
+  flush,
+  stop,
+};
 export default userActivityTracker;

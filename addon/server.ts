@@ -3,7 +3,9 @@ import './utils/httpClient.js';
 
 // ── Redis diagnostics: install BEFORE any module touches Redis ──
 import { installRedisCounter, printRedisReport, getTotal, startPeriodicReporting } from './lib/redisCounter.js';
-installRedisCounter();
+if (process.env.ENABLE_REDIS_DIAGNOSTICS === 'true') {
+  installRedisCounter();
+}
 // ─────────────────────────────────────────────────────────────────
 
 import { addon, startServerWithCacheWarming } from './index.js';
@@ -266,6 +268,11 @@ async function startServer(): Promise<void> {
   // Storage
   await database.initialize();
   shutdownSequence.register('metrics', () => require('./lib/metricsBatch').flushMetrics(), { phase: 'traffic' });
+  shutdownSequence.register('user activity', () => {
+    const tracker = require('./lib/userActivityTracker');
+    tracker.stop?.();
+    return tracker.flush();
+  }, { phase: 'traffic' });
   shutdownSequence.register('jellyfin artwork', () => require('./lib/jellyfin/items').flushRememberedImages(), { phase: 'traffic' });
   shutdownSequence.register('database', () => database.close());
   readiness.markReady('database');
@@ -412,12 +419,14 @@ async function startServer(): Promise<void> {
   process.stdout.write('\n');
 
   // ── Redis diagnostics: print report after boot ──
-  printRedisReport();
-  // Print follow-up reports to monitor deferred & background tasks
-  setTimeout(() => { consola.info(`[Redis-Counter] +30s total commands: ${getTotal()}`); printRedisReport(); }, 30_000);
-  setTimeout(() => { consola.info(`[Redis-Counter] +60s total commands: ${getTotal()}`); printRedisReport(); }, 60_000);
-  setTimeout(() => { consola.info(`[Redis-Counter] +120s total commands: ${getTotal()}`); printRedisReport(); }, 120_000);
-  startPeriodicReporting(60_000);
+  if (process.env.ENABLE_REDIS_DIAGNOSTICS === 'true') {
+    printRedisReport();
+    // Print follow-up reports to monitor deferred & background tasks
+    setTimeout(() => { consola.info(`[Redis-Counter] +30s total commands: ${getTotal()}`); printRedisReport(); }, 30_000);
+    setTimeout(() => { consola.info(`[Redis-Counter] +60s total commands: ${getTotal()}`); printRedisReport(); }, 60_000);
+    setTimeout(() => { consola.info(`[Redis-Counter] +120s total commands: ${getTotal()}`); printRedisReport(); }, 120_000);
+    startPeriodicReporting(60_000);
+  }
 
   if (process.send) {
     process.send('ready');

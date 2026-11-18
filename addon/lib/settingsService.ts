@@ -6,9 +6,31 @@ const logger = consola.withTag('Settings');
 const database: any = require('./database');
 
 const cache = new Map<string, string>();
+const resolvedSettings = new Map<string, string>();
 const originalEnv = new Map<string, string | undefined>();
 const bootValues = new Map<string, string>();
 let initialized = false;
+
+function notifySecretsRefresh(): void {
+  try {
+    const logBuffer = require('./logBuffer') as typeof import('./logBuffer');
+    logBuffer.refreshSecrets?.();
+  } catch {
+    // Ignore if logBuffer is unavailable in isolated test contexts
+  }
+}
+
+function resolveSettingValue(def: SettingDefinition): string {
+  if (def.envOnly) {
+    const envVal = process.env[def.envVar] || (def.legacyEnvVar ? process.env[def.legacyEnvVar] : undefined);
+    return envVal || String(def.default);
+  }
+  const dbVal = cache.get(def.key);
+  if (dbVal !== undefined) return dbVal;
+  const envVal = process.env[def.envVar] || (def.legacyEnvVar ? process.env[def.legacyEnvVar] : undefined);
+  if (envVal) return envVal;
+  return String(def.default);
+}
 
 export async function initializeSettings(): Promise<void> {
   if (initialized) return;
@@ -26,10 +48,16 @@ export async function initializeSettings(): Promise<void> {
       process.env[def.envVar] = value;
     }
   }
+  resolvedSettings.clear();
   for (const def of SETTINGS_REGISTRY) {
-    bootValues.set(def.key, getSetting(def.key));
+    const val = resolveSettingValue(def);
+    if (!def.envOnly) {
+      resolvedSettings.set(def.key, val);
+    }
+    bootValues.set(def.key, val);
   }
   initialized = true;
+  notifySecretsRefresh();
   applySideEffects();
   logger.info(`Loaded ${rows.length} settings from database`);
 }
@@ -81,14 +109,17 @@ async function convertQuietHours(): Promise<void> {
 }
 
 export function getSetting(key: string): string {
+  if (initialized) {
+    const cached = resolvedSettings.get(key);
+    if (cached !== undefined) return cached;
+  }
   const def = getSettingDefinition(key);
   if (!def) return '';
-  const envVal = process.env[def.envVar] || (def.legacyEnvVar ? process.env[def.legacyEnvVar] : undefined);
-  if (def.envOnly && envVal) return envVal;
-  const dbVal = cache.get(key);
-  if (dbVal !== undefined) return dbVal;
-  if (envVal) return envVal;
-  return String(def.default);
+  const resolved = resolveSettingValue(def);
+  if (initialized && !def.envOnly) {
+    resolvedSettings.set(key, resolved);
+  }
+  return resolved;
 }
 
 export function previewSettingValue(key: string, value: string | null): string {
@@ -113,6 +144,8 @@ export async function setSetting(key: string, value: string): Promise<void> {
     originalEnv.set(def.envVar, process.env[def.envVar]);
   }
   process.env[def.envVar] = value;
+  resolvedSettings.set(key, value);
+  if (def.sensitive) notifySecretsRefresh();
   applySideEffects(key);
   logger.info(`Setting ${key} updated`);
 }
@@ -131,6 +164,12 @@ export async function resetSetting(key: string): Promise<void> {
     delete process.env[def.envVar];
   }
   originalEnv.delete(def.envVar);
+  if (initialized) {
+    resolvedSettings.set(key, resolveSettingValue(def));
+  } else {
+    resolvedSettings.delete(key);
+  }
+  if (def.sensitive) notifySecretsRefresh();
   applySideEffects(key);
   logger.info(`Setting ${key} reset to default`);
 }

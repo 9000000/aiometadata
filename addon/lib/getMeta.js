@@ -392,6 +392,8 @@ async function resolveArtworkForProfile({ type, ids, metaProvider, providerArt, 
   return { poster, background, logo, landscapePosterUrl };
 }
 
+const NUMERIC_META_PREFIXES = new Set(['mal', 'kitsu', 'tmdb', 'tvdb', 'tvmaze', 'anidb', 'anilist']);
+
 async function getMeta(type, language, stremioId, config = {}, userUUID, includeVideos = true) {
   try {
     // Validate inputs
@@ -411,6 +413,14 @@ async function getMeta(type, language, stremioId, config = {}, userUUID, include
     const [prefix, sourceId] = stremioId.split(':');
     if (prefix === 'tvdbc') {
       return await handleTvdbCollection(sourceId, language, config, userUUID);
+    }
+    if (NUMERIC_META_PREFIXES.has(prefix) && !/^\d+$/.test(sourceId || '')) {
+      logger.debug(`[Meta] Ignoring malformed numeric ID: ${stremioId}`);
+      return { meta: null };
+    }
+    if (stremioId.startsWith('tt') && !/^tt\d+(:|$)/.test(stremioId)) {
+      logger.debug(`[Meta] Ignoring malformed IMDb ID: ${stremioId}`);
+      return { meta: null };
     }
     let meta;
     logger.debug(`[Meta] Processing ${stremioId} (type: ${type})`);
@@ -1174,18 +1184,24 @@ async function getAnimeMeta(preferredProvider, stremioId, language, config, user
   if (allIds?.kitsuId && (preferredProvider !== 'mal' || !jikan.isJikanEnabled())) {
     try {
       logger.debug(`[AnimeMeta] Using provider 'kitsu' for ${stremioId} (Kitsu ID: ${allIds.kitsuId})`);
+      const shouldIncludeVideos = Boolean(includeVideos) && type !== 'movie';
+      const kitsuIncludes = shouldIncludeVideos
+        ? 'categories,episodes,mediaRelationships.destination'
+        : 'categories,mediaRelationships.destination';
       const kitsuDetails = await cacheWrapGlobal(
-        `kitsu-anime-${allIds.kitsuId}-categories,episodes,mediaRelationships.destination`,
-        () => kitsu.getMultipleAnimeDetails([allIds.kitsuId], 'categories,episodes,mediaRelationships.destination'),
+        `kitsu-anime-${allIds.kitsuId}-${kitsuIncludes}`,
+        () => kitsu.getMultipleAnimeDetails([allIds.kitsuId], kitsuIncludes),
         CATALOG_TTL()
       );
-      if (!kitsuDetails) {
+      if (!kitsuDetails || !Array.isArray(kitsuDetails.data) || !kitsuDetails.data[0]) {
         throw new Error(`Kitsu returned no details for Kitsu ID ${allIds.kitsuId}.`);
       }
       const details = kitsuDetails.data[0];
       const artwork = await getAnimeArtwork(allIds, config, details.attributes?.posterImage?.original, details.attributes?.coverImage?.original, type);
       const { background, poster, logo, landscapePosterUrl } = artwork;
-      let episodes = kitsuDetails.included?.filter(item => item.type === 'episodes') || [];
+      let episodes = shouldIncludeVideos
+        ? (kitsuDetails.included?.filter(item => item.type === 'episodes') || [])
+        : [];
       let genres = kitsuDetails.included?.filter(item => item.type === 'categories').map(item => item.attributes?.title).filter(Boolean) || [];
       return _markDegraded(await buildKitsuAnimeResponse(stremioId, details, genres, kitsuDetails.included, episodes, config, userUUID, {
         mapping: allIds,

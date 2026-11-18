@@ -23,6 +23,7 @@ const FILES: Record<ScheduleKind, FeedFiles> = {
   dub: { feed: 'raw/dub-episode-feed.json', schedule: 'raw/v2/dub-schedule.json' },
 };
 const MANIFEST_SECTION: Record<ScheduleKind, string> = { earliest: 'subbed', dub: 'dubbed' };
+const REFRESH_CHECK_INTERVAL_MS = 60_000;
 
 let snapshot: Snapshot | null = null;
 let manifestSeen: Record<ScheduleKind, string> = { earliest: '', dub: '' };
@@ -30,6 +31,7 @@ let lastCheck = 0;
 let lastRefreshAt = 0;
 let lastError = '';
 let refreshing: Promise<void> | null = null;
+let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
 function settingNumber(key: string, fallback: number): number {
   const value = Number(getSetting(key));
@@ -112,8 +114,18 @@ function startRefresh(): Promise<void> {
   return refreshing;
 }
 
+export function startAnimeScheduleRefresh(): void {
+  if (refreshTimer) return;
+  refreshTimer = setInterval(() => {
+    refreshInBackground();
+  }, REFRESH_CHECK_INTERVAL_MS);
+  refreshTimer.unref?.();
+}
+
 export async function initializeAnimeSchedule(): Promise<void> {
-  if (!baseUrl() || snapshot) return;
+  if (!baseUrl()) return;
+  startAnimeScheduleRefresh();
+  if (snapshot) return;
   await (refreshing || startRefresh());
 }
 
@@ -136,6 +148,7 @@ export function getAnimeScheduleStats() {
 /** Downloads every schedule file again, whatever the update file says. */
 export async function forceUpdateAnimeSchedule(): Promise<{ success: boolean; count: number; message: string }> {
   if (!baseUrl()) return { success: false, count: 0, message: 'The anime release schedule source is turned off' };
+  startAnimeScheduleRefresh();
   if (refreshing) await refreshing.catch(() => {});
   manifestSeen = { earliest: '', dub: '' };
   try {
@@ -161,7 +174,6 @@ function refreshInBackground(): void {
 
 /** True when the published schedule has stopped updating, so the earliest times come from AniList directly. */
 export function isStale(): boolean {
-  refreshInBackground();
   // While the first download is still running there is nothing to call stale yet.
   if (!snapshot) return !baseUrl() || !refreshing;
   const maxAge = settingNumber('ANIME_SCHEDULE_STALE_HOURS', 6) * 60 * 60 * 1000;
@@ -174,7 +186,6 @@ export function anilistIdForMal(malId: unknown): number | null {
 }
 
 export function hasAnime(kind: ScheduleKind, anilistId: number): boolean {
-  refreshInBackground();
   return !!snapshot?.dates[kind].has(anilistId);
 }
 

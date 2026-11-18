@@ -27,6 +27,30 @@ const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
 const MAX_FILE_SIZE = 15 * 1024 * 1024;
 const MAX_INPUT_PIXELS = 10000 * 10000;
 const REQUEST_TIMEOUT_MS = 10000;
+const MAX_CONCURRENT_SHARP_JOBS = 4;
+
+let activeSharpJobs = 0;
+const sharpWaitQueue: Array<() => void> = [];
+
+async function withSharpSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (activeSharpJobs < MAX_CONCURRENT_SHARP_JOBS && sharpWaitQueue.length === 0) {
+    activeSharpJobs += 1;
+  } else {
+    await new Promise<void>((resolve) => {
+      sharpWaitQueue.push(resolve);
+    });
+  }
+  try {
+    return await fn();
+  } finally {
+    const next = sharpWaitQueue.shift();
+    if (next) {
+      next();
+    } else {
+      activeSharpJobs -= 1;
+    }
+  }
+}
 
 interface BannerOptions {
   width?: number;
@@ -189,33 +213,35 @@ function createSharpStream(): any {
 async function streamProcessedImage(imageUrl: string, outputStream: any, configureTransformer: (transformer: any) => any): Promise<StreamResult> {
   ensureOutputStream(outputStream);
 
-  const response = await fetchImageStream(imageUrl);
-  const inputLimiter = createInputSizeLimiter(MAX_FILE_SIZE);
-  const outputCounter = createOutputCounter();
-  const transformer = configureTransformer(createSharpStream()).jpeg();
-  let outputInfo: any = null;
+  return withSharpSlot(async () => {
+    const response = await fetchImageStream(imageUrl);
+    const inputLimiter = createInputSizeLimiter(MAX_FILE_SIZE);
+    const outputCounter = createOutputCounter();
+    const transformer = configureTransformer(createSharpStream()).jpeg();
+    let outputInfo: any = null;
 
-  transformer.once('info', (info: any) => {
-    outputInfo = info;
+    transformer.once('info', (info: any) => {
+      outputInfo = info;
+    });
+
+    try {
+      await pipeline(
+        response.data,
+        inputLimiter,
+        transformer,
+        outputCounter.stream,
+        outputStream
+      );
+
+      return {
+        bytesWritten: outputCounter.bytes(),
+        info: outputInfo
+      };
+    } catch (error: any) {
+      response.data.destroy(error);
+      throw error;
+    }
   });
-
-  try {
-    await pipeline(
-      response.data,
-      inputLimiter,
-      transformer,
-      outputCounter.stream,
-      outputStream
-    );
-
-    return {
-      bytesWritten: outputCounter.bytes(),
-      info: outputInfo
-    };
-  } catch (error: any) {
-    response.data.destroy(error);
-    throw error;
-  }
 }
 
 export { blurImage, convertBannerToBackground, validateImageUrl };

@@ -262,7 +262,8 @@ async function getMalDiscoverCatalog(
     const response = await cacheWrapJikanApi(
       `mal-discover-${catalogId}-page${page}-genre${genreName || 'All'}${seasonCacheSuffix}${customCacheTTL !== null ? `-ttl${customCacheTTL}` : ''}`,
       async () => jikan.fetchDiscover(rawParams, page),
-      customCacheTTL ?? 30 * 60
+      customCacheTTL ?? 30 * 60,
+      { sourceList: true }
     );
 
     if (!response?.items || response.items.length === 0) {
@@ -306,39 +307,39 @@ async function getMalCatalog(
   if (catalogId === 'mal.airing') {
     animeResults = await cacheWrapJikanApi(`mal-airing-${page}-${config.sfw}`, async () => {
       return await jikan.getAiringNow(page, config);
-    }, 24 * 60 * 60);
+    }, 24 * 60 * 60, { sourceList: true });
   } else if (catalogId === 'mal.upcoming') {
     animeResults = await cacheWrapJikanApi(`mal-upcoming-${page}-${config.sfw}`, async () => {
       return await jikan.getUpcoming(page, config);
-    }, 24 * 60 * 60);
+    }, 24 * 60 * 60, { sourceList: true });
   } else if (catalogId === 'mal.top_movies') {
     animeResults = await cacheWrapJikanApi(`mal-top-movies-${page}-${config.sfw}`, async () => {
       return await jikan.getTopAnimeByType('movie', page, config);
-    }, null);
+    }, null, { sourceList: true });
   } else if (catalogId === 'mal.top_series') {
     animeResults = await cacheWrapJikanApi(`mal-top-series-${page}-${config.sfw}`, async () => {
       return await jikan.getTopAnimeByType('tv', page, config);
-    }, null);
+    }, null, { sourceList: true });
   } else if (catalogId === 'mal.most_popular') {
     animeResults = await cacheWrapJikanApi(`mal-most-popular-${page}-${config.sfw}`, async () => {
       return await jikan.getTopAnimeByFilter('bypopularity', page, config);
-    }, null);
+    }, null, { sourceList: true });
   } else if (catalogId === 'mal.most_favorites') {
     animeResults = await cacheWrapJikanApi(`mal-most-favorites-${page}-${config.sfw}`, async () => {
       return await jikan.getTopAnimeByFilter('favorite', page, config);
-    }, null);
+    }, null, { sourceList: true });
   } else if (catalogId === 'mal.top_anime') {
     animeResults = await cacheWrapJikanApi(`mal-top-anime-${page}-${config.sfw}`, async () => {
       return await jikan.getTopAnimeByType('anime', page, config);
-    }, null);
+    }, null, { sourceList: true });
   } else if (catalogId === 'mal.season_top') {
     animeResults = await cacheWrapJikanApi(`mal-season-top-${page}-${config.sfw}`, async () => {
       return await jikan.getSeasonTopRated(page, config);
-    }, 24 * 60 * 60);
+    }, 24 * 60 * 60, { sourceList: true });
   } else if (catalogId === 'mal.season_top_new') {
     animeResults = await cacheWrapJikanApi(`mal-season-top-new-${page}-${config.sfw}`, async () => {
       return await jikan.getSeasonTopNew(page, config);
-    }, 24 * 60 * 60);
+    }, 24 * 60 * 60, { sourceList: true });
   } else if (decadeMap[catalogId]) {
     const [startDate, endDate] = decadeMap[catalogId];
     const allAnimeGenres = await cacheWrapJikanApi('anime-genres', async () => {
@@ -348,7 +349,7 @@ async function getMalCatalog(
     if (genreId !== undefined) {
       animeResults = await cacheWrapJikanApi(`mal-${catalogId}-${page}-${genreId ?? 'all'}-${config.sfw}`, async () => {
         return await jikan.getTopAnimeByDateRange(startDate, endDate, page, genreId ?? undefined, config);
-      }, null);
+      }, null, catalogId === 'mal.20sDecade' ? { sourceList: true } : {});
     }
   } else if (catalogId === 'mal.genres') {
     const mediaType = null;
@@ -359,7 +360,7 @@ async function getMalCatalog(
     if (genreId !== undefined) {
       animeResults = await cacheWrapJikanApi(`mal-genre-${genreId ?? 'any'}-${mediaType || 'all'}-${page}-${config.sfw}`, async () => {
         return await jikan.getAnimeByGenre(genreId, mediaType, page, config);
-      }, null);
+      }, null, { sourceList: true });
     }
   } else if (catalogId === 'mal.studios') {
     if (genre) {
@@ -372,14 +373,14 @@ async function getMalCatalog(
         const studioId = selectedStudio.mal_id;
         animeResults = await cacheWrapJikanApi(`mal-studio-${studioId}-${page}-${config.sfw}`, async () => {
           return await jikan.getAnimeByStudio(studioId, page);
-        }, null);
+        }, null, { sourceList: true });
       }
     }
   } else if (catalogId === 'mal.schedule') {
     const dayOfWeek = genre || 'Monday';
     animeResults = await cacheWrapJikanApi(`mal-schedule-${dayOfWeek}-${page}-${config.sfw}`, async () => {
       return await jikan.getAiringSchedule(dayOfWeek, page, config);
-    }, null);
+    }, null, { sourceList: true });
   } else if (catalogId === 'mal.seasons') {
     let seasonString = genre ? decodeURIComponent(genre) : null;
     if (!seasonString) {
@@ -398,7 +399,7 @@ async function getMalCatalog(
     const year = parseInt(parts[1]);
     animeResults = await cacheWrapJikanApi(`mal-season-${year}-${season}-${page}-${config.sfw}`, async () => {
       return await jikan.getAnimeBySeason(year, season, page, config);
-    }, null);
+    }, null, { sourceList: true });
   } else {
     logger.warn(`[MAL] Unknown catalog id: ${catalogId}`);
     return [];
@@ -595,7 +596,7 @@ async function getTvdbCatalog(type: string, catalogId: string, genreName: string
       // Standard behavior for genres/search
       return await tvdb.filter(tvdbType, params, config);
     }
-  });
+  }, { sourceList: true });
   
   logger.debug(`TVDB filter results: ${results ? results.length : 0} items returned`);
   
@@ -1985,7 +1986,7 @@ async function getExternalAddonCatalog(type: string, catalogId: string, genre: s
       const cacheKey = `custom-batch:${catalogId}:${sourceKey}:${genre || 'all'}:skip=${offset}:ttl:${catalogTTL}`;
       return await cacheWrap(cacheKey, async () => {
         return await fetchStremThruCatalog(catalogUrl, offset, genre);
-      }, catalogTTL, { enableErrorCaching: true, maxRetries: 2 });
+      }, catalogTTL, { enableErrorCaching: true, maxRetries: 2, sourceList: true });
     };
 
     const collected: any[] = [];
@@ -2777,7 +2778,7 @@ async function getLetterboxdCatalog(
       `letterboxd-list:${identifier}:${isWatchlist}:ttl:${listTtl}`,
       async () => await fetchLetterboxdList(identifier, isWatchlist),
       listTtl,
-      { enableErrorCaching: true, maxRetries: 2, resultClassifier: classifyResultAllowEmpty }
+      { enableErrorCaching: true, maxRetries: 2, resultClassifier: classifyResultAllowEmpty, sourceList: true }
     );
     
     if (!listData?.data?.items) {

@@ -9,6 +9,7 @@ export interface AnimeEpisode {
 }
 
 const tmdbEpisodes = new LRUCache<string, { kitsuId: number; episodeNumber: number } | false>({ max: envInt('ANIME_TMDB_EPISODE_CACHE_MAX', 20000, 1) });
+const tvdbEpisodes = new LRUCache<string, AnimeEpisode | false>({ max: envInt('ANIME_TMDB_EPISODE_CACHE_MAX', 20000, 1) });
 
 async function kitsuEpisodeFromTmdb(tmdbId: number, season: number, episode: number, config: any) {
   const key = `${tmdbId}:${season}:${episode}`;
@@ -90,16 +91,29 @@ export async function resolveAnimeEpisode(meta: any, video: any, config: any): P
       }
     }
     if (!tvdbId) return null;
+    const cacheKey = `${tvdbId}:${season}:${episode}`;
+    const held = tvdbEpisodes.get(cacheKey);
+    if (held !== undefined) return held || null;
+
     const animeList = require('./anime-list-mapper');
-    const anidb = await animeList.resolveAnidbEpisodeFromTvdbEpisode(tvdbId, season, episode);
-    if (!positive(anidb?.anidbId) || !positive(anidb?.anidbEpisode) || Number(anidb.anidbSeason) !== 1) return null;
-    // Only a mapping that leads back to the same TVDB episode is trusted.
-    const back = animeList.resolveTvdbEpisodeFromAnidbEpisode(anidb.anidbId, 1, anidb.anidbEpisode);
-    if (Number(back?.tvdbId) !== tvdbId || Number(back?.tvdbSeason) !== season || Number(back?.tvdbEpisode) !== episode) return null;
-    const mapping = mapper.getMappingByAnidbId(anidb.anidbId);
-    const malId = positive(mapping?.mal_id);
-    const anilistId = positive(mapping?.anilist_id);
-    return malId || anilistId ? { malId, anilistId, episode: anidb.anidbEpisode } : null;
+    const anidb = animeList.resolveAnidbEpisodeFromTvdbEpisode(tvdbId, season, episode);
+    let resolved: AnimeEpisode | null = null;
+    if (positive(anidb?.anidbId) && positive(anidb?.anidbEpisode) && Number(anidb.anidbSeason) === 1) {
+      // Only a mapping that leads back to the same TVDB episode is trusted.
+      const back = animeList.resolveTvdbEpisodeFromAnidbEpisode(anidb.anidbId, 1, anidb.anidbEpisode);
+      if (Number(back?.tvdbId) === tvdbId && Number(back?.tvdbSeason) === season && Number(back?.tvdbEpisode) === episode) {
+        const mapping = mapper.getMappingByAnidbId(anidb.anidbId);
+        const malId = positive(mapping?.mal_id);
+        const anilistId = positive(mapping?.anilist_id);
+        if (malId || anilistId) {
+          resolved = { malId, anilistId, episode: anidb.anidbEpisode };
+        }
+      }
+    }
+    if (animeList.isInitialized() && mapper.isInitialized?.() !== false) {
+      tvdbEpisodes.set(cacheKey, resolved || false, { ttl: envInt('ANIME_TMDB_EPISODE_CACHE_TTL', 3600, 60) * 1000 });
+    }
+    return resolved;
   }
 
   if (meta?._metaProvider === 'tmdb') {

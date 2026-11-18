@@ -52,6 +52,10 @@ function parseMediaId(id: any): ParsedMediaId | null {
   let [prefix, ...rest] = parts;
 
   if (prefix === 'mal' && rest.length > 0) {
+    if (!/^\d+$/.test(rest[0])) {
+      logger.debug(`[Watch Tracking] Invalid numeric identifier for provider mal: ${rest[0]}`);
+      return null;
+    }
     const kitsuId = require('./id-mapper').getMappingByMalId(rest[0])?.kitsu_id;
     if (kitsuId === undefined || kitsuId === null) {
       logger.debug(`[Watch Tracking] No Kitsu id known for MAL ${rest[0]}`);
@@ -187,7 +191,7 @@ function handleSubtitleRequest(type: string, id: string, config: any, userUUID: 
 
     const parsedId = parseMediaId(id);
     if (!parsedId) {
-      logger.warn(`[Watch Tracking] Failed to parse media ID, id: ${id}, type: ${type}`);
+      logger.debug(`[Watch Tracking] Failed to parse media ID, id: ${id}, type: ${type}`);
       return { subtitles: [] };
     }
 

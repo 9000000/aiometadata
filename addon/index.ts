@@ -412,33 +412,82 @@ function applyImageCachePrefix(data) {
 
   const landscapeCached = posterCacheConfig.isFieldCacheable('landscapePoster');
   const applyToMeta = (meta) => {
-    if (!meta) return;
+    if (!meta) return meta;
+    let cloned = null;
+    const ensureClone = () => {
+      if (!cloned) cloned = { ...meta };
+      return cloned;
+    };
     for (const field of enabledFields) {
       if (!meta[field]) continue;
       if (field === 'poster' && meta.posterShape === 'landscape') {
-        if (landscapeCached) meta.poster = prefixUrl(meta.poster, 'landscape');
+        if (landscapeCached) {
+          const nextUrl = prefixUrl(meta.poster, 'landscape');
+          if (nextUrl !== meta.poster) ensureClone().poster = nextUrl;
+        }
         continue;
       }
-      meta[field] = prefixUrl(meta[field], metaFieldClasses[field]);
+      const nextUrl = prefixUrl(meta[field], metaFieldClasses[field]);
+      if (nextUrl !== meta[field]) ensureClone()[field] = nextUrl;
     }
     if (cacheThumbnails && Array.isArray(meta.videos)) {
-      for (const video of meta.videos) {
-        if (video?.thumbnail) video.thumbnail = prefixUrl(video.thumbnail, 'thumbnail');
+      let nextVideos = null;
+      for (let i = 0; i < meta.videos.length; i++) {
+        const video = meta.videos[i];
+        if (video?.thumbnail) {
+          const nextThumb = prefixUrl(video.thumbnail, 'thumbnail');
+          if (nextThumb !== video.thumbnail) {
+            if (!nextVideos) nextVideos = meta.videos.slice();
+            nextVideos[i] = { ...video, thumbnail: nextThumb };
+          }
+        }
       }
+      if (nextVideos) ensureClone().videos = nextVideos;
     }
     if (cacheCast && Array.isArray(meta.app_extras?.cast)) {
-      for (const member of meta.app_extras.cast) {
-        if (member?.photo) member.photo = prefixUrl(member.photo, 'cast');
+      let nextCast = null;
+      for (let i = 0; i < meta.app_extras.cast.length; i++) {
+        const member = meta.app_extras.cast[i];
+        if (member?.photo) {
+          const nextPhoto = prefixUrl(member.photo, 'cast');
+          if (nextPhoto !== member.photo) {
+            if (!nextCast) nextCast = meta.app_extras.cast.slice();
+            nextCast[i] = { ...member, photo: nextPhoto };
+          }
+        }
+      }
+      if (nextCast) {
+        ensureClone().app_extras = { ...meta.app_extras, cast: nextCast };
       }
     }
+    if (Array.isArray(meta.credits)) {
+      let nextCredits = null;
+      for (let i = 0; i < meta.credits.length; i++) {
+        const nextCredit = applyToMeta(meta.credits[i]);
+        if (nextCredit !== meta.credits[i]) {
+          if (!nextCredits) nextCredits = meta.credits.slice();
+          nextCredits[i] = nextCredit;
+        }
+      }
+      if (nextCredits) ensureClone().credits = nextCredits;
+    }
+    return cloned || meta;
   };
 
-  applyToMeta(data.meta);
-  if (Array.isArray(data.meta?.credits)) {
-    for (const credit of data.meta.credits) applyToMeta(credit);
+  if (data.meta) {
+    const nextMeta = applyToMeta(data.meta);
+    if (nextMeta !== data.meta) data.meta = nextMeta;
   }
   if (Array.isArray(data.metas)) {
-    for (const meta of data.metas) applyToMeta(meta);
+    let nextMetas = null;
+    for (let i = 0; i < data.metas.length; i++) {
+      const nextMeta = applyToMeta(data.metas[i]);
+      if (nextMeta !== data.metas[i]) {
+        if (!nextMetas) nextMetas = data.metas.slice();
+        nextMetas[i] = nextMeta;
+      }
+    }
+    if (nextMetas) data.metas = nextMetas;
   }
 }
 
@@ -654,10 +703,43 @@ const respond = function (req, res, data, opts?) {
   res.setHeader("Access-Control-Allow-Headers", "*");
   res.setHeader("Content-Type", "application/json");
 
-  applyImageCachePrefix(data);
+  let payload = data;
+  if (data && typeof data === 'object' && !Array.isArray(data) && !Buffer.isBuffer(data) && ('meta' in data || 'metas' in data)) {
+    payload = { ...data };
+  }
 
-  stripReleaseAvailabilityForResponse(data);
-  res.send(data);
+  applyImageCachePrefix(payload);
+
+  if (payload && typeof payload === 'object') {
+    const cloneForReleaseStrip = (meta) => {
+      if (!meta || typeof meta !== 'object') return meta;
+      const hasField = Object.prototype.hasOwnProperty.call(meta, '_releaseAvailability');
+      const hasDates = Boolean(meta.app_extras && Object.prototype.hasOwnProperty.call(meta.app_extras, 'releaseDates'));
+      if (!hasField && !hasDates) return meta;
+      return {
+        ...meta,
+        ...(hasDates ? { app_extras: { ...meta.app_extras } } : {}),
+      };
+    };
+    if (payload.meta) {
+      const nextMeta = cloneForReleaseStrip(payload.meta);
+      if (nextMeta !== payload.meta) payload.meta = nextMeta;
+    }
+    if (Array.isArray(payload.metas)) {
+      let nextMetas = null;
+      for (let i = 0; i < payload.metas.length; i++) {
+        const nextMeta = cloneForReleaseStrip(payload.metas[i]);
+        if (nextMeta !== payload.metas[i]) {
+          if (!nextMetas) nextMetas = payload.metas.slice();
+          nextMetas[i] = nextMeta;
+        }
+      }
+      if (nextMetas) payload.metas = nextMetas;
+    }
+  }
+
+  stripReleaseAvailabilityForResponse(payload);
+  res.send(payload);
 };
 
   addon.get("/api/config", (req, res) => {
@@ -4856,9 +4938,47 @@ addon.get("/manifest.json", function (req, res) {
 // --- Database-Only Manifest Route ---
 require('./lib/collectionExportRoutes').register(addon);
 
+const { LRUCache: ManifestLruCache } = require('lru-cache');
+const MANIFEST_L1_CACHE_MAX = 500;
+const MANIFEST_L1_CACHE_TTL_MS = 30_000;
+const manifestL1Cache = new ManifestLruCache({
+  max: MANIFEST_L1_CACHE_MAX,
+  ttl: MANIFEST_L1_CACHE_TTL_MS,
+}) as import('lru-cache').LRUCache<string, string>;
+const manifestInflight = new Map<string, Promise<string | null>>();
+
+function buildManifestCacheKey(opts: {
+  userUUID: string;
+  config: any;
+  profileId: string;
+  tags: string[];
+}): string {
+  const configDigest = crypto
+    .createHash('sha1')
+    .update(JSON.stringify(opts.config))
+    .digest('hex');
+  const serverStamp = [
+    process.env.HOST_NAME || '',
+    jikan.isJikanEnabled() ? '1' : '0',
+    getSetting('LUMIERE_API_BASE'),
+    getSetting('MAL_PAGE_SIZE'),
+    getSetting('CATALOG_LIST_ITEMS_SIZE'),
+    getSetting('ADDON_LOGO_URL'),
+    getSetting('ADDON_NAME_SUFFIX'),
+    getSetting('WATCH_STATE_PULL_TTL'),
+  ].join('|');
+  return `${opts.userUUID}:${configDigest}:${opts.profileId}:${opts.tags.join(',')}:${serverStamp}`;
+}
+
 addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
     const { userUUID } = req.params;
     try {
+        if (!userUUID) {
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Access-Control-Allow-Headers', '*');
+            return res.status(404).send({ err: "User configuration not found." });
+        }
+
         // Load config from database
         const config = await database.getUserConfig(userUUID);
         if (!config) {
@@ -4888,12 +5008,41 @@ addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
         if (refusedFilters.length > 0) {
             consola.warn(`[Manifest] User ${userUUID} asked for ${refusedFilters.join(', ')}, which does not tighten their configured ${config.ageRating || 'None'}`);
         }
-        consola.debug(`[Manifest] Building fresh manifest for user: ${userUUID}${tags.length ? ` (tags: ${tags.join(', ')})` : ''}`);
         if (unknownTags.length > 0) {
             consola.warn(`[Manifest] User ${userUUID} asked for ${unknownTags.join(', ')}, which no catalog is tagged with`);
         }
-        const viewer = profile?.id ? scopeConfigToProfile(config, userUUID, profile.id) : undefined;
-        const manifest = await getManifest(config, { tags, userUUID, viewer });
+
+        const manifestCacheKey = buildManifestCacheKey({
+            userUUID,
+            config,
+            profileId: profile?.id ? String(profile.id) : '',
+            tags,
+        });
+
+        let cachedManifestJson = manifestL1Cache.get(manifestCacheKey);
+        if (!cachedManifestJson) {
+            let inflight = manifestInflight.get(manifestCacheKey);
+            if (!inflight) {
+                consola.debug(`[Manifest] Building fresh manifest for user: ${userUUID}${tags.length ? ` (tags: ${tags.join(', ')})` : ''}`);
+                const viewer = profile?.id ? scopeConfigToProfile(config, userUUID, profile.id) : undefined;
+                inflight = getManifest(config, { tags, userUUID, viewer })
+                    .then((built) => {
+                        if (!built) return null;
+                        const serialized = JSON.stringify(built);
+                        manifestL1Cache.set(manifestCacheKey, serialized);
+                        return serialized;
+                    })
+                    .finally(() => {
+                        manifestInflight.delete(manifestCacheKey);
+                    });
+                manifestInflight.set(manifestCacheKey, inflight);
+            }
+            cachedManifestJson = (await inflight) ?? undefined;
+        } else {
+            consola.debug(`[Manifest] Serving L1 cached manifest for user: ${userUUID}${tags.length ? ` (tags: ${tags.join(', ')})` : ''}`);
+        }
+
+        const manifest = cachedManifestJson ? JSON.parse(cachedManifestJson) : null;
             if (!manifest) {
                 res.setHeader('Access-Control-Allow-Origin', '*');
                 res.setHeader('Access-Control-Allow-Headers', '*');
@@ -5000,7 +5149,11 @@ const catalogRoute = async function (req, res) {
   }
 
   // Handle calendar-videos catalog
-  if (id === 'calendar-videos' && type === 'series' && extra) {
+  if (id === 'calendar-videos') {
+    if (type !== 'series' || !extra) {
+      res.setHeader('Cache-Control', "max-age=10800, stale-while-revalidate=3600, stale-if-error=259200");
+      return res.json({ metas: [] });
+    }
     const logger = consola.withTag('Calendar');
     
     try {
@@ -5034,22 +5187,21 @@ const catalogRoute = async function (req, res) {
           
           if (!result || !result.meta) return null;
           
-          const meta = result.meta;
-          
-          if (meta.videos && Array.isArray(meta.videos)) {
-            const now = new Date();
-            meta.videos = meta.videos.filter(video => {
+          const rawMeta = result.meta;
+          if (!Array.isArray(rawMeta.videos) || rawMeta.videos.length === 0) return null;
+
+          const now = new Date();
+          const upcomingVideos = rawMeta.videos
+            .filter(video => {
               if (!video.released) return false;
               const releaseDate = new Date(video.released);
               return !isNaN(releaseDate.getTime()) && releaseDate >= now;
-            });
-            
-            meta.videos.sort((a, b) => new Date(a.released).getTime() - new Date(b.released).getTime());
-          }
-          
-          if (!meta.videos || meta.videos.length === 0) return null;
-          
-          return meta;
+            })
+            .sort((a, b) => new Date(a.released).getTime() - new Date(b.released).getTime());
+
+          if (upcomingVideos.length === 0) return null;
+
+          return { ...rawMeta, videos: upcomingVideos };
         } catch (err) {
           logger.warn(`Failed to process ID ${id} for calendar: ${err.message}`);
           return null;
@@ -5443,12 +5595,15 @@ const catalogRoute = async function (req, res) {
     }
     }
     if (!filtersAlreadyApplied && responseData?.metas && Array.isArray(responseData.metas) && responseData.metas.length > 0) {
-      responseData.metas = await applyCatalogFilters(responseData.metas, {
-        type: actualType,
-        config,
-        catalogConfig,
-        cleanId
-      });
+      responseData = {
+        ...responseData,
+        metas: await applyCatalogFilters(responseData.metas, {
+          type: actualType,
+          config,
+          catalogConfig,
+          cleanId
+        }),
+      };
     }
 
     if (Array.isArray(responseData?.metas) && responseData.metas.length > 1) {
@@ -5472,7 +5627,7 @@ const catalogRoute = async function (req, res) {
     if (catalogConfig?.randomizePerPage && Array.isArray(responseData?.metas) && responseData.metas.length > 1) {
       responseData = req.params.forJellyfin === '1'
         ? { ...responseData, randomize: true }
-        : { ...responseData, metas: shuffleMetas(responseData.metas) };
+        : { ...responseData, metas: shuffleMetas([...responseData.metas]) };
     }
 
     // Art URL pattern overrides for catalog items
@@ -5509,109 +5664,125 @@ const catalogRoute = async function (req, res) {
     const merged = cleanId.startsWith('merged.');
     if ((merged || catalogArt.applies) && responseData?.metas && Array.isArray(responseData.metas)) {
       const proxyApiKey = config.usePosterProxy ? getPosterRatingApiKey(config) : null;
-      for (const meta of responseData.metas) {
-        const art = artOf(meta);
+      let nextMetas = null;
+      for (let i = 0; i < responseData.metas.length; i++) {
+        const rawMeta = responseData.metas[i];
+        if (!rawMeta) continue;
+        const art = artOf(rawMeta);
         if (!art.applies) continue;
-        const ids = extractIdsFromMeta(meta);
-        const type = meta.type || actualType;
+        let meta = rawMeta;
+        const cloneMeta = () => {
+          if (meta === rawMeta) meta = { ...rawMeta };
+          return meta;
+        };
+        const ids = extractIdsFromMeta(rawMeta);
+        const itemType = rawMeta.type || actualType;
+        const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
         if (art.posterApplies) {
+          let nextPoster = null;
           if (proxyApiKey) {
-            const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
             if (proxyId) {
-              meta.poster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, ratingKey: proxyApiKey, lang: config.language });
+              nextPoster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'poster', type: itemType, id: proxyId, fallback: meta.poster, ratingKey: proxyApiKey, lang: config.language });
             }
           } else {
-            const resolved = resolveCustomArtUrl(art.posterPattern, ids, type, config, { shape: posterShapeOf(meta) });
+            const resolved = resolveCustomArtUrl(art.posterPattern, ids, itemType, config, { shape: posterShapeOf(meta) });
             if (resolved) {
-              if (config.usePosterProxy) {
-                const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
-                if (proxyId) {
-                  meta.poster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, url: resolved });
-                } else {
-                  meta.poster = resolved;
-                }
-              } else {
-                meta.poster = resolved;
-              }
+              nextPoster = (config.usePosterProxy && proxyId)
+                ? buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'poster', type: itemType, id: proxyId, fallback: meta.poster, url: resolved })
+                : resolved;
             }
+          }
+          if (nextPoster && nextPoster !== meta.poster) {
+            cloneMeta().poster = nextPoster;
           }
         }
         if (art.backgroundPattern) {
-          const resolved = resolveCustomArtUrl(art.backgroundPattern, ids, type, config, { shape: 'landscape' });
+          const resolved = resolveCustomArtUrl(art.backgroundPattern, ids, itemType, config, { shape: 'landscape' });
           if (resolved) {
-            if (config.usePosterProxy) {
-              const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
-              if (proxyId) {
-                meta.background = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'background', type: type, id: proxyId, fallback: meta.background, url: resolved });
-              } else {
-                meta.background = resolved;
-              }
-            } else {
-              meta.background = resolved;
+            const nextBackground = (config.usePosterProxy && proxyId)
+              ? buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'background', type: itemType, id: proxyId, fallback: meta.background, url: resolved })
+              : resolved;
+            if (nextBackground !== meta.background) {
+              cloneMeta().background = nextBackground;
             }
           }
         }
         if (art.landscapePattern) {
-          const resolved = resolveCustomArtUrl(art.landscapePattern, ids, type, config, { shape: 'landscape' });
+          const resolved = resolveCustomArtUrl(art.landscapePattern, ids, itemType, config, { shape: 'landscape' });
           if (resolved) {
-            if (config.usePosterProxy) {
-              const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
-              if (proxyId) {
-                meta.landscapePoster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'landscape', type: type, id: proxyId, fallback: meta.landscapePoster, url: resolved });
-              } else {
-                meta.landscapePoster = resolved;
-              }
-            } else {
-              meta.landscapePoster = resolved;
+            const nextLandscape = (config.usePosterProxy && proxyId)
+              ? buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'landscape', type: itemType, id: proxyId, fallback: meta.landscapePoster, url: resolved })
+              : resolved;
+            if (nextLandscape !== meta.landscapePoster) {
+              cloneMeta().landscapePoster = nextLandscape;
             }
           }
         }
         if (art.logoPattern) {
-          const resolved = resolveCustomArtUrl(art.logoPattern, ids, type, config);
+          const resolved = resolveCustomArtUrl(art.logoPattern, ids, itemType, config);
           if (resolved) {
-            if (config.usePosterProxy) {
-              const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
-              if (proxyId) {
-                meta.logo = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'logo', type: type, id: proxyId, fallback: meta.logo, url: resolved });
-              } else {
-                meta.logo = resolved;
-              }
-            } else {
-              meta.logo = resolved;
+            const nextLogo = (config.usePosterProxy && proxyId)
+              ? buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'logo', type: itemType, id: proxyId, fallback: meta.logo, url: resolved })
+              : resolved;
+            if (nextLogo !== meta.logo) {
+              cloneMeta().logo = nextLogo;
             }
           }
         }
+        if (meta !== rawMeta) {
+          if (!nextMetas) nextMetas = responseData.metas.slice();
+          nextMetas[i] = meta;
+        }
       }
+      if (nextMetas) responseData = { ...responseData, metas: nextMetas };
     }
 
-    if (req.params.forJellyfin === '1' && Array.isArray(responseData?.metas)) responseData.pageSize = catalogPageSize;
+    if (req.params.forJellyfin === '1' && Array.isArray(responseData?.metas)) {
+      responseData = { ...responseData, pageSize: catalogPageSize };
+    }
 
     if (config.trailerProvider === 'addon' && req.params.forJellyfin !== '1' && Array.isArray(responseData?.metas)) {
       const { applyTrailerAddonWithin } = require('./lib/trailerProjection');
-      await applyTrailerAddonWithin(responseData.metas, config, envInt('TRAILER_ADDON_CATALOG_WAIT_MS', 1500, 0));
+      const clonedMetas = responseData.metas.map((m) => (m ? { ...m } : m));
+      await applyTrailerAddonWithin(clonedMetas, config, envInt('TRAILER_ADDON_CATALOG_WAIT_MS', 1500, 0));
+      responseData = { ...responseData, metas: clonedMetas };
     }
 
     const isSearchCatalog = cleanId === 'search' || cleanId === 'people_search' || cleanId === 'gemini.search';
     if (isLandscapeCatalogConfig(config, catalogConfig) && !isSearchCatalog && req.params.forJellyfin !== '1' && Array.isArray(responseData?.metas)) {
-      for (const meta of responseData.metas) {
+      let nextMetas = null;
+      for (let i = 0; i < responseData.metas.length; i++) {
+        const meta = responseData.metas[i];
+        if (!meta) continue;
         const landscape = artOf(meta).upstreamArt ? (meta.background || meta.landscapePoster) : (meta.landscapePoster || meta.background);
         if (meta.posterShape === 'landscape' || !landscape) continue;
-        meta.poster = landscape;
-        meta.posterShape = 'landscape';
+        if (!nextMetas) nextMetas = responseData.metas.slice();
+        nextMetas[i] = { ...meta, poster: landscape, posterShape: 'landscape' };
       }
+      if (nextMetas) responseData = { ...responseData, metas: nextMetas };
     }
 
     if (merged && Array.isArray(responseData?.metas)) {
-      for (const meta of responseData.metas) delete meta?._artSource;
+      let nextMetas = null;
+      for (let i = 0; i < responseData.metas.length; i++) {
+        const meta = responseData.metas[i];
+        if (meta && '_artSource' in meta) {
+          if (!nextMetas) nextMetas = responseData.metas.slice();
+          const cloned = { ...meta };
+          delete cloned._artSource;
+          nextMetas[i] = cloned;
+        }
+      }
+      if (nextMetas) responseData = { ...responseData, metas: nextMetas };
     }
 
     if ((responseData as any)?.error) {
       const { dynamicError, showsNotices } = require('./lib/errorNotice');
       const reason = String((responseData as any).error);
-      delete (responseData as any).error;
-      if (showsNotices(config)) {
-        responseData = dynamicError('catalog', { title: 'Search unavailable', description: reason }, actualType === 'series' ? 'series' : 'movie');
-      }
+      const { error: _ignoredError, ...restResponse } = responseData as any;
+      responseData = showsNotices(config)
+        ? dynamicError('catalog', { title: 'Search unavailable', description: reason }, actualType === 'series' ? 'series' : 'movie')
+        : restResponse;
     }
 
     if (Array.isArray(responseData?.metas)) {
@@ -5661,6 +5832,21 @@ const catalogRouteForViewer = async function (req, res) {
 addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", catalogRouteForViewer);
 registerInProcessRoute('catalog', "/stremio/:userUUID/catalog/:type/:id{/:extra}.json", catalogRoute);
 // --- Meta Route (with enhanced caching) ---
+const STRICT_NUMERIC_META_PREFIXES = new Set(['mal', 'kitsu', 'tmdb', 'tvdb', 'tvmaze', 'anidb', 'anilist']);
+
+function isMalformedNumericMetaId(type: string, rawId: string): boolean {
+  if (!rawId || typeof rawId !== 'string') return false;
+  let normalizedId = rawId.startsWith('tun_') ? rawId.slice(4) : rawId;
+  const canonicalUpNextId = extractCanonicalIdFromDynamicUpNextId(type, normalizedId);
+  if (canonicalUpNextId) {
+    normalizedId = canonicalUpNextId;
+  }
+  if (!normalizedId.includes(':')) return false;
+  const [prefix, sourceId] = normalizedId.split(':');
+  if (!STRICT_NUMERIC_META_PREFIXES.has(prefix)) return false;
+  return !sourceId || !/^\d+$/.test(sourceId);
+}
+
 const metaRoute = async function (req, res) {
   const { userUUID, type, id: stremioId } = req.params;
 
@@ -5708,7 +5894,13 @@ const metaRoute = async function (req, res) {
   const fullConfig = config;
   
   // Pass config to req for ETag generation
-  req.userConfig = config; 
+  req.userConfig = config;
+
+  if (isMalformedNumericMetaId(type, stremioId)) {
+    consola.debug(`[Meta Route] Ignoring malformed numeric Stremio ID: ${stremioId}`);
+    return respond(req, res, { meta: null }, { cacheMaxAge: 300, staleRevalidate: 600 });
+  }
+
   // Enhanced caching options for better error handling
   const cacheOptions = {
     enableErrorCaching: true,
@@ -5782,7 +5974,14 @@ const metaRoute = async function (req, res) {
       return respond(req, res, { meta: null });
     }
 
-    if (req.params.beforeArt !== '1') applyMetaArt(result.meta, config, type, req.headers['user-agent'] || '');
+    if (req.params.beforeArt !== '1') {
+      const clonedMeta = {
+        ...result.meta,
+        ...(Array.isArray(result.meta.videos) ? { videos: result.meta.videos.map((v) => (v ? { ...v } : v)) } : {}),
+      };
+      applyMetaArt(clonedMeta, config, type, req.headers['user-agent'] || '');
+      result = { ...result, meta: clonedMeta };
+    }
 
     /*else if (result && result.meta) {
       // cache wrap the ratings
@@ -5821,14 +6020,20 @@ const metaRoute = async function (req, res) {
     }*/
     
     if (stremioId.startsWith('tvdbc:') && result?.meta && Array.isArray(result.meta.videos)) {
-      result.meta.collection = {
-        items: result.meta.videos.map((video) => ({
-          id: video.id,
-          type: 'movie',
-          name: video.title || video.name,
-          poster: video.thumbnail,
-          ...(video.released ? { releaseInfo: String(video.released).slice(0, 4) } : {}),
-        })),
+      result = {
+        ...result,
+        meta: {
+          ...result.meta,
+          collection: {
+            items: result.meta.videos.map((video) => ({
+              id: video.id,
+              type: 'movie',
+              name: video.title || video.name,
+              poster: video.thumbnail,
+              ...(video.released ? { releaseInfo: String(video.released).slice(0, 4) } : {}),
+            })),
+          },
+        },
       };
     }
 

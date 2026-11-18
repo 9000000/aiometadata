@@ -110,6 +110,7 @@ async function runRefreshAhead(versionedKey: string, rebuild: () => Promise<bool
   activeCount += 1;
 
   const lockKey = refreshLockKey(versionedKey);
+  let lockAcquired = false;
 
   try {
     const acquired = await redis.set(lockKey, '1', 'EX', LOCK_SECONDS, 'NX');
@@ -118,6 +119,7 @@ async function runRefreshAhead(versionedKey: string, rebuild: () => Promise<bool
       stats.skippedLocked += 1;
       return;
     }
+    lockAcquired = true;
 
     stats.started += 1;
     const wrote = await withRebuildTimeout(rebuild);
@@ -132,6 +134,9 @@ async function runRefreshAhead(versionedKey: string, rebuild: () => Promise<bool
   } catch (error: any) {
     stats.failed += 1;
     logger.warn(`Refresh failed for ${versionedKey}: ${error?.message}`);
+    if (lockAcquired) {
+      await Promise.resolve(redis.del(lockKey)).catch(() => {});
+    }
   } finally {
     inFlight.delete(versionedKey);
     activeCount -= 1;

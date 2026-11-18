@@ -1,4 +1,5 @@
-import { httpGet, httpPost, httpRequest } from "./httpClient.js";
+import { httpGet, httpPost, httpRequest, KEEP_ALIVE } from "./httpClient.js";
+import { LRUCache } from 'lru-cache';
 import { historyPayload, type EpisodeRef } from "./historyPayload";
 import { noteTrackerCall } from "./trackerCalls";
 import { getMeta } from "../lib/getMeta.js";
@@ -87,7 +88,7 @@ function sanitizeUrlForLogging(url: string): string {
   return url.replace(/(Authorization: Bearer\s+)[^\s]+/gi, '$1[REDACTED]');
 }
 
-const simklDispatcher = new Agent({ allowH2: false, connect: { timeout: 30000 } });
+const simklDispatcher = new Agent({ allowH2: false, connect: { timeout: 30000 }, ...KEEP_ALIVE });
 
 /**
  * Checks if an error is a "permanent" client-side error that should not be retried.
@@ -119,7 +120,7 @@ interface SimklBucket {
   pausedUntil: number;
 }
 
-const simklBuckets = new Map<string, SimklBucket>();
+const simklBuckets = new LRUCache<string, SimklBucket>({ max: 5000, ttl: 60 * 60 * 1000 });
 
 function simklBucket(key: string): SimklBucket {
   let bucket = simklBuckets.get(key);
@@ -392,7 +393,7 @@ function needsRefresh(token: any): boolean {
 }
 
 const refreshing = new Map<string, Promise<any | null>>();
-const refreshFailedUntil = new Map<string, number>();
+const refreshFailedUntil = new LRUCache<string, number>({ max: 5000, ttl: 60 * 60 * 1000 });
 
 // A refresh kills the previous access token, so only one runs per grant across replicas.
 function refreshSimklToken(tokenId: string): Promise<any | null> {

@@ -1,6 +1,7 @@
 const redis = require("./redisClient");
 const metrics = require("./metricsBatch");
 const consola = require("consola");
+const { LRUCache } = require("lru-cache");
 const { isMetricsDisabled } = require('./metricsConfig');
 const { envInt } = require('../utils/envNumber');
 
@@ -61,7 +62,7 @@ class RequestTracker {
     this.dailyKey = `requests:${new Date().toISOString().split("T")[0]}`;
     this.hourlyKey = `requests:${new Date().toISOString().substring(0, 13)}`;
     this.errorKey = `errors:${new Date().toISOString().split("T")[0]}`;
-    this._chartMemoryCache = new Map();
+    this._chartMemoryCache = new LRUCache({ max: 200, ttl: 60 * 1000 });
 
     // Let it run in LITE_MODE because it only checks a few specific keys
     this.cleanupCorruptedKeys().catch((error) => {
@@ -80,9 +81,9 @@ class RequestTracker {
     return null;
   }
 
-  _setCachedChartData(key, data) {
-    if (!this._chartMemoryCache) this._chartMemoryCache = new Map();
-    this._chartMemoryCache.set(key, { data, timestamp: Date.now() });
+  _setCachedChartData(key, data, ttlMs = 60 * 1000) {
+    if (!this._chartMemoryCache) this._chartMemoryCache = new LRUCache({ max: 200, ttl: 60 * 1000 });
+    this._chartMemoryCache.set(key, { data, timestamp: Date.now() }, { ttl: ttlMs });
   }
 
   // Middleware to track all requests
@@ -1176,16 +1177,25 @@ class RequestTracker {
     try {
       const hourlyData = [];
       const now = new Date();
+      const hourBuckets = [];
+      const pipeline = redis.pipeline();
 
       for (let i = hours - 1; i >= 0; i--) {
         const hour = new Date(now.getTime() - i * 60 * 60 * 1000);
         const hourKey = hour.toISOString().substring(0, 13);
-        const requests = await redis.get(`requests:${hourKey}`);
+        hourBuckets.push(hour);
+        pipeline.get(`requests:${hourKey}`);
+        pipeline.lrange(`response_times:${hourKey}`, 0, -1);
+      }
 
-        const responseTimesKey = `response_times:${hourKey}`;
-        const responseTimes = await redis.lrange(responseTimesKey, 0, -1);
+      const results = await pipeline.exec();
+
+      for (let idx = 0; idx < hourBuckets.length; idx++) {
+        const hour = hourBuckets[idx];
+        const requests = results?.[idx * 2]?.[1];
+        const responseTimes = results?.[idx * 2 + 1]?.[1];
         const avgResponseTime =
-          responseTimes.length > 0
+          Array.isArray(responseTimes) && responseTimes.length > 0
             ? responseTimes.reduce((sum, time) => sum + parseInt(time), 0) /
               responseTimes.length
             : 0;
@@ -1203,7 +1213,7 @@ class RequestTracker {
         });
       }
 
-      this._setCachedChartData(cacheKey, hourlyData);
+      this._setCachedChartData(cacheKey, hourlyData, 60_000);
       return hourlyData;
     } catch (error) {
       logger.error("[Request Tracker] Failed to get hourly stats:", error);
@@ -1265,7 +1275,7 @@ class RequestTracker {
       }
 
       const result = { grid, peak };
-      this._setCachedChartData(cacheKey, result);
+      this._setCachedChartData(cacheKey, result, 120_000);
       return result;
     } catch (error) {
       logger.error("[Request Tracker] Failed to get activity heatmap:", error);
@@ -1294,6 +1304,8 @@ class RequestTracker {
       ];
       const hourlyData = [];
       const now = new Date();
+      const hourBuckets = [];
+      const pipeline = redis.pipeline();
 
       for (let i = hours - 1; i >= 0; i--) {
         const hour = new Date(now.getTime() - i * 60 * 60 * 1000);
@@ -1304,18 +1316,29 @@ class RequestTracker {
           try { displayHour = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hour12: false }).format(hour)) || 0; if (displayHour === 24) displayHour = 0; } catch {}
         }
 
-        const hourStats = {
+        hourBuckets.push({
           hour: displayHour,
           timestamp: hour.toISOString(),
+        });
+
+        for (const provider of providers) {
+          pipeline.lrange(`provider_response_times:${provider}:${hourKey}`, 0, -1);
+        }
+      }
+
+      const results = await pipeline.exec();
+      let resultIdx = 0;
+
+      for (const bucket of hourBuckets) {
+        const hourStats = {
+          hour: bucket.hour,
+          timestamp: bucket.timestamp,
         };
 
         for (const provider of providers) {
-          const responseTimes = await redis.lrange(
-            `provider_response_times:${provider}:${hourKey}`,
-            0,
-            -1,
-          );
-          if (responseTimes.length > 0) {
+          const responseTimes = results?.[resultIdx]?.[1];
+          resultIdx += 1;
+          if (Array.isArray(responseTimes) && responseTimes.length > 0) {
             const avgResponseTime =
               responseTimes.reduce((sum, time) => sum + parseInt(time), 0) /
               responseTimes.length;
@@ -1327,7 +1350,7 @@ class RequestTracker {
         hourlyData.push(hourStats);
       }
 
-      this._setCachedChartData(cacheKey, hourlyData);
+      this._setCachedChartData(cacheKey, hourlyData, 60_000);
       return hourlyData;
     } catch (error) {
       logger.error(
@@ -1352,8 +1375,12 @@ class RequestTracker {
       return;
     }
     try {
-      const errorId = Date.now().toString();
-      const timestamp = new Date().toISOString();
+      const nowMs = Date.now();
+      const errorId = nowMs.toString();
+      const timestamp = new Date(nowMs).toISOString();
+      const errorTtlSeconds = 86400 * 7;
+      const cutoffTimestamp = nowMs - errorTtlSeconds * 1000;
+      const maxErrorLogs = 5000;
 
       const errorLog = {
         id: errorId,
@@ -1364,11 +1391,13 @@ class RequestTracker {
         count: 1,
       };
 
-      // Store in Redis with 7 day TTL using pipeline (fire-and-forget)
+      // Store in Redis with 7 day TTL and prune expired/excess entries using pipeline (fire-and-forget)
       redis.pipeline()
-        .set(`error_log:${errorId}`, JSON.stringify(errorLog), "EX", 86400 * 7)
-        .zadd("error_logs", Date.now(), errorId)
-        .expire("error_logs", 86400 * 7)
+        .set(`error_log:${errorId}`, JSON.stringify(errorLog), "EX", errorTtlSeconds)
+        .zadd("error_logs", nowMs, errorId)
+        .zremrangebyscore("error_logs", "-inf", cutoffTimestamp)
+        .zremrangebyrank("error_logs", 0, -(maxErrorLogs + 1))
+        .expire("error_logs", errorTtlSeconds)
         .exec()
         .catch(() => {});
 

@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { request, Agent, ProxyAgent } = require("undici");
+const { KEEP_ALIVE } = require('../utils/httpClient');
 const database = require('./database');
 const buildInfo = require('./buildInfo');
 const { buildInstallUrl } = require('./installUrl');
@@ -21,7 +22,7 @@ const createGeminiDispatcher = () => {
   const geminiProxy = process.env.GEMINI_HTTPS_PROXY ?? process.env.GEMINI_HTTP_PROXY;
   if (geminiProxy) {
     try {
-      return new ProxyAgent({ uri: new URL(geminiProxy).toString(), allowH2: false });
+      return new ProxyAgent({ uri: new URL(geminiProxy).toString(), allowH2: false, connections: 25, ...KEEP_ALIVE });
     } catch (error) {
       console.warn("Invalid Gemini proxy URL:", geminiProxy);
     }
@@ -30,7 +31,7 @@ const createGeminiDispatcher = () => {
   const globalProxy = process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY;
   if (globalProxy) {
     try {
-      return new ProxyAgent({ uri: new URL(globalProxy).toString(), allowH2: false });
+      return new ProxyAgent({ uri: new URL(globalProxy).toString(), allowH2: false, connections: 25, ...KEEP_ALIVE });
     } catch (error) {
       console.warn("Invalid global proxy URL:", globalProxy);
     }
@@ -38,8 +39,8 @@ const createGeminiDispatcher = () => {
   // No proxy configured - use direct connection
   return new Agent({
     allowH2: false,
-    keepAliveTimeout: 10000,
     connections: 10,
+    ...KEEP_ALIVE,
   });
 };
 
@@ -1214,7 +1215,11 @@ class ConfigApi {
   async loadRouteConfig(userUUID) {
     const shared = await this.loadSharedConfig(userUUID);
     if (!shared) return shared;
-    return Array.isArray(shared.catalogs) ? { ...shared, catalogs: shared.catalogs.map((catalog) => ({ ...catalog })) } : { ...shared };
+    try {
+      return structuredClone(shared);
+    } catch {
+      return JSON.parse(JSON.stringify(shared));
+    }
   }
 
   buildApiKeyValidationSummary(details) {

@@ -79,7 +79,7 @@ async function playbackFingerprint(service: Capable, credential: string, config:
 
 const inFlight = new Map<string, Promise<HeldRows>>();
 
-const generations = new Map<string, number>();
+const generations = new LRUCache<string, number>({ max: 10000, ttl: 24 * 60 * 60 * 1000 });
 export const generationOf = (userUUID: string): number => generations.get(userUUID) ?? 0;
 
 /**

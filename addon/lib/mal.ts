@@ -1,9 +1,8 @@
 require("dotenv").config();
-const { httpGet }: any = require('../utils/httpClient');
+const { httpGet, KEEP_ALIVE }: any = require('../utils/httpClient');
 const { socksDispatcher }: any = require('fetch-socks');
 const { Agent, ProxyAgent }: any = require('undici');
 const consola: any = require('consola');
-const redis: any = require('./redisClient');
 const logger: any = consola.withTag('MAL');
 const JIKAN_DISABLED_MESSAGE = 'Jikan is turned off (JIKAN_ENABLED), so MAL data is unavailable';
 for (const level of ['warn', 'error'] as const) {
@@ -50,12 +49,6 @@ function malPageSize(): number {
   return Math.max(1, parseInt(String(process.env.MAL_PAGE_SIZE), 10) || 25);
 }
 
-interface EtagEntry {
-  etag: string;
-  data: any;
-  timestamp: number;
-}
-
 interface RequestTask {
   resolve: (value: any) => void;
   reject: (reason: any) => void;
@@ -67,25 +60,6 @@ interface RequestTask {
 interface CatalogRequestOptions {
   throwOnError?: boolean;
 }
-
-const etagCache = new Map<string, EtagEntry>();
-
-setInterval(() => {
-  const now = Date.now();
-  const maxAge = 24 * 60 * 60 * 1000;
-  let cleaned = 0;
-
-  for (const [url, entry] of etagCache.entries()) {
-    if (now - entry.timestamp > maxAge) {
-      etagCache.delete(url);
-      cleaned++;
-    }
-  }
-
-  if (cleaned > 0) {
-    logger.debug(`Cleaned ${cleaned} expired ETag entries. Cache size: ${etagCache.size}`);
-  }
-}, 60 * 60 * 1000);
 
 const MAL_SOCKS_PROXY_URL = process.env.MAL_SOCKS_PROXY_URL;
 const HTTP_PROXY_URL = process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY;
@@ -116,14 +90,14 @@ if (MAL_SOCKS_PROXY_URL) {
 if (!malDispatcher) {
   if (HTTP_PROXY_URL) {
     try {
-      malDispatcher = new ProxyAgent({ uri: new URL(HTTP_PROXY_URL).toString(), allowH2: false });
+      malDispatcher = new ProxyAgent({ uri: new URL(HTTP_PROXY_URL).toString(), allowH2: false, connections: 25, ...KEEP_ALIVE });
       logger.info('Using global HTTP proxy for Jikan API.');
     } catch (error: any) {
       logger.warn(`Invalid HTTP_PROXY URL. Using direct connection. Error: ${error.message}`);
-      malDispatcher = new Agent({ allowH2: false, connect: { timeout: 30000 } });
+      malDispatcher = new Agent({ allowH2: false, connect: { timeout: 30000 }, ...KEEP_ALIVE });
     }
   } else {
-    malDispatcher = new Agent({ allowH2: false, connect: { timeout: 30000 } });
+    malDispatcher = new Agent({ allowH2: false, connect: { timeout: 30000 }, ...KEEP_ALIVE });
     logger.debug('undici agent is enabled for direct connections.');
   }
 }
@@ -330,47 +304,14 @@ function enqueueRequest(task: () => Promise<any>, url: string): Promise<any> {
 }
 
 async function _makeJikanRequest(url: string): Promise<any> {
-  const etagKey = `mal_etag:${url}`;
-
-  let etag: string | null = null;
-  if (redis) {
-      etag = await redis.get(etagKey);
-  }
-
-  const headers: Record<string, string> = {};
-  if (etag) {
-    headers['If-None-Match'] = etag;
-  }
-
-  let response = await httpGet(url, {
-      dispatcher: malDispatcher,
-      headers: headers,
-      timeout: 15000,
-      validateStatus: (status: number) => (status >= 200 && status < 300) || status === 304
+  return httpGet(url, {
+    dispatcher: malDispatcher,
+    timeout: 15000,
   });
-
-  if (response.status === 304) {
-       if (redis) {
-           const cachedBody = await redis.get(`mal_cache:${url}`);
-           if (cachedBody) {
-               logger.debug(`[304] Using Redis cached body for ${url}`);
-               return { data: JSON.parse(cachedBody) };
-           }
-       }
-       logger.warn(`[304] ETag match but body missing for ${url}. Re-fetching without ETag...`);
-       response = await httpGet(url, { dispatcher: malDispatcher, timeout: 15000, headers: {} });
-  }
-
-  if (response.headers?.etag && redis) {
-      const TTL = 25 * 60 * 60;
-      await redis.set(etagKey, response.headers.etag, 'EX', TTL);
-      await redis.set(`mal_cache:${url}`, JSON.stringify(response.data), 'EX', TTL);
-  }
-
-  return response;
 }
 
 async function searchAnime(type: string, query: string, limit: number = malPageSize(), config: any = {}, page: number = 1): Promise<any[]> {
+  const { cacheWrapJikanApi }: any = require('./getCache');
   let url = `${jikanApiBase()}/anime?q=${encodeURIComponent(query)}&limit=${limit}&page=${page}`;
   if (config.sfw) {
     url += `&sfw=true`;
@@ -386,12 +327,16 @@ async function searchAnime(type: string, query: string, limit: number = malPageS
   if (queryType) {
     url += `&type=${queryType}`;
   }
-  return enqueueRequest(() => _makeJikanRequest(url), url)
-    .then((response: any) => normalizeJikanCatalogForCache(response.data?.data || []))
-    .catch((e: any) => {
-      logger.error(`A critical error occurred while searching for anime with query "${query}"`, e.message);
-      return [];
-    });
+  const cacheKey = `search-${queryType || 'all'}-${limit}-p${page}-sfw${!!config.sfw}-${encodeURIComponent(query.trim().toLowerCase())}`;
+  return cacheWrapJikanApi(
+    cacheKey,
+    () => enqueueRequest(() => _makeJikanRequest(url), url)
+      .then((response: any) => normalizeJikanCatalogForCache(response.data?.data || [])),
+    60 * 60
+  ).catch((e: any) => {
+    logger.error(`A critical error occurred while searching for anime with query "${query}"`, e.message);
+    return [];
+  });
 }
 
 async function getAnimeDetails(malId: string | number): Promise<any> {
@@ -444,7 +389,7 @@ function stillGrowing(episodes: any[]): boolean {
  * twelve, and a short scrape on the newest page ages out in hours, not a day.
  */
 async function getAnimeEpisodes(malId: string | number): Promise<any[]> {
-  const { cacheWrapJikanApi }: any = require('./getCache');
+  const { cacheWrapJikanApi, classifyResult }: any = require('./getCache');
 
   const fetchPage = async (page: number) => {
     const url = `${jikanApiBase()}/anime/${malId}/episodes?page=${page}`;
@@ -461,12 +406,21 @@ async function getAnimeEpisodes(malId: string | number): Promise<any[]> {
     () => fetchPage(page),
     null,
     {
-      resultClassifier: (result: any) => ({
-        type: 'SUCCESS',
-        ttl: result && result.lastPage === page && stillGrowing(result.results)
-          ? episodeLatestPageTtl()
-          : episodePageTtl(),
-      }),
+      resultClassifier: (result: any, error: any = null, cacheKey: string | null = null) => {
+        if (error) {
+          const errStatus = error.status ?? error.statusCode ?? error.response?.status;
+          if (errStatus === 429 || errStatus === 405 || error.code === 'JIKAN_DISABLED' || error.message?.includes('429')) {
+            return { type: 'SKIP_CACHE', ttl: 0 };
+          }
+          return classifyResult(result, error, cacheKey);
+        }
+        return {
+          type: 'SUCCESS',
+          ttl: result && result.lastPage === page && stillGrowing(result.results)
+            ? episodeLatestPageTtl()
+            : episodePageTtl(),
+        };
+      },
     }
   );
 
@@ -486,8 +440,12 @@ async function getAnimeEpisodes(malId: string | number): Promise<any[]> {
 }
 
 async function getAnimeEpisodeVideos(malId: string | number): Promise<any[]> {
-  const results = await jikanGetAllPages(`/anime/${malId}/videos/episodes`);
-  return results;
+  const { cacheWrapJikanApi }: any = require('./getCache');
+  return cacheWrapJikanApi(
+    `anime-episode-videos-${malId}`,
+    () => jikanGetAllPages(`/anime/${malId}/videos/episodes`),
+    episodeLatestPageTtl()
+  ).catch(() => []);
 }
 
 async function getAnimeCharacters(malId: string | number): Promise<any[]> {
@@ -501,13 +459,17 @@ async function getAnimeCharacters(malId: string | number): Promise<any[]> {
 }
 
 async function getAnimeByVoiceActor(personId: string | number): Promise<any[]> {
+  const { cacheWrapJikanApi }: any = require('./getCache');
   const url = `${jikanApiBase()}/people/${personId}/full`;
-  return enqueueRequest(() => _makeJikanRequest(url), url)
-    .then((response: any) => response.data?.data?.voices || [])
-    .catch((e: any) => {
-      logger.warn(`Could not fetch roles for person ID ${personId}:`, e.message);
-      return [];
-    });
+  return cacheWrapJikanApi(
+    `person-voices-${personId}`,
+    () => enqueueRequest(() => _makeJikanRequest(url), url)
+      .then((response: any) => response.data?.data?.voices || []),
+    7 * 24 * 60 * 60
+  ).catch((e: any) => {
+    logger.warn(`Could not fetch roles for person ID ${personId}:`, e.message);
+    return [];
+  });
 }
 
 async function jikanPaginator(endpoint: string, totalItemsToFetch: number, queryParams: Record<string, any> = {}): Promise<any[]> {
@@ -821,24 +783,39 @@ async function getAvailableSeasons(): Promise<any[]> {
 }
 
 async function getCurrentSeasonRaw(config: any = {}): Promise<any[]> {
-  const params: Record<string, any> = { filter: 'tv', limit: malPageSize() };
-  if (config.sfw) params.sfw = true;
-  const items = await jikanGetAllPages('/seasons/now', params);
-  return items
-    .filter((a: any) => typeof a?.score === 'number' && a.score > 0)
-    .sort((a: any, b: any) => (b.score || 0) - (a.score || 0));
+  const { cacheWrapJikanApi }: any = require('./getCache');
+  return cacheWrapJikanApi(
+    `season-now-sorted-sfw-${!!config.sfw}`,
+    async () => {
+      const params: Record<string, any> = { filter: 'tv', limit: malPageSize() };
+      if (config.sfw) params.sfw = true;
+      const items = await jikanGetAllPages('/seasons/now', params);
+      const sorted = items
+        .filter((a: any) => typeof a?.score === 'number' && a.score > 0)
+        .sort((a: any, b: any) => (b.score || 0) - (a.score || 0));
+      return normalizeJikanCatalogForCache(sorted);
+    },
+    6 * 60 * 60,
+    { sourceList: true }
+  );
 }
 
 async function hasPrequelOrParent(malId: string | number): Promise<boolean> {
+  const { cacheWrapJikanApi, classifyResultAllowEmpty }: any = require('./getCache');
   const url = `${jikanApiBase()}/anime/${malId}/relations`;
-  try {
-    const response = await enqueueRequest(() => _makeJikanRequest(url), url);
-    const relations = response.data?.data || [];
-    return relations.some((r: any) => r.relation === 'Prequel' || r.relation === 'Parent story');
-  } catch (e: any) {
+  return cacheWrapJikanApi(
+    `anime-has-prequel-${malId}`,
+    async () => {
+      const response = await enqueueRequest(() => _makeJikanRequest(url), url);
+      const relations = response.data?.data || [];
+      return relations.some((r: any) => r.relation === 'Prequel' || r.relation === 'Parent story');
+    },
+    7 * 24 * 60 * 60,
+    { resultClassifier: classifyResultAllowEmpty }
+  ).catch((e: any) => {
     logger.warn(`Could not fetch relations for anime ${malId}:`, e.message);
     return false;
-  }
+  });
 }
 
 async function getSeasonTopRated(page: number = 1, config: any = {}): Promise<any[]> {
@@ -1003,5 +980,5 @@ module.exports = {
   getSeasonTopRated,
   getSeasonTopNew,
   fetchDiscover,
-  getMemoryStats: () => ({ etagCache: etagCache.size }),
+  getMemoryStats: () => ({ etagCache: 0, requestQueue: requestQueue.length }),
 };

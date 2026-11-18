@@ -111,22 +111,27 @@ if (SOCKS_PROXY_URL) {
 }
 
 if (!dispatcher) {
+  const { KEEP_ALIVE } = require('../utils/httpClient');
   if (HTTP_PROXY_URL) {
     try {
-      dispatcher = new ProxyAgent({ uri: new URL(HTTP_PROXY_URL).toString(), allowH2: false });
+      dispatcher = new ProxyAgent({
+        uri: new URL(HTTP_PROXY_URL).toString(),
+        allowH2: false,
+        connections: 32,
+        ...KEEP_ALIVE,
+      });
       console.log('[TMDB] Using global HTTP proxy.');
     } catch (error: any) {
       console.error(`[TMDB] Invalid HTTP_PROXY URL. Using direct connection. Error: ${error.message}`);
-      dispatcher = new Agent({ allowH2: false, connect: { timeout: 10000 } });
+      dispatcher = new Agent({ allowH2: false, connect: { timeout: 10000 }, ...KEEP_ALIVE });
     }
   } else {
-    const { KEEP_ALIVE } = require('../utils/httpClient');
     dispatcher = new Agent({ allowH2: false, connect: { timeout: 10000 }, ...KEEP_ALIVE });
     consola.debug('[TMDB] undici agent is enabled for direct connections.');
   }
 }
 
-const scrapedImdbIdCache = new LRUCache<string, string>({
+const scrapedImdbIdCache = new LRUCache<string, string | false>({
   max: parseInt(process.env.TMDB_SCRAPED_IMDB_CACHE_MAX || '', 10) || 10000,
   ttl: 24 * 60 * 60 * 1000,
 });
@@ -207,7 +212,7 @@ async function makeTmdbRequest(endpoint: string, apiKey: string, params: Record<
 
       // Handle 429 specifically with backoff
       if (response.status === 429) {
-          await response.body?.cancel().catch(() => undefined);
+          await response.arrayBuffer().catch(() => undefined);
           const retryAfterHeader = response.headers.get('retry-after');
           const retryAfter = parseInt(retryAfterHeader || '5', 10);
           const waitTime = retryAfter * 1000 + 50; // Add buffer
@@ -224,7 +229,7 @@ async function makeTmdbRequest(endpoint: string, apiKey: string, params: Record<
         if (NON_RETRYABLE_CODES.has(response.status)) {
              // Special handling for 404 - return null/empty instead of throwing if expected
              if (response.status === 404) {
-                 await response.body?.cancel().catch(() => undefined);
+                 await response.arrayBuffer().catch(() => undefined);
                  consola.warn(`[TMDB] Resource not found for ${endpoint}`);
                  return null;
              }
@@ -309,9 +314,11 @@ async function makeTmdbRequest(endpoint: string, apiKey: string, params: Record<
       if (!data.imdb_id && currentTmdbId && type && config?.tmdb?.scrapeImdb) {
           if (scrapedImdbIdCache.has(currentTmdbId)) {
               const cachedImdbId = scrapedImdbIdCache.get(currentTmdbId);
-              data.imdb_id = cachedImdbId;
-              if (!data.external_ids) data.external_ids = {};
-              data.external_ids.imdb_id = cachedImdbId;
+              if (cachedImdbId) {
+                  data.imdb_id = cachedImdbId;
+                  if (!data.external_ids) data.external_ids = {};
+                  data.external_ids.imdb_id = cachedImdbId;
+              }
           } else { 
               const titleForScraper = data.original_title || data.title || null;
 
@@ -333,11 +340,20 @@ async function makeTmdbRequest(endpoint: string, apiKey: string, params: Record<
                         if (!data.external_ids) data.external_ids = {};
                         data.external_ids.imdb_id = foundImdbId;
                         scrapedImdbIdCache.set(currentTmdbId, foundImdbId);
+                      } else {
+                        scrapedImdbIdCache.set(currentTmdbId, false, { ttl: 60 * 60 * 1000 });
                       }
                       
                       timingMetrics.recordTiming('imdb_scrape_lookup', Date.now() - scrapeStartTime, { 
                         type, 
                         success: isValidMatch,
+                        method: 'scrape'
+                      });
+                  } else {
+                      scrapedImdbIdCache.set(currentTmdbId, false, { ttl: 60 * 60 * 1000 });
+                      timingMetrics.recordTiming('imdb_scrape_lookup', Date.now() - scrapeStartTime, {
+                        type,
+                        success: false,
                         method: 'scrape'
                       });
                   }
@@ -672,12 +688,28 @@ export async function searchCollection(params: any, config: UserConfig) {
   return makeTmdbRequest('/search/collection', getApiKey(config), params, 'GET', null, config);
 }
 
+const TMDB_LIST_CACHE_TTL_SEC = 60 * 60;
+
 export async function discoverMovie(params: any, config: UserConfig) {
-  return makeTmdbRequest('/discover/movie', getApiKey(config), params, 'GET', null, config);
+  const normalizedQueryParams = normalizeTmdbCacheQueryParams(params);
+  const cacheKey = `tmdb:discover:movie${getTmdbQueryCacheSuffix(normalizedQueryParams)}`;
+  return cacheWrapGlobal(
+    cacheKey,
+    () => makeTmdbRequest('/discover/movie', getApiKey(config), normalizedQueryParams, 'GET', null, config),
+    TMDB_LIST_CACHE_TTL_SEC,
+    { sourceList: true }
+  );
 }
 
 export async function discoverTv(params: any, config: UserConfig) {
-  return makeTmdbRequest('/discover/tv', getApiKey(config), params, 'GET', null, config);
+  const normalizedQueryParams = normalizeTmdbCacheQueryParams(params);
+  const cacheKey = `tmdb:discover:tv${getTmdbQueryCacheSuffix(normalizedQueryParams)}`;
+  return cacheWrapGlobal(
+    cacheKey,
+    () => makeTmdbRequest('/discover/tv', getApiKey(config), normalizedQueryParams, 'GET', null, config),
+    TMDB_LIST_CACHE_TTL_SEC,
+    { sourceList: true }
+  );
 }
 
 export async function genreMovieList(params: any, config: UserConfig) {
@@ -735,24 +767,38 @@ export async function accountTvWatchlist(params: any, config: UserConfig) {
 export async function getTmdbListDetails(params: any, config: UserConfig) {
   const apiKey = getApiKey(config);
   const listId = params.list_id;
+  const normalizedQueryParams = normalizeTmdbCacheQueryParams(params);
+  const cacheKey = `tmdb:list:details:${listId}${getTmdbQueryCacheSuffix(normalizedQueryParams)}`;
   consola.info(`[TMDB] Fetching list details for list ID: ${listId}`);
-  return makeTmdbRequest(`/list/${listId}`, apiKey, params, 'GET', null, config);
+  return cacheWrapGlobal(
+    cacheKey,
+    () => makeTmdbRequest(`/list/${listId}`, apiKey, normalizedQueryParams, 'GET', null, config),
+    TMDB_LIST_CACHE_TTL_SEC,
+    { sourceList: true }
+  );
 }
 
 export async function getTmdbListItems(params: any, config: UserConfig) {
   const apiKey = getApiKey(config);
   const listId = params.list_id;
+  const normalizedQueryParams = normalizeTmdbCacheQueryParams(params);
+  const cacheKey = `tmdb:list:items:${listId}${getTmdbQueryCacheSuffix(normalizedQueryParams)}`;
   consola.info(`[TMDB] Fetching list items for list ID: ${listId}, page: ${params.page || 1}`);
-  
-  const result = await makeTmdbRequest(`/list/${listId}`, apiKey, params, 'GET', null, config);
-  
+
+  const result = await cacheWrapGlobal(
+    cacheKey,
+    () => makeTmdbRequest(`/list/${listId}`, apiKey, normalizedQueryParams, 'GET', null, config),
+    TMDB_LIST_CACHE_TTL_SEC,
+    { sourceList: true }
+  );
+
   return {
-    items: result.items || [],
-    page: result.page || 1,
-    total_pages: result.total_pages || 1,
-    total_results: result.total_results || 0,
-    list_name: result.name || '',
-    list_description: result.description || ''
+    items: result?.items || [],
+    page: result?.page || 1,
+    total_pages: result?.total_pages || 1,
+    total_results: result?.total_results || 0,
+    list_name: result?.name || '',
+    list_description: result?.description || ''
   };
 }
 
@@ -1108,7 +1154,14 @@ export async function getTmdbSeriesLogo(tmdbId: string, config: UserConfig) {
 }
 
 export async function trending(params: any, config: UserConfig) {
-    return makeTmdbRequest(`/trending/${params.media_type}/${params.time_window}`, getApiKey(config), params, 'GET', null, config);
+  const normalizedQueryParams = normalizeTmdbCacheQueryParams(params);
+  const cacheKey = `tmdb:trending:${params.media_type}:${params.time_window}${getTmdbQueryCacheSuffix(normalizedQueryParams)}`;
+  return cacheWrapGlobal(
+    cacheKey,
+    () => makeTmdbRequest(`/trending/${params.media_type}/${params.time_window}`, getApiKey(config), normalizedQueryParams, 'GET', null, config),
+    TMDB_LIST_CACHE_TTL_SEC,
+    { sourceList: true }
+  );
 }
 
 export async function seasonInfo(params: any, config: UserConfig) {

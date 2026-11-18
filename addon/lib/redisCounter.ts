@@ -66,7 +66,7 @@ function isRealtimeLogEnabled(): boolean {
       return val === 'true' || val === true;
     }
   } catch {}
-  return process.env.ENABLE_REDIS_LOG !== 'false';
+  return process.env.ENABLE_REDIS_LOG === 'true';
 }
 
 function isPeriodicReportEnabled(): boolean {
@@ -77,27 +77,28 @@ function isPeriodicReportEnabled(): boolean {
       return val === 'true' || val === true;
     }
   } catch {}
-  return process.env.ENABLE_REDIS_PERIODIC_REPORT !== 'false';
+  return process.env.ENABLE_REDIS_PERIODIC_REPORT === 'true';
 }
 
 function trackCommand(command: string, args: any[] = []): void {
   if (!isTracking) return;
   totalCommands++;
 
-  const caller = getCallerInfo();
   const key = extractKey(command, args);
+  let caller: string | undefined;
 
   // Real-time trace logging (controlled via Admin Settings -> Diagnostics)
   if (isRealtimeLogEnabled()) {
+    caller = getCallerInfo();
     const keyPreview = key ? (key.length > 80 ? key.substring(0, 77) + '...' : key) : '<no-key>';
     logger.info(`[CMD] ${command.toUpperCase().padEnd(8)} ${keyPreview} (caller: ${caller})`);
   }
 
-  // Update command stats
+  // Update command stats (without caller when not logging)
   const existing = commandCounts.get(command);
   if (existing) {
     existing.count++;
-    existing.lastCaller = caller;
+    if (caller) existing.lastCaller = caller;
     if (key && existing.sampleKeys.size < 5) {
       existing.sampleKeys.add(key.length > 50 ? key.substring(0, 47) + '...' : key);
     }
@@ -107,9 +108,11 @@ function trackCommand(command: string, args: any[] = []): void {
     commandCounts.set(command, { command, count: 1, firstCaller: caller, lastCaller: caller, sampleKeys });
   }
 
-  // Update caller stats
-  const currentCallerCount = callerCounts.get(caller) || 0;
-  callerCounts.set(caller, currentCallerCount + 1);
+  // Update caller stats only when caller is known
+  if (caller) {
+    const currentCallerCount = callerCounts.get(caller) || 0;
+    callerCounts.set(caller, currentCallerCount + 1);
+  }
 }
 
 function wrapPipeline(originalPipeline: any): any {

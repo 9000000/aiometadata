@@ -1,5 +1,6 @@
 import { historyPayload, type EpisodeRef } from './historyPayload';
-import { httpGet, httpPost } from "./httpClient.js";
+import { httpGet, httpPost, KEEP_ALIVE } from "./httpClient.js";
+import { LRUCache } from 'lru-cache';
 import { resolveAllIds } from "../lib/id-resolver.js";
 const buildInfo = require('../lib/buildInfo');
 import { getMeta } from "../lib/getMeta.js";
@@ -61,14 +62,14 @@ if (!mdblistDispatcher) {
     try {
       // ProxyAgent may need to be imported if not already
       const { ProxyAgent } = require('undici');
-      mdblistDispatcher = new ProxyAgent({ uri: new URL(HTTP_PROXY_URL).toString(), allowH2: false });
+      mdblistDispatcher = new ProxyAgent({ uri: new URL(HTTP_PROXY_URL).toString(), allowH2: false, connections: 25, ...KEEP_ALIVE });
       logger.info('[MDBList] Using global HTTP proxy.');
     } catch (error: any) {
       logger.error(`[MDBList] Invalid HTTP_PROXY URL. Using direct connection. Error: ${error.message}`);
-      mdblistDispatcher = new Agent({ allowH2: false, connect: { timeout: 30000 } });
+      mdblistDispatcher = new Agent({ allowH2: false, connect: { timeout: 30000 }, ...KEEP_ALIVE });
     }
   } else {
-    mdblistDispatcher = new Agent({ allowH2: false, connect: { timeout: 30000 } });
+    mdblistDispatcher = new Agent({ allowH2: false, connect: { timeout: 30000 }, ...KEEP_ALIVE });
     logger.debug('[MDBList] undici agent is enabled for direct connections.');
   }
 }
@@ -108,7 +109,7 @@ interface RateLimitState {
   lastReset?: number;
 }
 
-const rateLimitStates = new Map<string, RateLimitState>();
+const rateLimitStates = new LRUCache<string, RateLimitState>({ max: 5000, ttl: 60 * 60 * 1000 });
 
 let globalLastRequestTime = 0;
 let globalRequestPromise = Promise.resolve();
@@ -140,8 +141,9 @@ async function globalThrottle(): Promise<void> {
 // ---------------------------------------
 
 function getRateLimitState(apiKey: string = 'global'): RateLimitState {
-  if (!rateLimitStates.has(apiKey)) {
-    rateLimitStates.set(apiKey, {
+  let state = rateLimitStates.get(apiKey);
+  if (!state) {
+    state = {
       recentRateLimitHits: 0,
       lastRateLimitTime: 0,
       isRateLimited: false,
@@ -149,9 +151,10 @@ function getRateLimitState(apiKey: string = 'global'): RateLimitState {
       lastLimit: undefined,
       lastRemaining: undefined,
       lastReset: undefined
-    });
+    };
+    rateLimitStates.set(apiKey, state);
   }
-  return rateLimitStates.get(apiKey)!;
+  return state;
 }
 
 function mdblistCallsLeft(apiKey: string): { remaining: number | null; limit: number | null; resetAt: number } {

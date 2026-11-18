@@ -1,5 +1,6 @@
 import { getMeta } from "../lib/getMeta.js";
 import { cacheWrapMetaSmart, cacheWrapGlobal } from "../lib/getCache.js";
+import { LRUCache } from 'lru-cache';
 import { createHash } from "crypto";
 import { resolveAllIds } from "../lib/id-resolver.js";
 import { UserConfig } from "../types/index.js";
@@ -33,7 +34,7 @@ interface RateLimitState {
   rateLimitResetTime: number;
 }
 
-const rateLimitStates = new Map<string, RateLimitState>();
+const rateLimitStates = new LRUCache<string, RateLimitState>({ max: 5000, ttl: 60 * 60 * 1000 });
 
 let globalLastRequestTime = 0;
 let globalRequestPromise = Promise.resolve();
@@ -52,15 +53,17 @@ async function globalThrottle(): Promise<void> {
 }
 
 function getRateLimitState(apiKey: string): RateLimitState {
-  if (!rateLimitStates.has(apiKey)) {
-    rateLimitStates.set(apiKey, {
+  let state = rateLimitStates.get(apiKey);
+  if (!state) {
+    state = {
       recentRateLimitHits: 0,
       lastRateLimitTime: 0,
       isRateLimited: false,
       rateLimitResetTime: 0,
-    });
+    };
+    rateLimitStates.set(apiKey, state);
   }
-  return rateLimitStates.get(apiKey)!;
+  return state;
 }
 
 function isPermanentError(status: number): boolean {

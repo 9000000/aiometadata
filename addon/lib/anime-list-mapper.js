@@ -4,6 +4,7 @@ const axios = require('axios');
 const redis = require('./redisClient');
 const xml2js = require('xml2js');
 const consola = require('consola');
+const { writeFileAtomic } = require('../utils/atomicWrite');
 
 
 const logger = consola.withTag('AnimeListMapper');
@@ -48,19 +49,20 @@ function processAndIndexXmlData(xmlData) {
         const animeList = result['anime-list'].anime || [];
         
         for (const anime of animeList) {
-          const anidbid = parseInt(anime.$.anidbid);
+          const anidbid = parseInt(anime.$.anidbid, 10);
           if (!anidbid) continue;
+
+          const parsed = buildParsedEntry(anime);
 
           // Store by AniDB ID
           animeListMap.set(anidbid, anime);
 
           // Index by TVDB ID
-          if (anime.$.tvdbid && anime.$.tvdbid !== 'unknown' && anime.$.tvdbid !== 'hentai') {
-            const tvdbId = parseInt(anime.$.tvdbid);
-            if (!tvdbToAnimeMap.has(tvdbId)) {
-              tvdbToAnimeMap.set(tvdbId, []);
+          if (parsed.tvdbId) {
+            if (!tvdbToAnimeMap.has(parsed.tvdbId)) {
+              tvdbToAnimeMap.set(parsed.tvdbId, []);
             }
-            tvdbToAnimeMap.get(tvdbId).push(anime);
+            tvdbToAnimeMap.get(parsed.tvdbId).push(anime);
           }
 
           // Index by TMDB TV ID
@@ -169,8 +171,8 @@ async function downloadAndProcessAnimeList(force = false, skipReloadOnUnchangedE
     });
     const xmlData = response.data;
 
-    await fs.mkdir(path.dirname(LOCAL_CACHE_PATH), { recursive: true });
-    await fs.writeFile(LOCAL_CACHE_PATH, xmlData, 'utf-8');
+    await processAndIndexXmlData(xmlData);
+    await writeFileAtomic(LOCAL_CACHE_PATH, xmlData, 'utf-8');
 
     if (useRedisCache) {
       try {
@@ -179,8 +181,6 @@ async function downloadAndProcessAnimeList(force = false, skipReloadOnUnchangedE
         logger.warn('Failed to save ETag to Redis:', redisError.message);
       }
     }
-
-    await processAndIndexXmlData(xmlData);
     
     // Track maintenance task completion
     const endTime = Date.now();
@@ -246,9 +246,14 @@ async function initializeAnimeListMapper() {
         logger.error('Scheduled update failed:', error.message);
       }
     }, intervalMs);
+    updateInterval.unref?.();
 
     logger.info(`Scheduled periodic updates every ${UPDATE_INTERVAL_HOURS} hours.`);
   }
+}
+
+function toIntId(id) {
+  return typeof id === 'number' ? Math.trunc(id) : parseInt(id, 10);
 }
 
 /**
@@ -256,7 +261,7 @@ async function initializeAnimeListMapper() {
  */
 function getAnimeByAnidbId(anidbId) {
   if (!isInitialized) return null;
-  return animeListMap.get(parseInt(anidbId)) || null;
+  return animeListMap.get(toIntId(anidbId)) || null;
 }
 
 /**
@@ -264,7 +269,7 @@ function getAnimeByAnidbId(anidbId) {
  */
 function getAnimeByTvdbId(tvdbId) {
   if (!isInitialized) return [];
-  return tvdbToAnimeMap.get(parseInt(tvdbId)) || [];
+  return tvdbToAnimeMap.get(toIntId(tvdbId)) || [];
 }
 
 /**
@@ -272,7 +277,7 @@ function getAnimeByTvdbId(tvdbId) {
  */
 function getAnimeByTmdbId(tmdbId) {
   if (!isInitialized) return [];
-  return tmdbToAnimeMap.get(parseInt(tmdbId)) || [];
+  return tmdbToAnimeMap.get(toIntId(tmdbId)) || [];
 }
 
 /**
@@ -304,6 +309,50 @@ function getMappingList(animeEntry) {
   return [];
 }
 
+function buildParsedEntry(anime) {
+  const attrs = anime.$ || {};
+  const anidbId = parseInt(attrs.anidbid, 10);
+  const tvdbId = (attrs.tvdbid && attrs.tvdbid !== 'unknown' && attrs.tvdbid !== 'hentai')
+    ? parseInt(attrs.tvdbid, 10)
+    : null;
+  const defaultTvdbSeason = attrs.defaulttvdbseason;
+  const defaultSeasonNum = (defaultTvdbSeason !== 'a' && defaultTvdbSeason !== '0')
+    ? parseInt(defaultTvdbSeason, 10)
+    : NaN;
+  const episodeOffset = parseInt(attrs.episodeoffset, 10) || 0;
+  const rawMappings = getMappingList(anime);
+  const mappings = rawMappings.map((m) => {
+    const mAttrs = m.$ || {};
+    const hasStart = Boolean(mAttrs.start);
+    const hasEnd = Boolean(mAttrs.end);
+    return {
+      raw: m,
+      anidbSeason: parseInt(mAttrs.anidbseason, 10),
+      tvdbSeason: mAttrs.tvdbseason !== undefined ? parseInt(mAttrs.tvdbseason, 10) : undefined,
+      offset: parseInt(mAttrs.offset, 10) || 0,
+      hasStart,
+      hasEnd,
+      start: hasStart ? parseInt(mAttrs.start, 10) : NaN,
+      end: hasEnd ? parseInt(mAttrs.end, 10) : NaN,
+      ranges: m._ ? getCachedEpisodeMapping(m._) : null,
+    };
+  });
+  const parsed = {
+    anidbId,
+    tvdbId: tvdbId && !isNaN(tvdbId) ? tvdbId : null,
+    defaultTvdbSeason,
+    defaultSeasonNum,
+    episodeOffset,
+    mappings,
+  };
+  Object.defineProperty(anime, '_parsed', { value: parsed, enumerable: false, configurable: true });
+  return parsed;
+}
+
+function getParsedEntry(anime) {
+  return anime._parsed || buildParsedEntry(anime);
+}
+
 function getSameSeasonEntryGroup(animeEntry) {
   const key = `${animeEntry.$.tvdbid}|${animeEntry.$.defaulttvdbseason}`;
   const cached = sameSeasonEntryGroupCache.get(key);
@@ -311,25 +360,23 @@ function getSameSeasonEntryGroup(animeEntry) {
     return cached;
   }
 
-  const allEntries = getAnimeByTvdbId(animeEntry.$.tvdbid);
+  const allEntries = getAnimeByTvdbId(getParsedEntry(animeEntry).tvdbId ?? animeEntry.$.tvdbid);
   const sameSeasonEntries = allEntries.filter(
     (entry) => entry.$.defaulttvdbseason === animeEntry.$.defaulttvdbseason
   );
 
-  const sortedEntries = [...sameSeasonEntries].sort((a, b) => {
-    const offsetA = parseInt(a.$.episodeoffset) || 0;
-    const offsetB = parseInt(b.$.episodeoffset) || 0;
-    return offsetA - offsetB;
-  });
+  const sortedEntries = [...sameSeasonEntries].sort(
+    (a, b) => getParsedEntry(a).episodeOffset - getParsedEntry(b).episodeOffset
+  );
 
   const sortedOffsetEntries = sortedEntries.map((entry) => ({
     entry,
-    offset: parseInt(entry.$.episodeoffset) || 0,
+    offset: getParsedEntry(entry).episodeOffset,
   }));
 
   const indexByAnidbId = new Map();
   for (let i = 0; i < sortedEntries.length; i++) {
-    indexByAnidbId.set(parseInt(sortedEntries[i].$.anidbid), i);
+    indexByAnidbId.set(getParsedEntry(sortedEntries[i]).anidbId, i);
   }
 
   const group = {
@@ -402,282 +449,161 @@ function getSeasonMappings(animeEntry, anidbSeason, targetType = 'tvdb') {
  * @param {number} tvdbEpisode - The TVDB episode number within that season
  * @returns {Object|null} AniDB episode info or null if not found
  */
-async function resolveAnidbEpisodeFromTvdbEpisode(tvdbId, tvdbSeason, tvdbEpisode) {
+function resolveAnidbEpisodeFromTvdbEpisode(tvdbId, tvdbSeason, tvdbEpisode) {
   if (!isInitialized) return null;
-  
-  // Get all anime entries for this TVDB ID
+
   const animeEntries = getAnimeByTvdbId(tvdbId);
   if (!animeEntries || animeEntries.length === 0) {
-    // logger.debug(`No anime entries found for TVDB ID ${tvdbId}`);
     return null;
   }
-  
-  // logger.debug(`Found ${animeEntries.length} entries for TVDB ID ${tvdbId}, Season ${tvdbSeason}, Episode ${tvdbEpisode}`);
-  
-  // Try each anime entry to find a match
+
   for (const animeEntry of animeEntries) {
-    const defaultTvdbSeason = animeEntry.$.defaulttvdbseason;
-    const episodeOffset = parseInt(animeEntry.$.episodeoffset) || 0;
-    
-    // logger.debug(`Processing entry anidbid=${animeEntry.$.anidbid}, defaulttvdbseason="${defaultTvdbSeason}", episodeoffset=${episodeOffset}`);
-    
-    // Case 1: Absolute episode numbering (defaulttvdbseason = "a")
+    const parsed = getParsedEntry(animeEntry);
+    const defaultTvdbSeason = parsed.defaultTvdbSeason;
+
     if (defaultTvdbSeason === 'a') {
-      // logger.debug(`Case 1: Absolute numbering`);
-      const result = handleAbsoluteNumbering(animeEntry, tvdbSeason, tvdbEpisode);
+      const result = handleAbsoluteNumbering(animeEntry, parsed, tvdbSeason, tvdbEpisode);
+      if (result) return result;
+    } else if (defaultTvdbSeason === '0') {
+      continue;
+    } else if (parsed.defaultSeasonNum === tvdbSeason) {
+      const result = handleRegularSeasonMapping(animeEntry, parsed, tvdbSeason, tvdbEpisode);
       if (result) return result;
     }
-    
-    // Case 2: Multi-season with absolute numbering (defaulttvdbseason = "0")
-    else if (defaultTvdbSeason === '0') {
-      // logger.debug(`Case 2: Multi-season, skipping`);
-      // Skip this entry - it's part of a multi-episode series but doesn't map to a specific season
-      continue; // Try the next anime entry
-    }
-    
-    // Case 3: Regular season mapping (defaulttvdbseason = specific number)
-    else {
-      const defaultSeason = parseInt(defaultTvdbSeason);
-      // logger.debug(`Case 3: Regular season mapping, defaultSeason=${defaultSeason}, tvdbSeason=${tvdbSeason}`);
-      if (defaultSeason === tvdbSeason) {
-        // logger.debug(`Season match! Calling handleRegularSeasonMapping`);
-        const result = handleRegularSeasonMapping(animeEntry, tvdbSeason, tvdbEpisode, episodeOffset);
-        if (result) {
-          // logger.debug(`Success! Result:`, result);
-          return result;
-        } else {
-          // logger.debug(`handleRegularSeasonMapping returned null, continuing to next entry...`);
-        }
-      } else {
-        // logger.debug(`Season mismatch: defaultSeason=${defaultSeason} !== tvdbSeason=${tvdbSeason}`);
-      }
-    }
   }
-  
-  // logger.debug(`No matching season found for TVDB ID ${tvdbId}, Season ${tvdbSeason}`);
+
   return null;
 }
 
 /**
  * Handle absolute episode numbering (like One Piece)
  */
-function handleAbsoluteNumbering(animeEntry, tvdbSeason, tvdbEpisode) {
-  const mappingList = getMappingList(animeEntry);
-  
-  // Find the season-specific mapping
-  for (const mapping of mappingList) {
-    const mappingTvdbSeason = parseInt(mapping.$.tvdbseason);
-    if (mappingTvdbSeason === tvdbSeason) {
-      const offset = parseInt(mapping.$.offset) || 0; // Default to 0 if no offset
-      // Check if this mapping has start/end range
-      if (mapping.$.start && mapping.$.end) {
-        const anidbStart = parseInt(mapping.$.start);
-        const anidbEnd = parseInt(mapping.$.end);
-       
-        
-        // Calculate the AniDB episode for this TVDB episode
+function handleAbsoluteNumbering(animeEntry, parsed, tvdbSeason, tvdbEpisode) {
+  for (const mapping of parsed.mappings) {
+    if (mapping.tvdbSeason === tvdbSeason) {
+      const offset = mapping.offset;
+      if (mapping.hasStart && mapping.hasEnd) {
         const anidbEpisode = tvdbEpisode - offset;
-        
-        // Check if the calculated AniDB episode falls within the mapped range
-        if (anidbEpisode >= anidbStart && anidbEpisode <= anidbEnd) {
-          
+        if (anidbEpisode >= mapping.start && anidbEpisode <= mapping.end) {
           return {
-            anidbId: parseInt(animeEntry.$.anidbid),
-            anidbSeason: parseInt(mapping.$.anidbseason),
-            anidbEpisode: anidbEpisode,
+            anidbId: parsed.anidbId,
+            anidbSeason: mapping.anidbSeason,
+            anidbEpisode,
             episodeOffset: offset,
             animeName: animeEntry.name,
             mappingInfo: {
               type: 'absolute_numbering',
-              start: anidbStart,
-              end: anidbEnd,
-              offset: offset
-            }
+              start: mapping.start,
+              end: mapping.end,
+              offset,
+            },
           };
         }
-      }
-      else if (mapping.$.start && !mapping.$.end) {
-        const anidbStart = parseInt(mapping.$.start);
+      } else if (mapping.hasStart && !mapping.hasEnd) {
         const anidbEpisode = tvdbEpisode - offset;
-
-        if (anidbEpisode >= anidbStart) {
+        if (anidbEpisode >= mapping.start) {
           return {
-            anidbId: parseInt(animeEntry.$.anidbid),
-            anidbSeason: parseInt(mapping.$.anidbseason),
-            anidbEpisode: anidbEpisode,
+            anidbId: parsed.anidbId,
+            anidbSeason: mapping.anidbSeason,
+            anidbEpisode,
             episodeOffset: offset,
             animeName: animeEntry.name,
             mappingInfo: {
               type: 'absolute_numbering_open',
-              start: anidbStart,
-              offset: offset
-            }
+              start: mapping.start,
+              offset,
+            },
           };
         }
       }
-      // TODO: Handle episode mapping strings (like ";1-2;3-4;") for cases without start/end
     }
   }
-  
+
   return null;
 }
 
 /**
  * Handle regular season mapping with episode offset
  */
-function handleRegularSeasonMapping(animeEntry, tvdbSeason, tvdbEpisode, episodeOffset) {
-  // logger.debug(`Starting with tvdbSeason=${tvdbSeason}, tvdbEpisode=${tvdbEpisode}, episodeOffset=${episodeOffset}`);
-  
-  // Check if there are multiple entries with the same tvdbId and defaulttvdbseason
+function handleRegularSeasonMapping(animeEntry, parsed, tvdbSeason, tvdbEpisode) {
+  const episodeOffset = parsed.episodeOffset;
   const seasonGroup = getSameSeasonEntryGroup(animeEntry);
   const sameSeasonEntries = seasonGroup.sameSeasonEntries;
-  
-  // logger.debug(`Found ${sameSeasonEntries.length} entries with same defaulttvdbseason`);
-  
-  // If there's only one entry for this season, use direct 1:1 mapping
+
   if (sameSeasonEntries.length === 1) {
-    // logger.debug(`Single entry case - direct 1:1 mapping`);
-    // Direct 1:1 mapping - ignore mapping-list
     const anidbEpisode = tvdbEpisode - episodeOffset;
-    
-    // logger.debug(`Calculated anidbEpisode = ${tvdbEpisode} - ${episodeOffset} = ${anidbEpisode}`);
-    
-    // Check if the calculated AniDB episode is valid (positive)
     if (anidbEpisode <= 0) {
-      // logger.debug(`Invalid anidbEpisode (${anidbEpisode}), returning null`);
       return null;
     }
-    
-    const result = {
-      anidbId: parseInt(animeEntry.$.anidbid),
-      anidbSeason: 1, // Usually season 1 for these cases
-      anidbEpisode: anidbEpisode,
-      episodeOffset: episodeOffset,
+
+    return {
+      anidbId: parsed.anidbId,
+      anidbSeason: 1,
+      anidbEpisode,
+      episodeOffset,
       animeName: animeEntry.name,
       mappingInfo: {
         type: 'regular_season_direct',
-        episodeOffset: episodeOffset
-      }
+        episodeOffset,
+      },
     };
-    
-    // logger.debug(`Returning result:`, result);
-    return result;
   }
-  
-  // Multiple entries for this season, use mapping-list ranges
-  // logger.debug(`Multiple entries case - checking mapping-list`);
-  const mappingList = getMappingList(animeEntry);
-  // logger.debug(`mappingList length: ${mappingList.length}`);
-  
-  if (mappingList.length > 0) {
-    // logger.debug(`Processing mapping-list entries`);
-    // Check if there's a mapping that covers this episode
-    for (const mapping of mappingList) {
-      // logger.debug(`Checking mapping:`, mapping);
-      if (mapping.$.start && mapping.$.end) {
-        const start = parseInt(mapping.$.start);
-        const end = parseInt(mapping.$.end);
-        
-        // logger.debug(`Mapping has start=${start}, end=${end}`);
-        
-        // Check if this TVDB episode falls within the mapped range
+
+  if (parsed.mappings.length > 0) {
+    for (const mapping of parsed.mappings) {
+      if (mapping.hasStart && mapping.hasEnd) {
+        const start = mapping.start;
+        const end = mapping.end;
         if (tvdbEpisode >= start + episodeOffset && tvdbEpisode <= end + episodeOffset) {
-          // logger.debug(`Episode ${tvdbEpisode} falls within range [${start + episodeOffset}, ${end + episodeOffset}]`);
-          // Calculate AniDB episode using episodeoffset
           const anidbEpisode = tvdbEpisode - episodeOffset;
-          
-          // logger.debug(`Calculated anidbEpisode = ${tvdbEpisode} - ${episodeOffset} = ${anidbEpisode}`);
-          
-          // Check if the calculated AniDB episode is valid (positive)
           if (anidbEpisode <= 0) {
-            // logger.debug(`Invalid anidbEpisode (${anidbEpisode}), returning null`);
             return null;
           }
-          
-          const result = {
-            anidbId: parseInt(animeEntry.$.anidbid),
-            anidbSeason: parseInt(mapping.$.anidbseason),
-            anidbEpisode: anidbEpisode,
-            episodeOffset: episodeOffset,
+
+          return {
+            anidbId: parsed.anidbId,
+            anidbSeason: mapping.anidbSeason,
+            anidbEpisode,
+            episodeOffset,
             animeName: animeEntry.name,
             mappingInfo: {
               type: 'regular_season_with_mapping',
-              start: start,
-              end: end,
-              episodeOffset: episodeOffset
-            }
+              start,
+              end,
+              episodeOffset,
+            },
           };
-          
-          // logger.debug(`Returning result:`, result);
-          return result;
-        } else {
-          // logger.debug(`Episode ${tvdbEpisode} does NOT fall within range [${start + episodeOffset}, ${end + episodeOffset}]`);
         }
-      } else {
-        // logger.debug(`Mapping missing start/end attributes - will fall back to episodeOffset approach`);
       }
     }
-    // If we have mappings but none cover this episode, this entry doesn't match
-    // logger.debug(`No mapping covered this episode, will fall back to episodeOffset approach`);
   }
-  
-  // No specific mappings or mappings without start/end, use the episodeOffset approach
-  // logger.debug(`Using episodeOffset fallback`);
-  
-  // For multiple entries with same season, we need to implement episode range logic
-  // Check if this entry should handle this specific episode based on episodeOffset
+
   if (sameSeasonEntries.length > 1) {
-    // logger.debug(`Multiple entries detected, implementing episode range logic`);
-    
-    // Find the next entry with a higher episodeOffset to determine the range
-    const sortedEntries = seasonGroup.sortedEntries;
-    const currentEntryIndex = seasonGroup.indexByAnidbId.get(parseInt(animeEntry.$.anidbid));
-    
+    const currentEntryIndex = seasonGroup.indexByAnidbId.get(parsed.anidbId);
     if (currentEntryIndex !== undefined) {
-      const currentOffset = parseInt(animeEntry.$.episodeoffset) || 0;
-      const nextEntry = sortedEntries[currentEntryIndex + 1];
-      
-      if (nextEntry) {
-        const nextOffset = parseInt(nextEntry.$.episodeoffset) || 0;
-        // logger.debug(`Current entry offset: ${currentOffset}, Next entry offset: ${nextOffset}`);
-        
-        // This entry should handle episodes from currentOffset to nextOffset-1
-        // currentOffset is inclusive, nextOffset is exclusive
-        if (tvdbEpisode > nextOffset) {
-          // logger.debug(`Episode ${tvdbEpisode} >= ${nextOffset}, this entry doesn't cover it`);
-          return null;
-        }
-        
-        // logger.debug(`Episode ${tvdbEpisode} is within range [${currentOffset}, ${nextOffset-1}]`);
+      const nextEntry = seasonGroup.sortedOffsetEntries[currentEntryIndex + 1];
+      if (nextEntry && tvdbEpisode > nextEntry.offset) {
+        return null;
       }
     }
   }
-  
-  // Formula: anidbEpisode = tvdbEpisode - episodeOffset
+
   const anidbEpisode = tvdbEpisode - episodeOffset;
-  
-  // logger.debug(`Calculated anidbEpisode = ${tvdbEpisode} - ${episodeOffset} = ${anidbEpisode}`);
-  
-  // Check if the calculated AniDB episode is valid (positive)
   if (anidbEpisode <= 0) {
-    // logger.debug(`Invalid anidbEpisode (${anidbEpisode}), returning null`);
-    return null; // This anime entry doesn't cover this TVDB episode
+    return null;
   }
-  
-  const result = {
-    anidbId: parseInt(animeEntry.$.anidbid),
-    anidbSeason: 1, // Usually season 1 for these cases
-    anidbEpisode: anidbEpisode,
-    episodeOffset: episodeOffset,
+
+  return {
+    anidbId: parsed.anidbId,
+    anidbSeason: 1,
+    anidbEpisode,
+    episodeOffset,
     animeName: animeEntry.name,
     mappingInfo: {
       type: 'regular_season',
-      episodeOffset: episodeOffset
-    }
+      episodeOffset,
+    },
   };
-  
-  // logger.debug(`Returning fallback result:`, result);
-  return result;
 }
 
 /**
@@ -692,19 +618,17 @@ function resolveTvdbEpisodeFromAnidbEpisode(anidbId, anidbSeason, anidbEpisode) 
 
   const animeEntry = getAnimeByAnidbId(anidbId);
   if (!animeEntry) {
-    // logger.debug(`No anime entry found for AniDB ID ${anidbId}`);
     return null;
   }
 
-  const tvdbId = animeEntry.$.tvdbid ? parseInt(animeEntry.$.tvdbid) : null;
+  const parsed = getParsedEntry(animeEntry);
+  const tvdbId = parsed.tvdbId;
   if (!tvdbId) {
-    // logger.debug(`AniDB ID ${anidbId} does not have a TVDB mapping`);
     return null;
   }
 
-  const defaultTvdbSeason = animeEntry.$.defaulttvdbseason;
-  const episodeOffset = parseInt(animeEntry.$.episodeoffset) || 0;
-  const mappingList = getMappingList(animeEntry);
+  const defaultTvdbSeason = parsed.defaultTvdbSeason;
+  const episodeOffset = parsed.episodeOffset;
 
   const buildResult = (season, episode, info) => ({
     tvdbId,
@@ -715,43 +639,34 @@ function resolveTvdbEpisodeFromAnidbEpisode(anidbId, anidbSeason, anidbEpisode) 
   });
 
   if (defaultTvdbSeason === 'a') {
-    for (const mapping of mappingList) {
-      const mappingAnidbSeason = parseInt(mapping.$.anidbseason);
-      if (mappingAnidbSeason !== anidbSeason) continue;
+    for (const mapping of parsed.mappings) {
+      if (mapping.anidbSeason !== anidbSeason) continue;
+      if (mapping.tvdbSeason === undefined) continue;
 
-      if (mapping.$.tvdbseason === undefined) continue;
-      const tvdbSeason = parseInt(mapping.$.tvdbseason);
-      const offset = parseInt(mapping.$.offset) || 0;
+      const tvdbSeason = mapping.tvdbSeason;
+      const offset = mapping.offset;
 
-      if (mapping.$.start && mapping.$.end) {
-        const start = parseInt(mapping.$.start);
-        const end = parseInt(mapping.$.end);
-
-        if (anidbEpisode >= start && anidbEpisode <= end) {
-          const tvdbEpisode = anidbEpisode + offset;
-          return buildResult(tvdbSeason, tvdbEpisode, {
+      if (mapping.hasStart && mapping.hasEnd) {
+        if (anidbEpisode >= mapping.start && anidbEpisode <= mapping.end) {
+          return buildResult(tvdbSeason, anidbEpisode + offset, {
             type: 'absolute_numbering',
-            start,
-            end,
+            start: mapping.start,
+            end: mapping.end,
             offset,
           });
         }
-      } else if (mapping.$.start && !mapping.$.end) {
-        const start = parseInt(mapping.$.start);
-        if (anidbEpisode >= start) {
-           const tvdbEpisode = anidbEpisode + offset;
-           return buildResult(tvdbSeason, tvdbEpisode, {
-             type: 'absolute_numbering_open',
-             start,
-             offset,
-           });
+      } else if (mapping.hasStart && !mapping.hasEnd) {
+        if (anidbEpisode >= mapping.start) {
+          return buildResult(tvdbSeason, anidbEpisode + offset, {
+            type: 'absolute_numbering_open',
+            start: mapping.start,
+            offset,
+          });
         }
-     } else if (mapping._) {
-        const ranges = getCachedEpisodeMapping(mapping._);
-        for (const range of ranges) {
+      } else if (mapping.ranges) {
+        for (const range of mapping.ranges) {
           if (anidbEpisode >= range.start && anidbEpisode <= range.end) {
-            const tvdbEpisode = anidbEpisode + offset;
-            return buildResult(tvdbSeason, tvdbEpisode, {
+            return buildResult(tvdbSeason, anidbEpisode + offset, {
               type: 'absolute_numbering_range',
               range,
               offset,
@@ -760,30 +675,20 @@ function resolveTvdbEpisodeFromAnidbEpisode(anidbId, anidbSeason, anidbEpisode) 
         }
       }
     }
-
-    // logger.debug(
-    //   `No absolute mapping found for AniDB ${anidbId} S${anidbSeason}E${anidbEpisode}`
-    // );
     return null;
   }
 
   if (defaultTvdbSeason === '0') {
-    // logger.debug(
-    //   `defaulttvdbseason=0 currently unsupported for reverse lookup (AniDB ${anidbId})`
-    // );
     return null;
   }
 
-  const tvdbSeason = parseInt(defaultTvdbSeason);
+  const tvdbSeason = parsed.defaultSeasonNum;
   const seasonGroup = getSameSeasonEntryGroup(animeEntry);
   const sameSeasonEntries = seasonGroup.sameSeasonEntries;
 
   if (sameSeasonEntries.length === 1) {
     const tvdbEpisode = anidbEpisode + episodeOffset;
     if (tvdbEpisode <= 0) {
-      // logger.debug(
-      //   `Calculated TVDB episode <= 0 for AniDB ${anidbId} S${anidbSeason}E${anidbEpisode}`
-      // );
       return null;
     }
 
@@ -793,24 +698,20 @@ function resolveTvdbEpisodeFromAnidbEpisode(anidbId, anidbSeason, anidbEpisode) 
     });
   }
 
-  for (const mapping of mappingList) {
-    const mappingAnidbSeason = parseInt(mapping.$.anidbseason);
-    if (mappingAnidbSeason !== anidbSeason) continue;
+  for (const mapping of parsed.mappings) {
+    if (mapping.anidbSeason !== anidbSeason) continue;
 
-    const targetSeason = parseInt(mapping.$.tvdbseason) || tvdbSeason;
-    const offset = parseInt(mapping.$.offset) || episodeOffset;
+    const targetSeason = mapping.tvdbSeason || tvdbSeason;
+    const offset = mapping.offset || episodeOffset;
 
-    if (mapping.$.start && mapping.$.end) {
-      const start = parseInt(mapping.$.start);
-      const end = parseInt(mapping.$.end);
-
-      if (anidbEpisode >= start && anidbEpisode <= end) {
-        const delta = anidbEpisode - start;
-        const tvdbEpisode = start + offset + delta;
+    if (mapping.hasStart && mapping.hasEnd) {
+      if (anidbEpisode >= mapping.start && anidbEpisode <= mapping.end) {
+        const delta = anidbEpisode - mapping.start;
+        const tvdbEpisode = mapping.start + offset + delta;
         return buildResult(targetSeason, tvdbEpisode, {
           type: 'regular_season_with_mapping',
-          start,
-          end,
+          start: mapping.start,
+          end: mapping.end,
           offset,
         });
       }
@@ -819,23 +720,17 @@ function resolveTvdbEpisodeFromAnidbEpisode(anidbId, anidbSeason, anidbEpisode) 
 
   if (sameSeasonEntries.length > 1) {
     const sortedEntries = seasonGroup.sortedOffsetEntries;
-    const currentIndex = seasonGroup.indexByAnidbId.get(parseInt(animeEntry.$.anidbid));
+    const currentIndex = seasonGroup.indexByAnidbId.get(parsed.anidbId);
 
     if (currentIndex !== undefined) {
       const currentOffset = sortedEntries[currentIndex].offset;
       const nextOffset = sortedEntries[currentIndex + 1]?.offset;
 
       if (anidbEpisode < 1) {
-        // logger.debug(
-        //   `AniDB episode must be >= 1 (AniDB ${anidbId} S${anidbSeason}E${anidbEpisode})`
-        // );
         return null;
       }
 
       if (nextOffset !== undefined && anidbEpisode + currentOffset > nextOffset) {
-        // logger.debug(
-        //   `AniDB episode ${anidbEpisode} falls beyond range for this entry (next offset ${nextOffset})`
-        // );
         return null;
       }
 
@@ -854,9 +749,6 @@ function resolveTvdbEpisodeFromAnidbEpisode(anidbId, anidbSeason, anidbEpisode) 
 
   const tvdbEpisode = anidbEpisode + episodeOffset;
   if (tvdbEpisode <= 0) {
-    // logger.debug(
-    //   `Calculated TVDB episode <= 0 for AniDB ${anidbId} S${anidbSeason}E${anidbEpisode}`
-    // );
     return null;
   }
 

@@ -23,7 +23,7 @@ const { stripCachePrefix }: any = require('../cacheEpoch');
 
 export function writeThrough(
   meta: any,
-  componentsToCache: Array<{ cacheKey: string; componentData: any }>,
+  componentsToCache: Array<{ cacheKey: string; componentData: any; encodedPayload?: Buffer | string }>,
 ): { stable: boolean; tier: 'frozen' | 'stable' | 'partial' | null; enqueued: number; skipped?: boolean } {
   const cls = classifyMetaStability(meta);
   if (!cls.stable || !cls.tier) return { stable: false, tier: null, enqueued: 0 };
@@ -43,7 +43,7 @@ export function writeThrough(
     logger.debug(`Demoting ${meta?.id} to partial: ${comp.reasons.join(', ')}`);
   }
 
-  const rows = componentsToCache.map(({ cacheKey, componentData }) => {
+  const rows = componentsToCache.map(({ cacheKey, componentData, encodedPayload }) => {
     const parts = cacheKey.split(':');
     return {
       k: cacheKey,
@@ -51,6 +51,7 @@ export function writeThrough(
       component: parts[0],
       tier,
       componentData,
+      ...(encodedPayload !== undefined ? { encodedPayload } : {}),
     };
   });
   store.put(rows);

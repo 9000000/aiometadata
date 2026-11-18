@@ -31,8 +31,6 @@ function anilistHeaders(accessToken?: string): Record<string, string> {
 
 class AniListAPI {
   baseURL: string;
-  cache: Map<any, any>;
-  cacheTimeout: number;
   rateLimit: {
     limit: number;
     remaining: number;
@@ -44,8 +42,6 @@ class AniListAPI {
   isProcessingQueue: boolean;
   constructor() {
     this.baseURL = 'https://graphql.anilist.co';
-    this.cache = new Map();
-    this.cacheTimeout = 60 * 60 * 1000; // 1 hour
     
     // Rate limiting configuration
     this.rateLimit = {
@@ -859,10 +855,9 @@ class AniListAPI {
   }
 
   /**
-   * Clear cache
+   * Clear cache (kept as no-op for backward compatibility; AniList uses Redis cache)
    */
   clearCache() {
-    this.cache.clear();
     console.log('[AniList] Cache cleared');
   }
 
@@ -954,19 +949,13 @@ class AniListAPI {
   }
 
   /**
-   * Get cache statistics
+   * Get cache and rate-limit statistics
    */
   getCacheStats() {
-    const now = Date.now();
-    const validEntries = Array.from(this.cache.values()).filter(
-      (entry: any) => now - entry.timestamp < this.cacheTimeout
-    );
-    
     return {
-      totalEntries: this.cache.size,
-      validEntries: validEntries.length,
-      expiredEntries: this.cache.size - validEntries.length,
-      cacheTimeout: this.cacheTimeout,
+      totalEntries: 0,
+      validEntries: 0,
+      expiredEntries: 0,
       rateLimit: this.getRateLimitStatus()
     };
   }

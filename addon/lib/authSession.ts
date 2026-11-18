@@ -15,6 +15,10 @@ function accountSessionsKey(accountId: string): string {
   return `${ACCOUNT_SESSIONS_PREFIX}${accountId}`;
 }
 
+function hashSessionId(id: string): string {
+  return crypto.createHash('sha256').update(id).digest('hex');
+}
+
 /**
  * The set has to outlive its longest-lived member, so its expiry follows the
  * highest score rather than whichever session was added last. Setting it from
@@ -45,12 +49,13 @@ export function sessionTtlSeconds(): number {
 
 export async function createSession(data: Omit<SessionData, 'createdAt'>): Promise<string> {
   const id = crypto.randomBytes(32).toString('base64url');
+  const hashedId = hashSessionId(id);
   const payload: SessionData = { ...data, createdAt: Date.now() };
   const ttl = sessionTtlSeconds();
-  await redis.set(`${SESSION_PREFIX}${id}`, JSON.stringify(payload), 'EX', ttl);
+  await redis.set(`${SESSION_PREFIX}${hashedId}`, JSON.stringify(payload), 'EX', ttl);
   try {
     const key = accountSessionsKey(data.accountId);
-    await redis.zadd(key, Date.now() + ttl * 1000, id);
+    await redis.zadd(key, Date.now() + ttl * 1000, hashedId);
     await refreshIndexExpiry(key);
   } catch (error: any) {
     logger.warn(`Could not index session for ${data.accountId}: ${error.message}`);
@@ -61,7 +66,11 @@ export async function createSession(data: Omit<SessionData, 'createdAt'>): Promi
 export async function readSession(id: string | undefined): Promise<SessionData | null> {
   if (!id) return null;
   try {
-    const raw = await redis.get(`${SESSION_PREFIX}${id}`);
+    const hashedId = hashSessionId(id);
+    let raw = await redis.get(`${SESSION_PREFIX}${hashedId}`);
+    if (!raw && hashedId !== id) {
+      raw = await redis.get(`${SESSION_PREFIX}${id}`);
+    }
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     const stored: Permission[] = Array.isArray(parsed.permissions)
@@ -95,11 +104,26 @@ export async function readSession(id: string | undefined): Promise<SessionData |
 export async function destroySession(id: string | undefined): Promise<void> {
   if (!id) return;
   try {
-    const raw = await redis.get(`${SESSION_PREFIX}${id}`);
-    await redis.del(`${SESSION_PREFIX}${id}`);
+    const hashedId = hashSessionId(id);
+    const hashedKey = `${SESSION_PREFIX}${hashedId}`;
+    const legacyKey = `${SESSION_PREFIX}${id}`;
+    const rawHashed = await redis.get(hashedKey);
+    const rawLegacy = hashedId !== id ? await redis.get(legacyKey) : null;
+    if (hashedId !== id) {
+      await redis.del(hashedKey, legacyKey);
+    } else {
+      await redis.del(hashedKey);
+    }
+    const raw = rawHashed || rawLegacy;
     if (raw) {
       const accountId = JSON.parse(raw)?.accountId;
-      if (accountId) await redis.zrem(accountSessionsKey(accountId), id);
+      if (accountId) {
+        if (hashedId !== id) {
+          await redis.zrem(accountSessionsKey(accountId), hashedId, id);
+        } else {
+          await redis.zrem(accountSessionsKey(accountId), hashedId);
+        }
+      }
     }
   } catch (error: any) {
     logger.warn(`Could not destroy session: ${error.message}`);

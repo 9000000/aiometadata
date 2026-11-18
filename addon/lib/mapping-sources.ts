@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import consola from 'consola';
+import { writeFileAtomic } from '../utils/atomicWrite';
 const redis = require('./redisClient');
 const { request } = require('undici');
 const logger = consola.withTag('ID Mappings');
@@ -93,8 +94,7 @@ export async function downloadCsv<T>(source: MappingSource, parse: (csv: string)
         logger.warn(`Downloaded ${name} failed to parse: ${parseError.message}`);
         throw parseError;
       }
-      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-      fs.writeFileSync(cachePath, csv);
+      await writeFileAtomic(cachePath, csv, 'utf8');
       if (redis && redis.status === 'ready' && headers.etag) await redis.set(etagKey, headers.etag);
       return parsed;
     } catch (error: any) {

@@ -3490,13 +3490,24 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
 
   // --- Diagnostics ---
   {
+    key: 'ENABLE_REDIS_DIAGNOSTICS',
+    envVar: 'ENABLE_REDIS_DIAGNOSTICS',
+    label: 'Enable Redis Diagnostics',
+    description: 'Instrument the Redis client on startup to count commands and optionally log callers or periodic summaries',
+    category: 'Diagnostics',
+    type: 'boolean',
+    default: false,
+    envOnly: true,
+    requiresRestart: true,
+  },
+  {
     key: 'ENABLE_REDIS_LOG',
     envVar: 'ENABLE_REDIS_LOG',
     label: 'Enable Redis Request Logging',
     description: 'Log every Redis command, target key, and calling file in real-time to monitor background queries',
     category: 'Diagnostics',
     type: 'boolean',
-    default: true,
+    default: false,
   },
   {
     key: 'ENABLE_USER_REQUEST_TRACKING',
@@ -3514,7 +3525,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     description: 'Print periodic summary report of Redis commands and top background callers every 60s',
     category: 'Diagnostics',
     type: 'boolean',
-    default: true,
+    default: false,
   },
   {
     key: 'LOG_BUFFER_SIZE',

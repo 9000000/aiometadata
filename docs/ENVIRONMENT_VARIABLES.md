@@ -25,6 +25,11 @@ cp .env.example .env
 - **Description**: Your domain name for generating URLs
 - **Example**: `HOST_NAME=your-domain.com`
 
+### `SOURCE_CODE_URL`
+- **Default**: the official source of the release this build was made from (`https://github.com/cedya77/aiometadata/tree/v<version>`)
+- **Description**: Where the users of this instance can get its source code. The configure page's About dialog links to it. If you run a modified copy, the AGPL requires you to offer your users the source of your version: set this to where it is published.
+- **Example**: `SOURCE_CODE_URL=https://github.com/you/aiometadata-fork/tree/main`
+
 ### `NODE_ENV`
 - **Default**: `development`
 - **Options**: `development`, `production`
@@ -52,6 +57,17 @@ cp .env.example .env
 - **Default**: `true`
 - **Description**: Compress HTTP responses with gzip or brotli, whichever the client negotiates. A 20-item catalog page drops from about 99 KB to about 22 KB for roughly 1 ms of CPU. Images, server-sent events and responses under 1 KB are left alone. Set false only if a reverse proxy in front is already compressing.
 - **Example**: `RESPONSE_COMPRESSION_ENABLED=false`
+
+### `OUTBOUND_ALLOWED_PRIVATE_HOSTS`
+- **Optional**: Yes
+- **Default**: empty
+- **Description**: Comma-separated hosts on a private network that the server may still fetch from when a user or a configuration names them: addon manifests, external catalogs, stream, subtitle and trailer addons, and AIOManager. Any other private, loopback or link-local address is refused, apart from `HOST_NAME` itself (its host on its port). Use `*` to allow every private address on an instance only you can reach. With `HTTPS_PROXY` or `HTTP_PROXY` set, these requests still go through the proxy, checked before they leave. The image cache keeps its own list, `POSTER_CACHE_ALLOWED_HOSTS`. Also editable under **Server & Storage** in the dashboard settings.
+- **Example**: `OUTBOUND_ALLOWED_PRIVATE_HOSTS=aiostreams,192.168.1.20`
+
+### `ADDON_FETCH_MAX_MB`
+- **Optional**: Yes
+- **Default**: `10`
+- **Description**: The largest reply, in megabytes, the server reads from an addon manifest, an external catalog, a stream, subtitle or trailer addon, AIOManager, or a link read for an import. A larger reply is refused rather than read into memory.
 
 ---
 
@@ -223,9 +239,24 @@ to every visitor, so which one you reach for depends on who uses the instance.
 - **Get it**: https://simkl.com/oauth/applications
 
 #### `SIMKL_CLIENT_SECRET`
-- **Required for SimKL integration**: Only for the OAuth flow (not needed when `SIMKL_AUTH_MODE=pin`)
-- **Description**: SimKL API client secret for enabling SimKL account integration
+- **Required for SimKL integration**: Only for the OAuth (browser redirect) sign-in. The code sign-in needs only `SIMKL_CLIENT_ID`.
+- **Description**: SimKL API client secret, used by the OAuth sign-in. Its presence also decides the default of `SIMKL_AUTH_MODE`.
 - **Get it**: https://simkl.com/oauth/applications
+
+#### `SIMKL_AUTH_MODE`
+- **Required**: No
+- **Values**: `oauth`, `pin` or `both` (case-insensitive). Empty or any other value uses the default.
+- **Default**: When `SIMKL_V2_CLIENT_ID` is set, `oauth` if `SIMKL_V2_CLIENT_SECRET` is set too, else `pin`. Otherwise `oauth` if `SIMKL_CLIENT_SECRET` is set, else `pin`.
+- **Description**: How users connect their Simkl account.
+  - `oauth`: the browser is redirected to Simkl and back to `/api/auth/simkl/callback`. Needs the client secret and a callback URL that Simkl can reach.
+  - `pin`: the configure page shows a short code, the user enters it at simkl.com/pin, and the server polls Simkl until a token is issued. Needs only the client id; the server makes outbound calls only, so no inbound callback is needed. Suits private instances that are not reachable from the internet.
+  - `both`: offers both, the code sign-in first.
+- **Example**: `SIMKL_AUTH_MODE=pin`
+
+#### `DEVICE_AUTH_POLL_RATE_LIMIT_PER_MIN`
+- **Default**: `240`
+- **Description**: Maximum code sign-in requests (asking for a code and checking whether it has been approved) per caller per minute. A caller is the sign-in session, else the signed-in account, else the client IP. Applies only with Redis; without Redis there is no limit. Status checks that come sooner than Simkl allows are answered by the server without contacting Simkl.
+- **Example**: `DEVICE_AUTH_POLL_RATE_LIMIT_PER_MIN=120`
 
 #### `SIMKL_V2_CLIENT_ID`
 - **Required**: No, but Simkl retires the V1 sign-in (`SIMKL_CLIENT_ID`) around April 2027
@@ -244,24 +275,9 @@ to every visitor, so which one you reach for depends on who uses the instance.
 - **Default**: `300`
 - **Description**: How many seconds a Simkl token whose refresh failed is left before the refresh is tried again. A refresh the user revoked on Simkl keeps failing until they reconnect.
 
-#### `SIMKL_AUTH_MODE`
-- **Required**: No
-- **Default**: `pin` when `SIMKL_CLIENT_SECRET` is unset, otherwise `oauth`. With `SIMKL_V2_CLIENT_ID` set, `SIMKL_V2_CLIENT_SECRET` decides instead.
-- **Values**: `oauth`, `pin`, `both`
-- **Description**: Which SimKL connection flow(s) the configure page offers.
-  - `oauth` - the browser-redirect flow. Needs `SIMKL_CLIENT_SECRET` plus a publicly reachable `HOST_NAME`/`SIMKL_REDIRECT_URI` registered with SimKL.
-  - `pin` - the PIN (device) flow. The server asks SimKL for a short code, the user enters it at https://simkl.com/pin, and the server polls until SimKL hands back an access token. Needs only `SIMKL_CLIENT_ID`: no client secret and no inbound callback, so it works on instances that are not reachable from the internet.
-  - `both` - offers each flow side by side.
-- **Example**: `SIMKL_AUTH_MODE=pin`
-
-#### `DEVICE_AUTH_POLL_RATE_LIMIT_PER_MIN`
-- **Required**: No
-- **Default**: `240`
-- **Description**: Instance-wide cap on PIN authorization status polls per minute on `/api/auth/simkl/pin/status`. Only applies when Redis is available.
-
 #### `SIMKL_REDIRECT_URI`
-- **Required for SimKL integration**: No (optional, and unused when `SIMKL_AUTH_MODE=pin`)
-- **Description**: Redirect URI for SimKL OAuth. If not set, defaults to `${HOST_NAME}/api/auth/simkl/callback`. Must match the value set in your SimKL app settings if explicitly set.
+- **Required for SimKL integration**: No (optional)
+- **Description**: Redirect URI for SimKL OAuth. If not set, defaults to `${HOST_NAME}/api/auth/simkl/callback`. Must match the value set in your SimKL app settings if explicitly set. Unused when `SIMKL_AUTH_MODE` is `pin`.
 - **Example**: `SIMKL_REDIRECT_URI=https://your-domain.com/api/auth/simkl/callback`
 
 #### `SIMKL_ACTIVITIES_TTL`
@@ -282,6 +298,35 @@ to every visitor, so which one you reach for depends on who uses the instance.
 - **Optional**: Yes
 - **Description**: Google Gemini API key for AI search features
 - **Get it**: https://makersuite.google.com/app/apikey
+
+#### `OPENROUTER_BASE_URL`
+- **Optional**: Yes
+- **Default**: empty (OpenRouter)
+- **Description**: Sends every OpenRouter request (AI search, AI catalogs, recommendations) to another OpenAI-compatible API instead, such as LiteLLM, Ollama or vLLM. Users then enter that API's key in the OpenRouter key field (shown as **AI Endpoint API Key**) and pick its model names; the model list comes from its `/models`. OpenRouter's web search, presets and thinking control do not apply there and are hidden. An API that accepts any key can be used by every user of the instance. Also editable under **API Keys** in the dashboard settings.
+- **Example**: `OPENROUTER_BASE_URL=http://litellm:4000/v1`
+
+#### `WEB_SEARCH_ENGINE`
+- **Optional**: Yes
+- **Default**: `off`
+- **Values**: `off`, `fastcrw`, `searxng`
+- **Description**: A web search engine this instance offers every user for AI search and recommendations, so they need no key of their own. The engine searches the web and AIOMetadata hands the model the results, so any model can use it, including free ones and an `OPENROUTER_BASE_URL` endpoint. Users choose it under **Search with** in AI search and in recommendations. Users with a key of their own for an engine's hosted API (fastCRW) can use that engine whatever this is set to. Also editable under **API Keys** in the dashboard settings.
+- **Example**: `WEB_SEARCH_ENGINE=searxng`
+
+#### `WEB_SEARCH_URL`
+- **Optional**: Yes
+- **Default**: empty (the engine's hosted API, with `WEB_SEARCH_API_KEY`)
+- **Description**: The engine's server of this instance's own. SearXNG has no hosted API, so it needs this, and its `settings.yml` must list `json` under `search.formats`. For fastCRW, empty uses `https://api.fastcrw.com`.
+- **Example**: `WEB_SEARCH_URL=http://searxng:8080` or `WEB_SEARCH_URL=http://crw:3000`
+
+#### `WEB_SEARCH_API_KEY`
+- **Optional**: Yes
+- **Default**: empty
+- **Description**: A key for the engine's hosted API that the instance pays for, used by users who have no key of their own. A fastCRW search costs 2 credits.
+
+#### `WEB_SEARCH_CACHE_HOURS`
+- **Optional**: Yes
+- **Default**: `12`
+- **Description**: How long a web search is reused for the same query, by every user, before it runs again.
 
 ---
 
@@ -653,6 +698,32 @@ These caps bound the per-process heap used by module-level caches. The defaults 
 
 ---
 
+## Trailer Addon
+
+A configuration can take trailers from a Stremio trailer addon instead of the metadata provider. These settings bound how that addon is asked.
+
+### `TRAILER_ADDON_TIMEOUT_MS`
+- **Default**: `6000` (minimum `500`)
+- **Description**: How long a request to a user's trailer addon may take before the metadata provider's trailer is used instead.
+
+### `TRAILER_ADDON_CATALOG_WAIT_MS`
+- **Default**: `1500`
+- **Description**: How long a catalog page waits for a trailer addon. Titles it has not answered for by then keep the metadata provider's trailer in that response. `0` does not wait.
+
+### `TRAILER_ADDON_TTL`
+- **Default**: `86400` (minimum `60`)
+- **Description**: Seconds a trailer addon's answer for a title is kept. An answer whose links carry an `expire=` time is dropped five minutes before the first of them expires.
+
+### `TRAILER_ADDON_EMPTY_TTL`
+- **Default**: `86400` (minimum `60`)
+- **Description**: Seconds a trailer addon is left alone about a title it had no trailers for.
+
+### `TRAILER_ADDON_WARM_CONCURRENCY`
+- **Default**: `4`
+- **Description**: How many titles catalog warming asks a trailer addon about at once. It only re-asks for answers that would lapse before the next warm run.
+
+---
+
 ## Dashboard Configuration
 
 ### `DASHBOARD_METADATA_LANGUAGE`
@@ -858,7 +929,7 @@ Art the addon **passes through without storing** is decided by a chain of its ow
 
 ### `POSTER_CACHE_CAST`
 - **Default**: `false`
-- **Description**: Also cache cast/actor headshots. Numerous, at roughly ten to twenty per title, and each one is a separate image, so expect this to take a real bite out of `POSTER_CACHE_MAX_SIZE` on a large library.
+- **Description**: Also cache cast and actor headshots (`app_extras.cast[].photo` in meta and catalog responses). When on, each cast member's photo is served from `/poster-cache/cast/...` instead of straight from the origin, and the cache warmer pre-fills them. Members without a photo are left as they are. Small images, but a title can list dozens of people.
 - **Example**: `POSTER_CACHE_CAST=true`
 
 ### `POSTER_CACHE_COLLECTIONS`
@@ -1266,7 +1337,8 @@ MDBLIST_API_KEY=your_key_here
 TRAKT_CLIENT_ID=your_key_here  # Optional
 TRAKT_CLIENT_SECRET=your_key_here  # Optional
 SIMKL_CLIENT_ID=your_key_here  # Optional
-SIMKL_CLIENT_SECRET=your_key_here  # Optional
+SIMKL_CLIENT_SECRET=your_key_here  # Optional, OAuth sign-in only
+SIMKL_AUTH_MODE=  # Optional: oauth, pin or both
 SIMKL_V2_CLIENT_ID=your_key_here  # Optional
 SIMKL_V2_CLIENT_SECRET=your_key_here  # Optional
 

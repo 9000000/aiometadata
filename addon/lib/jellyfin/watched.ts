@@ -1,7 +1,10 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
 import consola from 'consola';
 import { LRUCache } from 'lru-cache';
 import { createHash } from 'crypto';
 import { envInt } from '../../utils/envNumber';
+import { yieldEvery } from '../../utils/yieldEvery';
 import { credentialFor, sourceFor } from './trackerSource';
 import { generationOf, videoIdFor } from './resume';
 import { playCountOf } from './dto';
@@ -13,7 +16,8 @@ export async function ownNextUpRows(userUUID: string, profile: string): Promise<
   const database: any = require('../database');
   const { parseStremioId } = require('./ids');
   const { envInt } = require('../../utils/envNumber');
-  const { videoIdAliases, groupBySpelling } = require('./aliases');
+  const { videoIdAliases, groupBySpelling, aliasConfigFor } = require('./aliases');
+  const aliasConfig = await aliasConfigFor(userUUID);
 
   const since = Date.now() - envInt('JELLYFIN_NEXTUP_OWN_DAYS', 120, 1) * 24 * 60 * 60 * 1000;
   const shows = envInt('JELLYFIN_NEXTUP_OWN_LIMIT', 300, 1);
@@ -33,17 +37,18 @@ export async function ownNextUpRows(userUUID: string, profile: string): Promise<
   const isAfter = (a: any, b: any): boolean => (a.season ?? 0) > (b.season ?? 0) || ((a.season ?? 0) === (b.season ?? 0) && a.episode > b.episode);
   let after: { at: number; videoId: string } | null = null;
   let carry: any[] = [];
-  for (let scanned = 0; rows.length < shows && scanned < scanCap; scanned += batch) {
+  const pending: Array<{ lead: any; leadParsed: any; watchedAt: number; bases: Set<string> }> = [];
+  for (let scanned = 0; pending.length < shows && scanned < scanCap; scanned += batch) {
     let records: any[];
     try {
       records = await database.listRecentlyPlayed(userUUID, since, batch, profile, after);
     } catch {
-      return rows;
+      break;
     }
     const last = records[records.length - 1];
     if (last) after = { at: Number(last.last_played_at), videoId: String(last.video_id) };
     const groupOf = new Map<string, any[]>();
-    for (const group of (await groupBySpelling([...carry, ...records])) as any[][]) {
+    for (const group of (await groupBySpelling([...carry, ...records], aliasConfig)) as any[][]) {
       for (const row of group) groupOf.set(String(row.video_id), group);
     }
     const byShow = new Map<string, any[]>();
@@ -66,17 +71,21 @@ export async function ownNextUpRows(userUUID: string, profile: string): Promise<
     }
     carry = last ? records.filter((row) => Number(row.last_played_at) === Number(last.last_played_at)) : [];
     for (const r of records) {
-      if (rows.length >= shows) break;
+      if (pending.length >= shows) break;
       const parsed = parseStremioId(String(r.video_id));
       if (!parsed || parsed.episode === null || parsed.episode === undefined) continue;
       const group = groupOf.get(String(r.video_id)) ?? [r];
       if (seen.has(parsed.base) || group.some((row: any) => handled.has(String(row.video_id)))) continue;
+      const bases = new Set<string>([parsed.base]);
       for (const row of group) {
         handled.add(String(row.video_id));
         const base = parseStremioId(String(row.video_id))?.base;
-        if (base) seen.add(base);
+        if (base) {
+          seen.add(base);
+          bases.add(base);
+        }
       }
-      for (const alias of await videoIdAliases(String(r.video_id))) {
+      for (const alias of await videoIdAliases(String(r.video_id), aliasConfig)) {
         const base = parseStremioId(alias)?.base;
         if (base) seen.add(base);
       }
@@ -90,6 +99,7 @@ export async function ownNextUpRows(userUUID: string, profile: string): Promise<
         leadParsed = spelled;
       }
       const at = Number(r.last_played_at) || 0;
+      const watchedAt = at || Number(r.updated_at) || 0;
       if (batchMs > 0 && at > 0) {
         const together = (byShow.get(leadParsed.base) ?? [])
           .filter((row) => Number(row.last_played_at) >= at - batchMs && Number(row.last_played_at) <= at)
@@ -101,16 +111,54 @@ export async function ownNextUpRows(userUUID: string, profile: string): Promise<
           leadParsed = spelled;
         }
       }
-      rows.push({
-        metaId: leadParsed.base,
-        videoId: String(lead.video_id),
-        season: leadParsed.season ?? null,
-        episode: leadParsed.episode,
-        mediaType: leadParsed.idType === 'kitsu' || leadParsed.idType === 'mal' || leadParsed.idType === 'anilist' ? 'anime' : 'series',
-        lastWatchedAt: Number(r.last_played_at) || Number(r.updated_at) || 0,
-      });
+      pending.push({ lead, leadParsed, watchedAt, bases });
     }
     if (records.length < batch) break;
+  }
+  // A mark only moves a show on, so one led by a mark goes back to its latest viewing unless a mark since is further,
+  // as when a tracker returns old marks dated the day they were sent.
+  const markLed = pending.filter((entry) => entry.lead.last_played_kind === 'mark');
+  const played: any[] = markLed.length
+    ? await database.listPlayedAmong(userUUID, profile, [...new Set(markLed.flatMap((entry) => [...entry.bases]))]).catch(() => [])
+    : [];
+  // Episode numbers compare only within one id, since ids can number a show differently.
+  const byBase = new Map<string, Array<{ row: any; spelled: any }>>();
+  for (const row of played) {
+    const spelled = regularEpisode(String(row.video_id));
+    if (!spelled) continue;
+    const group = byBase.get(spelled.base);
+    if (group) group.push({ row, spelled });
+    else byBase.set(spelled.base, [{ row, spelled }]);
+  }
+  for (const entry of markLed) {
+    let best: { viewing: { row: any; spelled: any }; pick: { row: any; spelled: any } } | null = null;
+    for (const base of entry.bases) {
+      const own = byBase.get(base) ?? [];
+      let viewing: { row: any; spelled: any } | null = null;
+      for (const held of own) {
+        if (held.row.last_played_kind !== 'mark' && (!viewing || Number(held.row.last_played_at) > Number(viewing.row.last_played_at))) viewing = held;
+      }
+      if (!viewing) continue;
+      let pick = viewing;
+      for (const held of own) {
+        if (held.row.last_played_kind === 'mark' && Number(held.row.last_played_at) >= Number(viewing.row.last_played_at) && isAfter(held.spelled, pick.spelled)) pick = held;
+      }
+      if (!best || Number(viewing.row.last_played_at) > Number(best.viewing.row.last_played_at)) best = { viewing, pick };
+    }
+    if (!best) continue;
+    entry.lead = { ...entry.lead, video_id: String(best.pick.row.video_id) };
+    entry.leadParsed = best.pick.spelled;
+    entry.watchedAt = Number(best.pick.row.last_played_at);
+  }
+  for (const { lead, leadParsed, watchedAt } of pending) {
+    rows.push({
+      metaId: leadParsed.base,
+      videoId: String(lead.video_id),
+      season: leadParsed.season ?? null,
+      episode: leadParsed.episode,
+      mediaType: leadParsed.idType === 'kitsu' || leadParsed.idType === 'mal' || leadParsed.idType === 'anilist' ? 'anime' : 'series',
+      lastWatchedAt: watchedAt,
+    });
   }
   return rows;
 }
@@ -162,6 +210,8 @@ export interface WatchedSnapshot {
   dropped: Set<string>;
   /** The drops could not be read, so `dropped` is not the whole list. */
   droppedUnread?: boolean;
+  /** Shows the tracker lists as on hold, under every id they answer to. */
+  onHold?: Set<string>;
   /** Anime entries the tracker lists as completed. */
   finishedAnime?: FinishedAnime[];
   /** Every entry on the tracker's lists, as `mal:` and `simkl:` keys. */
@@ -189,6 +239,7 @@ interface Collecting {
   /** When a video was last watched, by video id, where the tracker says. */
   at: Map<string, number>;
   dropped: Set<string>;
+  onHold?: Set<string>;
   finishedAnime?: FinishedAnime[];
   listedAnime?: Set<string>;
 }
@@ -263,6 +314,7 @@ function collectShow(entry: any, snapshot: Collecting, isAnime: boolean, history
   }
   // An older Simkl app is sent `notinteresting` where a newer one gets `dropped`.
   if (entry?.status === 'dropped' || entry?.status === 'notinteresting') for (const key of seriesKeysWithKitsu(ids)) snapshot.dropped.add(key);
+  if (entry?.status === 'hold') for (const key of seriesKeysWithKitsu(ids)) snapshot.onHold?.add(key);
 
   if (film) {
     if (entry?.status !== 'completed') return;
@@ -359,12 +411,14 @@ interface RawSnapshot {
   following?: Array<{ metaId: string; mediaType: 'anime' | 'series' }>;
   dropped?: string[];
   droppedUnread?: boolean;
+  onHold?: string[];
   finishedAnime?: FinishedAnime[];
   listedAnime?: string[];
 }
 
 /** A Simkl library, as `/sync/all-items` returns it, made into a snapshot. */
-export function assembleSimkl(data: any): RawSnapshot {
+export async function assembleSimkl(data: any): Promise<RawSnapshot> {
+  const pause = yieldEvery();
   const snapshot: Collecting = {
     episodes: new Set(),
     movies: new Set(),
@@ -373,12 +427,14 @@ export function assembleSimkl(data: any): RawSnapshot {
     following: [],
     at: new Map(),
     dropped: new Set(),
+    onHold: new Set(),
     finishedAnime: [],
     listedAnime: new Set(),
   };
   const history = new Map<string, HistoryEntry>();
 
   for (const entry of Array.isArray(data?.movies) ? data.movies : []) {
+    await pause();
     if (entry?.status !== 'completed') continue;
     const ids = entry?.movie?.ids ?? {};
     const at = Date.parse(entry?.last_watched_at ?? '') || 0;
@@ -390,8 +446,14 @@ export function assembleSimkl(data: any): RawSnapshot {
     if (id) recordWatch(history, { kind: 'movie', id, mediaType: 'movie', at });
   }
 
-  for (const entry of Array.isArray(data?.shows) ? data.shows : []) collectShow(entry, snapshot, false, history);
-  for (const entry of Array.isArray(data?.anime) ? data.anime : []) collectShow(entry, snapshot, true, history);
+  for (const entry of Array.isArray(data?.shows) ? data.shows : []) {
+    await pause();
+    collectShow(entry, snapshot, false, history);
+  }
+  for (const entry of Array.isArray(data?.anime) ? data.anime : []) {
+    await pause();
+    collectShow(entry, snapshot, true, history);
+  }
 
   return {
     episodes: [...snapshot.episodes],
@@ -402,6 +464,7 @@ export function assembleSimkl(data: any): RawSnapshot {
     nextUp: snapshot.nextUp.sort((a, b) => b.lastWatchedAt - a.lastWatchedAt),
     following: snapshot.following,
     dropped: [...snapshot.dropped],
+    onHold: [...(snapshot.onHold ?? [])],
     finishedAnime: snapshot.finishedAnime,
     listedAnime: [...(snapshot.listedAnime ?? [])],
   };
@@ -419,7 +482,7 @@ export interface AnimeListEntry {
   finished?: boolean;
 }
 
-export async function assembleAnimeList(entries: AnimeListEntry[]): Promise<RawSnapshot> {
+export async function assembleAnimeList(entries: AnimeListEntry[], config: any = {}): Promise<RawSnapshot> {
   const idMapper: any = require('../id-mapper');
   const { videoIdAliases, groupBySpelling } = require('./aliases');
   const snapshot: Collecting = {
@@ -430,6 +493,7 @@ export async function assembleAnimeList(entries: AnimeListEntry[]): Promise<RawS
     following: [],
     at: new Map(),
     dropped: new Set(),
+    onHold: new Set(),
   };
   const history = new Map<string, HistoryEntry>();
 
@@ -447,6 +511,7 @@ export async function assembleAnimeList(entries: AnimeListEntry[]): Promise<RawS
     if (!metaId) continue;
 
     if (entry.status === 'dropped') for (const key of seriesKeysWithKitsu(ids)) snapshot.dropped.add(key);
+    if (entry.status === 'paused') for (const key of seriesKeysWithKitsu(ids)) snapshot.onHold?.add(key);
     const watchedCount = entry.status === 'completed' ? Math.max(entry.progress, entry.episodes ?? 0) : entry.progress;
 
     if (entry.movie) {
@@ -462,7 +527,7 @@ export async function assembleAnimeList(entries: AnimeListEntry[]): Promise<RawS
 
     for (let number = 1; number <= watchedCount; number += 1) {
       const videoId = `${metaId}:${number}`;
-      for (const id of [videoId, ...(await videoIdAliases(videoId))]) snapshot.episodes.add(id);
+      for (const id of [videoId, ...(await videoIdAliases(videoId, config))]) snapshot.episodes.add(id);
     }
     if (watchedCount > 0) {
       const last = `${metaId}:${watchedCount}`;
@@ -501,6 +566,7 @@ export async function assembleAnimeList(entries: AnimeListEntry[]): Promise<RawS
     nextUp: snapshot.nextUp.sort((a, b) => b.lastWatchedAt - a.lastWatchedAt),
     following: snapshot.following,
     dropped: [...snapshot.dropped],
+    onHold: [...(snapshot.onHold ?? [])],
   };
 }
 
@@ -742,7 +808,7 @@ type MirroredService = 'simkl' | 'mdblist' | 'publicmetadb' | 'anilist' | 'mal';
 
 // Raised to rebuild indexes written in an older spelling.
 const INDEX_FORMAT = 9;
-const SERVICE_FORMATS: Partial<Record<MirroredService, number>> = { publicmetadb: 10 };
+const SERVICE_FORMATS: Partial<Record<MirroredService, number>> = { publicmetadb: 10, simkl: 10, anilist: 10, mal: 10 };
 const formatOf = (service: MirroredService): number => SERVICE_FORMATS[service] ?? INDEX_FORMAT;
 
 interface SummaryData {
@@ -751,11 +817,12 @@ interface SummaryData {
   following: Array<{ metaId: string; mediaType: 'anime' | 'series' }>;
   dropped: string[];
   droppedUnread?: boolean;
+  onHold?: string[];
   finishedAnime?: FinishedAnime[];
   listedAnime?: string[];
 }
 
-const summaries = new LRUCache<string, WatchedSnapshot>({ max: envInt('JELLYFIN_WATCHED_CACHE_MAX', 200, 1) });
+const summaries = new LRUCache<string, WatchedSnapshot>({ max: envInt('JELLYFIN_WATCHED_CACHE_MAX', 1000, 1) });
 // One build per account at a time, each after the last, so two versions never write the index at once.
 const indexBuilds = new Map<string, Promise<unknown>>();
 
@@ -766,6 +833,7 @@ function viewOf(source: string, fingerprint: string, data: SummaryData): Watched
     following: data?.following ?? [],
     dropped: new Set(data?.dropped ?? []),
     droppedUnread: data?.droppedUnread === true,
+    onHold: new Set(data?.onHold ?? []),
     ...(data?.finishedAnime ? { finishedAnime: data.finishedAnime, listedAnime: new Set(data.listedAnime ?? []) } : {}),
     fingerprint,
   };
@@ -779,7 +847,9 @@ async function assembleFromMirror(service: MirroredService, credential: string, 
   if (service === 'simkl') {
     const { canonicalIds } = require('./canonicalIds');
     const data: any = { movies: [], shows: [], anime: [] };
+    const pause = yieldEvery();
     for (const row of rows) {
+      await pause();
       const type = row.key.split(':')[0];
       if (!data[type]) continue;
       let entry = row.data;
@@ -811,7 +881,7 @@ async function assembleFromMirror(service: MirroredService, credential: string, 
     return { ...(await assembleMdblist({ movieRows, episodeRows, showRows, upNext, droppedShows: dropped.shows ?? [], droppedUnread: dropped.unread === true }, config)), following: [] };
   }
   if (service === 'anilist' || service === 'mal') {
-    return assembleAnimeList(rows.filter((row) => row.key.startsWith('entry:')).map((row) => row.data));
+    return assembleAnimeList(rows.filter((row) => row.key.startsWith('entry:')).map((row) => row.data), config);
   }
   const plays: any[] = [];
   let dropped: any = { items: [], unread: false };
@@ -882,13 +952,19 @@ async function writeIndex(source: string, raw: RawSnapshot): Promise<{ added: nu
       listed: entry ? 1 : 0,
     });
   };
-  for (const id of raw.episodes) add(id, 'episode');
+  // A large library takes seconds to compare, so the loops let other requests run as they go.
+  const pause = yieldEvery();
+  for (const id of raw.episodes) {
+    add(id, 'episode');
+    await pause();
+  }
   for (const id of raw.movies) add(id, 'movie');
   for (const entry of raw.history ?? []) if (!want.has(entry.id)) add(entry.id, entry.kind);
 
   const have = new Map<string, IndexRow>((await database.listWatchIndex(source)).map((row: IndexRow) => [row.video_id, row]));
   const changed: IndexRow[] = [];
   for (const row of want.values()) {
+    await pause();
     const held = have.get(row.video_id);
     if (!held || held.kind !== row.kind || held.meta_id !== row.meta_id || held.media_type !== row.media_type || held.at !== Math.round(row.at) || held.listed !== row.listed) changed.push(row);
   }
@@ -932,6 +1008,7 @@ async function buildIndex(service: MirroredService, credential: string, config: 
     following: raw.following ?? [],
     dropped: raw.dropped ?? [],
     droppedUnread: raw.droppedUnread === true,
+    ...(raw.onHold?.length ? { onHold: raw.onHold } : {}),
     ...(raw.finishedAnime ? { finishedAnime: raw.finishedAnime, listedAnime: raw.listedAnime ?? [] } : {}),
   };
   // Written last: an index left half-written by a crash is rebuilt, since its version never lands.
@@ -957,9 +1034,19 @@ async function storeSnapshot(userUUID: string, config: any, service: MirroredSer
     }
   }
 
+  return snapshotAt(service, credential, config, source, version);
+}
+
+export async function indexedSnapshot(service: MirroredService, credential: string, config: any): Promise<WatchedSnapshot> {
+  const { mirrorVersion, sourceKeyFor } = require('./trackerMirror');
+  const version = await mirrorVersion(service, credential);
+  return version ? snapshotAt(service, credential, config, sourceKeyFor(service, credential), version) : EMPTY;
+}
+
+function snapshotAt(service: MirroredService, credential: string, config: any, source: string, version: number): Promise<WatchedSnapshot> {
   const key = `store:${source}:v${version}:f${formatOf(service)}`;
   const memo = summaries.get(key);
-  if (memo) return memo;
+  if (memo) return Promise.resolve(memo);
   const prior = indexBuilds.get(source) ?? Promise.resolve();
   const work = prior.catch(() => undefined).then(async () => {
     const again = summaries.get(key);
@@ -1147,8 +1234,11 @@ async function pmdbTvdbOrders(rows: any[], config: any): Promise<Map<number, Map
   const { withEpisodeOrder } = require('../../utils/episodeOrder');
   const idMapper: any = require('../id-mapper');
   const shows = new Set<number>(rows.filter((row: any) => row?.tmdb_id && row.media_type !== 'movie' && Number(row?.season) > 0).map((row: any) => Number(row.tmdb_id)));
+  // A show a title is matched to was sent its plays in TMDB numbering, so they are read back in it.
+  const { listMatches } = require('./trackerMatch');
+  const matched = new Set<number>(config?.userUUID ? ((await listMatches(config.userUUID, 'publicmetadb').catch(() => [])) as any[]).filter((match) => match.kind === 'series').map((match) => Number(match.target?.ids?.tmdb)).filter(Boolean) : []);
   for (const tmdb of shows) {
-    if (idMapper.getMappingByTmdbId(String(tmdb), 'series')) continue;
+    if (matched.has(tmdb) || idMapper.getMappingByTmdbId(String(tmdb), 'series')) continue;
     const ids = await canonicalIds({ tmdb }, 'series', config).catch(() => ({} as Record<string, any>));
     if ((withEpisodeOrder(config, Number(ids.tvdb) || null).tvdbSeasonType || 'default') !== 'default') continue;
     const order = await mdblistTvdbOrder(tmdb, apiKey).catch(() => null);
@@ -1269,7 +1359,7 @@ export async function assemblePmdb(data: PmdbData, config: any): Promise<RawSnap
 // A request answers from the snapshot held here and a refresh follows behind it, so a
 // tracker slow to answer never holds up a client; only the first read waits on one.
 const served = new LRUCache<string, { snapshot: WatchedSnapshot; at: number }>({
-  max: envInt('JELLYFIN_WATCHED_CACHE_MAX', 200, 1),
+  max: envInt('JELLYFIN_WATCHED_CACHE_MAX', 1000, 1),
 });
 const refreshing = new Set<string>();
 
@@ -1374,7 +1464,7 @@ export async function watchedSnapshot(userUUID: string, config: any, opts: { pat
   return local.size ? { ...snapshot, dropped: new Set([...snapshot.dropped, ...local]) } : snapshot;
 }
 
-const unmarksFollowed = new LRUCache<string, string>({ max: envInt('JELLYFIN_WATCHED_CACHE_MAX', 200, 1) });
+const unmarksFollowed = new LRUCache<string, string>({ max: Math.max(5000, envInt('JELLYFIN_WATCHED_CACHE_MAX', 1000, 1)) });
 const unmarksInFlight = new Map<string, Promise<void>>();
 
 // A title that left the tracker's list since the last read was unmarked there.
@@ -1445,7 +1535,7 @@ async function clearUnmarked(userUUID: string, profile: string, config: any, bef
   for (const id of gone) {
     const parsed = parseStremioId(id);
     const isEpisode = Boolean(parsed && parsed.episode !== null && parsed.episode !== undefined);
-    const spellings = [id, ...(isEpisode ? await videoIdAliases(id) : await movieSpellings(id, config))];
+    const spellings = [id, ...(isEpisode ? await videoIdAliases(id, config) : await movieSpellings(id, config))];
     if (spellings.some((spelling) => current.has(spelling))) continue;
 
     const rows = [...(await database.getPlaystates(userUUID, spellings, profile)).values()].filter((row: any) => row.played);
@@ -1517,11 +1607,15 @@ export async function invalidateWatched(config: any): Promise<void> {
 
   const credential = credentialFor(config, service);
   if (!credential) return;
+  await forgetTrackerReads(service, credential);
+}
 
-  // What this server just changed must show on the next read, not after a refresh.
+export async function forgetTrackerReads(service: string, credential: string): Promise<void> {
+  // Marked stale rather than dropped: the next read serves it and reads again behind it, where a dropped one made a
+  // client wait on the tracker. The watch made here is already in the local index.
   const prefix = `${sourceHash(service, credential)}:`;
-  for (const key of [...served.keys()]) {
-    if (String(key).startsWith(prefix)) served.delete(key);
+  for (const [key, held] of [...served.entries()]) {
+    if (String(key).startsWith(prefix)) served.set(key, { ...held, at: 0 });
   }
 
   try {
@@ -1661,7 +1755,7 @@ export async function applyWatchedState(
     try {
       const database: any = require('../database');
       const { getPlaystatesAcross } = require('./aliases');
-      own = await getPlaystatesAcross(userUUID, videoIds, profile);
+      own = await getPlaystatesAcross(userUUID, videoIds, profile, config);
     } catch {
       own = new Map();
     }
@@ -1711,9 +1805,10 @@ export async function applyWatchedState(
   ];
   const watched = await watchedAmong(snapshot, direct);
   const aliasesOf = new Map<string, string[]>();
-  const { videoIdAliases, groupBySpelling } = require('./aliases');
+  const { videoIdAliases, groupBySpelling, aliasConfigFor } = require('./aliases');
+  const aliasConfig = config ?? (await aliasConfigFor(userUUID));
   for (const videoId of new Set(showEpisodes)) {
-    if (!watched.has(videoId) && !ownPlayed.has(videoId)) aliasesOf.set(videoId, await videoIdAliases(videoId));
+    if (!watched.has(videoId) && !ownPlayed.has(videoId)) aliasesOf.set(videoId, await videoIdAliases(videoId, aliasConfig));
   }
   for (const [id, at] of await watchedAmong(snapshot, [...aliasesOf.values()].flat())) watched.set(id, at);
   const unwatchedHere = (id: string): boolean => {

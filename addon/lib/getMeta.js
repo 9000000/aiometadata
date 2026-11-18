@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 require("dotenv").config();
 const Utils = require("../utils/parseProps");
 const moviedb = require("./getTmdb");
@@ -16,7 +18,7 @@ const { isAnime: isAnimeFunc } = require('../utils/isAnime');
 const { tmdbImageUrl, tmdbLogoSize, tmdbBackdropSize, tmdbLandscapeSize, tmdbPosterSize } = require('../utils/tmdbImageSize');
 const e = require("express");
 const { resolveAllIds } = require('./id-resolver');
-const { cacheWrapMeta, cacheWrapJikanApi, cacheWrapGlobal } = require('./getCache');
+const { cacheWrapMeta, cacheWrapGlobal } = require('./getCache');
 const { deriveStabilityStamp } = require('./metaColdStore');
 function CATALOG_TTL() { return parseInt(process.env.CATALOG_TTL || 1 * 24 * 60 * 60, 10); }
 const kitsu = require('./kitsu');
@@ -27,6 +29,7 @@ const idMappings = require('./id-mappings.js');
 const { withEpisodeOrder } = require('../utils/episodeOrder');
 const { buildCertificationMap } = require('../utils/contentRating');
 const { tmdbDetails, tvdbSeriesDetails, tvdbMovieDetails, tvmazeDetails, jikanDetails } = require('./metaDetails');
+const { resolveSeriesRuntime } = require('./tmdbSeriesRuntime');
 
 
 const logger = consola.withTag('Meta');
@@ -392,6 +395,8 @@ async function resolveArtworkForProfile({ type, ids, metaProvider, providerArt, 
   return { poster, background, logo, landscapePosterUrl };
 }
 
+const NUMERIC_META_PREFIXES = new Set(['mal', 'kitsu', 'tmdb', 'tvdb', 'tvmaze', 'anidb', 'anilist']);
+
 async function getMeta(type, language, stremioId, config = {}, userUUID, includeVideos = true) {
   try {
     // Validate inputs
@@ -411,6 +416,14 @@ async function getMeta(type, language, stremioId, config = {}, userUUID, include
     const [prefix, sourceId] = stremioId.split(':');
     if (prefix === 'tvdbc') {
       return await handleTvdbCollection(sourceId, language, config, userUUID);
+    }
+    if (NUMERIC_META_PREFIXES.has(prefix) && !/^\d+$/.test(sourceId || '')) {
+      logger.debug(`[Meta] Ignoring malformed numeric ID: ${stremioId}`);
+      return { meta: null };
+    }
+    if (stremioId.startsWith('tt') && !/^tt\d+(:|$)/.test(stremioId)) {
+      logger.debug(`[Meta] Ignoring malformed IMDb ID: ${stremioId}`);
+      return { meta: null };
     }
     let meta;
     logger.debug(`[Meta] Processing ${stremioId} (type: ${type})`);
@@ -1174,18 +1187,24 @@ async function getAnimeMeta(preferredProvider, stremioId, language, config, user
   if (allIds?.kitsuId && (preferredProvider !== 'mal' || !jikan.isJikanEnabled())) {
     try {
       logger.debug(`[AnimeMeta] Using provider 'kitsu' for ${stremioId} (Kitsu ID: ${allIds.kitsuId})`);
+      const shouldIncludeVideos = Boolean(includeVideos) && type !== 'movie';
+      const kitsuIncludes = shouldIncludeVideos
+        ? 'categories,episodes,mediaRelationships.destination'
+        : 'categories,mediaRelationships.destination';
       const kitsuDetails = await cacheWrapGlobal(
-        `kitsu-anime-${allIds.kitsuId}-categories,episodes,mediaRelationships.destination`,
-        () => kitsu.getMultipleAnimeDetails([allIds.kitsuId], 'categories,episodes,mediaRelationships.destination'),
+        `kitsu-anime-${allIds.kitsuId}-${kitsuIncludes}`,
+        () => kitsu.getMultipleAnimeDetails([allIds.kitsuId], kitsuIncludes),
         CATALOG_TTL()
       );
-      if (!kitsuDetails) {
+      if (!kitsuDetails || !Array.isArray(kitsuDetails.data) || !kitsuDetails.data[0]) {
         throw new Error(`Kitsu returned no details for Kitsu ID ${allIds.kitsuId}.`);
       }
       const details = kitsuDetails.data[0];
       const artwork = await getAnimeArtwork(allIds, config, details.attributes?.posterImage?.original, details.attributes?.coverImage?.original, type);
       const { background, poster, logo, landscapePosterUrl } = artwork;
-      let episodes = kitsuDetails.included?.filter(item => item.type === 'episodes') || [];
+      let episodes = shouldIncludeVideos
+        ? (kitsuDetails.included?.filter(item => item.type === 'episodes') || [])
+        : [];
       let genres = kitsuDetails.included?.filter(item => item.type === 'categories').map(item => item.attributes?.title).filter(Boolean) || [];
       return _markDegraded(await buildKitsuAnimeResponse(stremioId, details, genres, kitsuDetails.included, episodes, config, userUUID, {
         mapping: allIds,
@@ -1206,7 +1225,7 @@ async function getAnimeMeta(preferredProvider, stremioId, language, config, user
       logger.debug(`[AnimeMeta] Using provider 'mal' for ${stremioId}`);
       const [details, characters, episodes] = await Promise.all([
         jikan.getAnimeDetailsCached(allIds.malId),
-        includeVideos ? cacheWrapJikanApi(`anime-characters-${allIds.malId}`, () => jikan.getAnimeCharacters(allIds.malId), null) : null,
+        includeVideos ? jikan.getAnimeCharactersCached(allIds.malId) : null,
         includeVideos ? jikan.getAnimeEpisodes(allIds.malId) : null,
       ]);
       if (!details) {
@@ -1493,17 +1512,18 @@ async function buildTmdbMovieResponse(stremioId, movieData, language, config, us
   if (!credits) {
     credits = { cast: [], crew: [] };
   }
+  const originCountries = Utils.tmdbOriginCountries(movieData);
   const images = await Utils.mergeTmdbOriginalLanguageImages('movie', tmdbId, rawImages, originalLanguage, langCode, config);
-  const selectedPoster = Utils.selectTmdbImageByLang(images?.posters, config, 'iso_639_1', originalLanguage);
+  const selectedPoster = Utils.selectTmdbImageByLang(images?.posters, config, 'iso_639_1', originalLanguage, originCountries);
   const tmdbPosterUrl = selectedPoster?.file_path ? tmdbImageUrl(tmdbPosterSize(), selectedPoster?.file_path) : poster_path ? tmdbImageUrl(tmdbPosterSize(), poster_path) : `${host}/missing_poster.png`;
   const selectedBg = images?.backdrops?.find(b => b.iso_639_1 === 'xx')
     || images?.backdrops?.find(b => b.iso_639_1 === null)
     || images?.backdrops?.find(b => b.iso_639_1 === langCode)
     || images?.backdrops?.[0];
-  const selectedLandscapePoster = Utils.selectTmdbImageByLang(images?.backdrops, config, 'iso_639_1', originalLanguage);
+  const selectedLandscapePoster = Utils.selectTmdbImageByLang(images?.backdrops, config, 'iso_639_1', originalLanguage, originCountries);
   const tmdbLandscapePosterUrl = selectedLandscapePoster?.file_path ? tmdbImageUrl(tmdbLandscapeSize(selectedLandscapePoster?.width), selectedLandscapePoster?.file_path) : null;
   const tmdbBackgroundUrl = selectedBg?.file_path ? tmdbImageUrl(tmdbBackdropSize(selectedBg?.width), selectedBg?.file_path) : backdrop_path ? tmdbImageUrl(tmdbBackdropSize(), backdrop_path) : null;
-  const selectedLogo = Utils.selectTmdbImageByLang(images?.logos, config, 'iso_639_1', originalLanguage);
+  const selectedLogo = Utils.selectTmdbImageByLang(images?.logos, config, 'iso_639_1', originalLanguage, originCountries);
   let tmdbLogoUrl = selectedLogo?.file_path ? tmdbImageUrl(tmdbLogoSize(selectedLogo?.width), selectedLogo?.file_path) : null;
 
   let poster, background, logoUrl, imdbRatingValue, landscapePosterUrl;
@@ -1625,17 +1645,18 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
   }
   const langCode = language.split('-')[0];
 
+  const originCountries = Utils.tmdbOriginCountries(seriesData);
   const images = await Utils.mergeTmdbOriginalLanguageImages('tv', tmdbId, rawImages, originalLanguage, langCode, config);
-  const selectedPoster = Utils.selectTmdbImageByLang(images?.posters, config, 'iso_639_1', originalLanguage);
+  const selectedPoster = Utils.selectTmdbImageByLang(images?.posters, config, 'iso_639_1', originalLanguage, originCountries);
   const tmdbPosterUrl = selectedPoster?.file_path ? tmdbImageUrl(tmdbPosterSize(), selectedPoster?.file_path) : poster_path ? tmdbImageUrl(tmdbPosterSize(), poster_path) : `${host}/missing_poster.png`;
   const selectedBg = images?.backdrops?.find(b => b.iso_639_1 === 'xx')
     || images?.backdrops?.find(b => b.iso_639_1 === null)
     || images?.backdrops?.find(b => b.iso_639_1 === langCode)
     || images?.backdrops?.[0];
-  const selectedLandscapePoster = Utils.selectTmdbImageByLang(images?.backdrops, config, 'iso_639_1', originalLanguage);
+  const selectedLandscapePoster = Utils.selectTmdbImageByLang(images?.backdrops, config, 'iso_639_1', originalLanguage, originCountries);
   const tmdbLandscapePosterUrl = selectedLandscapePoster?.file_path ? tmdbImageUrl(tmdbLandscapeSize(selectedLandscapePoster?.width), selectedLandscapePoster?.file_path) : null;
   const tmdbBackgroundUrl = selectedBg?.file_path ? tmdbImageUrl(tmdbBackdropSize(selectedBg?.width), selectedBg?.file_path) : backdrop_path ? tmdbImageUrl(tmdbBackdropSize(), backdrop_path) : null;
-  const selectedLogo = Utils.selectTmdbImageByLang(images?.logos, config, 'iso_639_1', originalLanguage);
+  const selectedLogo = Utils.selectTmdbImageByLang(images?.logos, config, 'iso_639_1', originalLanguage, originCountries);
   let tmdbLogoUrl = selectedLogo?.file_path ? tmdbImageUrl(tmdbLogoSize(selectedLogo?.width), selectedLogo?.file_path) : null;
   let poster, background, logoUrl, imdbRatingValue, landscapePosterUrl;
 
@@ -1684,10 +1705,11 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
     if (season.poster_path) tmdbSeasonPosters[season.season_number] = tmdbImageUrl(tmdbPosterSize(), season.poster_path);
   });
 
+  let loadedSeasonDetails = null;
   if(includeVideos) {
     const seasonToKitsuIdMap = new Map();
     const seasonToImdbIdMap = new Map();
-    
+
     if (kitsuId && idProvider === 'kitsu') {
       const officialSeasons = (seasons || [])
         .filter(season => season.season_number > 0 && season.episode_count > 0)
@@ -1732,6 +1754,7 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
           seasonDetails.push(seasonData);
         });
     });
+    loadedSeasonDetails = seasonDetails;
     const isAnimeContent = isAnimeFunc(seriesData, seriesData.genres) || kitsuId || malId;
     logger.debug(`[TmdbSeriesMeta] isAnimeContent: ${isAnimeContent}`);
     
@@ -1970,7 +1993,7 @@ async function buildTmdbSeriesResponse(stremioId, seriesData, language, config, 
     
     videos = (await Promise.all(videosPromises)).filter(Boolean);
   }
-  const runtime = seriesData.episode_run_time?.[0] ?? seriesData.last_episode_to_air?.runtime ?? seriesData.next_episode_to_air?.runtime ?? null;
+  const runtime = await resolveSeriesRuntime(seriesData, loadedSeasonDetails);
   let overview = seriesData.overview;
   const overviewLanguage = getEffectiveOverviewLanguage(config) || language || 'en-US';
   overview = Utils.processOverviewTranslations(seriesData.translations, overviewLanguage, overview);
@@ -2049,6 +2072,7 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
   let kitsuId = allIds?.kitsuId;
   let imdbId = allIds?.imdbId;
   let tmdbId = allIds?.tmdbId;
+  const prefersImdb = isAnime && !!config.mal?.useImdbIdForCatalogAndSearch;
   kitsuId = kitsuId || idMapper.getMappingByTmdbId(tmdbId, 'movie')?.kitsu_id;
 
   const { year, image: tvdbPosterPath, remoteIds, characters } = movieData;
@@ -2148,7 +2172,7 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
   }));
   
   const { trailers: allTrailers } = Utils.parseTvdbTrailers(movieData.trailers, translatedName);
-  const trailers = Utils.pickTrailersByLanguage(allTrailers, langCode3);
+  const trailers = Utils.selectTvdbTrailersByLanguage(allTrailers, langCode3, language);
 
   if(!logoUrl && imdbId && await imdb.metahubImageExists(imdbId, 'logo')){
     logoUrl =  imdb.getLogoFromImdb(imdbId);
@@ -2173,7 +2197,8 @@ async function buildTvdbMovieResponse(stremioId, movieData, language, config, us
  
   //console.log(tvdbShow.artworks?.find(a => a.type === 2)?.image);
   return {
-    id: isAnime ? config.mal?.useImdbIdForCatalogAndSearch ? imdbId : stremioId : imdbId || stremioId,
+    id: isAnime && !(prefersImdb && imdbId) ? stremioId : imdbId || stremioId,
+    ...(prefersImdb && !imdbId ? { _awaitingImdb: true } : {}),
     type: 'movie',
     _metaProvider: 'tvdb',
     keywords: tmdbKeywords,
@@ -2320,6 +2345,7 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
   const malId = allIds?.malId;
   const castCount = config.castCount;
   imdbId = imdbId || tvdbShow.remoteIds?.find(id => id.sourceName === 'IMDB')?.id
+  const prefersImdb = isAnime && !!config.mal?.useImdbIdForCatalogAndSearch;
 
   // Get artwork based on art provider preference
   const tvdbPosterUrl = findArtwork(tvdbShow.artworks, 2, langCode3, config) || `${host}/missing_poster.png`;
@@ -2409,7 +2435,7 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
   }));
 
   const { trailers: allTrailers } = Utils.parseTvdbTrailers(tvdbShow.trailers, translatedName);
-  const trailers = Utils.pickTrailersByLanguage(allTrailers, langCode3);
+  const trailers = Utils.selectTvdbTrailersByLanguage(allTrailers, langCode3, language);
 
 
 
@@ -2474,6 +2500,10 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
     }
     
     
+    // Without an IMDb id, an anime under the IMDb provider numbers its episodes by the id it was asked by, as its meta id does.
+    const askedEpisodeIds = isAnime && !imdbId && idProvider !== 'kitsu' && idProvider !== 'mal'
+      ? (stremioId.startsWith('mal:') ? 'mal' : stremioId.startsWith('kitsu:') ? 'kitsu' : null)
+      : null;
     const nowMs = Date.now();
     videos = await Promise.all(
       episodeList.map(async (episode) => {
@@ -2507,7 +2537,7 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
           if (episode.seasonNumber === 0) {
             episodeId = `${imdbId || `tvdb:${tvdbId}`}:0:${episode.number}`;
           } 
-          else if (idProvider === 'kitsu' && isAnime) {
+          else if ((idProvider === 'kitsu' && isAnime) || askedEpisodeIds === 'kitsu') {
             if ((config.tvdbSeasonType === 'default' || config.tvdbSeasonType === 'official')){
               const anidbEpisodeInfo = await resolveAnidbEpisodeFromTvdbEpisode(tvdbId, episode.seasonNumber, episode.number);
               if (anidbEpisodeInfo) {
@@ -2532,7 +2562,7 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
               }
             }
           }
-          else if(idProvider === 'mal' && !config.mal?.useImdbIdForCatalogAndSearch) {
+          else if((idProvider === 'mal' && (!config.mal?.useImdbIdForCatalogAndSearch || (prefersImdb && !imdbId))) || askedEpisodeIds === 'mal') {
             if ((config.tvdbSeasonType === 'default' || config.tvdbSeasonType === 'official')){
               const anidbEpisodeInfo = await resolveAnidbEpisodeFromTvdbEpisode(tvdbId, episode.seasonNumber, episode.number);
               if (anidbEpisodeInfo) {
@@ -2626,7 +2656,8 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
   //console.log(tvdbShow.artworks?.find(a => a.type === 2)?.image);
   logger.debug(`[TvdbSeriesMeta] imdbId: ${imdbId}, stremioId: ${stremioId}`);
   const meta = {
-    id: isAnime ? config.mal?.useImdbIdForCatalogAndSearch ? imdbId : stremioId : imdbId || stremioId,
+    id: isAnime && !(prefersImdb && imdbId) ? stremioId : imdbId || stremioId,
+    ...(prefersImdb && !imdbId ? { _awaitingImdb: true } : {}),
     type: 'series',
     _metaProvider: 'tvdb',
     keywords: tmdbKeywords,

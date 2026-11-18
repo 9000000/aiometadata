@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 require('dotenv').config();
 const {
   cacheWrapCatalog,
@@ -24,8 +26,8 @@ const { runWithRequestContext } = require('./logBuffer.js');
 const posterCacheConfig = require('./posterCache/config.js');
 const { collectWarmupTargets, extractIdsFromWarmerMeta } = require('./warmupTargets.js');
 const imageWarmQueue = require('./posterCache/warmQueue.js');
-const { warmTrailerAddon } = require('./trailerProjection');
-const { isEndOfList } = require('./catalogPagination');
+const { isEndOfList, listedTotalOf } = require('./catalogPagination');
+const { usesTrailerAddon, queueTrailerWarm, trailerWarmStats, resetTrailerWarm } = require('./trailerProjection');
 
 function pinnedCollectionTasks(config, enabledCatalogs) {
   const tasks = new Map();
@@ -383,19 +385,27 @@ class ComprehensiveCatalogWarmer {
   projectCatalogResult(result) {
     const projected = projectCatalogPayloadForCache(result);
     if (isEndOfList(result?.metas) && projected && typeof projected === 'object') projected.endOfList = true;
+    // The page is cached as JSON, which would drop the count the source attached to the array.
+    const listed = listedTotalOf(result?.metas);
+    if (listed !== undefined && projected && typeof projected === 'object') projected.listed = listed;
     return projected;
   }
 
-  async warmTrailers(metas, config, catalogId) {
-    if (config.trailerProvider !== 'addon') return;
+  // A config that takes trailers from an addon has that addon's answers kept
+  // warm too, so its catalog pages need not wait on it. The titles are queued
+  // and asked in the background, so a slow addon never holds up the catalogs.
+  async warmTrailers(metas, config, uuid) {
+    if (!usesTrailerAddon(config)) return;
     try {
-      await warmTrailerAddon(metas, config, this.config.intervalHours * 60 * 60);
+      const nextRunAt = Date.now() + this.config.intervalHours * 60 * 60 * 1000;
+      const queued = await queueTrailerWarm(metas, config, nextRunAt);
+      if (queued) this.log('debug', `Queued ${queued} title(s) for the trailer addon (${uuid})`);
     } catch (error) {
-      this.log('debug', `Trailer warm failed for ${catalogId}: ${error.message}`);
+      this.log('warn', `Trailer warming failed: ${error.message}`);
     }
   }
 
-  async warmMALCatalog(catalogId, page, config, extraArgs) {
+  async warmMALCatalog(catalogId, page, config, extraArgs, includeVideos = Boolean(posterCacheConfig.isClassEnabled('thumbnail'))) {
     const language = config.language || 'en-US';
     const { genre: genreName, type_filter } = extraArgs;
     let metas = [];
@@ -406,7 +416,7 @@ class ComprehensiveCatalogWarmer {
         const animeResults = await cacheWrapJikanApi(`mal-airing-${page}-${config.sfw}`, async () => {
           return await jikan.getAiringNow(page, config, { throwOnError: true });
         }, 24 * 60 * 60);
-        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, true);
+        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, includeVideos);
         break;
       }
 
@@ -414,7 +424,7 @@ class ComprehensiveCatalogWarmer {
         const animeResults = await cacheWrapJikanApi(`mal-upcoming-${page}-${config.sfw}`, async () => {
           return await jikan.getUpcoming(page, config);
         }, 24 * 60 * 60);
-        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, true);
+        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, includeVideos);
         break;
       }
 
@@ -422,7 +432,7 @@ class ComprehensiveCatalogWarmer {
         const animeResults = await cacheWrapJikanApi(`mal-top-movies-${page}-${config.sfw}`, async () => {
           return await jikan.getTopAnimeByType('movie', page, config, { throwOnError: true });
         }, null);
-        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, true);
+        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, includeVideos);
         break;
       }
 
@@ -430,7 +440,7 @@ class ComprehensiveCatalogWarmer {
         const animeResults = await cacheWrapJikanApi(`mal-top-series-${page}-${config.sfw}`, async () => {
           return await jikan.getTopAnimeByType('tv', page, config, { throwOnError: true });
         }, null);
-        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, true);
+        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, includeVideos);
         break;
       }
 
@@ -438,7 +448,7 @@ class ComprehensiveCatalogWarmer {
         const animeResults = await cacheWrapJikanApi(`mal-most-popular-${page}-${config.sfw}`, async () => {
           return await jikan.getTopAnimeByFilter('bypopularity', page, config, { throwOnError: true });
         }, null);
-        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, true);
+        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, includeVideos);
         break;
       }
 
@@ -446,7 +456,7 @@ class ComprehensiveCatalogWarmer {
         const animeResults = await cacheWrapJikanApi(`mal-most-favorites-${page}-${config.sfw}`, async () => {
           return await jikan.getTopAnimeByFilter('favorite', page, config, { throwOnError: true });
         }, null);
-        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, true);
+        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, includeVideos);
         break;
       }
 
@@ -454,7 +464,7 @@ class ComprehensiveCatalogWarmer {
         const animeResults = await cacheWrapJikanApi(`mal-top-anime-${page}-${config.sfw}`, async () => {
           return await jikan.getTopAnimeByType('anime', page, config, { throwOnError: true });
         }, null);
-        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, true);
+        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, includeVideos);
         break;
       }
 
@@ -462,7 +472,7 @@ class ComprehensiveCatalogWarmer {
         const animeResults = await cacheWrapJikanApi(`mal-season-top-${page}-${config.sfw}`, async () => {
           return await jikan.getSeasonTopRated(page, config);
         }, 24 * 60 * 60);
-        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, true);
+        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, includeVideos);
         break;
       }
 
@@ -470,7 +480,7 @@ class ComprehensiveCatalogWarmer {
         const animeResults = await cacheWrapJikanApi(`mal-season-top-new-${page}-${config.sfw}`, async () => {
           return await jikan.getSeasonTopNew(page, config);
         }, 24 * 60 * 60);
-        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, true);
+        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, includeVideos);
         break;
       }
 
@@ -496,7 +506,7 @@ class ComprehensiveCatalogWarmer {
           const animeResults = await cacheWrapJikanApi(`mal-${catalogId}-${page}-${genreId ?? 'all'}-${config.sfw}`, async () => {
             return await jikan.getTopAnimeByDateRange(startDate, endDate, page, genreId ?? undefined, config, { throwOnError: true });
           }, null);
-          metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, true);
+          metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, includeVideos);
         }
         break;
       }
@@ -512,7 +522,7 @@ class ComprehensiveCatalogWarmer {
           const animeResults = await cacheWrapJikanApi(`mal-genre-${genreId ?? 'any'}-${mediaType || 'all'}-${page}-${config.sfw}`, async () => {
             return await jikan.getAnimeByGenre(genreId, mediaType, page, config);
           }, null);
-          metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, true);
+          metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, includeVideos);
         }
         break;
       }
@@ -531,7 +541,7 @@ class ComprehensiveCatalogWarmer {
             const animeResults = await cacheWrapJikanApi(`mal-studio-${studioId}-${page}-${config.sfw}`, async () => {
               return await jikan.getAnimeByStudio(studioId, page);
             }, null);
-            metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, true);
+            metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, includeVideos);
           } else {
             this.log('warn', `Could not find a MAL ID for studio name: ${genreName}`);
           }
@@ -544,7 +554,7 @@ class ComprehensiveCatalogWarmer {
         const animeResults = await cacheWrapJikanApi(`mal-schedule-${dayOfWeek}-${page}-${config.sfw}`, async () => {
           return await jikan.getAiringSchedule(dayOfWeek, page, config, { throwOnError: true });
         }, null);
-        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, true);
+        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, includeVideos);
         break;
       }
 
@@ -572,7 +582,7 @@ class ComprehensiveCatalogWarmer {
         const animeResults = await cacheWrapJikanApi(`mal-season-${year}-${season}-${page}-${config.sfw}`, async () => {
           return await jikan.getAnimeBySeason(year, season, page, config);
         }, null);
-        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, true);
+        metas = await parseAnimeCatalogMetaBatch(animeResults, config, language, includeVideos);
         break;
       }
 
@@ -619,7 +629,8 @@ class ComprehensiveCatalogWarmer {
           const actualType = catalog.type;
           const catalogKey = `${catalogId}:${actualType}:${stableStringify(extraArgs || {})}`;
 
-          // A page built here still has its episodes, which the cached page drops, so their thumbnails warm from it.
+          // Only request full episode arrays when thumbnail image caching is enabled.
+          const includeVideos = Boolean(posterCacheConfig.isClassEnabled('thumbnail'));
           let built = null;
           const keep = (fullResult) => {
             built = fullResult;
@@ -628,7 +639,7 @@ class ComprehensiveCatalogWarmer {
           const result = await cacheWrapCatalog(uuid, catalogKey, async () => {
           if (WARMER_MAL_CATALOGS.has(catalogId)) {
             const configWithUUID = { ...config, userUUID: uuid };
-            const fullResult = await this.warmMALCatalog(catalogId, derivedPage, configWithUUID, extraArgs);
+            const fullResult = await this.warmMALCatalog(catalogId, derivedPage, configWithUUID, extraArgs, includeVideos);
             return keep(fullResult);
           } else if (catalogId === 'tmdb.trending') {
             // Special handling for tmdb.trending - call getTrending directly
@@ -637,7 +648,7 @@ class ComprehensiveCatalogWarmer {
             }
             const configWithUUID = { ...config, userUUID: uuid };
             const { getTrending } = require('./getTrending');
-            const fullResult = await getTrending(catalog.type, config.language, derivedPage, extraArgs.genre || null, configWithUUID, uuid, true);
+            const fullResult = await getTrending(catalog.type, config.language, derivedPage, extraArgs.genre || null, configWithUUID, uuid, includeVideos);
             return keep(fullResult);
           } else if (catalogId === 'tvmaze.schedule') {
             const configWithUUID = { ...config, userUUID: uuid };
@@ -649,7 +660,7 @@ class ComprehensiveCatalogWarmer {
               language: config.language || 'en-US',
               config: configWithUUID,
               userUUID: uuid,
-              includeVideos: true,
+              includeVideos,
               enableErrorCaching: false,
               maxRetries: 1,
             });
@@ -662,7 +673,7 @@ class ComprehensiveCatalogWarmer {
             // Add userUUID to config object for parseStremThruItems
             const configWithUUID = { ...config, userUUID: uuid };
             const { getCatalog } = require('./getCatalog');
-            const fullResult = await getCatalog(catalog.type, config.language, derivedPage, catalogId, extraArgs.genre || null, configWithUUID, uuid, true);
+            const fullResult = await getCatalog(catalog.type, config.language, derivedPage, catalogId, extraArgs.genre || null, configWithUUID, uuid, includeVideos);
             return keep(fullResult);
           }
           }, {
@@ -679,7 +690,7 @@ class ComprehensiveCatalogWarmer {
 
           if (rawMetaCount > 0) {
             imageWarmQueue.offer(collectWarmupTargets(built?.metas ?? result.metas, config, catalog.type));
-            await this.warmTrailers(result.metas, config, catalogId);
+            await this.warmTrailers(built?.metas ?? result.metas, config, uuid);
           }
 
           if (rawMetaCount === 0) {
@@ -711,14 +722,15 @@ class ComprehensiveCatalogWarmer {
 
     while (pagesWarmed < maxPages) {
       try {
-        const fullResult = await getCatalog(catalog.type, config.language, 1, catalogId, genreValue || null, configWithUUID, uuid, true, currentSkip);
+        const includeVideos = Boolean(posterCacheConfig.isClassEnabled('thumbnail'));
+        const fullResult = await getCatalog(catalog.type, config.language, 1, catalogId, genreValue || null, configWithUUID, uuid, includeVideos, currentSkip);
         const result = this.projectCatalogResult(fullResult);
 
         const rawMetaCount = result?.metas?.length || 0;
 
         if (rawMetaCount > 0) {
           imageWarmQueue.offer(collectWarmupTargets(fullResult.metas, config, catalog.type));
-          await this.warmTrailers(result.metas, config, catalogId);
+          await this.warmTrailers(fullResult.metas, config, uuid);
         }
 
         if (rawMetaCount === 0) {
@@ -789,6 +801,7 @@ class ComprehensiveCatalogWarmer {
     // Reset stop flag at start
     this.shouldStop = false;
     imageWarmQueue.resetStats();
+    resetTrailerWarm();
     this.isRunning = true;
     this.stats.isRunning = true;
     this.stats.totalUUIDs = this.config.uuids.length;
@@ -946,6 +959,12 @@ class ComprehensiveCatalogWarmer {
       const stoppedEarly = this.shouldStop;
       const cachedPages = this.stats.pagesFromCache ? ` (${this.stats.pagesFromCache} already cached)` : '';
       this.log('success', `Warmup ${stoppedEarly ? 'stopped' : 'complete'}! Processed ${this.config.uuids.length} UUID(s), warmed ${this.stats.catalogsWarmed}/${this.stats.totalCatalogs} catalogs and ${this.stats.pinnedWarmed}/${this.stats.totalPinned} collection genres, ${this.stats.totalPages} pages${cachedPages}, ${this.stats.totalItems} items in ${this.stats.duration}`);
+
+      const trailerStats = trailerWarmStats();
+      if (trailerStats.queued > 0) {
+        const skipped = trailerStats.skipped ? `, ${trailerStats.skipped} skipped after the addon stopped answering` : '';
+        this.log('info', `Trailer warming: ${trailerStats.queued} due, ${trailerStats.fetched} fetched, ${trailerStats.unanswered} unanswered${skipped}, ${trailerStats.outstanding} still queued`);
+      }
 
       const imageStats = imageWarmQueue.getStats();
       if (imageStats.depth > 0) {

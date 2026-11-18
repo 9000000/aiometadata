@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 const express = require("express");
 const favicon = require('serve-favicon');
 const fs = require('fs');
@@ -11,7 +13,7 @@ const addon = express();
 
 const { getCatalog } = require("./lib/getCatalog");
 const { applyCatalogFilters, catalogFiltersActive } = require("./utils/catalogFilters");
-const { cursorKey, resolveStartPage, fillFilteredPage, fillOnce, isEndOfList } = require("./lib/catalogPagination");
+const { cursorKey, cursorAudience, resolveStartPage, fillFilteredPage, fillOnce, isEndOfList, listedTotalOf } = require("./lib/catalogPagination");
 const { registerInProcessRoute } = require("./lib/inProcessRoutes");
 const anilist = require("./lib/anilist");
 const { getSearch } = require("./lib/getSearch");
@@ -37,7 +39,7 @@ const { stripReleaseAvailabilityForResponse } = require('./utils/releaseAvailabi
 
 const configApi = require('./lib/configApi');
 const database = require('./lib/database');
-const { loadConfigFromDatabase, loadRouteConfig } = require('./lib/configApi');
+const { loadConfigFromDatabase, loadRouteConfig, loadSharedConfig } = require('./lib/configApi');
 const { getTrending } = require("./lib/getTrending");
 const { resolveProxyRatingPosterUrl, parseAnimeCatalogMetaBatch } = require("./utils/parseProps");
 const { extractIdsFromMeta, extractCanonicalIdFromDynamicUpNextId } = require("./utils/metaIds");
@@ -52,7 +54,7 @@ const { isLandscapeCatalogConfig } = require("./utils/catalogPosterShape");
 const { getFavorites, getWatchList } = require("./lib/getPersonalLists");
 const { resolveDynamicTmdbDiscoverParams } = require('./lib/tmdbDiscoverDateTokens');
 const { applyCatalogKeyArgs, applyCatalogKeyStamps, hiddenCatalogGenre } = require('./lib/catalogKeyArgs');
-const { blurImage, convertBannerToBackground } = require('./utils/imageProcessor');
+const { blurImage, convertBannerToBackground, normaliseBannerOptions } = require('./utils/imageProcessor');
 const { getAiTriggerKeyword, applyAiTrigger } = require('./utils/aiSearchTrigger');
 const { TraktClient } = require('./lib/trakt');
 const movielens = require('./lib/movielens');
@@ -69,20 +71,13 @@ const {
   verifyTraktOAuthState,
 } = require('./lib/oauthState');
 const { renderOAuthPage, escapeHtml } = require('./lib/oauthPage');
-const { hasAnyWatchTrackingEnabled } = require('./lib/watchTracking');
+const { hasAnyWatchTrackingEnabled, scrobblesJellyfin } = require('./lib/watchTracking');
 const simklAuth = require('./lib/simkl');
+const { revokeSimklGrant } = require('./lib/accountLinks');
 const { SimklClient } = simklAuth;
-const {
-  createSessionId,
-  deleteDeviceAuthSession,
-  getDeviceAuthSession,
-  registerPoll,
-  saveDeviceAuthSession,
-  widenPollInterval,
-} = require('./lib/deviceAuthSessions');
 const jikan = require('./lib/mal');
 const buildInfo = require('./lib/buildInfo');
-const { clientDistDir, clientIndexPath, publicDir } = require('./lib/runtimePaths');
+const { appRoot, clientDistDir, clientIndexPath, publicDir } = require('./lib/runtimePaths');
 const ADDON_VERSION = buildInfo.version;
 const { withGlobalEpoch } = require('./lib/cacheEpoch');
 const idMapper = require('./lib/id-mapper');
@@ -96,22 +91,6 @@ const TRAKT_OAUTH_STATE_TTL_MS = parseInt(process.env.TRAKT_OAUTH_STATE_TTL_MS |
 const usedAnilistCodes = new Set();
 const ANILIST_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const SIMKL_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
-
-// Which Simkl flows this instance offers. PIN needs only a client id, so it is
-// the default when no secret is set.
-function resolveSimklAuthMode() {
-  const configured = String(getSetting('SIMKL_AUTH_MODE') || '').trim().toLowerCase();
-  if (configured === 'pin' || configured === 'oauth' || configured === 'both') {
-    return configured;
-  }
-  if (simklAuth.simklV2Credentials().clientId) return simklAuth.simklV2Credentials().clientSecret ? 'oauth' : 'pin';
-  return getSetting('SIMKL_CLIENT_SECRET') ? 'oauth' : 'pin';
-}
-
-function simklPinEnabled() {
-  const mode = resolveSimklAuthMode();
-  return mode === 'pin' || mode === 'both';
-}
 
 const usedMalCodes = new Set();
 const MAL_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -174,6 +153,22 @@ addon.use((req, res, next) => {
 
 const { readiness } = require('./lib/lifecycle/runtime.js');
 const { createReadinessGate } = require('./lib/lifecycle/readiness.js');
+
+// The license texts and notices travel with every instance, so its users can read them (AGPL-3.0 section 13).
+const LICENSE_FILES = new Set(['LICENSE', 'LICENSE-FSL.md', 'LICENSING.md', 'NOTICE', 'TRADEMARKS.md', 'THIRD_PARTY_NOTICES.txt']);
+addon.get('/licenses/:file', (req, res) => {
+  const file = String(req.params.file);
+  if (!LICENSE_FILES.has(file)) return res.status(404).json({ error: 'Not found' });
+  res.type('text/plain; charset=utf-8');
+  res.sendFile(path.join(appRoot, file), (error) => {
+    if (error && !res.headersSent) res.status(404).json({ error: 'Not found' });
+  });
+});
+
+/** Where this instance's source can be had. An operator running a modified copy points it at their own. */
+function sourceCodeUrl() {
+  return getSetting('SOURCE_CODE_URL') || `https://github.com/cedya77/aiometadata/tree/v${ADDON_VERSION}`;
+}
 
 addon.get('/health/live', (req, res) => {
   res.status(200).json({
@@ -271,7 +266,11 @@ async function testKeysRateLimitMiddleware(req, res, next) {
 
   try {
     const minuteBucket = Math.floor(Date.now() / 60000);
-    const rateKey = `rate-limit:test-keys:${minuteBucket}`;
+    // Each caller has its own allowance, so one cannot use up everyone's.
+    const caller = req.session?.accountId
+      ? `account:${req.session.accountId}`
+      : `address:${require('./lib/authRoutes').clientAddress(req)}`;
+    const rateKey = `rate-limit:test-keys:${caller}:${minuteBucket}`;
     const currentCount = await redis.incr(rateKey);
 
     // First hit in this minute bucket: set a short TTL.
@@ -289,62 +288,9 @@ async function testKeysRateLimitMiddleware(req, res, next) {
   next();
 }
 
-const REDIS_LIMITER_TIMEOUT_MS = 500;
-
-function DEVICE_AUTH_POLL_RATE_LIMIT_PER_MIN() {
-  const parsed = parseInt(getSetting('DEVICE_AUTH_POLL_RATE_LIMIT_PER_MIN'), 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 240;
-}
-
 function getManagerSyncHostDelayMs() {
   const parsed = parseInt(getSetting('MANAGER_SYNC_HOST_DELAY_MS'), 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 400;
-}
-
-// Own bucket: a pending code polls every few seconds and would eat the much
-// tighter /api/test-keys budget.
-async function deviceAuthPollRateLimitMiddleware(req, res, next) {
-  if (!redis) {
-    return next();
-  }
-
-  try {
-    const minuteBucket = Math.floor(Date.now() / 60000);
-    // Keyed per caller, the way the config-load limiter is. A single bucket for
-    // the whole instance would let a handful of concurrent authorizations spend
-    // the budget, and would let anyone spend it deliberately: a pending code
-    // polls every few seconds and these routes need no session.
-    const target = (typeof req.query?.sessionId === 'string' && req.query.sessionId)
-      || (typeof req.body?.sessionId === 'string' && req.body.sessionId)
-      || req.session?.accountId
-      || req.ip
-      || 'unknown';
-    const rateKey = `rate-limit:device-auth-poll:${target}:${minuteBucket}`;
-
-    // Bounded: with no Redis listening, ioredis holds a command for the better
-    // part of a minute, and these routes are polled every few seconds. A count
-    // we can't read in time means the request is allowed through.
-    const currentCount = await Promise.race([
-      redis.incr(rateKey),
-      new Promise(resolve => setTimeout(() => resolve(null), REDIS_LIMITER_TIMEOUT_MS).unref()),
-    ]);
-
-    if (currentCount === null) {
-      return next();
-    }
-
-    if (currentCount === 1) {
-      redis.expire(rateKey, 70).catch(() => undefined);
-    }
-
-    if (currentCount > DEVICE_AUTH_POLL_RATE_LIMIT_PER_MIN()) {
-      return res.status(429).json({ error: 'Too many authorization status requests. Please try again shortly.' });
-    }
-  } catch (error) {
-    consola.warn('[Rate Limit] Device auth poll limiter failed, allowing request:', error.message);
-  }
-
-  next();
 }
 
 function CONFIG_LOAD_RATE_LIMIT_PER_MIN() {
@@ -383,7 +329,7 @@ async function configLoadRateLimitMiddleware(req, res, next) {
 
 
 const posterCacheConfig = require('./lib/posterCache/config.js');
-const { buildProxyArtUrl, proxyArtUrlVouched } = require('./lib/posterCache/proxyArt.js');
+const { buildProxyArtUrl, followableFallback, proxyArtUrlVouched } = require('./lib/posterCache/proxyArt.js');
 const { applyMetaArt } = require('./lib/metaArt');
 const { serveStoreResult, servePassThrough, openArtStream } = require('./lib/posterCache/artProxyServe.js');
 
@@ -412,33 +358,82 @@ function applyImageCachePrefix(data) {
 
   const landscapeCached = posterCacheConfig.isFieldCacheable('landscapePoster');
   const applyToMeta = (meta) => {
-    if (!meta) return;
+    if (!meta) return meta;
+    let cloned = null;
+    const ensureClone = () => {
+      if (!cloned) cloned = { ...meta };
+      return cloned;
+    };
     for (const field of enabledFields) {
       if (!meta[field]) continue;
       if (field === 'poster' && meta.posterShape === 'landscape') {
-        if (landscapeCached) meta.poster = prefixUrl(meta.poster, 'landscape');
+        if (landscapeCached) {
+          const nextUrl = prefixUrl(meta.poster, 'landscape');
+          if (nextUrl !== meta.poster) ensureClone().poster = nextUrl;
+        }
         continue;
       }
-      meta[field] = prefixUrl(meta[field], metaFieldClasses[field]);
+      const nextUrl = prefixUrl(meta[field], metaFieldClasses[field]);
+      if (nextUrl !== meta[field]) ensureClone()[field] = nextUrl;
     }
     if (cacheThumbnails && Array.isArray(meta.videos)) {
-      for (const video of meta.videos) {
-        if (video?.thumbnail) video.thumbnail = prefixUrl(video.thumbnail, 'thumbnail');
+      let nextVideos = null;
+      for (let i = 0; i < meta.videos.length; i++) {
+        const video = meta.videos[i];
+        if (video?.thumbnail) {
+          const nextThumb = prefixUrl(video.thumbnail, 'thumbnail');
+          if (nextThumb !== video.thumbnail) {
+            if (!nextVideos) nextVideos = meta.videos.slice();
+            nextVideos[i] = { ...video, thumbnail: nextThumb };
+          }
+        }
       }
+      if (nextVideos) ensureClone().videos = nextVideos;
     }
     if (cacheCast && Array.isArray(meta.app_extras?.cast)) {
-      for (const member of meta.app_extras.cast) {
-        if (member?.photo) member.photo = prefixUrl(member.photo, 'cast');
+      let nextCast = null;
+      for (let i = 0; i < meta.app_extras.cast.length; i++) {
+        const member = meta.app_extras.cast[i];
+        if (member?.photo) {
+          const nextPhoto = prefixUrl(member.photo, 'cast');
+          if (nextPhoto !== member.photo) {
+            if (!nextCast) nextCast = meta.app_extras.cast.slice();
+            nextCast[i] = { ...member, photo: nextPhoto };
+          }
+        }
+      }
+      if (nextCast) {
+        ensureClone().app_extras = { ...meta.app_extras, cast: nextCast };
       }
     }
+    if (Array.isArray(meta.credits)) {
+      let nextCredits = null;
+      for (let i = 0; i < meta.credits.length; i++) {
+        const nextCredit = applyToMeta(meta.credits[i]);
+        if (nextCredit !== meta.credits[i]) {
+          if (!nextCredits) nextCredits = meta.credits.slice();
+          nextCredits[i] = nextCredit;
+        }
+      }
+      if (nextCredits) ensureClone().credits = nextCredits;
+    }
+    return cloned || meta;
   };
 
-  applyToMeta(data.meta);
-  if (Array.isArray(data.meta?.credits)) {
-    for (const credit of data.meta.credits) applyToMeta(credit);
+  if (data.meta) {
+    const nextMeta = applyToMeta(data.meta);
+    if (nextMeta !== data.meta) data.meta = nextMeta;
   }
   if (Array.isArray(data.metas)) {
-    for (const meta of data.metas) applyToMeta(meta);
+    let nextMetas = null;
+    for (let i = 0; i < data.metas.length; i++) {
+      const nextMeta = applyToMeta(data.metas[i]);
+      if (nextMeta !== data.metas[i]) {
+        if (!nextMetas) nextMetas = data.metas.slice();
+        nextMetas[i] = nextMeta;
+      }
+    }
+    if (nextMetas) data.metas = nextMetas;
   }
 }
 
@@ -512,21 +507,6 @@ const getCacheHeaders = function (opts) {
   return headerParts.length > 0 ? headerParts.join(", ") : false;
 };
 
-/** A named viewer's own tags take the place of the install URL's, as on this addon's own server. */
-function tagsAsked(req) {
-  return req.viewerTags ?? req.query.tag;
-}
-
-function withViewerAccounts(config, scoped) {
-  return { ...config, jellyfinAccounts: scoped.jellyfinAccounts, jellyfinAccountOwner: scoped.jellyfinAccountOwner };
-}
-
-/** A request naming nobody here is refused rather than served as yours. */
-function refuseUnknownViewer(res, area, userUUID, name, quiet = false) {
-  consola[quiet ? 'debug' : 'info'](`[${area}] Unknown viewer "${String(name).slice(0, 64)}" for ${userUUID}`);
-  return res.status(404).json({ error: "Unknown viewer" });
-}
-
 /**
  * The filtering an install URL asks for, from the profiles it names and from the raw
  * parameters. One UUID can then serve both an unrestricted and a family install.
@@ -534,10 +514,29 @@ function refuseUnknownViewer(res, area, userUUID, name, quiet = false) {
  * user are coalesced and hand back the same object.
  */
 
+// A household user named by `viewer` brings their own tags, which stand in for the
+// install URL's `tag` for the whole request. Set by the routes once the name is matched.
+// A user without tags of their own leaves the URL's `tag` (and any cap it carries) in force.
+function tagQueryOf(req) {
+  return Array.isArray(req.viewerTags) && req.viewerTags.length > 0 ? req.viewerTags : req.query.tag;
+}
+
+function refuseUnknownViewer(res, area, userUUID, name, level = 'info') {
+  const line = `[${area}] Unknown viewer "${String(name).slice(0, 64)}" for ${userUUID}`;
+  if (level === 'debug') consola.debug(line);
+  else consola.info(line);
+  return res.status(404).json({ error: "Unknown viewer" });
+}
+
+/** The stored config, read with the accounts of the household user it was scoped to. */
+function withViewerAccounts(stored, scoped) {
+  return { ...stored, jellyfinAccounts: scoped.jellyfinAccounts, jellyfinAccountOwner: scoped.jellyfinAccountOwner };
+}
+
 function applyRatingOverrides(config, req, userUUID) {
   const rawRating = req.query.contentrating ?? req.query.contentRating;
   const rawUnrated = req.query.unrated;
-  const rawTag = tagsAsked(req);
+  const rawTag = tagQueryOf(req);
   if (rawRating === undefined && rawUnrated === undefined && rawTag === undefined) return config;
 
   const { tags: urlTags } = resolveManifestTags(config, rawTag);
@@ -654,10 +653,43 @@ const respond = function (req, res, data, opts?) {
   res.setHeader("Access-Control-Allow-Headers", "*");
   res.setHeader("Content-Type", "application/json");
 
-  applyImageCachePrefix(data);
+  let payload = data;
+  if (data && typeof data === 'object' && !Array.isArray(data) && !Buffer.isBuffer(data) && ('meta' in data || 'metas' in data)) {
+    payload = { ...data };
+  }
 
-  stripReleaseAvailabilityForResponse(data);
-  res.send(data);
+  applyImageCachePrefix(payload);
+
+  if (payload && typeof payload === 'object') {
+    const cloneForReleaseStrip = (meta) => {
+      if (!meta || typeof meta !== 'object') return meta;
+      const hasField = Object.prototype.hasOwnProperty.call(meta, '_releaseAvailability');
+      const hasDates = Boolean(meta.app_extras && Object.prototype.hasOwnProperty.call(meta.app_extras, 'releaseDates'));
+      if (!hasField && !hasDates) return meta;
+      return {
+        ...meta,
+        ...(hasDates ? { app_extras: { ...meta.app_extras } } : {}),
+      };
+    };
+    if (payload.meta) {
+      const nextMeta = cloneForReleaseStrip(payload.meta);
+      if (nextMeta !== payload.meta) payload.meta = nextMeta;
+    }
+    if (Array.isArray(payload.metas)) {
+      let nextMetas = null;
+      for (let i = 0; i < payload.metas.length; i++) {
+        const nextMeta = cloneForReleaseStrip(payload.metas[i]);
+        if (nextMeta !== payload.metas[i]) {
+          if (!nextMetas) nextMetas = payload.metas.slice();
+          nextMetas[i] = nextMeta;
+        }
+      }
+      if (nextMetas) payload.metas = nextMetas;
+    }
+  }
+
+  stripReleaseAvailabilityForResponse(payload);
+  res.send(payload);
 };
 
   addon.get("/api/config", (req, res) => {
@@ -680,16 +712,19 @@ const respond = function (req, res, data, opts?) {
       gemini: getSetting('GEMINI_API_KEY'),
       trakt: getSetting('TRAKT_CLIENT_ID'),
       simkl: getSetting('SIMKL_CLIENT_ID') || getSetting('SIMKL_V2_CLIENT_ID'),
-      simklAuthMode: resolveSimklAuthMode(),
       simklV2: Boolean(getSetting('SIMKL_V2_CLIENT_ID')),
+      simklAuthMode: simklAuth.simklAuthMode(),
       simklListMinTTL: parseInt(getSetting('SIMKL_LIST_MIN_TTL'), 10) || 300,
       simklActivitiesTTL: parseInt(getSetting('SIMKL_ACTIVITIES_TTL'), 10) || 1800,
       customDescriptionBlurb: getSetting('CUSTOM_DESCRIPTION_BLURB'),
       addonVersion: ADDON_VERSION,
+      sourceCodeUrl: sourceCodeUrl(),
       hasBuiltInTvdb: !!getSetting('BUILT_IN_TVDB_API_KEY'),
       hasBuiltInTmdb: !!getSetting('BUILT_IN_TMDB_API_KEY'),
       hasBuiltInMdblist: !!getSetting('BUILT_IN_MDBLIST_API_KEY'),
       hasBuiltInGemini: !!getSetting('BUILT_IN_GEMINI_API_KEY'),
+      aiCustomEndpoint: require('./utils/ai-endpoint').isCustomAiEndpoint(),
+      webSearch: require('./utils/webSearch').webSearchInfo(),
       catalogTTL: parseInt(getSetting('CATALOG_TTL') || String(24 * 60 * 60), 10),
       maxCatalogs: parseInt(getSetting('MAX_CATALOGS') || '', 10) || null,
       collectionImportCatalogCap: parseInt(getSetting('COLLECTION_IMPORT_CATALOG_CAP') || '', 10) || 400,
@@ -746,6 +781,17 @@ addon.post("/api/config/load/:userUUID", configLoadRateLimitMiddleware, configAp
 addon.put("/api/config/update/:userUUID", configApi.updateConfig.bind(configApi));
 addon.get('/api/config/is-trusted/:uuid', configApi.isTrusted.bind(configApi));
 addon.post("/api/test-keys", testKeysRateLimitMiddleware, configApi.testApiKeys);
+// Only the instance's own endpoint is asked, never an address from the request.
+addon.post("/api/ai/models", testKeysRateLimitMiddleware, async (req, res) => {
+  const { isCustomAiEndpoint, listEndpointModels } = require('./utils/ai-endpoint');
+  if (!isCustomAiEndpoint()) return res.status(404).json({ error: 'This instance uses OpenRouter' });
+  const apiKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey.trim().slice(0, 500) : '';
+  try {
+    res.json({ models: await listEndpointModels(apiKey) });
+  } catch (error: any) {
+    res.status(502).json({ error: `The AI endpoint did not list its models: ${String(error?.message || error).slice(0, 200)}` });
+  }
+});
 
 // --- Trakt OAuth Routes ---
 addon.get("/api/auth/trakt/authorize", async (req, res) => {
@@ -1133,8 +1179,12 @@ addon.post("/api/movielens/lists/:userUUID", async (req, res) => {
   }
 });
 
-// Saves a new Simkl access token and returns the token ID the user pastes into
-// their config. Used by both the OAuth callback and the PIN flow.
+/**
+ * Stores a Simkl token for a Simkl user, reusing the token id that user
+ * already has, and repoints configs that named the user's older token ids.
+ * Used by both OAuth callbacks and the code sign-in. Returns the token id, or
+ * null when the token could not be saved.
+ */
 async function persistSimklToken(user, accessToken, v2Tokens = null) {
   const refreshToken = v2Tokens?.refresh_token || '';
   const expiresAt = v2Tokens ? Date.now() + v2Tokens.expires_in * 1000 : 0;
@@ -1165,6 +1215,7 @@ async function persistSimklToken(user, accessToken, v2Tokens = null) {
   }
 
   if (!saved) {
+    consola.error(`[Simkl OAuth] Could not save the token for user ${user.username}`);
     return null;
   }
 
@@ -1187,12 +1238,126 @@ async function persistSimklToken(user, accessToken, v2Tokens = null) {
   return tokenId;
 }
 
-function revokeSimklGrant(token) {
-  const { clientId, clientSecret } = simklAuth.simklV2Credentials();
-  if (!clientId || !token) return;
-  simklAuth.revokeSimklV2Token(clientId, clientSecret, token)
-    .catch((error) => consola.debug(`[Simkl] Could not revoke a replaced grant: ${error?.message}`));
+// --- Simkl code sign-in (PIN / device flow) ---
+const {
+  createDeviceAuthSession,
+  getDeviceAuthSession,
+  saveDeviceAuthSession,
+  deleteDeviceAuthSession,
+  pollTooSoon,
+  widenPollGap,
+  deviceAuthRateLimit,
+} = require('./lib/deviceAuth');
+
+const SIMKL_PIN_NOT_ENABLED = 'Simkl PIN authentication is not enabled on this instance.';
+const SIMKL_PIN_NOT_CONFIGURED = 'Simkl is not configured on this instance. The instance owner needs to set SIMKL_CLIENT_ID.';
+
+/** The client id a new code is requested with: the V2 app when one is configured, else the V1 app. */
+function simklCodeFlowClient() {
+  const v2ClientId = simklAuth.simklV2Credentials().clientId;
+  if (v2ClientId) return { v2: true, clientId: v2ClientId };
+  const v1ClientId = String(process.env.SIMKL_CLIENT_ID || '').trim();
+  return v1ClientId ? { v2: false, clientId: v1ClientId } : null;
 }
+
+addon.post("/api/auth/simkl/pin", deviceAuthRateLimit, async (req, res) => {
+  if (!simklAuth.simklCodeFlowOffered()) {
+    return res.status(404).json({ error: SIMKL_PIN_NOT_ENABLED });
+  }
+  const client = simklCodeFlowClient();
+  if (!client) {
+    return res.status(500).json({ error: SIMKL_PIN_NOT_CONFIGURED });
+  }
+
+  try {
+    const code = client.v2
+      ? await simklAuth.requestSimklV2DeviceCode(client.clientId)
+      : await simklAuth.requestSimklPin(client.clientId);
+    const sessionId = createDeviceAuthSession('simkl', code);
+    res.json({
+      sessionId,
+      userCode: code.userCode,
+      verificationUrl: code.verificationUrl,
+      interval: code.interval,
+      expiresIn: code.expiresIn,
+    });
+  } catch (error) {
+    consola.error("[Simkl PIN] Could not request a PIN:", error);
+    res.status(500).json({
+      error: simklAuth.isUserSafeError(error) ? error.message : "Failed to request a Simkl PIN. Please try again.",
+    });
+  }
+});
+
+addon.get("/api/auth/simkl/pin/status", deviceAuthRateLimit, async (req, res) => {
+  if (!simklAuth.simklCodeFlowOffered()) {
+    return res.status(404).json({ error: SIMKL_PIN_NOT_ENABLED });
+  }
+  if (!simklCodeFlowClient()) {
+    return res.status(500).json({ error: SIMKL_PIN_NOT_CONFIGURED });
+  }
+
+  try {
+    const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
+    const session = await getDeviceAuthSession('simkl', sessionId);
+    if (!session) {
+      return res.status(404).json({ status: 'expired' });
+    }
+
+    // Answered here so a fast poller never reaches Simkl sooner than it allows.
+    if (pollTooSoon(session)) {
+      return res.json({ status: 'pending' });
+    }
+    session.lastPolledAt = Date.now();
+    saveDeviceAuthSession(sessionId, session);
+
+    // A session started before V2 was switched on finishes on V1.
+    const v2ClientId = simklAuth.simklV2Credentials().clientId;
+    const v1ClientId = String(process.env.SIMKL_CLIENT_ID || '').trim();
+    const result = session.deviceCode && v2ClientId
+      ? await simklAuth.pollSimklV2DeviceToken(v2ClientId, session.deviceCode)
+      : await simklAuth.pollSimklPin(v1ClientId, session.userCode);
+
+    if (result.status === 'slow_down') {
+      widenPollGap(session);
+      saveDeviceAuthSession(sessionId, session);
+      return res.json({ status: 'slow_down' });
+    }
+    if (result.status === 'expired') {
+      deleteDeviceAuthSession(sessionId);
+      return res.json({ status: 'expired' });
+    }
+    if (result.status !== 'authorized') {
+      return res.json({ status: 'pending' });
+    }
+
+    const userClientId = result.tokens ? v2ClientId : v1ClientId;
+    const user = await new SimklClient(userClientId).getMe(result.accessToken);
+    const tokenId = await persistSimklToken(user, result.accessToken, result.tokens || null);
+    if (!tokenId) {
+      // The session stays, so the next poll can try storing the token again.
+      return res.status(500).json({ error: "Simkl authorized the connection, but this server could not store the token. Please try again." });
+    }
+
+    deleteDeviceAuthSession(sessionId);
+    res.json({ status: 'authorized', tokenId, username: user.username });
+  } catch (error) {
+    consola.error("[Simkl PIN] Status check failed:", error);
+    res.status(500).json({ error: "Failed to check the Simkl authorization status." });
+  }
+});
+
+addon.post("/api/auth/simkl/pin/cancel", async (req, res) => {
+  try {
+    const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId : '';
+    const session = await getDeviceAuthSession('simkl', sessionId);
+    if (session) deleteDeviceAuthSession(sessionId);
+    res.json({ cancelled: Boolean(session) });
+  } catch (error) {
+    consola.error("[Simkl PIN] Cancel failed:", error);
+    res.status(500).json({ error: "Failed to cancel the Simkl authorization." });
+  }
+});
 
 function simklRedirectUri() {
   return normalizeRedirectUri(process.env.SIMKL_REDIRECT_URI || `${process.env.HOST_NAME}/api/auth/simkl/callback`);
@@ -1284,7 +1449,6 @@ addon.get("/api/auth/simkl/callback", async (req, res) => {
     const user = await simklClient.getMe(tokens.access_token);
     
     const tokenId = await persistSimklToken(user, tokens.access_token);
-    
     if (!tokenId) {
       return res.status(500).send(renderOAuthPage({
         provider: 'simkl',
@@ -1370,11 +1534,8 @@ addon.post("/api/auth/trakt/disconnect", async (req, res) => {
       return res.status(404).json({ error: "User config not found" });
     }
     
-    // Delete OAuth token from database if it exists
-    if (config.apiKeys?.traktTokenId) {
-      await database.deleteOAuthToken(config.apiKeys.traktTokenId);
-      delete config.apiKeys.traktTokenId;
-    }
+    const released = config.apiKeys?.traktTokenId;
+    if (released) delete config.apiKeys.traktTokenId;
     
     // Remove Trakt user info
     delete config.traktUser;
@@ -1394,6 +1555,9 @@ addon.post("/api/auth/trakt/disconnect", async (req, res) => {
     
     // Invalidate config cache
     configCache.del(userUUID);
+
+    // Released once this configuration no longer names it, and only if no other does.
+    if (released) await require('./lib/accountLinks').releaseFieldToken('traktTokenId', released);
     
     // `removed` says exactly what this disconnect took out, so a page holding
     // unsaved edits can apply the same removals instead of adopting the whole
@@ -1403,156 +1567,6 @@ addon.post("/api/auth/trakt/disconnect", async (req, res) => {
     consola.error("[Trakt] Disconnect error:", error);
     res.status(500).json({ error: "Failed to disconnect Trakt" });
   }
-});
-
-// Drops a pending session so a cancelled code doesn't linger until it expires.
-// Knowing the session id is the only thing needed, same as polling it.
-async function handleDeviceAuthCancel(req, res, provider) {
-  try {
-    const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId : '';
-    const session = await getDeviceAuthSession(sessionId, provider);
-    if (session) {
-      await deleteDeviceAuthSession(sessionId);
-    }
-    res.json({ cancelled: !!session });
-  } catch (error) {
-    consola.error(`[${provider}] Failed to cancel the authorization session:`, error);
-    res.status(500).json({ error: "Failed to cancel the authorization" });
-  }
-}
-
-// --- Simkl PIN (device) Routes ---
-// No client secret and no reachable callback URL needed, so these work on
-// private instances where the OAuth flow can't.
-addon.post("/api/auth/simkl/pin", deviceAuthPollRateLimitMiddleware, async (req, res) => {
-  try {
-    if (!simklPinEnabled()) {
-      return res.status(404).json({ error: "Simkl PIN authentication is not enabled on this instance." });
-    }
-
-    const v2ClientId = simklAuth.simklV2Credentials().clientId;
-    if (v2ClientId) {
-      const device = await simklAuth.requestSimklDeviceCode(v2ClientId);
-      const sessionId = createSessionId();
-      await saveDeviceAuthSession(sessionId, {
-        provider: 'simkl',
-        userCode: device.user_code,
-        deviceCode: device.device_code,
-        expiresAt: Date.now() + device.expires_in * 1000,
-        pollIntervalMs: device.interval * 1000,
-        lastPolledAt: 0,
-      });
-      return res.json({
-        sessionId,
-        userCode: device.user_code,
-        verificationUrl: device.verification_url,
-        interval: device.interval,
-        expiresIn: device.expires_in,
-      });
-    }
-
-    const clientId = getSetting('SIMKL_CLIENT_ID');
-    if (!clientId) {
-      return res.status(500).json({ error: "Simkl is not configured. Please set the SIMKL_CLIENT_ID environment variable." });
-    }
-
-    const simklClient = new SimklClient(clientId);
-    const pin = await simklClient.requestPin();
-
-    const sessionId = createSessionId();
-    const expiresAt = Date.now() + pin.expires_in * 1000;
-    await saveDeviceAuthSession(sessionId, {
-      provider: 'simkl',
-      userCode: pin.user_code,
-      expiresAt,
-      pollIntervalMs: pin.interval * 1000,
-      lastPolledAt: 0,
-    });
-
-    res.json({
-      sessionId,
-      userCode: pin.user_code,
-      verificationUrl: pin.verification_url,
-      interval: pin.interval,
-      expiresIn: pin.expires_in,
-    });
-  } catch (error) {
-    consola.error("[Simkl PIN] Failed to request a PIN:", error);
-    res.status(500).json({ error: error?.expose ? error.message : "Failed to request a Simkl PIN" });
-  }
-});
-
-addon.get("/api/auth/simkl/pin/status", deviceAuthPollRateLimitMiddleware, async (req, res) => {
-  try {
-    if (!simklPinEnabled()) {
-      return res.status(404).json({ error: "Simkl PIN authentication is not enabled on this instance." });
-    }
-
-    const v2ClientId = simklAuth.simklV2Credentials().clientId;
-    const clientId = v2ClientId || getSetting('SIMKL_CLIENT_ID');
-    if (!clientId) {
-      return res.status(500).json({ error: "Simkl is not configured. Please set the SIMKL_CLIENT_ID environment variable." });
-    }
-
-    const sessionIdParam = Array.isArray(req.query.sessionId) ? req.query.sessionId[0] : req.query.sessionId;
-    const sessionId = typeof sessionIdParam === 'string' ? sessionIdParam : '';
-
-    // The session id stays in the browser that started the flow, so guessing the
-    // short user code isn't enough to claim the token.
-    const session = await getDeviceAuthSession(sessionId, 'simkl');
-    if (!session) {
-      return res.status(404).json({ status: 'expired' });
-    }
-
-    // Simkl asks callers to respect the interval it handed out, so polls that
-    // arrive early are answered without bothering it.
-    if (!await registerPoll(sessionId, session)) {
-      return res.json({ status: 'pending' });
-    }
-
-    // A session started before V2 was switched on still finishes on V1.
-    const onV2 = Boolean(session.deviceCode && v2ClientId);
-    const simklClient = new SimklClient(onV2 ? v2ClientId : getSetting('SIMKL_CLIENT_ID'));
-    const poll = onV2
-      ? await simklAuth.pollSimklDeviceCode(v2ClientId, session.deviceCode)
-      : await simklClient.pollPin(session.userCode);
-
-    if (poll.status === 'pending') {
-      return res.json({ status: 'pending' });
-    }
-
-    if (poll.status === 'slow_down') {
-      await widenPollInterval(sessionId, session);
-      return res.json({ status: 'slow_down' });
-    }
-
-    if (poll.status === 'expired') {
-      await deleteDeviceAuthSession(sessionId);
-      return res.json({ status: 'expired' });
-    }
-
-    const accessToken = poll.tokens ? poll.tokens.access_token : poll.access_token;
-    const user = await simklClient.getMe(accessToken);
-    const tokenId = await persistSimklToken(user, accessToken, poll.tokens || null);
-
-    if (!tokenId) {
-      // Session left in place: storing the token is the only thing that failed,
-      // so the next poll can try again rather than making the user start over.
-      return res.status(500).json({ error: "Simkl authorized the connection, but this server could not store the token." });
-    }
-
-    await deleteDeviceAuthSession(sessionId);
-
-    consola.info(`[Simkl PIN] Connected user ${user.username} - tokenId: ${tokenId}`);
-    res.json({ status: 'authorized', tokenId, username: user.username });
-  } catch (error) {
-    consola.error("[Simkl PIN] Status check failed:", error);
-    res.status(500).json({ error: "Failed to check the Simkl PIN status" });
-  }
-});
-
-addon.post("/api/auth/simkl/pin/cancel", async (req, res) => {
-  await handleDeviceAuthCancel(req, res, 'simkl');
 });
 
 addon.post("/api/auth/simkl/disconnect", async (req, res) => {
@@ -2049,6 +2063,22 @@ addon.get("/api/tmdb/discover/providers", async (req, res) => {
     consola.error("[TMDB Discover] Error fetching providers:", error.message);
     const status = error.response?.status || 500;
     return res.status(status).json({ error: error.message || "Failed to fetch TMDB discover providers" });
+  }
+});
+
+// How many TMDB keywords an exclusion pattern such as `christmas*` fits, read from the keyword export.
+addon.get("/api/tmdb/keyword-pattern", async (req, res) => {
+  const { isKeywordPattern, keywordPatternProblem, keywordPatternRegex } = require('./utils/keywordPatterns');
+  const pattern = String(req.query.pattern || '').trim();
+  if (!isKeywordPattern(pattern)) return res.status(400).json({ error: "pattern must contain *" });
+  const problem = keywordPatternProblem(pattern);
+  if (problem) return res.json({ pattern, valid: false, problem });
+  try {
+    const { previewTmdbKeywordPattern } = require('./lib/tmdb-keyword-index');
+    return res.json({ pattern, valid: true, ...(await previewTmdbKeywordPattern(keywordPatternRegex(pattern))) });
+  } catch (error) {
+    consola.warn('[TMDB Keywords] Pattern preview failed:', error.message);
+    return res.json({ pattern, valid: true, count: null, sample: [] });
   }
 });
 
@@ -3274,7 +3304,7 @@ addon.get("/api/recommendations/status", async (req: any, res: any) => {
 
     const { collectWatchedRows, isWatched, resolveSources, trackerAvailability, runAsProfile }: any = require('./utils/recommendations/history');
     const { summarise }: any = require('./utils/recommendations/rows');
-    const { resolveProvider }: any = require('./utils/recommendations/provider');
+    const { resolveProvider, instanceGeminiKey }: any = require('./utils/recommendations/provider');
     const { profileCacheKey }: any = require('./utils/recommendations/profile');
     const { readGlobalCache }: any = require('./lib/getCache');
 
@@ -3298,9 +3328,11 @@ addon.get("/api/recommendations/status", async (req: any, res: any) => {
         provider: chosen ? { provider: chosen.provider, model: chosen.model } : null,
         counts: summarise(rows, require('./utils/recommendations/rows').tuningFrom(viewerConfig)),
         profile: profile ? { summary: profile.summary, builtAt: profile.builtAt, builtFrom: profile.builtFrom } : null,
+        // Only while the settings in front of the user still search through an engine here.
+        webSearchFailure: chosen?.webSource ? await require('./utils/webSearch').lastWebSearchFailure('recommendations', userUUID) : null,
       };
     });
-    return res.json({ ...report, profiles });
+    return res.json({ ...report, profiles, instanceGemini: !!instanceGeminiKey() });
   } catch (error: any) {
     consola.withTag('Recommendations').warn(`Status failed: ${error.message}`);
     return res.status(500).json({ error: "Could not read recommendation status" });
@@ -4379,11 +4411,13 @@ addon.post("/api/integrations/credential", async (req, res) => {
       setAccountKey(config, profile, provider, tokenId);
       if (card.accounts[ACCOUNT_SERVICES[provider].master] === undefined) card.accounts[ACCOUNT_SERVICES[provider].master] = true;
     } else {
+      const previous = config.apiKeys?.[mapping.field];
+      if (previous && previous !== tokenId) replaced = previous;
       config.apiKeys = { ...(config.apiKeys || {}), [mapping.field]: tokenId };
     }
     await database.saveUserConfig(userUUID, access.passwordHash, config);
     configCache.del(userUUID);
-    if (replaced) await require('./lib/accountLinks').releaseTokenIfUnused(provider, replaced, provider === 'simkl' ? revokeSimklGrant : undefined);
+    if (replaced) await require('./lib/accountLinks').releaseFieldToken(mapping.field, replaced, profile && provider === 'simkl' ? revokeSimklGrant : undefined);
     require('./lib/jellyfin/watched').warmChangedSources(userUUID, before, config);
     res.json({ success: true, field: mapping.field, tokenId });
   } catch (error) {
@@ -4400,9 +4434,11 @@ async function hydraReinstall(instanceUrl: string, apiKey: string, addonUrl: str
   const { httpPost } = require('./utils/httpClient');
   const target = `${managerAccounts.normalizeInstanceUrl(instanceUrl)}/hydra/reinstall`;
   try {
+    const guard = require('./utils/outboundGuard');
     const response = await httpPost(target, { addonUrl }, {
       headers: { 'X-API-Key': apiKey },
-      timeout: 15000
+      timeout: 15000,
+      ...guard.addonRequest(guard.addonFetchMaxBytes(), 30000)
     });
     if (typeof response.data === 'string') {
       consola.warn(`[AIOManager Proxy] Non-JSON response from ${target} (status ${response.status}); this instance does not expose the Hydra API, reinstall was not processed`);
@@ -4410,6 +4446,9 @@ async function hydraReinstall(instanceUrl: string, apiKey: string, addonUrl: str
     }
     return { ok: true, status: 200, data: response.data ?? { success: true } };
   } catch (error: any) {
+    if (require('./utils/outboundGuard').isRefusedDestination(error)) {
+      return { ok: false, status: 400, error: 'That address is on a private network, which this server reads from only when its admin lists the host in OUTBOUND_ALLOWED_PRIVATE_HOSTS' };
+    }
     const upstreamStatus = error.response?.status;
     let upstreamData = error.response?.data;
     if (typeof upstreamData === 'string') {
@@ -4606,7 +4645,8 @@ addon.get("/api/aiomanager/status", async (req, res) => {
 
   try {
     const { httpGet } = require('./utils/httpClient');
-    const response = await httpGet(`${instanceUrl.replace(/\/+$/, '')}/hydra/status`, { timeout: 10000 });
+    const guard = require('./utils/outboundGuard');
+    const response = await httpGet(`${instanceUrl.replace(/\/+$/, '')}/hydra/status`, { timeout: 10000, ...guard.addonRequest(guard.addonFetchMaxBytes(), 20000) });
     // Releases without Hydra answer the SPA catch-all, so HTML means unsupported.
     if (typeof response.data === 'string' || !response.data?.capabilities) {
       return res.json({ supported: false });
@@ -4856,9 +4896,49 @@ addon.get("/manifest.json", function (req, res) {
 // --- Database-Only Manifest Route ---
 require('./lib/collectionExportRoutes').register(addon);
 
+const { LRUCache: ManifestLruCache } = require('lru-cache');
+const MANIFEST_L1_CACHE_MAX = 500;
+const MANIFEST_L1_CACHE_TTL_MS = 30_000;
+const manifestL1Cache = new ManifestLruCache({
+  max: MANIFEST_L1_CACHE_MAX,
+  ttl: MANIFEST_L1_CACHE_TTL_MS,
+}) as import('lru-cache').LRUCache<string, string>;
+const manifestInflight = new Map<string, Promise<string | null>>();
+
+function buildManifestCacheKey(opts: {
+  userUUID: string;
+  config: any;
+  profileId: string;
+  tags: string[];
+}): string {
+  const configDigest =
+    require('./lib/configCache').stampOf?.(opts.config) ||
+    crypto
+      .createHash('sha1')
+      .update(JSON.stringify(opts.config))
+      .digest('hex');
+  const serverStamp = [
+    process.env.HOST_NAME || '',
+    jikan.isJikanEnabled() ? '1' : '0',
+    getSetting('LUMIERE_API_BASE'),
+    getSetting('MAL_PAGE_SIZE'),
+    getSetting('CATALOG_LIST_ITEMS_SIZE'),
+    getSetting('ADDON_LOGO_URL'),
+    getSetting('ADDON_NAME_SUFFIX'),
+    getSetting('WATCH_STATE_PULL_TTL'),
+  ].join('|');
+  return `${opts.userUUID}:${configDigest}:${opts.profileId}:${opts.tags.join(',')}:${serverStamp}`;
+}
+
 addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
     const { userUUID } = req.params;
     try {
+        if (!userUUID) {
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Access-Control-Allow-Headers', '*');
+            return res.status(404).send({ err: "User configuration not found." });
+        }
+
         // Load config from database
         const config = await database.getUserConfig(userUUID);
         if (!config) {
@@ -4870,10 +4950,16 @@ addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
         
         const { profileForViewer, scopeConfigToProfile } = require('./lib/jellyfin/profiles');
         const profile = profileForViewer(config, userUUID, req.query.viewer);
-        if (profile === undefined) return refuseUnknownViewer(res, 'Manifest', userUUID, req.query.viewer);
-        if (profile?.tags.length) req.viewerTags = profile.tags;
+        if (profile === undefined) {
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Access-Control-Allow-Headers', '*');
+            return refuseUnknownViewer(res, 'Manifest', userUUID, req.query.viewer);
+        }
+        if (profile) req.viewerTags = profile.tags;
+        // Only which catalogs are listed follows the user's accounts; the rest is the stored config's.
+        const viewerConfig = profile?.id ? scopeConfigToProfile(config, userUUID, profile.id) : undefined;
 
-        const { tags, unknown: unknownTags } = resolveManifestTags(config, tagsAsked(req));
+        const { tags, unknown: unknownTags } = resolveManifestTags(config, tagQueryOf(req));
         req.manifestTags = tags;
         // The cap itself applies to catalog and search requests, not to the manifest.
         // It is resolved here anyway so an install URL can be checked before it is used.
@@ -4888,18 +4974,48 @@ addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
         if (refusedFilters.length > 0) {
             consola.warn(`[Manifest] User ${userUUID} asked for ${refusedFilters.join(', ')}, which does not tighten their configured ${config.ageRating || 'None'}`);
         }
-        consola.debug(`[Manifest] Building fresh manifest for user: ${userUUID}${tags.length ? ` (tags: ${tags.join(', ')})` : ''}`);
         if (unknownTags.length > 0) {
             consola.warn(`[Manifest] User ${userUUID} asked for ${unknownTags.join(', ')}, which no catalog is tagged with`);
         }
-        const viewer = profile?.id ? scopeConfigToProfile(config, userUUID, profile.id) : undefined;
-        const manifest = await getManifest(config, { tags, userUUID, viewer });
+        const manifestCacheKey = buildManifestCacheKey({
+            userUUID,
+            config,
+            profileId: profile?.id ? String(profile.id) : '',
+            tags,
+        });
+
+        let cachedManifestJson = manifestL1Cache.get(manifestCacheKey);
+        if (!cachedManifestJson) {
+            let inflight = manifestInflight.get(manifestCacheKey);
+            if (!inflight) {
+                consola.debug(`[Manifest] Building fresh manifest for user: ${userUUID}${tags.length ? ` (tags: ${tags.join(', ')})` : ''}`);
+                inflight = getManifest(config, { tags, userUUID, ...(viewerConfig ? { viewerConfig } : {}) })
+                    .then((built) => {
+                        if (!built) return null;
+                        const serialized = JSON.stringify(built);
+                        manifestL1Cache.set(manifestCacheKey, serialized);
+                        return serialized;
+                    })
+                    .finally(() => {
+                        manifestInflight.delete(manifestCacheKey);
+                    });
+                manifestInflight.set(manifestCacheKey, inflight);
+            }
+            cachedManifestJson = (await inflight) ?? undefined;
+        } else {
+            consola.debug(`[Manifest] Serving L1 cached manifest for user: ${userUUID}${tags.length ? ` (tags: ${tags.join(', ')})` : ''}`);
+        }
+
+        const manifest = cachedManifestJson ? JSON.parse(cachedManifestJson) : null;
             if (!manifest) {
                 res.setHeader('Access-Control-Allow-Origin', '*');
                 res.setHeader('Access-Control-Allow-Headers', '*');
                 return res.status(500).send({ err: "Failed to build manifest." });
             }
-            
+        if (manifest.resources?.includes('player')) {
+            require('./lib/stremioEventStatus').noteManifest(userUUID, profile?.id ?? '');
+        }
+
         // Pass config to request object for ETag generation
         req.userConfig = config;
         
@@ -4967,21 +5083,23 @@ function withCatalogCriticRatings(metas: any[], config: any, req: any): Promise<
 
 const catalogRoute = async function (req, res) {
   const { userUUID, type, id, extra } = req.params;
-  // `viewerConfig` is set only for a named viewer and `accountOwner` only by the Jellyfin server's reads, never from the request.
+  // Handed over by viewerCatalogRoute for a named household user, never from the request.
   const storedConfig = req.viewerConfig ?? await loadRouteConfig(userUUID);
 
   if (!storedConfig) {
     return res.status(404).send({ error: "User configuration not found" });
   }
   const { viewerConfigFor } = require('./lib/accounts');
+  // Set only by the Jellyfin server's in-process reads, never from the request.
   const config = applyRatingOverrides(viewerConfigFor(storedConfig, req.params.accountOwner, id), req, userUUID);
   config.userUUID = userUUID;
+  const { tags: requestTags } = resolveManifestTags(storedConfig, tagQueryOf(req));
 
   {
     const { collectionCatalogMetas, isCollectionCatalogId } = require('./lib/collectionBuilder/aiostreamsCollections');
     if (isCollectionCatalogId(id)) {
       const skip = parseInt(new URLSearchParams(extra || '').get('skip') || '0', 10) || 0;
-      const { tags } = resolveManifestTags(storedConfig, tagsAsked(req));
+      const tags = requestTags;
       const metas = await collectionCatalogMetas(userUUID, config, tags, id, skip);
       if (!metas) return res.status(404).send({ error: "Collection not found" });
       req.userConfig = config;
@@ -5000,7 +5118,11 @@ const catalogRoute = async function (req, res) {
   }
 
   // Handle calendar-videos catalog
-  if (id === 'calendar-videos' && type === 'series' && extra) {
+  if (id === 'calendar-videos') {
+    if (type !== 'series' || !extra) {
+      res.setHeader('Cache-Control', "max-age=10800, stale-while-revalidate=3600, stale-if-error=259200");
+      return res.json({ metas: [] });
+    }
     const logger = consola.withTag('Calendar');
     
     try {
@@ -5034,22 +5156,21 @@ const catalogRoute = async function (req, res) {
           
           if (!result || !result.meta) return null;
           
-          const meta = result.meta;
-          
-          if (meta.videos && Array.isArray(meta.videos)) {
-            const now = new Date();
-            meta.videos = meta.videos.filter(video => {
+          const rawMeta = result.meta;
+          if (!Array.isArray(rawMeta.videos) || rawMeta.videos.length === 0) return null;
+
+          const now = new Date();
+          const upcomingVideos = rawMeta.videos
+            .filter(video => {
               if (!video.released) return false;
               const releaseDate = new Date(video.released);
               return !isNaN(releaseDate.getTime()) && releaseDate >= now;
-            });
-            
-            meta.videos.sort((a, b) => new Date(a.released).getTime() - new Date(b.released).getTime());
-          }
-          
-          if (!meta.videos || meta.videos.length === 0) return null;
-          
-          return meta;
+            })
+            .sort((a, b) => new Date(a.released).getTime() - new Date(b.released).getTime());
+
+          if (upcomingVideos.length === 0) return null;
+
+          return { ...rawMeta, videos: upcomingVideos };
         } catch (err) {
           logger.warn(`Failed to process ID ${id} for calendar: ${err.message}`);
           return null;
@@ -5175,7 +5296,7 @@ const catalogRoute = async function (req, res) {
     catalogPageSize = parseInt(process.env.MAL_PAGE_SIZE || '25');
   } else if (cleanId === 'anilist.trending' || cleanId.startsWith('anilist.discover')) {
     catalogPageSize = 50;
-  } else if (cleanId.startsWith('rt.') || cleanId.startsWith('simkl.watchlist.') || cleanId.startsWith('simkl.list.') || cleanId.startsWith('simkl.upnext') || cleanId.startsWith('simkl.dvd.') || cleanId.startsWith('simkl.trending.') || cleanId.startsWith('simkl.recipe.') || cleanId.startsWith('stremthru.') || cleanId.startsWith('mdblist.') || cleanId.startsWith('custom.') || cleanId.startsWith('trakt.') || cleanId.startsWith('anilist.') || cleanId.startsWith('letterboxd.') || cleanId.startsWith('movielens.') || cleanId.startsWith('lumiere.') || cleanId.startsWith('aiom.watchlist.') || cleanId.startsWith('recommendations.') || (cleanId.startsWith('tvdb.') && !cleanId.startsWith('tvdb.collection.'))) {
+  } else if (cleanId.startsWith('rt.') || cleanId.startsWith('simkl.watchlist.') || cleanId.startsWith('simkl.list.') || cleanId.startsWith('simkl.upnext') || cleanId.startsWith('simkl.dvd.') || cleanId.startsWith('simkl.trending.') || cleanId.startsWith('simkl.recipe.') || cleanId.startsWith('stremthru.') || cleanId.startsWith('mdblist.') || cleanId.startsWith('custom.') || cleanId.startsWith('trakt.') || cleanId.startsWith('anilist.') || cleanId.startsWith('letterboxd.') || cleanId.startsWith('movielens.') || cleanId.startsWith('lumiere.') || cleanId.startsWith('aiom.watchlist.') || cleanId.startsWith('recommendations.') || cleanId.startsWith('publicmetadb.list.') || cleanId.startsWith('publicmetadb.public.') || cleanId === 'publicmetadb.watchlist' || (cleanId.startsWith('tvdb.') && !cleanId.startsWith('tvdb.collection.'))) {
     catalogPageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE || '20');
   } else {
     catalogPageSize = 20;
@@ -5311,7 +5432,7 @@ const catalogRoute = async function (req, res) {
             consola.error(`[SEARCH] ${cleanId} failed: ${searchResult.error}`);
             return { metas: [], error: searchResult.error };
           }
-          return { metas: searchResult.metas || [] };
+          return { metas: searchResult.metas || [], ...(searchResult.webSearchFailed ? { webSearchFailed: searchResult.webSearchFailed } : {}) };
         }, searchEngine, cacheOptions);
       }
       } else if (cleanId.startsWith('custom.') || cleanId.startsWith('stremthru.')) {
@@ -5383,7 +5504,9 @@ const catalogRoute = async function (req, res) {
             break;
           }
       }
-      return { metas: metas || [], ...(ended ? { endOfList: true } : {}) };
+      // Copied out of the array here because the page is cached as JSON, which drops it.
+      const listed = listedTotalOf(metas);
+      return { metas: metas || [], ...(ended ? { endOfList: true } : {}), ...(listed !== undefined ? { listed } : {}) };
     };
 
     const keyForPage = (page) => {
@@ -5403,9 +5526,9 @@ const catalogRoute = async function (req, res) {
     } else if (catalogFiltersActive({ config, catalogConfig, cleanId })) {
       const { accountOwner } = require('./lib/accounts');
       const { viewerProfile } = require('./lib/jellyfin/viewer');
-      const filteredFor = [viewerProfile() || accountOwner(config), config._ratingOverride, ...resolveManifestTags(storedConfig, tagsAsked(req)).tags]
-        .filter(Boolean).join('|');
-      const key = cursorKey(userUUID, cleanId, actualType, genreName, filteredFor);
+      // Each audience pages through its own filtered list, so it keeps its own positions.
+      const audience = cursorAudience(viewerProfile() || accountOwner(config), config._ratingOverride, requestTags);
+      const key = cursorKey(userUUID, cleanId, actualType, genreName, audience);
       const skipValue = legacySkip || 0;
       // Deduped here rather than after, so what a page serves, and so where the
       // next one starts, is the same whether it is filled for this request or on
@@ -5443,12 +5566,15 @@ const catalogRoute = async function (req, res) {
     }
     }
     if (!filtersAlreadyApplied && responseData?.metas && Array.isArray(responseData.metas) && responseData.metas.length > 0) {
-      responseData.metas = await applyCatalogFilters(responseData.metas, {
-        type: actualType,
-        config,
-        catalogConfig,
-        cleanId
-      });
+      responseData = {
+        ...responseData,
+        metas: await applyCatalogFilters(responseData.metas, {
+          type: actualType,
+          config,
+          catalogConfig,
+          cleanId
+        }),
+      };
     }
 
     if (Array.isArray(responseData?.metas) && responseData.metas.length > 1) {
@@ -5472,7 +5598,7 @@ const catalogRoute = async function (req, res) {
     if (catalogConfig?.randomizePerPage && Array.isArray(responseData?.metas) && responseData.metas.length > 1) {
       responseData = req.params.forJellyfin === '1'
         ? { ...responseData, randomize: true }
-        : { ...responseData, metas: shuffleMetas(responseData.metas) };
+        : { ...responseData, metas: shuffleMetas([...responseData.metas]) };
     }
 
     // Art URL pattern overrides for catalog items
@@ -5509,109 +5635,140 @@ const catalogRoute = async function (req, res) {
     const merged = cleanId.startsWith('merged.');
     if ((merged || catalogArt.applies) && responseData?.metas && Array.isArray(responseData.metas)) {
       const proxyApiKey = config.usePosterProxy ? getPosterRatingApiKey(config) : null;
-      for (const meta of responseData.metas) {
-        const art = artOf(meta);
+      let nextMetas = null;
+      for (let i = 0; i < responseData.metas.length; i++) {
+        const rawMeta = responseData.metas[i];
+        if (!rawMeta) continue;
+        const art = artOf(rawMeta);
         if (!art.applies) continue;
-        const ids = extractIdsFromMeta(meta);
-        const type = meta.type || actualType;
+        let meta = rawMeta;
+        const cloneMeta = () => {
+          if (meta === rawMeta) meta = { ...rawMeta };
+          return meta;
+        };
+        const ids = extractIdsFromMeta(rawMeta);
+        const itemType = rawMeta.type || actualType;
+        const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
         if (art.posterApplies) {
+          let nextPoster = null;
           if (proxyApiKey) {
-            const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
             if (proxyId) {
-              meta.poster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, ratingKey: proxyApiKey, lang: config.language });
+              nextPoster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'poster', type: itemType, id: proxyId, fallback: meta.poster, ratingKey: proxyApiKey, lang: config.language });
             }
           } else {
-            const resolved = resolveCustomArtUrl(art.posterPattern, ids, type, config, { shape: posterShapeOf(meta) });
+            const resolved = resolveCustomArtUrl(art.posterPattern, ids, itemType, config, { shape: posterShapeOf(meta) });
             if (resolved) {
-              if (config.usePosterProxy) {
-                const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
-                if (proxyId) {
-                  meta.poster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'poster', type: type, id: proxyId, fallback: meta.poster, url: resolved });
-                } else {
-                  meta.poster = resolved;
-                }
-              } else {
-                meta.poster = resolved;
-              }
+              nextPoster = (config.usePosterProxy && proxyId)
+                ? buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'poster', type: itemType, id: proxyId, fallback: meta.poster, url: resolved })
+                : resolved;
             }
+          }
+          if (nextPoster && nextPoster !== meta.poster) {
+            cloneMeta().poster = nextPoster;
           }
         }
         if (art.backgroundPattern) {
-          const resolved = resolveCustomArtUrl(art.backgroundPattern, ids, type, config, { shape: 'landscape' });
+          const resolved = resolveCustomArtUrl(art.backgroundPattern, ids, itemType, config, { shape: 'landscape' });
           if (resolved) {
-            if (config.usePosterProxy) {
-              const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
-              if (proxyId) {
-                meta.background = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'background', type: type, id: proxyId, fallback: meta.background, url: resolved });
-              } else {
-                meta.background = resolved;
-              }
-            } else {
-              meta.background = resolved;
+            const nextBackground = (config.usePosterProxy && proxyId)
+              ? buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'background', type: itemType, id: proxyId, fallback: meta.background, url: resolved })
+              : resolved;
+            if (nextBackground !== meta.background) {
+              cloneMeta().background = nextBackground;
             }
           }
         }
         if (art.landscapePattern) {
-          const resolved = resolveCustomArtUrl(art.landscapePattern, ids, type, config, { shape: 'landscape' });
+          const resolved = resolveCustomArtUrl(art.landscapePattern, ids, itemType, config, { shape: 'landscape' });
           if (resolved) {
-            if (config.usePosterProxy) {
-              const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
-              if (proxyId) {
-                meta.landscapePoster = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'landscape', type: type, id: proxyId, fallback: meta.landscapePoster, url: resolved });
-              } else {
-                meta.landscapePoster = resolved;
-              }
-            } else {
-              meta.landscapePoster = resolved;
+            const nextLandscape = (config.usePosterProxy && proxyId)
+              ? buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'landscape', type: itemType, id: proxyId, fallback: meta.landscapePoster, url: resolved })
+              : resolved;
+            if (nextLandscape !== meta.landscapePoster) {
+              cloneMeta().landscapePoster = nextLandscape;
             }
           }
         }
         if (art.logoPattern) {
-          const resolved = resolveCustomArtUrl(art.logoPattern, ids, type, config);
+          const resolved = resolveCustomArtUrl(art.logoPattern, ids, itemType, config);
           if (resolved) {
-            if (config.usePosterProxy) {
-              const proxyId = ids.imdbId || (ids.tmdbId ? `tmdb:${ids.tmdbId}` : (ids.tvdbId ? `tvdb:${ids.tvdbId}` : null));
-              if (proxyId) {
-                meta.logo = buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'logo', type: type, id: proxyId, fallback: meta.logo, url: resolved });
-              } else {
-                meta.logo = resolved;
-              }
-            } else {
-              meta.logo = resolved;
+            const nextLogo = (config.usePosterProxy && proxyId)
+              ? buildProxyArtUrl({ base: `${host}/poster-cache/proxy`, imageClass: 'logo', type: itemType, id: proxyId, fallback: meta.logo, url: resolved })
+              : resolved;
+            if (nextLogo !== meta.logo) {
+              cloneMeta().logo = nextLogo;
             }
           }
         }
+        if (meta !== rawMeta) {
+          if (!nextMetas) nextMetas = responseData.metas.slice();
+          nextMetas[i] = meta;
+        }
       }
+      if (nextMetas) responseData = { ...responseData, metas: nextMetas };
     }
 
-    if (req.params.forJellyfin === '1' && Array.isArray(responseData?.metas)) responseData.pageSize = catalogPageSize;
-
-    if (config.trailerProvider === 'addon' && req.params.forJellyfin !== '1' && Array.isArray(responseData?.metas)) {
-      const { applyTrailerAddonWithin } = require('./lib/trailerProjection');
-      await applyTrailerAddonWithin(responseData.metas, config, envInt('TRAILER_ADDON_CATALOG_WAIT_MS', 1500, 0));
+    if (req.params.forJellyfin === '1' && Array.isArray(responseData?.metas)) {
+      responseData = { ...responseData, pageSize: catalogPageSize };
     }
 
     const isSearchCatalog = cleanId === 'search' || cleanId === 'people_search' || cleanId === 'gemini.search';
     if (isLandscapeCatalogConfig(config, catalogConfig) && !isSearchCatalog && req.params.forJellyfin !== '1' && Array.isArray(responseData?.metas)) {
-      for (const meta of responseData.metas) {
+      let nextMetas = null;
+      for (let i = 0; i < responseData.metas.length; i++) {
+        const meta = responseData.metas[i];
+        if (!meta) continue;
         const landscape = artOf(meta).upstreamArt ? (meta.background || meta.landscapePoster) : (meta.landscapePoster || meta.background);
         if (meta.posterShape === 'landscape' || !landscape) continue;
-        meta.poster = landscape;
-        meta.posterShape = 'landscape';
+        if (!nextMetas) nextMetas = responseData.metas.slice();
+        nextMetas[i] = { ...meta, poster: landscape, posterShape: 'landscape' };
       }
+      if (nextMetas) responseData = { ...responseData, metas: nextMetas };
     }
 
     if (merged && Array.isArray(responseData?.metas)) {
-      for (const meta of responseData.metas) delete meta?._artSource;
+      let nextMetas = null;
+      for (let i = 0; i < responseData.metas.length; i++) {
+        const meta = responseData.metas[i];
+        if (meta && '_artSource' in meta) {
+          if (!nextMetas) nextMetas = responseData.metas.slice();
+          const cloned = { ...meta };
+          delete cloned._artSource;
+          nextMetas[i] = cloned;
+        }
+      }
+      if (nextMetas) responseData = { ...responseData, metas: nextMetas };
     }
 
     if ((responseData as any)?.error) {
       const { dynamicError, showsNotices } = require('./lib/errorNotice');
       const reason = String((responseData as any).error);
-      delete (responseData as any).error;
-      if (showsNotices(config)) {
-        responseData = dynamicError('catalog', { title: 'Search unavailable', description: reason }, actualType === 'series' ? 'series' : 'movie');
-      }
+      const { error: _ignoredError, ...restResponse } = responseData as any;
+      responseData = showsNotices(config)
+        ? dynamicError('catalog', { title: 'Search unavailable', description: reason }, actualType === 'series' ? 'series' : 'movie')
+        : restResponse;
+    }
+
+    // The search answered without the web: its results stay, led by a notice saying why. A copy, since a response
+    // can be shared between requests waiting on the same search.
+    if ((responseData as any)?.webSearchFailed) {
+      const { noticeMeta, showsNotices } = require('./lib/errorNotice');
+      const { webSearchFailed, ...rest } = responseData as any;
+      responseData = showsNotices(config) && Array.isArray(rest.metas)
+        ? { ...rest, metas: [noticeMeta({ title: 'Web search unavailable', description: `${webSearchFailed} This search ran without the web.` }, actualType === 'series' ? 'series' : 'movie'), ...rest.metas] }
+        : rest;
+    }
+
+    // The source's count of the whole list is for Jellyfin reads only.
+    if (req.params.forJellyfin !== '1' && responseData && typeof responseData === 'object' && 'listed' in responseData) {
+      const { listed: _listed, ...withoutListed } = responseData as any;
+      responseData = withoutListed;
+    }
+
+    if (req.params.forJellyfin !== '1' && Array.isArray(responseData?.metas)) {
+      const clonedMetas = responseData.metas.map((m) => (m ? { ...m } : m));
+      await require('./lib/trailerProjection').applyAddonTrailersToList(clonedMetas, config);
+      responseData = { ...responseData, metas: clonedMetas };
     }
 
     if (Array.isArray(responseData?.metas)) {
@@ -5627,40 +5784,61 @@ const catalogRoute = async function (req, res) {
     return res.status(500).send("Internal Server Error");
   }
 };
-/** A read naming its household user, as watch state does, gets that user's history and accounts rows;
- *  a read naming nobody here is refused rather than served as yours. */
-const catalogRouteForViewer = async function (req, res) {
+// A read naming a household user is answered as that user: their tags, their
+// history and picks, their own accounts. Only the public route comes through here.
+const viewerCatalogRoute = async function (req, res) {
+  const { userUUID, id } = req.params;
   const named = req.query.viewer;
-  if (named === undefined || named === '') return catalogRoute(req, res);
-  const { userUUID } = req.params;
-  const storedConfig = await loadRouteConfig(userUUID);
-  if (!storedConfig) return catalogRoute(req, res);
+  if (named === undefined || named === null || (typeof named === 'string' && !named.trim())) return catalogRoute(req, res);
 
-  const { profileForViewer, profileKey, scopeConfigToProfile } = require('./lib/jellyfin/profiles');
-  const profile = profileForViewer(storedConfig, userUUID, named);
-  if (profile === undefined) return refuseUnknownViewer(res, 'Catalog', userUUID, named, true);
+  const stored = await loadRouteConfig(userUUID).catch(() => null);
+  if (!stored) return catalogRoute(req, res);
+
+  const { profileForViewer, scopeConfigToProfile, profileKey } = require('./lib/jellyfin/profiles');
+  const profile = profileForViewer(stored, userUUID, named);
+  if (profile === undefined) return refuseUnknownViewer(res, 'Catalog', userUUID, named, 'debug');
   if (!profile) return catalogRoute(req, res);
-  if (profile.tags.length) req.viewerTags = profile.tags;
+
+  req.viewerTags = profile.tags;
   if (!profile.id) return catalogRoute(req, res);
 
-  const { accountOwner, catalogEntryFor, servesCatalog } = require('./lib/accounts');
-  const scoped = scopeConfigToProfile(storedConfig, userUUID, profile.id);
-  if (!servesCatalog(scoped, catalogEntryFor(storedConfig, req.params.id))) {
-    req.userConfig = storedConfig;
+  const { accountOwner, servesCatalog } = require('./lib/accounts');
+  const scoped = scopeConfigToProfile(stored, userUUID, profile.id);
+  const viewerConfig = withViewerAccounts(stored, scoped);
+
+  const bareId = String(id).replace(/_(movie|series|anime|all)$/, '');
+  const entry = (Array.isArray(stored.catalogs) ? stored.catalogs : []).find((c) => c?.id === bareId) ?? { id: bareId };
+  if (!servesCatalog(scoped, entry)) {
+    req.userConfig = viewerConfig;
     return respond(req, res, { metas: [] });
   }
 
-  req.viewerConfig = withViewerAccounts(storedConfig, scoped);
-  const { noteAccountOwner, noteProfile, runInViewerScope } = require('./lib/jellyfin/viewer');
+  const { runInViewerScope, noteProfile, noteAccountOwner } = require('./lib/jellyfin/viewer');
   return runInViewerScope(false, () => {
     noteProfile(profileKey(scoped));
     noteAccountOwner(accountOwner(scoped));
+    req.viewerConfig = viewerConfig;
     return catalogRoute(req, res);
   });
 };
-addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", catalogRouteForViewer);
+addon.get("/stremio/:userUUID/catalog/:type/:id{/:extra}.json", viewerCatalogRoute);
 registerInProcessRoute('catalog', "/stremio/:userUUID/catalog/:type/:id{/:extra}.json", catalogRoute);
 // --- Meta Route (with enhanced caching) ---
+const STRICT_NUMERIC_META_PREFIXES = new Set(['mal', 'kitsu', 'tmdb', 'tvdb', 'tvmaze', 'anidb', 'anilist']);
+
+function isMalformedNumericMetaId(type: string, rawId: string): boolean {
+  if (!rawId || typeof rawId !== 'string') return false;
+  let normalizedId = rawId.startsWith('tun_') ? rawId.slice(4) : rawId;
+  const canonicalUpNextId = extractCanonicalIdFromDynamicUpNextId(type, normalizedId);
+  if (canonicalUpNextId) {
+    normalizedId = canonicalUpNextId;
+  }
+  if (!normalizedId.includes(':')) return false;
+  const [prefix, sourceId] = normalizedId.split(':');
+  if (!STRICT_NUMERIC_META_PREFIXES.has(prefix)) return false;
+  return !sourceId || !/^\d+$/.test(sourceId);
+}
+
 const metaRoute = async function (req, res) {
   const { userUUID, type, id: stremioId } = req.params;
 
@@ -5693,11 +5871,11 @@ const metaRoute = async function (req, res) {
     if (stremioId.startsWith(COLLECTION_META_PREFIX)) {
       const { profileForViewer, scopeConfigToProfile } = require('./lib/jellyfin/profiles');
       const profile = profileForViewer(config, userUUID, req.query.viewer);
-      if (profile === undefined) return refuseUnknownViewer(res, 'Meta', userUUID, req.query.viewer, true);
-      if (profile?.tags.length) req.viewerTags = profile.tags;
-      const view = profile?.id ? withViewerAccounts(config, scopeConfigToProfile(config, userUUID, profile.id)) : config;
-      const { tags } = resolveManifestTags(config, tagsAsked(req));
-      const meta = await collectionMeta(userUUID, view, tags, stremioId);
+      if (profile === undefined) return refuseUnknownViewer(res, 'Meta', userUUID, req.query.viewer, 'debug');
+      if (profile) req.viewerTags = profile.tags;
+      const viewerConfig = profile?.id ? withViewerAccounts(config, scopeConfigToProfile(config, userUUID, profile.id)) : config;
+      const { tags } = resolveManifestTags(config, tagQueryOf(req));
+      const meta = await collectionMeta(userUUID, viewerConfig, tags, stremioId);
       if (!meta) return res.status(404).send({ error: "Collection not found" });
       req.userConfig = config;
       return respond(req, res, { meta });
@@ -5708,7 +5886,13 @@ const metaRoute = async function (req, res) {
   const fullConfig = config;
   
   // Pass config to req for ETag generation
-  req.userConfig = config; 
+  req.userConfig = config;
+
+  if (isMalformedNumericMetaId(type, stremioId)) {
+    consola.debug(`[Meta Route] Ignoring malformed numeric Stremio ID: ${stremioId}`);
+    return respond(req, res, { meta: null }, { cacheMaxAge: 300, staleRevalidate: 600 });
+  }
+
   // Enhanced caching options for better error handling
   const cacheOptions = {
     enableErrorCaching: true,
@@ -5782,7 +5966,14 @@ const metaRoute = async function (req, res) {
       return respond(req, res, { meta: null });
     }
 
-    if (req.params.beforeArt !== '1') applyMetaArt(result.meta, config, type, req.headers['user-agent'] || '');
+    if (req.params.beforeArt !== '1') {
+      const clonedMeta = {
+        ...result.meta,
+        ...(Array.isArray(result.meta.videos) ? { videos: result.meta.videos.map((v) => (v ? { ...v } : v)) } : {}),
+      };
+      applyMetaArt(clonedMeta, config, type, req.headers['user-agent'] || '');
+      result = { ...result, meta: clonedMeta };
+    }
 
     /*else if (result && result.meta) {
       // cache wrap the ratings
@@ -5821,14 +6012,20 @@ const metaRoute = async function (req, res) {
     }*/
     
     if (stremioId.startsWith('tvdbc:') && result?.meta && Array.isArray(result.meta.videos)) {
-      result.meta.collection = {
-        items: result.meta.videos.map((video) => ({
-          id: video.id,
-          type: 'movie',
-          name: video.title || video.name,
-          poster: video.thumbnail,
-          ...(video.released ? { releaseInfo: String(video.released).slice(0, 4) } : {}),
-        })),
+      result = {
+        ...result,
+        meta: {
+          ...result.meta,
+          collection: {
+            items: result.meta.videos.map((video) => ({
+              id: video.id,
+              type: 'movie',
+              name: video.title || video.name,
+              poster: video.thumbnail,
+              ...(video.released ? { releaseInfo: String(video.released).slice(0, 4) } : {}),
+            })),
+          },
+        },
       };
     }
 
@@ -5909,7 +6106,8 @@ addon.post(["/stremio/:userUUID/watch_state/push/:type/:id.json", "/stremio/:use
   // a 5xx would have the sender retrying it for a day.
   let config;
   try {
-    config = await loadConfigFromDatabase(userUUID);
+    const stored = await loadSharedConfig(userUUID);
+    config = stored ? { ...stored } : null;
   } catch {
     config = null;
   }
@@ -5917,7 +6115,7 @@ addon.post(["/stremio/:userUUID/watch_state/push/:type/:id.json", "/stremio/:use
     return res.status(404).json({ error: "User configuration not found" });
   }
 
-  if (!config.playbackReporting) {
+  if (!scrobblesJellyfin(config)) {
     consola.debug(`[Playback] Reporting is off for ${userUUID}, dropping ${type}/${id}`);
     return res.status(404).json({ error: "Playback reporting is not enabled" });
   }
@@ -5953,7 +6151,7 @@ addon.get("/stremio/:userUUID/watch_state/pull.json", async function (req, res) 
   } catch {
     config = null;
   }
-  if (!config || !config.playbackReporting) {
+  if (!config || !scrobblesJellyfin(config)) {
     return res.status(404).json({ error: "Watch state is not enabled" });
   }
 
@@ -5972,6 +6170,87 @@ addon.get("/stremio/:userUUID/watch_state/pull.json", async function (req, res) 
   } catch (error) {
     consola.error(`[Watch State] Failed to build the pull for ${userUUID}: ${error.message}`);
     return res.status(500).json({ error: "Failed to read watch state" });
+  }
+});
+
+// --- Stremio player and library events ---
+// Stremio does not wait for or read the answer, so it is given before the work.
+function stremioEventRoute(resource) {
+  return async function (req, res) {
+    const { userUUID, type, id, extra } = req.params;
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Cache-Control', 'no-store');
+
+    let stored;
+    try {
+      stored = await loadSharedConfig(userUUID);
+    } catch {
+      stored = null;
+    }
+    if (!stored) return res.json({ success: false });
+
+    const { profileForViewer } = require('./lib/jellyfin/profiles');
+    const profile = profileForViewer(stored, userUUID, req.query.viewer);
+    if (profile === undefined) return refuseUnknownViewer(res, 'Stremio', userUUID, req.query.viewer);
+
+    const { runInViewerScope } = require('./lib/jellyfin/viewer');
+    const { clientRequest, loadConfig } = require('./lib/jellyfin/context');
+    const { PLAY_SOURCES } = require('./lib/playSources');
+    const viewerReq = clientRequest(userUUID, profile?.id ?? null, PLAY_SOURCES.stremio.client);
+    return runInViewerScope(false, async () => {
+      const { syncsStremioLibrary } = require('./lib/watchTracking');
+      const { parseStremioEvent, stremioEventTarget, stremioEventKey, stremioEventSlot, isRepeatEvent, runInOrder, titleType, clientPlayOf, clientMarkOf } = require('./lib/stremioEvents');
+      const config = await loadConfig(viewerReq).catch(() => null);
+      const event = config && PLAY_SOURCES.stremio.scrobbles(config) ? parseStremioEvent(resource, type, id, extra) : null;
+      if (!event) return res.json({ success: false });
+      res.json({ success: true });
+
+      require('./lib/stremioEventStatus').noteEvent(userUUID, profile?.id ?? '');
+      const { viewerScope } = require('./lib/playbackHandler');
+      const scope = viewerScope(userUUID, config);
+      if (isRepeatEvent(scope, stremioEventTarget(event), stremioEventKey(event))) return;
+
+      runInOrder(`${scope}|${stremioEventSlot(event)}`, async () => {
+        const playstate = require('./lib/jellyfin/playstate');
+        if (event.resource === 'player') {
+          const play = clientPlayOf(event);
+          return play ? playstate.recordClientPlay(viewerReq, play, 'stremio') : undefined;
+        }
+        if (event.action === 'watched' || event.action === 'unwatched') {
+          const mark = clientMarkOf(event);
+          return mark ? playstate.recordClientMark(viewerReq, mark, 'stremio') : undefined;
+        }
+        if (!syncsStremioLibrary(config)) return;
+        const { setWatchlisted } = require('./lib/jellyfin/watchlist');
+        await setWatchlisted(userUUID, config, { k: event.type, t: titleType(event.metaId, event.type), i: event.metaId }, event.action === 'libraryAdd');
+      }).catch((error) => consola.error(`[Stremio] ${resource} ${type}/${id} failed: ${error.message}`));
+    });
+  };
+}
+addon.get("/stremio/:userUUID/player/:type/:id/:extra.json", stremioEventRoute('player'));
+addon.get("/stremio/:userUUID/library/:type/:id/:extra.json", stremioEventRoute('library'));
+
+// When each install link last fetched a manifest declaring the Stremio events, and last sent one.
+addon.post("/api/stremio/:userUUID/event-status", configLoadRateLimitMiddleware, async function (req, res) {
+  const userUUID = String(req.params.userUUID);
+  const password = req.body?.password;
+  try {
+    const accountId = req.session?.accountId;
+    const owns = Boolean(accountId) && (await database.ownsConfig(accountId, userUUID));
+    const verified = !owns && password ? await database.verifyUserAndGetConfig(userUUID, String(password)) : null;
+    if (!owns && !verified) {
+      return res.status(401).json({ error: 'Sign in or enter the configuration password to read the Stremio status' });
+    }
+    const config = verified ?? (await database.getUserConfig(userUUID).catch(() => null));
+    const { listProfiles } = require('./lib/jellyfin/profiles');
+    const { readStatus } = require('./lib/stremioEventStatus');
+    const links = await readStatus(userUUID, listProfiles(config, userUUID).map((profile) => profile.id ?? ''));
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ links });
+  } catch (error) {
+    consola.error(`[Stremio] Failed to read the event status for ${userUUID}: ${error.message}`);
+    return res.status(500).json({ error: "Failed to read the Stremio status" });
   }
 });
 
@@ -6290,10 +6569,12 @@ addon.get("/api/proxy-manifest", async function (req, res) {
     return res.status(400).json({ error: 'Invalid url parameter' });
   }
 
+  const guard = require('./utils/outboundGuard');
   try {
     const { httpGet } = require('./utils/httpClient');
     const manifestData = await httpGet(url, {
-      timeout: 10000
+      timeout: 10000,
+      ...guard.addonRequest(guard.addonFetchMaxBytes(), 20000)
     });
 
     let data = manifestData.data;
@@ -6310,6 +6591,12 @@ addon.get("/api/proxy-manifest", async function (req, res) {
     res.setHeader('Content-Type', 'application/json');
     res.json(data);
   } catch (error) {
+    if (guard.isRefusedDestination(error)) {
+      return res.status(400).json({ error: 'That address is on a private network, which this server reads from only when its admin lists the host in OUTBOUND_ALLOWED_PRIVATE_HOSTS' });
+    }
+    if (guard.isResponseTooLarge(error)) {
+      return res.status(502).json({ error: 'That link answered with more than this server reads (ADDON_FETCH_MAX_MB)' });
+    }
     consola.error(`[Proxy Manifest] Failed to fetch manifest from ${url}:`, error.message);
     res.status(error.response?.status || 500).json({ 
       error: error.message || 'Failed to fetch manifest' 
@@ -6388,7 +6675,8 @@ function warnRefusedOrigin(context, message) {
 const handlePosterProxy = async function (req, res) {
   const { type, id } = req.params;
   const { fallback, lang, key, url: customUrl, sig } = req.query;
-  const sendFallback = () => (fallback ? res.redirect(302, fallback) : res.status(404).end());
+  const followable = followableFallback(fallback, req.query.fsig);
+  const sendFallback = () => (followable ? res.redirect(302, followable) : res.status(404).end());
   if (!key && !customUrl) {
     return sendFallback();
   }
@@ -6455,9 +6743,10 @@ addon.get("/poster/:type/:id", handlePosterProxy);
 function streamArtWithFallback(assetName) {
   return async function (req, res) {
     const { id } = req.params;
-    const { fallback, url: customUrl, sig } = req.query;
+    const { url: customUrl, sig } = req.query;
+    const followable = followableFallback(req.query.fallback, req.query.fsig);
     if (!customUrl) {
-      return res.redirect(302, fallback || '');
+      return followable ? res.redirect(302, followable) : res.status(404).end();
     }
     const bypassed = posterCacheConfig.isBypassed(customUrl);
     // A property of the URL, not of whether we are storing it — see handlePosterProxy.
@@ -6497,8 +6786,8 @@ function streamArtWithFallback(assetName) {
       } else {
         consola.debug(`Art proxy miss for ${assetName} ${id}: ${error.message}`);
       }
-      if (fallback) {
-        return res.redirect(302, fallback);
+      if (followable) {
+        return res.redirect(302, followable);
       }
       res.status(404).end();
     }
@@ -6564,15 +6853,14 @@ addon.get("/api/image/banner-to-background", async function (req, res) {
   if (!imageUrl) { return res.status(400).send('Image URL not provided'); }
   
   try {
-    // Parse options from query parameters
-    const options = {
-      width: parseInt(req.query.width) || 1920,
-      height: parseInt(req.query.height) || 1080,
-      blur: parseFloat(req.query.blur) || 0,
-      brightness: parseFloat(req.query.brightness) || 1,
-      contrast: parseFloat(req.query.contrast) || 1,
-      position: req.query.position || 'center' // Add position parameter
-    };
+    const options = normaliseBannerOptions({
+      width: parseInt(req.query.width),
+      height: parseInt(req.query.height),
+      blur: parseFloat(req.query.blur),
+      brightness: parseFloat(req.query.brightness),
+      contrast: parseFloat(req.query.contrast),
+      position: typeof req.query.position === 'string' ? req.query.position : undefined,
+    });
     
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
@@ -6770,18 +7058,89 @@ addon.use('/configure', express.static(clientDistDir, { setHeaders: setClientDis
 addon.use(express.static(publicDir));
 addon.use(express.static(clientDistDir, { setHeaders: setClientDistCacheHeaders }));
 
+addon.get(require('./lib/dashboardApp').DASHBOARD_APP_MANIFEST, (req, res) => {
+  const manifest = require('./lib/dashboardApp').dashboardAppManifest(req.query);
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.type('application/manifest+json').send(JSON.stringify(manifest));
+});
+
+addon.get(require('./lib/dashboardApp').OWN_PAGE_APP_MANIFEST, (req, res) => {
+  const manifest = require('./lib/dashboardApp').ownPageAppManifest(req.query);
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.type('application/manifest+json').send(JSON.stringify(manifest));
+});
+
+// A configuration's own Jellyfin page: the same app, opened on its own shell.
+addon.get("/api/own-page/status", (req, res) => {
+  res.json(require('./lib/jellyfin/ownPage').ownPageStatus());
+});
+
+addon.post("/api/own-page/:userUUID/session", (req, res, next) => require('./lib/jellyfin/ownPage').ownPageAddressLimit(req, res, next), async (req, res) => {
+  try {
+    const outcome = await require('./lib/jellyfin/ownPage').startSession(req, String(req.params.userUUID), req.body?.password);
+    res.status(outcome.status).json(outcome.body);
+  } catch (error) {
+    consola.error('[Own Page] Sign-in failed:', error);
+    res.status(500).json({ error: 'The sign-in could not be checked' });
+  }
+});
+
+addon.get("/api/own-page/:userUUID/profiles", (req, res, next) => require('./lib/jellyfin/ownPage').ownPageAddressLimit(req, res, next), async (req, res) => {
+  try {
+    const ownPage = require('./lib/jellyfin/ownPage');
+    const outcome = await ownPage.sessionProfiles(req.headers[ownPage.OWN_PAGE_HEADER], String(req.params.userUUID));
+    res.status(outcome.status).json(outcome.body);
+  } catch (error) {
+    consola.error('[Own Page] Profiles failed:', error);
+    res.status(500).json({ error: 'The profiles could not be read' });
+  }
+});
+
+addon.post("/api/own-page/:userUUID/unlock", (req, res, next) => require('./lib/jellyfin/ownPage').ownPageAddressLimit(req, res, next), async (req, res) => {
+  try {
+    const ownPage = require('./lib/jellyfin/ownPage');
+    const outcome = await ownPage.unlockProfile(req.headers[ownPage.OWN_PAGE_HEADER], String(req.params.userUUID), req.body?.profile, req.body?.pin);
+    res.status(outcome.status).json(outcome.body);
+  } catch (error) {
+    consola.error('[Own Page] Unlock failed:', error);
+    res.status(500).json({ error: 'The PIN could not be checked' });
+  }
+});
+
+addon.get(["/jellyfin-page/:userUUID", "/jellyfin-page/:userUUID/{*page}"], (req, res) => {
+  try {
+    const { ownPageAppHead, DASHBOARD_APP_THEME } = require('./lib/dashboardApp');
+    const html = fs.readFileSync(clientIndexPath, 'utf8')
+      .replace(/<title>.*?<\/title>/, '<title>Your viewing page</title>')
+      .replace(/\s*<link rel="apple-touch-icon"[^>]*>/, '')
+      .replace(/<meta name="theme-color" content="[^"]*"/, `<meta name="theme-color" content="${DASHBOARD_APP_THEME}"`)
+      .replace('</head>', `    ${ownPageAppHead(String(req.params.userUUID))}\n  <script>window.OWN_PAGE_MODE = true;</script>\n</head>`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.type('html').send(html);
+  } catch (error) {
+    consola.error('[Own Page] Page failed:', error);
+    res.status(500).send('The page could not be loaded');
+  }
+});
+
 // Dedicated Dashboard Page Route
-addon.get("/dashboard", (req, res) => {
+addon.get(["/dashboard", "/dashboard/{*page}"], (req, res) => {
   // Serve the same HTML but with dashboard-specific handling
   try {
     let html = fs.readFileSync(clientIndexPath, 'utf8');
-    
+
     // Inject dashboard-specific meta tags and title
     html = html.replace(
       /<title>.*?<\/title>/,
       '<title>AIO Metadata Dashboard</title>'
     );
-    
+
+    const { dashboardAppHead, DASHBOARD_APP_THEME } = require('./lib/dashboardApp');
+    html = html
+      .replace(/\s*<link rel="apple-touch-icon"[^>]*>/, '')
+      .replace(/<meta name="theme-color" content="[^"]*"/, `<meta name="theme-color" content="${DASHBOARD_APP_THEME}"`)
+      .replace('</head>', `    ${dashboardAppHead(req.path, req.query)}\n</head>`);
+
     // Add dashboard-specific script to auto-navigate to dashboard
     html = html.replace(
       '</head>',
@@ -6805,11 +7164,6 @@ addon.get("/dashboard", (req, res) => {
     consola.error('Error serving dashboard page:', error);
     res.status(500).send('Error loading dashboard');
   }
-});
-
-// Dashboard with trailing slash
-addon.get("/dashboard/", (req, res) => {
-  res.redirect('/dashboard');
 });
 
 addon.get('/api/config/addon-info', (req, res) => {
@@ -7067,6 +7421,30 @@ addon.delete('/api/config/delete-user/:userUUID', async (req, res) => {
       error: 'Failed to delete user account',
       details: error.message 
     });
+  }
+});
+
+// --- Change the configuration password ---
+const CONFIG_PASSWORD_MIN = 6;
+const CONFIG_PASSWORD_MAX = 200;
+addon.post('/api/config/change-password/:userUUID', configLoadRateLimitMiddleware, async (req, res) => {
+  const userUUID = String(req.params.userUUID || '');
+  const { currentPassword, newPassword } = req.body || {};
+  const next = typeof newPassword === 'string' ? newPassword : '';
+  if (!userUUID) return res.status(400).json({ error: 'User UUID is required' });
+  if (next.length < CONFIG_PASSWORD_MIN || next.length > CONFIG_PASSWORD_MAX) {
+    return res.status(400).json({ error: `The new password needs ${CONFIG_PASSWORD_MIN} to ${CONFIG_PASSWORD_MAX} characters` });
+  }
+  try {
+    // An account that owns the configuration needs no password, as for every other change to it.
+    const access = await resolveConfigAccess(req, userUUID, typeof currentPassword === 'string' ? currentPassword : null);
+    if (!access) return res.status(401).json({ error: 'The current password is not right' });
+    if (!(await database.setUserPassword(userUUID, next))) return res.status(404).json({ error: 'User not found' });
+    consola.info(`[Config] Password changed for ${userUUID}; its Jellyfin sign-ins were ended`);
+    return res.json({ success: true });
+  } catch (error) {
+    consola.error(`[Config] Changing the password of ${userUUID} failed:`, error);
+    return res.status(500).json({ error: 'Failed to change the password' });
   }
 });
 
@@ -7339,6 +7717,9 @@ async function describeSelfDemotion(req, key, proposedValue, confirmed) {
 
   return null;
 }
+
+// A Jellyfin tab route: an administrator as before, or a configuration's own page as far as `access` reaches.
+const jellyfinRoute = (access) => require('./lib/jellyfin/ownPage').ownPageGuard(access, requireDashboardAdmin);
 
 function requireDashboardAdmin(req, res, next) {
   // A signed-in administrator needs no key. ADMIN_KEY stays the way in when the
@@ -8227,158 +8608,8 @@ addon.get("/api/dashboard/content", requireAuthUnlessGuestMode, (req, res) => {
   }
 });
 
-addon.get("/api/dashboard/jellyfin", requireDashboardAdmin, async (req, res) => {
-  try {
-    res.json(await require('./lib/jellyfin/dashboard').dashboardOverview());
-  } catch (error) {
-    consola.error('[Dashboard API] Error:', error);
-    res.status(500).json({ error: 'Failed to fetch Jellyfin playback data' });
-  }
-});
-
-addon.get("/api/dashboard/jellyfin/search", requireDashboardAdmin, async (req, res) => {
-  try {
-    res.json(await require('./lib/jellyfin/dashboard').dashboardSearch(String(req.query.q ?? '')));
-  } catch (error) {
-    consola.error('[Dashboard API] Error:', error);
-    res.status(500).json({ error: 'Failed to search Jellyfin playback' });
-  }
-});
-
-addon.get("/api/dashboard/jellyfin/:userUUID/export", requireDashboardAdmin, async (req, res) => {
-  try {
-    const payload = await require('./lib/jellyfin/dashboard').dashboardExport(String(req.params.userUUID));
-    res.setHeader('Content-Disposition', `attachment; filename="jellyfin-playback-${String(req.params.userUUID).slice(0, 8)}.json"`);
-    res.json(payload);
-  } catch (error) {
-    consola.error('[Dashboard API] Error:', error);
-    res.status(500).json({ error: 'Failed to export Jellyfin playback' });
-  }
-});
-
-addon.get("/api/dashboard/jellyfin/:userUUID/plays", requireDashboardAdmin, async (req, res) => {
-  try {
-    const profile = typeof req.query.profile === 'string' ? req.query.profile : null;
-    const kind = req.query.kind === 'played' ? 'played' : 'progress';
-    const offset = parseInt(String(req.query.offset ?? ''), 10);
-    const limit = parseInt(String(req.query.limit ?? ''), 10);
-    const payload = await require('./lib/jellyfin/dashboard').dashboardPlays(String(req.params.userUUID), profile, kind, Number.isFinite(offset) ? offset : 0, Number.isFinite(limit) ? limit : 30);
-    if (!payload) {
-      res.status(404).json({ error: 'No such configuration' });
-      return;
-    }
-    res.json(payload);
-  } catch (error) {
-    consola.error('[Dashboard API] Error:', error);
-    res.status(500).json({ error: 'Failed to read Jellyfin plays' });
-  }
-});
-
-addon.get("/api/dashboard/jellyfin/:userUUID/shows", requireDashboardAdmin, async (req, res) => {
-  try {
-    const profile = typeof req.query.profile === 'string' ? req.query.profile : null;
-    const payload = await require('./lib/jellyfin/dashboard').dashboardShows(String(req.params.userUUID), profile, req.query.fresh === '1');
-    if (!payload) {
-      res.status(404).json({ error: 'No such configuration' });
-      return;
-    }
-    res.json(payload);
-  } catch (error) {
-    consola.error('[Dashboard API] Error:', error);
-    res.status(500).json({ error: 'Failed to read Jellyfin shows' });
-  }
-});
-
-addon.get("/api/dashboard/jellyfin/:userUUID/calendar", requireDashboardAdmin, async (req, res) => {
-  try {
-    const profile = typeof req.query.profile === 'string' ? req.query.profile : null;
-    const from = Number(req.query.from);
-    const to = Number(req.query.to);
-    if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) {
-      res.status(400).json({ error: 'Name the window as from and to times' });
-      return;
-    }
-    const rows = await require('./lib/jellyfin/dashboard').dashboardCalendar(String(req.params.userUUID), profile, from, to);
-    if (!rows) {
-      res.status(404).json({ error: 'No such configuration' });
-      return;
-    }
-    res.json({ rows });
-  } catch (error) {
-    consola.error('[Dashboard API] Error:', error);
-    res.status(500).json({ error: 'Failed to read the Jellyfin calendar' });
-  }
-});
-
-addon.get("/api/dashboard/jellyfin/:userUUID/library", requireDashboardAdmin, async (req, res) => {
-  try {
-    const profile = typeof req.query.profile === 'string' ? req.query.profile : null;
-    const tab = ['watchlist', 'ratings', 'dropped'].includes(String(req.query.tab)) ? String(req.query.tab) : 'watchlist';
-    const kind = ['movie', 'series'].includes(String(req.query.kind)) ? String(req.query.kind) : 'all';
-    const limit = parseInt(String(req.query.limit ?? ''), 10);
-    const offset = parseInt(String(req.query.offset ?? ''), 10);
-    const payload = await require('./lib/jellyfin/dashboard').dashboardLibrary(String(req.params.userUUID), profile, tab, kind, Number.isFinite(offset) ? offset : 0, Number.isFinite(limit) ? limit : 48);
-    if (!payload) {
-      res.status(404).json({ error: 'No such configuration' });
-      return;
-    }
-    res.json(payload);
-  } catch (error) {
-    consola.error('[Dashboard API] Error:', error);
-    res.status(500).json({ error: 'Failed to read the Jellyfin library' });
-  }
-});
-
-addon.post("/api/dashboard/jellyfin/:userUUID/library/undrop", requireDashboardAdmin, async (req, res) => {
-  try {
-    const metaId = typeof req.body?.metaId === 'string' ? req.body.metaId.trim() : '';
-    const profile = typeof req.body?.profile === 'string' ? req.body.profile : null;
-    if (!metaId) {
-      res.status(400).json({ error: 'Name the show to pick back up' });
-      return;
-    }
-    const undropped = await require('./lib/jellyfin/dashboard').undropShow(String(req.params.userUUID), profile, metaId);
-    if (undropped === null) {
-      res.status(404).json({ error: 'No such configuration' });
-      return;
-    }
-    res.json({ undropped });
-  } catch (error) {
-    consola.error('[Dashboard API] Error:', error);
-    res.status(500).json({ error: 'Failed to pick the show back up' });
-  }
-});
-
-addon.post("/api/dashboard/jellyfin/:userUUID/shows/refresh", requireDashboardAdmin, async (req, res) => {
-  try {
-    const metaId = typeof req.body?.metaId === 'string' ? req.body.metaId.trim() : '';
-    if (!metaId) {
-      res.status(400).json({ error: 'Name the show to refresh' });
-      return;
-    }
-    res.json({ refreshed: await require('./lib/jellyfin/dashboard').refreshShow(String(req.params.userUUID), metaId) });
-  } catch (error) {
-    consola.error('[Dashboard API] Error:', error);
-    res.status(500).json({ error: 'Failed to refresh the show' });
-  }
-});
-
-addon.get("/api/dashboard/jellyfin/:userUUID", requireDashboardAdmin, async (req, res) => {
-  try {
-    const profile = typeof req.query.profile === 'string' ? req.query.profile : null;
-    const rows = parseInt(String(req.query.rows ?? ''), 10);
-    const offset = parseInt(String(req.query.tz ?? ''), 10);
-    const payload = await require('./lib/jellyfin/dashboard').dashboardConfiguration(String(req.params.userUUID), profile, Number.isFinite(rows) ? rows : undefined, Number.isFinite(offset) && Math.abs(offset) <= 14 * 60 ? offset : 0);
-    if (!payload) {
-      res.status(404).json({ error: 'No such configuration' });
-      return;
-    }
-    res.json(payload);
-  } catch (error) {
-    consola.error('[Dashboard API] Error:', error);
-    res.status(500).json({ error: 'Failed to fetch Jellyfin playback data' });
-  }
-});
+// The Jellyfin dashboard API lives with the Jellyfin modules.
+require('./lib/jellyfin/dashboardRoutes').registerJellyfinDashboardRoutes(addon, { jellyfinRoute, requireDashboardAdmin });
 
 addon.get("/api/dashboard/users", requireDashboardAdmin, (req, res) => {
   // Users endpoint is NOT disabled when metrics are disabled

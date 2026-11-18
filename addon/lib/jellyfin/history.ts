@@ -1,12 +1,14 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
 import { listProfiles, type Profile } from './profiles';
 import { encodeJellyfinId, normaliseJellyfinId, parseStremioId } from './ids';
-import { groupBySpelling } from './aliases';
+import { filmTwin, groupBySpelling, videoIdAliases } from './aliases';
 import { playCountOf } from './dto';
 import { createHash } from 'crypto';
 
 const ANIME_IDS = /^(kitsu|mal|anilist|anidb):/;
 // The tracker an imported row came from, by the origin it was written with.
-const TRACKER_NAMES: Record<string, string> = { mdblist: 'MDBList', simkl: 'Simkl', publicmetadb: 'PublicMetaDB', anilist: 'AniList', mal: 'MyAnimeList' };
+const TRACKER_NAMES: Record<string, string> = { mdblist: 'MDBList', simkl: 'Simkl', publicmetadb: 'PublicMetaDB', anilist: 'AniList', mal: 'MyAnimeList', trakt: 'Trakt', letterboxd: 'Letterboxd' };
 
 export interface HistoryUser {
   profile: Profile;
@@ -118,16 +120,46 @@ function merged(into: HistoryEntry, entry: HistoryEntry): void {
   }
 }
 
+const SPELLINGS_READ = 500;
+
+/** Each row's other spellings outside these rows, with `earlier` set on those a page before already read. */
+async function spellingsOutside(rows: any[], read: (videoIds: string[]) => Promise<any[]>, config: any = {}): Promise<Map<any, any[]>> {
+  const at = (row: any, videoId = String(row.video_id)) => `${row.profile ?? ''}|${videoId}`;
+  const here = new Set(rows.map((row) => at(row)));
+  const wanted = new Map<any, string[]>();
+  for (const row of rows) {
+    const id = String(row.video_id);
+    const others = [...(await videoIdAliases(id, config).catch(() => [] as string[])), filmTwin(id)]
+      .filter((other): other is string => Boolean(other) && !here.has(at(row, other as string)));
+    if (others.length) wanted.set(row, others);
+  }
+  const out = new Map<any, any[]>();
+  if (!wanted.size) return out;
+  const ids = [...new Set([...wanted.values()].flat())];
+  const found = new Map<string, any>();
+  for (let i = 0; i < ids.length; i += SPELLINGS_READ) {
+    for (const row of await read(ids.slice(i, i + SPELLINGS_READ))) found.set(at(row), row);
+  }
+  for (const [row, others] of wanted) {
+    const held = others.map((other) => found.get(at(row, other))).filter(Boolean);
+    if (held.length) out.set(row, held);
+  }
+  return out;
+}
+
 /**
  * A page of history, each title once. Spellings of a title are folded by their
  * aliases, then by the item they open, which is the same whatever the spelling.
+ * A title whose spellings fall pages apart is listed where the first of them comes.
  * A page ends between two play times, never inside one, as one play's spellings share it.
  */
 export async function historyPage(
   read: (limit: number, after?: HistoryCursor) => Promise<any[]>,
   resolve: (entries: HistoryEntry[]) => Promise<Array<any | null>>,
   limit: number,
-  after?: HistoryCursor
+  after?: HistoryCursor,
+  readSpellings?: (videoIds: string[], pagedThrough?: HistoryCursor) => Promise<any[]>,
+  config: any = {}
 ): Promise<{ entries: Array<HistoryEntry & { item: any | null }>; cursor: string | null }> {
   const asked = limit * 3 + 1;
   const raw = await read(asked, after);
@@ -144,7 +176,11 @@ export async function historyPage(
     if (!byProfile.has(key)) byProfile.set(key, []);
     byProfile.get(key)!.push(row);
   }
-  const groups = (await Promise.all([...byProfile.values()].map((rows) => groupBySpelling(rows)))).flat();
+  const outside = readSpellings ? await spellingsOutside(kept, (videoIds) => readSpellings(videoIds, after), config) : new Map<any, any[]>();
+  // A title a page before listed under another spelling is not listed again.
+  const groups = (await Promise.all([...byProfile.values()].map((rows) => groupBySpelling(rows, config))))
+    .flat()
+    .filter((group) => !group.some((row) => outside.get(row)?.some((other) => Number(other.earlier) === 1)));
   const indexOf = new Map(kept.map((row, i) => [row, i]));
   const firstIndex = new Map(groups.map((group) => [group, Math.min(...group.map((row) => indexOf.get(row)!))]));
   const lastIndex = new Map(groups.map((group) => [group, Math.max(...group.map((row) => indexOf.get(row)!))]));
@@ -167,13 +203,20 @@ export async function historyPage(
       end = next;
     }
   }
-  const candidates = groups.filter((group) => firstIndex.get(group)! < end).map(entryOf);
+  const candidates = groups.filter((group) => firstIndex.get(group)! < end).map((group) => {
+    const entry = entryOf(group);
+    // Spellings on later pages join this entry, so clearing it clears them too.
+    for (const row of group) for (const other of outside.get(row) ?? []) merged(entry, entryOf([other]));
+    return entry;
+  });
   const items = await resolve(candidates);
   const skipped = new Set(after?.seen ?? []);
   const byItem = new Map<string, HistoryEntry & { item: any | null }>();
   for (const [i, entry] of candidates.entries()) {
     const item = items[i] ?? null;
-    const key = createHash('sha1').update(item?.Id ? `${entry.profile}|${normaliseJellyfinId(String(item.Id))}` : `${entry.profile}|${entry.itemKey}`).digest('base64url').slice(0, 12);
+    // A film's two ids open different items.
+    const film = item?.Type === 'Movie' ? (item.ProviderIds?.Imdb ?? (item.ProviderIds?.Tmdb ? `tmdb:${item.ProviderIds.Tmdb}` : null)) : null;
+    const key = createHash('sha1').update(film ? `${entry.profile}|${film}` : item?.Id ? `${entry.profile}|${normaliseJellyfinId(String(item.Id))}` : `${entry.profile}|${entry.itemKey}`).digest('base64url').slice(0, 12);
     if (skipped.has(key)) continue;
     const held = byItem.get(key);
     if (held) merged(held, entry);
@@ -227,6 +270,7 @@ export function exportRow(row: any): any {
     positionMs: Number(row.position_ms) || 0,
     durationMs: Number(row.runtime_ms) || 0,
     lastPlayedAt: iso(row.last_played_at),
+    lastPlayedKind: row.last_played_at ? row.last_played_kind ?? null : null,
     updatedAt: iso(row.updated_at),
     origin: originOf(row).origin,
   };

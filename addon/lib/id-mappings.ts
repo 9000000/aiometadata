@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import consola from 'consola';
 import { IdField, IdMap, IndexStats, MappingIndex, ParsedMappings, buildIndex, lookup, parseMappingCsv } from './id-mapping-index';
 import { MappingSource, SOURCES, downloadCsv, readCachedCsv } from './mapping-sources';
@@ -151,6 +153,21 @@ export function getSeriesByTvmaze(tvmazeId: string): IdMap | undefined {
   return lookup(indexFor('series'), 'tvmazeId', tvmazeId);
 }
 
+/** The mapped ids of a parsed id (`base` is `tt…` or `<idType>:<id>`); throws until the tables load, like the lookups above. */
+export function getByParsedId(parsed: { idType?: string | null; base?: string } | null | undefined, type: 'series' | 'movie'): IdMap | undefined {
+  if (!parsed?.base) return undefined;
+  const id = parsed.idType === 'imdb' ? parsed.base : String(parsed.base).split(':')[1];
+  switch (parsed.idType) {
+    case 'imdb': return getByImdbId(id, type);
+    case 'tmdb': return getByTmdbId(id, type);
+    case 'tvdb': return getByTvdbId(id, type);
+    case 'tvmaze': return getSeriesByTvmaze(id);
+    default: return undefined;
+  }
+}
+
+export const mappingsReady = (): boolean => indexes !== null;
+
 export function getMappingStats() {
   ensureInitialized();
   const { series, movie } = indexes;
@@ -217,6 +234,7 @@ export const mappings = {
 };
 
 module.exports = {
+  mappingsReady,
   mappings,
   initializeMappings,
   refreshChangedMappings,
@@ -230,6 +248,7 @@ module.exports = {
   getByTvdbId,
   getByTmdbId,
   getByImdbId,
+  getByParsedId,
   getMappingStats,
   forceUpdateIdMappings,
   getIdMappingsStats,

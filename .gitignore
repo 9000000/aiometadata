@@ -123,3 +123,6 @@ addon/lib/buildInfo.js
 
 .agent/
 log.txt
+
+# Generated from package-lock.json and node_modules on every build (npm run notices)
+THIRD_PARTY_NOTICES.txt

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import type { AICatalogOutput, CatalogConfig } from './ai-catalog-schema';
 import { getSourceSchema } from './ai-catalog-schema';
 import { parseDateToken } from '../lib/tmdbDiscoverDateTokens';
@@ -46,7 +48,8 @@ function deriveFormState(source: string, catalogType: string, params: Record<str
     }
 
     if (catalogType === 'movie') {
-      const release = tmdbDateRange(params, 'primary_release_date');
+      const byReleaseType = !!fs.tmdbMovieReleaseTypes && params['primary_release_date.gte'] === undefined && params['primary_release_date.lte'] === undefined;
+      const release = tmdbDateRange(params, byReleaseType ? 'release_date' : 'primary_release_date');
       if (release.preset) fs.movieDatePreset = release.preset;
       if (release.from) fs.primaryReleaseFrom = release.from;
       if (release.to) fs.primaryReleaseTo = release.to;

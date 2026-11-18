@@ -1,7 +1,10 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 const { tvdbLanguageChain, pickArtwork }: any = require('../utils/tvdbLanguage');
 import { config } from 'dotenv';
 config();
-import { cacheWrapTvdbApi, stableStringify } from './getCache.js';
+import { cacheWrapTvdbApi, cacheWrapGlobal, classifyResult, stableStringify } from './getCache.js';
+import { LRUCache } from 'lru-cache';
 import { to3LetterCode } from './language-map.js';
 import { readsBySeason } from '../utils/episodeOrder';
 import { normalizeTitle } from '../utils/normalizeTitle';
@@ -464,7 +467,7 @@ interface TokenCache {
 }
 
 // Global caches
-const tokenCache = new Map<string, TokenCache>(); // One token per unique TVDB API key
+const tokenCache = new LRUCache<string, TokenCache>({ max: 2000, ttl: 28 * 24 * 60 * 60 * 1000 }); // One token per unique TVDB API key
 const tokenInflight = new Map<string, Promise<string | null>>(); // Deduplicate concurrent logins per key
 
 async function getAuthToken(apiKey: string | undefined, userUUID: string | null = null): Promise<string | null> {
@@ -1115,8 +1118,17 @@ async function getStatuses(type: 'movies' | 'series', config: UserConfig): Promi
   });
 }
 
+const TVDB_FILTER_CACHE_TTL = 12 * 60 * 60;
+
 async function filter(type: 'movies' | 'series', params: any, config: UserConfig): Promise<TvdbFilterResult[]> {
-  return cacheWrapTvdbApi(`tvdb-filter:${type}:${stableStringify(params)}`, async () => {
+  const fullKey = `tvdb-api:tvdb-filter:${type}:${stableStringify(params)}`;
+  const tvdbListClassifier = (result: any, error: any = null, cacheKey: string | null = null) => {
+    const keyForClassify = cacheKey || fullKey;
+    if (error) return classifyResult(result, error, keyForClassify);
+    if (result === null || result === undefined) return { type: 'SKIP_CACHE', ttl: 0 };
+    return classifyResult(result, error, keyForClassify);
+  };
+  return cacheWrapGlobal(fullKey, async () => {
     const token = await getAuthToken(config.apiKeys?.tvdb, config.userUUID);
     if (!token) return [];
     
@@ -1151,6 +1163,11 @@ async function filter(type: 'movies' | 'series', params: any, config: UserConfig
       logger.error(`[filter] Error filtering TVDB ${type}:`, (error as Error).message);
       return [];
     }
+  }, TVDB_FILTER_CACHE_TTL, {
+    enableErrorCaching: true,
+    resultClassifier: tvdbListClassifier,
+    upstream: true,
+    sourceList: true,
   });
 }
 

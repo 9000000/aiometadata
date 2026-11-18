@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 const os = require("os");
 const process = require("process");
 const v8 = require("node:v8");
@@ -2141,34 +2143,19 @@ class DashboardAPI {
       keys.forEach(key => pipeline.ttl(key));
       const ttls = await pipeline.exec();
 
-      const expiringKeysBatch = [];
-      ttls.forEach(([err, ttl], index) => {
+      // Diagnostic-only: count expiring and no-TTL keys, never delete
+      // (let Redis expire keys naturally with lazyfree)
+      ttls.forEach(([err, ttl]) => {
         if (err) {
           return;
         }
 
         if (ttl > 0 && ttl < 3600) {
           expiringCount++;
-
-          if (deleteKeys) {
-            const expiringKey = keys[index];
-            if (expiringKey) {
-              expiringKeysBatch.push(expiringKey);
-            }
-          }
         } else if (ttl === -1) {
           noTtlCount++;
         }
       });
-
-      if (deleteKeys && expiringKeysBatch.length > 0) {
-        for (let i = 0; i < expiringKeysBatch.length; i += deleteBatchSize) {
-          const batch = expiringKeysBatch.slice(i, i + deleteBatchSize);
-          await this.cache.del(...batch);
-          deletedCount += batch.length;
-          forgetAllHeld();
-        }
-      }
     } while (cursor !== '0');
 
     return {
@@ -2182,7 +2169,7 @@ class DashboardAPI {
   // Smart cache cleanup scheduler
   async runScheduledCacheCleanup() {
     try {
-      const cleanupResult = await this.scanExpiringKeys({ deleteKeys: true });
+      const cleanupResult = await this.scanExpiringKeys({ deleteKeys: false });
 
       if (cleanupResult.noTtlCount > 1000) {
         logger.warn(`[Cache Cleanup] Found ${cleanupResult.noTtlCount} keys with no TTL (potential leaks)`);
@@ -2224,7 +2211,7 @@ class DashboardAPI {
         throw new Error("Cache not available");
       }
 
-      const cleanupResult = await this.scanExpiringKeys({ deleteKeys: true });
+      const cleanupResult = await this.scanExpiringKeys({ deleteKeys: false });
 
       if (cleanupResult.noTtlCount > 1000) {
         logger.warn(`[Cache Cleanup] Found ${cleanupResult.noTtlCount} keys with no TTL (potential leaks)`);
@@ -2448,7 +2435,7 @@ class DashboardAPI {
           break;
           
         case "expired": {
-          const cleanupResult = await this.scanExpiringKeys({ deleteKeys: true });
+          const cleanupResult = await this.scanExpiringKeys({ deleteKeys: false });
           deletedCount = cleanupResult.deletedCount;
           break;
         }

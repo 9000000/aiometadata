@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 const crypto = require('crypto');
 const { request, Agent, ProxyAgent } = require("undici");
+const { KEEP_ALIVE } = require('../utils/httpClient');
 const database = require('./database');
 const buildInfo = require('./buildInfo');
 const { buildInstallUrl } = require('./installUrl');
@@ -8,7 +11,9 @@ const { respondIfSigninRequired } = require('./signinGate');
 const KEY_VALIDATION_STATUS_SET = new Set(['valid', 'invalid', 'timeout', 'error']);
 const isKnownKeyValidationStatus = (status) =>
   typeof status === 'string' && KEY_VALIDATION_STATUS_SET.has(status);
-const TESTABLE_API_KEY_FIELDS = new Set(['gemini', 'tmdb', 'tvdb', 'fanart', 'rpdb', 'topPoster', 'mdblist', 'openrouter', 'publicmetadb']);
+// A web search engine with a hosted API takes a user's key under its own id.
+const WEB_SEARCH_KEY_ENGINES = require('../utils/webSearch/engines').ENGINES.filter((engine) => engine.hostedUrl && engine.checkKey).map((engine) => engine.id);
+const TESTABLE_API_KEY_FIELDS = new Set(['gemini', 'tmdb', 'tvdb', 'fanart', 'rpdb', 'topPoster', 'mdblist', 'openrouter', 'publicmetadb', ...WEB_SEARCH_KEY_ENGINES]);
 function getTestApiKeyMaxLength() {
   const parsed = parseInt(process.env.TEST_API_KEY_MAX_LENGTH || '128', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 128;
@@ -21,7 +26,7 @@ const createGeminiDispatcher = () => {
   const geminiProxy = process.env.GEMINI_HTTPS_PROXY ?? process.env.GEMINI_HTTP_PROXY;
   if (geminiProxy) {
     try {
-      return new ProxyAgent({ uri: new URL(geminiProxy).toString(), allowH2: false });
+      return new ProxyAgent({ uri: new URL(geminiProxy).toString(), allowH2: false, connections: 25, ...KEEP_ALIVE });
     } catch (error) {
       console.warn("Invalid Gemini proxy URL:", geminiProxy);
     }
@@ -30,7 +35,7 @@ const createGeminiDispatcher = () => {
   const globalProxy = process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY;
   if (globalProxy) {
     try {
-      return new ProxyAgent({ uri: new URL(globalProxy).toString(), allowH2: false });
+      return new ProxyAgent({ uri: new URL(globalProxy).toString(), allowH2: false, connections: 25, ...KEEP_ALIVE });
     } catch (error) {
       console.warn("Invalid global proxy URL:", globalProxy);
     }
@@ -38,8 +43,8 @@ const createGeminiDispatcher = () => {
   // No proxy configured - use direct connection
   return new Agent({
     allowH2: false,
-    keepAliveTimeout: 10000,
     connections: 10,
+    ...KEEP_ALIVE,
   });
 };
 
@@ -65,13 +70,6 @@ const {
 const { deleteKeysByPattern } = require('./redisUtils');
 
 const MAX_TAG_NAME_LENGTH = 32;
-
-function getMaxCatalogs() {
-  const raw = process.env.MAX_CATALOGS;
-  if (!raw) return null;
-  const max = Number.parseInt(raw, 10);
-  return (Number.isFinite(max) && max > 0) ? max : null;
-}
 
 class ConfigApi {
   constructor() {
@@ -198,21 +196,27 @@ class ConfigApi {
     };
   }
 
+  // The instance's MAX_CATALOGS cap, or null when no cap applies. Anything other
+  // than a positive whole number (unset, empty, 'abc', '0', '-5', '1.5') means
+  // no cap.
+  getMaxCatalogs() {
+    const raw = String(require('./settingsService').getSetting('MAX_CATALOGS') ?? '').trim();
+    if (raw === '') return null;
+    const value = Number(raw);
+    return Number.isInteger(value) && value > 0 ? value : null;
+  }
+
+  // A catalog counts toward the cap unless it is explicitly disabled.
   validateCatalogCount(config) {
-    const maxCatalogs = getMaxCatalogs();
-    if (!maxCatalogs) return { valid: true };
-    const catalogs = config && config.catalogs;
-    if (!Array.isArray(catalogs)) return { valid: true };
-
-    // Only count enabled catalogs
-    const enabledCount = catalogs.filter(c => c.enabled !== false).length;
-
-    if (enabledCount <= maxCatalogs) return { valid: true };
+    const max = this.getMaxCatalogs();
+    if (max === null || !Array.isArray(config?.catalogs)) return { valid: true };
+    const count = config.catalogs.filter(catalog => catalog?.enabled !== false).length;
+    if (count <= max) return { valid: true };
     return {
       valid: false,
-      count: enabledCount,
-      max: maxCatalogs,
-      message: `Too many enabled catalogs (${enabledCount}); the maximum allowed on this instance is ${maxCatalogs}. Disable some catalogs and try again.`,
+      count,
+      max,
+      message: `This configuration has ${count} enabled catalogs, but this instance allows at most ${max}. Disable some catalogs and try again.`,
     };
   }
 
@@ -320,6 +324,15 @@ class ConfigApi {
         return res.status(400).json({ error: 'Saving creates a new configuration; change an existing one through /api/config/update/:userUUID' });
       }
 
+      const catalogCountCheck = this.validateCatalogCount(config);
+      if (!catalogCountCheck.valid) {
+        return res.status(400).json({
+          error: catalogCountCheck.message,
+          catalogCount: catalogCountCheck.count,
+          maxCatalogs: catalogCountCheck.max,
+        });
+      }
+
       // Only worth asking on an instance that gates creation at all: with no addon
       // password, anyone may create a configuration and the permission decides
       // nothing. Signing in is likewise the only way to hold one, so a request
@@ -343,16 +356,6 @@ class ConfigApi {
         return res.status(400).json({
           error: validation.message,
           missingKeys: validation.missingKeys
-        });
-      }
-
-      // Optional catalog count ceiling (opt-in via MAX_CATALOGS env var)
-      const catalogCheck = this.validateCatalogCount(config);
-      if (!catalogCheck.valid) {
-        return res.status(400).json({
-          error: catalogCheck.message,
-          catalogCount: catalogCheck.count,
-          maxCatalogs: catalogCheck.max,
         });
       }
 
@@ -428,6 +431,8 @@ class ConfigApi {
       } catch (error) {
         logger.debug(`Could not start reading new tracker accounts for ${userUUID}: ${error.message}`);
       }
+
+      require('./jellyfin/yearReview').rebuildAfterSave(userUUID).catch(() => undefined);
 
       require('./collectionImageCacheSync')
         .syncCollectionImages(userUUID, configWithTimestamp)
@@ -749,6 +754,15 @@ class ConfigApi {
         return res.status(400).json({ error: 'Configuration data is required' });
       }
 
+      const catalogCountCheck = this.validateCatalogCount(config);
+      if (!catalogCountCheck.valid) {
+        return res.status(400).json({
+          error: catalogCountCheck.message,
+          catalogCount: catalogCountCheck.count,
+          maxCatalogs: catalogCountCheck.max,
+        });
+      }
+
       // Check if UUID is trusted. An owner signed in to this instance has
       // already been let in, so the shared addon password is not asked again.
       const isTrusted = await database.isUUIDTrusted(userUUID);
@@ -764,16 +778,6 @@ class ConfigApi {
         return res.status(400).json({
           error: validation.message,
           missingKeys: validation.missingKeys
-        });
-      }
-
-      // Optional catalog count ceiling (opt-in via MAX_CATALOGS env var)
-      const catalogCheck = this.validateCatalogCount(config);
-      if (!catalogCheck.valid) {
-        return res.status(400).json({
-          error: catalogCheck.message,
-          catalogCount: catalogCheck.count,
-          maxCatalogs: catalogCheck.max,
         });
       }
 
@@ -862,10 +866,12 @@ class ConfigApi {
         logger.debug(`Could not start reading new tracker accounts for ${userUUID}: ${error.message}`);
       }
 
+      require('./jellyfin/yearReview').rebuildAfterSave(userUUID).catch(() => undefined);
+
       require('./collectionImageCacheSync')
         .syncCollectionImages(userUUID, configWithTimestamp)
         .catch(() => undefined);
-      
+
       // Invalidate user's cache when config changes
       try {
         const redis = require('./getCache').redis;
@@ -1214,7 +1220,11 @@ class ConfigApi {
   async loadRouteConfig(userUUID) {
     const shared = await this.loadSharedConfig(userUUID);
     if (!shared) return shared;
-    return Array.isArray(shared.catalogs) ? { ...shared, catalogs: shared.catalogs.map((catalog) => ({ ...catalog })) } : { ...shared };
+    try {
+      return structuredClone(shared);
+    } catch {
+      return JSON.parse(JSON.stringify(shared));
+    }
   }
 
   buildApiKeyValidationSummary(details) {
@@ -1553,12 +1563,17 @@ class ConfigApi {
       },
 
       openrouter: async (key) => {
-        const response = await serviceRequest('https://openrouter.ai/api/v1/auth/key', {
+        const { aiEndpointBase, isCustomAiEndpoint } = require('../utils/ai-endpoint');
+        // Any OpenAI-compatible server lists its models; only OpenRouter has /auth/key.
+        const url = isCustomAiEndpoint() ? `${aiEndpointBase()}/models` : 'https://openrouter.ai/api/v1/auth/key';
+        const response = await serviceRequest(url, {
           method: 'GET',
           headers: { 'Authorization': `Bearer ${key}` },
         });
         return response?.statusCode === 200;
       },
+
+      ...Object.fromEntries(WEB_SEARCH_KEY_ENGINES.map((id) => [id, async (key) => require('../utils/webSearch').checkWebSearchKey(id, key)])),
     };
 
     const validationPromises = Object.entries(apiKeys)

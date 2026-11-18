@@ -1,6 +1,10 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 /**
  * The id vocabulary a meta can carry. Prefixed ids live in `meta.id`, and the
  * providers also hang their own resolved ids off `_`-prefixed properties.
+ * `id` is the meta's own id exactly as served (e.g. `mal:16498`, `tt0111161`),
+ * with no prefix stripped; custom art patterns expose it as `{id}`.
  */
 export interface MetaIds {
   id?: string;
@@ -13,19 +17,29 @@ export interface MetaIds {
   anidbId?: string;
 }
 
+const NUMERIC_ID_REGEX = /^\d+$/;
+const IMDB_ID_REGEX = /^tt\d+$/;
+
 export function extractIdsFromMeta(meta: any): MetaIds {
   const ids: MetaIds = {};
   if (!meta) return ids;
 
-  const id = meta.id || '';
+  const id = typeof meta.id === 'string' ? meta.id : '';
   if (id) ids.id = id;
-  if (id.startsWith('tmdb:')) ids.tmdbId = id.slice(5);
-  else if (id.startsWith('tvdb:')) ids.tvdbId = id.slice(5);
-  else if (id.startsWith('kitsu:')) ids.kitsuId = id.slice(6);
-  else if (id.startsWith('mal:')) ids.malId = id.slice(4);
-  else if (id.startsWith('anilist:')) ids.anilistId = id.slice(8);
-  else if (id.startsWith('anidb:')) ids.anidbId = id.slice(6);
-  else if (id.startsWith('tt')) ids.imdbId = id;
+  if (id.startsWith('tt')) {
+    const imdbPart = id.split(':')[0];
+    if (IMDB_ID_REGEX.test(imdbPart)) ids.imdbId = imdbPart;
+  } else if (id.includes(':')) {
+    const [prefix, val] = id.split(':');
+    if (val && NUMERIC_ID_REGEX.test(val)) {
+      if (prefix === 'tmdb') ids.tmdbId = val;
+      else if (prefix === 'tvdb') ids.tvdbId = val;
+      else if (prefix === 'kitsu') ids.kitsuId = val;
+      else if (prefix === 'mal') ids.malId = val;
+      else if (prefix === 'anilist') ids.anilistId = val;
+      else if (prefix === 'anidb') ids.anidbId = val;
+    }
+  }
 
   // Pick up additional IDs from meta properties
   if (meta.imdb_id) ids.imdbId = meta.imdb_id;

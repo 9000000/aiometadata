@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import type { BuilderEntry, CatalogRowOptions } from '@shared/types';
 import type { MergeMode } from '@shared/mergeModes';
 
@@ -158,8 +160,12 @@ export interface CatalogConfig {
       catalogType: string;     // source catalog type at merge time
       originalEnabled: boolean;
       originalShowInHome: boolean;
+      /** Shown in place of the source's own name when the merge filters by source. */
+      label?: string;
     }>;
     mergeMode?: MergeMode;
+    /** The merge's one filter lists its sources instead of genres. */
+    filterBySource?: boolean;
     // MovieLens-specific metadata
     sortBy?: string;
     sortDirection?: string;
@@ -267,6 +273,10 @@ export interface AppConfig {
   };
   tvdbSeasonType: string;
   animeEpisodeDates?: 'provider' | 'earliest' | 'dub';
+  /** Where trailers come from: the metadata provider ('default', also when absent) or a trailer addon */
+  trailerProvider?: 'default' | 'addon';
+  /** Manifest URL of the trailer addon; its own options travel in the URL */
+  trailerAddonUrl?: string;
   tvdbEpisodeOrders?: Record<string, string>;
   tvdbNormalizeYearSeasons?: boolean;
   tvdbShowSeasonNumbering?: Record<string, 'years' | 'sequential'>;
@@ -298,6 +308,8 @@ export interface AppConfig {
     movieLensCredId?: string;
     publicmetadb?: string;
     customDescriptionBlurb?: string;
+    /** A key for a web search engine's hosted API, under the engine's id. */
+    [engine: string]: string | undefined;
   };
   /**
    * Legacy single-account manager credentials, keyed by manager id, with the API key
@@ -312,8 +324,6 @@ export interface AppConfig {
   managerAccounts?: ManagerAccount[];
   /** Poster rating provider: 'none' to disable rating posters, 'rpdb' for RatingPosterDB, 'top' for Top Poster API, or 'custom' for custom URL patterns */
   posterRatingProvider?: 'none' | 'rpdb' | 'top' | 'custom';
-  trailerProvider?: 'default' | 'addon';
-  trailerAddonUrl?: string;
   usePosterProxy: boolean;
   mdblistWatchTracking: boolean;
   anilistWatchTracking: boolean;
@@ -360,6 +370,8 @@ export interface AppConfig {
     profiles?: Record<string, { sources?: 'same' | 'simkl' | 'mdblist' | 'both' | 'local' }>;
     /** Gemini google_search grounding, or the OpenRouter :online suffix. Off unless set. */
     web_search?: boolean;
+    /** A web search engine here (an id from /api/config) instead of the provider's own search. */
+    web_search_via?: string;
     /**
      * How much thinking the model may spend before it answers. Billed and
      * counted against the same reply budget as the answer, so a high setting
@@ -420,6 +432,8 @@ export interface AppConfig {
     ai_web_search?: boolean;
     // OpenRouter :online suffix. On unless set to false.
     ai_openrouter_web_search?: boolean;
+    // A web search engine here (an id from /api/config) instead of the provider's own search.
+    ai_web_search_via?: string;
     // Optional keyword that must prefix a query for AI search to run. Blank = always run.
     // Only affects the AI catalog; regular search catalogs always see the original query.
     ai_trigger_keyword?: string;
@@ -450,8 +464,9 @@ export interface AppConfig {
   showDisabledCatalogs?: boolean;
   tags?: TagDef[];
   catalogModeOnly?: boolean;
-  hideStremioCatalogs?: boolean;
   collectionCatalogs?: boolean;
+  /** Leave Stremio-only catalogs (such as Calendar videos) out of the manifest. */
+  hideStremioCatalogs?: boolean;
   /** Install URL of a stream addon the Jellyfin server delegates playback to. */
   jellyfinStreamUrl?: string;
   jellyfinResolveOnOpen?: boolean;
@@ -460,8 +475,17 @@ export interface AppConfig {
   jellyfinSimilarSource?: 'simkl';
   jellyfinLatestRows?: boolean;
   jellyfinMarkUnaired?: boolean;
+  /** SyncPlay lists the release another member is playing first. On when unset. */
+  jellyfinMatchReleases?: boolean;
   /** Playback is reported by the client, so the subtitle trigger is not used. */
   playbackReporting?: boolean;
+  /** Jellyfin plays reach the trackers under playback reporting. On when unset. */
+  jellyfinScrobbling?: boolean;
+  /** Stremio player and library events are received under playback reporting. */
+  stremioScrobbling?: boolean;
+  stremioLibraryWatchlist?: boolean;
+  /** When the Stremio switch was last turned on, to tell whether the installed manifest predates it. */
+  stremioScrobblingSince?: number;
   /** Password a Jellyfin client signs in with, for accounts that have no configuration password. */
   jellyfinAppPassword?: string;
   /** Tracker the Jellyfin resume shelf reads from. `auto` picks a capable one. */

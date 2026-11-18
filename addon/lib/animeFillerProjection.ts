@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import { mayBeAnime, resolveAnimeEpisode } from './animeEpisodeIds';
 import { covers, episodeKind, isRecap } from './fillerData';
 import type { EpisodeKind } from './fillerData';
@@ -10,6 +12,7 @@ export async function applyAnimeFillerProjection(meta: any, config: any): Promis
   const skipMixed = skipFiller && !!options.skipMixedFiller;
   const skipRecap = !!options.skipRecap;
   const mark = !!options.allowEpisodeMarking;
+  if (!skipFiller && !skipRecap && !mark) return;
   if (!Array.isArray(meta?.videos) || !meta.videos.length) return;
 
   try {

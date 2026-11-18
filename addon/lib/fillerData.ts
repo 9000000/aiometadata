@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import consola from 'consola';
 import { httpGet } from '../utils/httpClient';
 import { getSetting } from './settingsService';
@@ -6,6 +8,7 @@ const logger = consola.withTag('FillerData');
 
 export type EpisodeKind = 'canon' | 'filler' | 'mixed' | 'anime_canon';
 const KINDS: EpisodeKind[] = ['canon', 'filler', 'mixed', 'anime_canon'];
+const REFRESH_CHECK_INTERVAL_MS = 60_000;
 
 interface Snapshot {
   kinds: Map<number, Map<number, EpisodeKind>>;
@@ -18,6 +21,7 @@ let lastCheck = 0;
 let lastRefreshAt = 0;
 let lastError = '';
 let refreshing: Promise<void> | null = null;
+let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
 function sourceUrl(): string {
   return (getSetting('FILLER_DATA_URL') || '').trim();
@@ -65,13 +69,22 @@ function refreshInBackground(): void {
   startRefresh().catch((error: any) => logger.warn(`Could not refresh the filler data: ${error?.message || error}`));
 }
 
+export function startFillerDataRefresh(): void {
+  if (refreshTimer) return;
+  refreshTimer = setInterval(() => {
+    refreshInBackground();
+  }, REFRESH_CHECK_INTERVAL_MS);
+  refreshTimer.unref?.();
+}
+
 export async function initializeFillerData(): Promise<void> {
-  if (!sourceUrl() || snapshot) return;
+  if (!sourceUrl()) return;
+  startFillerDataRefresh();
+  if (snapshot) return;
   await (refreshing || startRefresh());
 }
 
 export function covers(mal: number): boolean {
-  refreshInBackground();
   return !!snapshot?.kinds.has(mal);
 }
 
@@ -104,6 +117,7 @@ export function getFillerDataStats() {
 
 export async function forceUpdateFillerData(): Promise<{ success: boolean; count: number; message: string }> {
   if (!sourceUrl()) return { success: false, count: 0, message: 'The filler data source is turned off' };
+  startFillerDataRefresh();
   if (refreshing) await refreshing.catch(() => {});
   try {
     await startRefresh();

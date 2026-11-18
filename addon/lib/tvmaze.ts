@@ -1,4 +1,6 @@
-import { httpGet } from '../utils/httpClient.js';
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
+import { httpGet, KEEP_ALIVE } from '../utils/httpClient.js';
 import { cacheWrapTvmazeApi } from './getCache.js';
 const buildInfo = require('./buildInfo');
 import { Agent, ProxyAgent } from 'undici';
@@ -18,21 +20,26 @@ let tvmazeAgent: Agent | ProxyAgent;
 
 if (HTTP_PROXY_URL) {
   try {
-    tvmazeAgent = new ProxyAgent({ uri: new URL(HTTP_PROXY_URL).toString(), allowH2: false });
+    tvmazeAgent = new ProxyAgent({
+      uri: new URL(HTTP_PROXY_URL).toString(),
+      allowH2: false,
+      connections: 32,
+      ...KEEP_ALIVE,
+    });
     console.log('[TVmaze] Using global HTTP proxy.');
   } catch (error: any) {
     console.error(`[TVmaze] Invalid HTTP_PROXY URL. Using direct connection. Error: ${error.message}`);
     tvmazeAgent = new Agent({
       allowH2: false,
       connections: 2,
-      keepAliveTimeout: 10 * 1000,
+      ...KEEP_ALIVE,
     });
   }
 } else {
   tvmazeAgent = new Agent({
     allowH2: false,
     connections: 2,
-    keepAliveTimeout: 10 * 1000,
+    ...KEEP_ALIVE,
   });
   consolaLogger.debug('[TVmaze] undici agent is enabled for direct connections (2 max connections to avoid IP blocking).');
 }

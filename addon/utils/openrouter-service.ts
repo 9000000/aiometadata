@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import 'dotenv/config';
 import consola from 'consola';
 import { generateContent } from './openrouter-client';
@@ -14,7 +16,7 @@ interface Suggestion {
   year: number;
 }
 
-async function performOpenRouterSearch(apiKey: string, query: string, type: 'movie' | 'series' | 'mixed', language: string, model?: string): Promise<Suggestion[]> {
+async function performOpenRouterSearch(apiKey: string, query: string, type: 'movie' | 'series' | 'mixed', language: string, model?: string, webResults = ''): Promise<Suggestion[]> {
   const startTime = Date.now();
 
   if (!apiKey) {
@@ -32,7 +34,7 @@ async function performOpenRouterSearch(apiKey: string, query: string, type: 'mov
   try {
     const generationStart = Date.now();
 
-    const prompt = buildPrompt(query, type, 20, hasWebSearch ? 'context' : false);
+    const prompt = buildPrompt(query, type, 20, hasWebSearch || webResults ? 'context' : false, webResults);
 
     const response = await generateContent({
       apiKey,

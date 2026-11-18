@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import { useEffect, useState, type ReactNode } from 'react';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -27,6 +29,8 @@ import {
 import { Callout } from '@/components/settings/Callout';
 import { ProviderSelect, type SelectableOption } from '@/components/settings/ProviderSelect';
 import { SettingRow } from '@/components/settings/SettingRow';
+import { EngineOnlySearch, WebSearchEngineSelect } from '@/components/settings/WebSearchEngine';
+import { useWebSearch } from '@/hooks/useWebSearch';
 import { SearchTagRow } from '@/components/SearchTagRow';
 
 // Keep in sync with addon/utils/aiSearchTrigger.ts
@@ -165,14 +169,16 @@ function SortableEngineRow(props: EngineRowProps) {
 }
 
 export function SearchSettings() {
-  const { config, setConfig, hasBuiltInTvdb, hasBuiltInGemini, traktSearchEnabled, simklSearchEnabled, lumiereEnabled, jikanEnabled } = useConfig();
+  const { config, setConfig, hasBuiltInTvdb, hasBuiltInGemini, aiCustomEndpoint, traktSearchEnabled, simklSearchEnabled, lumiereEnabled, jikanEnabled } = useConfig();
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editType, setEditType] = useState('');
   const hasGeminiKey = !!config.apiKeys?.gemini || hasBuiltInGemini;
   const hasOpenRouterKey = !!config.apiKeys?.openrouter;
   const hasAnyAiKey = hasGeminiKey || hasOpenRouterKey;
-  const { models: openRouterModels, loading: openRouterModelsLoading } = useOpenRouterModels(config.apiKeys?.openrouter);
+  const { models: openRouterModels, loading: openRouterModelsLoading } = useOpenRouterModels(config.apiKeys?.openrouter, aiCustomEndpoint);
+  const web = useWebSearch();
+  const setWebVia = (via: string | undefined) => setConfig(prev => ({ ...prev, search: { ...prev.search, ai_web_search_via: via } }));
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -635,7 +641,9 @@ export function SearchSettings() {
                     label="Model"
                     description={
                       (config.search.ai_provider || 'gemini') === 'openrouter'
-                        ? isPresetModel(config.search.ai_model)
+                        ? aiCustomEndpoint
+                          ? "Any model name this instance's AI endpoint serves"
+                          : isPresetModel(config.search.ai_model)
                           ? 'Any OpenRouter model ID or @preset/name'
                           : `Any OpenRouter model ID or @preset/name, ${config.search.ai_openrouter_web_search !== false ? 'with Web Search' : 'without Web Search'}`
                         : (() => {
@@ -721,6 +729,22 @@ export function SearchSettings() {
                   {(() => {
                     const provider = config.search.ai_provider || 'gemini';
                     if (provider !== 'openrouter') return null;
+                    const via = config.search.ai_web_search_via;
+                    // Another OpenAI-compatible endpoint has no search of its own; only an engine here can search for it.
+                    if (aiCustomEndpoint) {
+                      return web.offered(via) ? (
+                        <EngineOnlySearch
+                          id="ai-openrouter-web-search"
+                          label="Web Search"
+                          on={config.search.ai_openrouter_web_search !== false && Boolean(via)}
+                          via={via}
+                          onChange={(next) => setConfig(prev => ({
+                            ...prev,
+                            search: { ...prev.search, ...(next ? { ai_openrouter_web_search: true, ai_web_search_via: next } : { ai_web_search_via: undefined }) },
+                          }))}
+                        />
+                      ) : null;
+                    }
                     const preset = isPresetModel(config.search.ai_model);
                     const enabled = config.search.ai_openrouter_web_search !== false && !preset;
 
@@ -731,7 +755,9 @@ export function SearchSettings() {
                           label="Web Search"
                           description={preset
                             ? 'A preset takes web search from its own settings on OpenRouter.'
-                            : 'Adds :online so the model sees live results. Billed by OpenRouter at roughly $0.005 per search, on top of the model.'}
+                            : enabled && via
+                              ? 'The model sees live results from the web.'
+                              : 'Adds :online so the model sees live results. Billed by OpenRouter at roughly $0.005 per search, on top of the model.'}
                           control={
                             <Switch
                               id="ai-openrouter-web-search"
@@ -745,7 +771,10 @@ export function SearchSettings() {
                             />
                           }
                         />
-                        {enabled && (
+                        {enabled && web.offered(via) && (
+                          <WebSearchEngineSelect id="ai-web-search-engine" own="OpenRouter" via={via} onChange={setWebVia} />
+                        )}
+                        {enabled && !via && (
                           <Callout variant="warn" className="text-xs">
                             Needs credits even on :free models. Turn it off to run on a zero balance.
                           </Callout>
@@ -759,14 +788,31 @@ export function SearchSettings() {
                     const provider = config.search.ai_provider || 'gemini';
                     if (provider !== 'gemini') return null;
                     const selected = GEMINI_MODELS.find(m => m.id === resolveGeminiModel(config.search.ai_model));
-                    if (selected && !selected.grounding) return null;
+                    const via = config.search.ai_web_search_via;
+                    // A model without Google's search can still have an engine here search for it.
+                    if (selected && !selected.grounding) {
+                      return web.offered(via) ? (
+                        <EngineOnlySearch
+                          id="ai-web-search"
+                          label="Web Search"
+                          on={!!config.search.ai_web_search && Boolean(via)}
+                          via={via}
+                          onChange={(next) => setConfig(prev => ({
+                            ...prev,
+                            search: { ...prev.search, ...(next ? { ai_web_search: true, ai_web_search_via: next } : { ai_web_search_via: undefined }) },
+                          }))}
+                        />
+                      ) : null;
+                    }
 
                     return (
                       <>
                         <SettingRow
                           htmlFor="ai-web-search"
                           label="Web Search"
-                          description="Billed by Google on most models. If the key is refused, the search runs without it."
+                          description={config.search.ai_web_search && via
+                            ? 'The model sees live results from the web.'
+                            : 'Billed by Google on most models. If the key is refused, the search runs without it.'}
                           control={
                             <Switch
                               id="ai-web-search"
@@ -779,6 +825,9 @@ export function SearchSettings() {
                             />
                           }
                         />
+                        {config.search.ai_web_search && web.offered(via) && (
+                          <WebSearchEngineSelect id="ai-web-search-engine" own="Google" via={via} onChange={setWebVia} />
+                        )}
                         {!config.search.ai_web_search && (
                           <Callout variant="warn" className="text-xs">
                             Answers come from the model's own knowledge, so recent or niche titles may be missed.

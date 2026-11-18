@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
@@ -26,9 +28,9 @@ import {
 } from './config.js';
 import { isNotModified, mergeRevalidated, type ConditionalValidators, type FetchOutcome } from './upstream.js';
 import { walkFiles, pruneEmptyDirs } from './walk.js';
-import { shapePoster } from './shape.js';
+import { shapePoster, shapesPosterFrom, shapesPosters } from './shape.js';
 import { envInt } from '../../utils/envNumber';
-import { sizedKeys } from './resize.js';
+import { inImageSlot, sizedKeys } from './resize.js';
 
 const logger = consola.withTag('PosterCache');
 
@@ -44,6 +46,16 @@ export interface EntryHeader {
   storedAt: number;
   bodyHash?: string;
   upstream?: UpstreamCacheMeta;
+  inferredMs?: number | null;
+}
+
+function resolveStoredInferredMs(header: EntryHeader | null | undefined): number | null {
+  if (!header) return null;
+  if (typeof header.inferredMs === 'number' && Number.isFinite(header.inferredMs)) {
+    return header.inferredMs;
+  }
+  if (header.inferredMs === null) return null;
+  return inferredTtlMsFor(header.upstream);
 }
 
 export interface CacheEntry {
@@ -95,6 +107,7 @@ interface MemoryEntry {
   contentType: string;
   storedAt: number;
   etag: string;
+  inferredMs: number | null;
   upstream?: UpstreamCacheMeta;
 }
 const memory = new Map<string, MemoryEntry>();
@@ -221,6 +234,7 @@ function memoryPut(
   contentType: string,
   storedAt: number,
   etag: string,
+  inferredMs: number | null,
   upstream?: UpstreamCacheMeta
 ): void {
   const budget = getMemoryBudget();
@@ -229,7 +243,7 @@ function memoryPut(
   if (body.length > budget) return;
 
   memoryDrop(key);
-  memory.set(key, { body, contentType, storedAt, etag, upstream });
+  memory.set(key, { body, contentType, storedAt, etag, inferredMs, upstream });
   memoryBytes += body.length;
 
   while (memoryBytes > budget) {
@@ -290,7 +304,7 @@ export async function get(imageClass: ImageClass, key: string): Promise<CacheEnt
 
   const cached = memoryTake(idxKey);
   if (cached) {
-    const inferredMs = inferredTtlMsFor(cached.upstream);
+    const inferredMs = cached.inferredMs ?? inferredTtlMsFor(cached.upstream);
     touch(imageClass, hash, file, index.get(idxKey)?.size ?? cached.body.length, {
       storedAt: cached.storedAt,
       inferredMs,
@@ -357,7 +371,7 @@ export async function get(imageClass: ImageClass, key: string): Promise<CacheEnt
     }
 
     const bodySize = stat.size - framing.bodyOffset;
-    const inferredMs = inferredTtlMsFor(header.upstream);
+    const inferredMs = resolveStoredInferredMs(header);
     touch(imageClass, hash, file, stat.size, { storedAt: header.storedAt, inferredMs });
 
     const expiresAt = getEntryExpiryFrom(key, header.storedAt, inferredMs);
@@ -425,11 +439,11 @@ async function readBuffered(
     return null;
   }
 
-  const inferredMs = inferredTtlMsFor(header.upstream);
+  const inferredMs = resolveStoredInferredMs(header);
   touch(imageClass, hash, file, raw.length, { storedAt: header.storedAt, inferredMs });
   const body = raw.subarray(framing.bodyOffset);
   const etag = header.bodyHash || hashBody(body);
-  memoryPut(indexKey(imageClass, hash), body, header.contentType, header.storedAt, etag, header.upstream);
+  memoryPut(indexKey(imageClass, hash), body, header.contentType, header.storedAt, etag, inferredMs, header.upstream);
 
   const expiresAt = getEntryExpiryFrom(key, header.storedAt, inferredMs);
   return {
@@ -494,12 +508,14 @@ export async function put(
   const hash = hashKey(key);
   const file = entryPath(imageClass, hash);
   const bodyHash = hashBody(body);
+  const inferredMs = inferredTtlMsFor(upstream);
   const header: EntryHeader = {
     key,
     contentType: contentType || 'image/jpeg',
     size: body.length,
     storedAt: Date.now(),
     bodyHash,
+    ...(inferredMs !== null ? { inferredMs } : {}),
   };
   if (upstream && Object.keys(upstream).length > 0) header.upstream = upstream;
 
@@ -523,10 +539,10 @@ export async function put(
     size: payload.length,
     lastAccess: Date.now(),
     storedAt: header.storedAt,
-    inferredMs: inferredTtlMsFor(header.upstream),
+    inferredMs,
     ids: extractIdTokens(key),
   });
-  memoryPut(indexKey(imageClass, hash), body, header.contentType, header.storedAt, bodyHash, header.upstream);
+  memoryPut(indexKey(imageClass, hash), body, header.contentType, header.storedAt, bodyHash, inferredMs, header.upstream);
   scheduleEviction();
   return bodyHash;
 }
@@ -631,6 +647,8 @@ async function refreshStoredEntry(
   if (Object.keys(upstream).length > 0) header.upstream = upstream;
   else delete header.upstream;
   const inferredMs = inferredTtlMsFor(header.upstream);
+  if (inferredMs !== null) header.inferredMs = inferredMs;
+  else delete header.inferredMs;
 
   if (fileSize - framing.bodyOffset > getStreamThresholdBytes()) {
     const refreshed = await rewriteHeaderStreaming(imageClass, hash, file, header, framing.bodyOffset, inferredMs);
@@ -677,7 +695,7 @@ async function refreshStoredEntry(
     storedAt: header.storedAt,
     inferredMs,
   });
-  memoryPut(indexKey(imageClass, hash), body, header.contentType, header.storedAt, etag, header.upstream);
+  memoryPut(indexKey(imageClass, hash), body, header.contentType, header.storedAt, etag, inferredMs, header.upstream);
 
   const expiresAt = getEntryExpiryFrom(key, header.storedAt, inferredMs);
   return {
@@ -794,7 +812,18 @@ export async function getOrFetch(
     try {
       let produced = await producer(revalidationHint(cached));
       if (!isNotModified(produced)) {
-        if (imageClass === 'poster' && !options.shaped) produced = { ...produced, ...(await shapePoster(produced.body, produced.contentType)) };
+        if (imageClass === 'poster' && !options.shaped && shapesPosterFrom(key) && shapesPosters()) {
+          const { body: rawBody, contentType: rawContentType } = produced;
+          try {
+            const shaped = await inImageSlot(
+              () => shapePoster(rawBody, rawContentType),
+              rawBody.length
+            );
+            produced = { ...produced, ...shaped };
+          } catch (shapeErr: any) {
+            logger.debug(`Poster shaping skipped under load: ${shapeErr?.message || shapeErr}`);
+          }
+        }
         return await store(produced);
       }
 
@@ -1249,7 +1278,51 @@ async function sweepInactive(): Promise<void> {
   }
 }
 
-/** Rebuilds the index from disk. Only stat() is needed — never a file read. */
+async function scanEntryMeta(file: string): Promise<{ stat: fs.Stats; header: EntryHeader | null } | null> {
+  let handle: fsp.FileHandle;
+  try {
+    handle = await fsp.open(file, 'r');
+  } catch {
+    return null;
+  }
+
+  let stat: fs.Stats;
+  try {
+    stat = await handle.stat();
+  } catch {
+    await handle.close().catch(() => { /* already closing */ });
+    return null;
+  }
+
+  try {
+    const probeLength = Math.min(1024, stat.size);
+    if (probeLength < HEADER_OFFSET) return { stat, header: null };
+    const probe = Buffer.allocUnsafe(probeLength);
+    const { bytesRead } = await handle.read(probe, 0, probeLength, 0);
+    const slice = bytesRead < probeLength ? probe.subarray(0, bytesRead) : probe;
+
+    const framing = readFraming(slice);
+    if (!framing || framing.bodyOffset > stat.size) return { stat, header: null };
+
+    let headerJson: Buffer;
+    if (framing.bodyOffset <= slice.length) {
+      headerJson = slice.subarray(HEADER_OFFSET, framing.bodyOffset);
+    } else {
+      headerJson = Buffer.allocUnsafe(framing.headerLen);
+      const full = await handle.read(headerJson, 0, framing.headerLen, HEADER_OFFSET);
+      if (full.bytesRead < framing.headerLen) return { stat, header: null };
+    }
+
+    const header = JSON.parse(headerJson.toString('utf8')) as EntryHeader;
+    return { stat, header };
+  } catch {
+    return { stat, header: null };
+  } finally {
+    await handle.close().catch(() => { /* already closing */ });
+  }
+}
+
+/** Rebuilds the index from disk, restoring stored timestamps and inferred TTLs from entry headers. */
 async function scan(): Promise<void> {
   const root = getCacheDir();
   scanning = true;
@@ -1262,27 +1335,24 @@ async function scan(): Promise<void> {
       onError: (error: any, dir: string) => logger.warn(`Could not scan ${dir}: ${error?.message}`)
     });
 
-    // Stats run many at a time.
     const width = envInt('POSTER_CACHE_SCAN_CONCURRENCY', 32, 1);
     let batch: string[] = [];
     const statBatch = async () => {
       const names = batch;
       batch = [];
       await Promise.all(names.map(async (name) => {
-        try {
-          const stat = await fsp.stat(entryPath(imageClass, name));
-          addToIndex({
-            imageClass,
-            hash: name,
-            size: stat.size,
-            lastAccess: stat.atimeMs,
-            storedAt: stat.mtimeMs,
-            inferredMs: null,
-          });
-          found += 1;
-        } catch {
-          // Vanished between readdir and stat — nothing to index.
-        }
+        const scanned = await scanEntryMeta(entryPath(imageClass, name));
+        if (!scanned) return;
+        const { stat, header } = scanned;
+        addToIndex({
+          imageClass,
+          hash: name,
+          size: stat.size,
+          lastAccess: stat.atimeMs,
+          storedAt: typeof header?.storedAt === 'number' && Number.isFinite(header.storedAt) ? header.storedAt : stat.mtimeMs,
+          inferredMs: resolveStoredInferredMs(header),
+        });
+        found += 1;
       }));
     };
     for await (const { name, dir } of files) {

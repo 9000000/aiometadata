@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
 import { LRUCache } from 'lru-cache';
 import { parseStremioId } from './ids';
 import { envInt } from '../../utils/envNumber';
@@ -8,6 +10,13 @@ const idMappings: any = require('../id-mappings');
 
 const database: any = require('../database');
 
+export function aliasConfigFor(userUUID: string | undefined): Promise<any> {
+  if (!userUUID) return Promise.resolve({});
+  return Promise.resolve()
+    .then(() => require('../configApi').loadSharedConfig(userUUID))
+    .then((config: any) => config ?? {}, () => ({}));
+}
+
 // One episode is spelled differently by each provider: kitsu:50040:6 is also tt37614297:1:6.
 function wholeTmdbSeason(mapping: any): number | null {
   const season = Number(mapping?.season?.tmdb);
@@ -16,10 +25,11 @@ function wholeTmdbSeason(mapping: any): number | null {
   return sharing.length === 1 ? season : null;
 }
 
-export async function kitsuForTmdb(tmdbId: number, season: number, episode: number): Promise<{ kitsuId: number; episodeNumber: number } | null> {
-  const found = await idMapper.resolveKitsuEpisodeFromTmdb(tmdbId, season, episode, {}, true).catch(() => null);
+export async function kitsuForTmdb(tmdbId: number, season: number, episode: number, config: any = {}): Promise<{ kitsuId: number; episodeNumber: number } | null> {
+  config ??= {};
+  const found = await idMapper.resolveKitsuEpisodeFromTmdb(tmdbId, season, episode, config, true).catch(() => null);
   if (!found?.kitsuId) return null;
-  const back = await idMapper.resolveTmdbEpisodeFromKitsu(found.kitsuId, found.episodeNumber, {}).catch(() => null);
+  const back = await idMapper.resolveTmdbEpisodeFromKitsu(found.kitsuId, found.episodeNumber, config).catch(() => null);
   const same = Number(back?.tmdbId) === tmdbId && Number(back?.seasonNumber) === season && Number(back?.episodeNumber) === episode;
   return same ? { kitsuId: Number(found.kitsuId), episodeNumber: Number(found.episodeNumber) } : null;
 }
@@ -40,13 +50,13 @@ async function tvdbOfPart(mapping: any, episode: number): Promise<{ tvdbId: numb
   return back?.anime?.kitsu_id === mapping.kitsu_id && back.episode === episode ? { tvdbId: Number(mapping.tvdb_id), tvdbSeason: season, tvdbEpisode } : null;
 }
 
-async function tmdbSpelling(mapping: any, episode: number): Promise<string | null> {
+async function tmdbSpelling(mapping: any, episode: number, config: any): Promise<string | null> {
   const whole = wholeTmdbSeason(mapping);
   if (whole !== null) return `tmdb:${mapping.themoviedb_id}:${whole}:${episode}`;
   if (!mapping?.kitsu_id || !mapping.themoviedb_id || mapping.themoviedb_type !== 'tv') return null;
-  const back = await idMapper.resolveTmdbEpisodeFromKitsu(mapping.kitsu_id, episode, {}).catch(() => null);
+  const back = await idMapper.resolveTmdbEpisodeFromKitsu(mapping.kitsu_id, episode, config).catch(() => null);
   if (Number(back?.tmdbId) !== Number(mapping.themoviedb_id)) return null;
-  const forward = await kitsuForTmdb(Number(back.tmdbId), Number(back.seasonNumber), Number(back.episodeNumber));
+  const forward = await kitsuForTmdb(Number(back.tmdbId), Number(back.seasonNumber), Number(back.episodeNumber), config);
   return forward?.kitsuId === Number(mapping.kitsu_id) && forward.episodeNumber === episode ? `tmdb:${back.tmdbId}:${back.seasonNumber}:${back.episodeNumber}` : null;
 }
 
@@ -82,16 +92,22 @@ const aliasMemo = new LRUCache<string, Promise<string[]>>({
   ttl: envInt('JELLYFIN_ALIAS_MEMO_TTL', 600, 1) * 1000,
 });
 
-export function videoIdAliases(videoId: string): Promise<string[]> {
-  let held = aliasMemo.get(videoId);
+function memoKey(videoId: string, config: any): string {
+  return `${require('../getTmdb').tmdbKeyId(config)}|${videoId}`;
+}
+
+export function videoIdAliases(videoId: string, config: any = {}): Promise<string[]> {
+  config ??= {};
+  const key = memoKey(videoId, config);
+  let held = aliasMemo.get(key);
   if (!held) {
-    held = computeVideoIdAliases(videoId);
-    aliasMemo.set(videoId, held);
+    held = computeVideoIdAliases(videoId, config);
+    aliasMemo.set(key, held);
   }
   return held.then((aliases) => [...aliases]);
 }
 
-async function computeVideoIdAliases(videoId: string): Promise<string[]> {
+async function computeVideoIdAliases(videoId: string, config: any): Promise<string[]> {
   const parsed = parseStremioId(videoId);
   if (!parsed) return [];
   if (parsed.episode === null || parsed.episode === undefined) {
@@ -126,7 +142,7 @@ async function computeVideoIdAliases(videoId: string): Promise<string[]> {
         add(`tvdb:${tvdb.tvdbId}:${tvdb.tvdbSeason}:${tvdb.tvdbEpisode}`);
         if (mapping.imdb_id) add(`${mapping.imdb_id}:${tvdb.tvdbSeason}:${tvdb.tvdbEpisode}`);
       }
-      add(await tmdbSpelling(mapping, episode));
+      add(await tmdbSpelling(mapping, episode, config));
       return [...out];
     }
 
@@ -134,11 +150,11 @@ async function computeVideoIdAliases(videoId: string): Promise<string[]> {
       const tmdbId = parseInt(parsed.base.split(':')[1], 10);
       const entries = idMapper.getSeriesMappingsByTmdbId(tmdbId).filter((entry: any) => wholeTmdbSeason(entry) === Number(parsed.season));
       const entry = entries.length === 1 ? entries[0] : null;
-      const split = entry || !idMapper.getSeriesMappingsByTmdbId(tmdbId).length ? null : await kitsuForTmdb(tmdbId, Number(parsed.season), Number(parsed.episode));
+      const split = entry || !idMapper.getSeriesMappingsByTmdbId(tmdbId).length ? null : await kitsuForTmdb(tmdbId, Number(parsed.season), Number(parsed.episode), config);
       const anime = entry?.kitsu_id ? `kitsu:${entry.kitsu_id}:${parsed.episode}` : entry?.mal_id ? `mal:${entry.mal_id}:${parsed.episode}` : split ? `kitsu:${split.kitsuId}:${split.episodeNumber}` : null;
       if (anime) {
         add(anime);
-        for (const alias of await videoIdAliases(anime)) add(alias);
+        for (const alias of await videoIdAliases(anime, config)) add(alias);
       } else if (!idMapper.getSeriesMappingsByTmdbId(tmdbId).length) {
         const regular = idMappings.getByTmdbId?.(String(tmdbId), 'series');
         if (regular?.imdbId) add(`${regular.imdbId}:${parsed.season}:${parsed.episode}`);
@@ -169,7 +185,7 @@ async function computeVideoIdAliases(videoId: string): Promise<string[]> {
         animeFound = Boolean(anime);
         if (anime?.kitsu_id) add(`kitsu:${anime.kitsu_id}:${animeEpisode}`);
         if (anime?.mal_id) add(`mal:${anime.mal_id}:${animeEpisode}`);
-        if (anime) add(await tmdbSpelling(anime, Number(animeEpisode)));
+        if (anime) add(await tmdbSpelling(anime, Number(animeEpisode), config));
       }
       if (parsed.idType === 'tvdb' && mapping?.imdb_id) add(`${mapping.imdb_id}:${season}:${episode}`);
       if (!mapping && !animeFound) {
@@ -186,19 +202,23 @@ async function computeVideoIdAliases(videoId: string): Promise<string[]> {
 }
 
 /** The same patch under every spelling of the episode. */
-export async function upsertPlaystateEverywhere(userUUID: string, videoId: string, patch: any, profile = '', known: string[] = []): Promise<void> {
+export async function upsertPlaystateEverywhere(userUUID: string, videoId: string, patch: any, profile = '', known: string[] = [], config?: any): Promise<void> {
   const at = Date.now();
-  await database.upsertPlaystate(userUUID, videoId, patch, profile, at);
-  const aliases = new Set([...(await videoIdAliases(videoId)), ...known.filter((id) => id && id !== videoId)]);
+  const resolved = config === undefined ? await aliasConfigFor(userUUID) : config;
+  const aliases = new Set([...(await videoIdAliases(videoId, resolved)), ...known.filter((id) => id && id !== videoId)]);
+  aliases.delete(videoId);
+  const held: Map<string, any> = await database.getPlaystates(userUUID, [videoId, ...aliases], profile);
+  await database.upsertPlaystate(userUUID, videoId, patch, profile, at, held.get(videoId) ?? null);
   for (const alias of aliases) {
-    await database.upsertPlaystate(userUUID, alias, patch, profile, at + 1);
+    await database.upsertPlaystate(userUUID, alias, patch, profile, at + 1, held.get(alias) ?? null);
   }
 }
 
 /** Rows for the ids asked for, found under any spelling, keyed by the id asked for. */
-export async function getPlaystatesAcross(userUUID: string, videoIds: string[], profile = ''): Promise<Map<string, any>> {
+export async function getPlaystatesAcross(userUUID: string, videoIds: string[], profile = '', config?: any): Promise<Map<string, any>> {
+  const resolved = config === undefined ? await aliasConfigFor(userUUID) : config;
   const aliases = new Map<string, string[]>();
-  for (const id of videoIds) aliases.set(id, await videoIdAliases(id));
+  for (const id of videoIds) aliases.set(id, await videoIdAliases(id, resolved));
 
   const lookup = new Set<string>(videoIds);
   for (const list of aliases.values()) for (const alias of list) lookup.add(alias);
@@ -221,11 +241,24 @@ function otherFilmSpelling(videoId: string): string | null {
   const parsed = parseStremioId(videoId);
   if (!parsed || (parsed.episode !== null && parsed.episode !== undefined)) return null;
   if (parsed.idType === 'imdb') {
-    const tmdbId = idMappings.getByImdbId?.(parsed.base, 'movie')?.tmdbId;
+    const tmdbId = idMappings.getByParsedId(parsed, 'movie')?.tmdbId;
     return tmdbId ? `tmdb:${tmdbId}` : null;
   }
-  if (parsed.idType === 'tmdb') return idMappings.getByTmdbId?.(String(parsed.base).split(':')[1], 'movie')?.imdbId ?? null;
+  if (parsed.idType === 'tmdb') return idMappings.getByParsedId(parsed, 'movie')?.imdbId ?? null;
   return null;
+}
+
+const FILM_ID = /^(tt\d+|tmdb:\d+)$/;
+
+/** A film's other id of IMDb and TMDB, where the movie mapping pairs them both ways; the two share no alias. */
+export function filmTwin(videoId: string): string | null {
+  if (!FILM_ID.test(videoId)) return null;
+  try {
+    const other = otherFilmSpelling(videoId);
+    return other && otherFilmSpelling(other) === videoId ? other : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function filmsHeldElsewhere(userUUID: string, videoIds: string[], profile = ''): Promise<Map<string, any>> {
@@ -249,21 +282,27 @@ export async function filmsHeldElsewhere(userUUID: string, videoIds: string[], p
 }
 
 /** One row per episode across its spellings; the first in the order given is kept. */
-export async function dedupeByAlias<T extends { videoId: string }>(rows: T[]): Promise<T[]> {
+export async function dedupeByAlias<T extends { videoId: string }>(rows: T[], config: any = {}): Promise<T[]> {
   const taken = new Set<string>();
   const out: T[] = [];
   for (const row of rows) {
     if (taken.has(row.videoId)) continue;
     out.push(row);
     taken.add(row.videoId);
-    for (const alias of await videoIdAliases(row.videoId)) taken.add(alias);
+    for (const alias of await videoIdAliases(row.videoId, config)) taken.add(alias);
   }
   return out;
 }
 
-/** Rows grouped by title: known aliases, and the spellings one play through this server wrote together. */
-export async function groupBySpelling<T extends { video_id: any; last_played_at?: any; origin?: any }>(rows: T[]): Promise<T[][]> {
-  const ids = rows.map((row) => String(row.video_id));
+const BREATH_EVERY = 500;
+
+/** Which title each id belongs to: known aliases, a film's IMDb and TMDB ids, and the spellings one play through this server wrote together. */
+export async function spellingRoots(ids: string[], writtenAt: (i: number) => unknown, breathe = false, config: any = {}): Promise<(id: string) => string> {
+  config ??= {};
+  // A history longer than the memo would only push out what others are using, and find nothing it put there.
+  const aliasesOf = breathe && ids.length > aliasMemo.max / 2
+    ? (id: string) => aliasMemo.peek(memoKey(id, config)) ?? computeVideoIdAliases(id, config)
+    : (id: string) => videoIdAliases(id, config);
   const parent = new Map<string, string>(ids.map((id) => [id, id]));
   const find = (id: string): string => {
     let root = id;
@@ -278,19 +317,55 @@ export async function groupBySpelling<T extends { video_id: any; last_played_at?
     if (ra !== rb) parent.set(ra, rb);
   };
 
-  const together = new Map<string, string>();
-  for (const [i, row] of rows.entries()) {
+  const together = new Map<string, Map<string, string>>();
+  for (let i = 0; i < ids.length; i += 1) {
     const id = ids[i];
-    for (const alias of await videoIdAliases(id).catch(() => [] as string[])) union(id, alias);
-    if (row.origin !== 'server' || !row.last_played_at) continue;
+    if (breathe && i % BREATH_EVERY === BREATH_EVERY - 1) await new Promise((resolve) => setImmediate(resolve));
+    for (const alias of await aliasesOf(id).catch(() => [] as string[])) union(id, alias);
+    const twin = filmTwin(id);
+    if (twin) union(id, twin);
+    const written = writtenAt(i);
+    if (!written) continue;
     const parsed = parseStremioId(id);
     const at = parsed && parsed.episode !== null && parsed.episode !== undefined ? `${parsed.season ?? ''}:${parsed.episode}` : 'title';
-    const key = `${row.last_played_at}|${at}`;
-    const first = together.get(key);
-    if (first) union(id, first);
-    else together.set(key, id);
+    const key = `${written}|${at}`;
+    const moment = together.get(key) ?? new Map<string, string>();
+    together.set(key, moment.set(id, parsed?.idType ?? id));
   }
+  // One play writes each provider's id once, so a moment naming a provider twice holds more than one title.
+  for (const moment of together.values()) {
+    if (moment.size < 2) continue;
+    if (new Set(moment.values()).size < moment.size) {
+      await pairFilmsByIds(moment, union, config);
+      continue;
+    }
+    const [first, ...rest] = moment.keys();
+    for (const id of rest) union(first, id);
+  }
+  return find;
+}
 
+/** Films sharing a moment, joined where a film's other spelling is written there too. */
+async function pairFilmsByIds(moment: Map<string, string>, union: (a: string, b: string) => void, config: any): Promise<void> {
+  const { movieSpellings } = require('./watched');
+  const paired = new Set<string>();
+  const films = [...moment].filter(([id, provider]) => (provider === 'imdb' || provider === 'tmdb') && parseStremioId(id)?.episode === null);
+  // IMDb ids first: each one answered pairs its TMDB spelling, which then needs no lookup of its own.
+  films.sort(([, a], [, b]) => Number(a === 'tmdb') - Number(b === 'tmdb'));
+  for (const [id] of films) {
+    if (paired.has(id)) continue;
+    for (const other of (await movieSpellings(id, config)) as string[]) {
+      if (!moment.has(other)) continue;
+      union(id, other);
+      paired.add(other);
+    }
+  }
+}
+
+/** Rows grouped by title. */
+export async function groupBySpelling<T extends { video_id: any; last_played_at?: any; origin?: any }>(rows: T[], config: any = {}): Promise<T[][]> {
+  const ids = rows.map((row) => String(row.video_id));
+  const find = await spellingRoots(ids, (i) => (rows[i].origin === 'server' ? rows[i].last_played_at : null), false, config);
   const groups = new Map<string, T[]>();
   for (const [i, row] of rows.entries()) {
     const root = find(ids[i]);

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
 import consola from 'consola';
 import { createHash } from 'crypto';
 import { LRUCache } from 'lru-cache';
@@ -41,7 +43,7 @@ const snapshots = new LRUCache<string, HeldRows>({
 
 const resumeMaxAgeMs = (): number => envInt('JELLYFIN_RESUME_MAX_AGE', 15 * 60, 60) * 1000;
 
-const resumeFloorPercent = (): number => Math.min(envInt('JELLYFIN_MIN_RESUME_PERCENT', 0, 0), 49);
+export const resumeFloorPercent = (): number => Math.min(envInt('JELLYFIN_MIN_RESUME_PERCENT', 0, 0), 49);
 
 export function belowResumeFloor(positionMs: number, runtimeMs: number): boolean {
   const floor = resumeFloorPercent();
@@ -79,8 +81,17 @@ async function playbackFingerprint(service: Capable, credential: string, config:
 
 const inFlight = new Map<string, Promise<HeldRows>>();
 
-const generations = new Map<string, number>();
-export const generationOf = (userUUID: string): number => generations.get(userUUID) ?? 0;
+// Numbered from one counter, so a user forgotten here and seen again never repeats a number it had.
+const generations = new LRUCache<string, number>({ max: 20000, ttl: 24 * 60 * 60 * 1000, updateAgeOnGet: true });
+let lastGeneration = 0;
+export function generationOf(userUUID: string): number {
+  let held = generations.get(userUUID);
+  if (held === undefined) {
+    held = ++lastGeneration;
+    generations.set(userUUID, held);
+  }
+  return held;
+}
 
 /**
  * A tracker names an episode in its own space, which for anime is rarely the
@@ -382,10 +393,10 @@ async function ownRows(userUUID: string, profile: string, config: any): Promise<
   // The earliest write of a batch is the spelling the client played under.
   const { dedupeByAlias, videoIdAliases } = require('./aliases');
   const { movieSpellings } = require('./watched');
-  const deduped: ResumeRow[] = await dedupeByAlias([...rows].sort((a, b) => (a.writtenAt ?? 0) - (b.writtenAt ?? 0)));
+  const deduped: ResumeRow[] = await dedupeByAlias([...rows].sort((a, b) => (a.writtenAt ?? 0) - (b.writtenAt ?? 0)), config);
   const spellingsOf = new Map<string, string[]>();
   for (const row of deduped) {
-    spellingsOf.set(row.videoId, row.kind === 'movie' ? await movieSpellings(row.videoId, config) : await videoIdAliases(row.videoId));
+    spellingsOf.set(row.videoId, row.kind === 'movie' ? await movieSpellings(row.videoId, config) : await videoIdAliases(row.videoId, config));
   }
   let held = new Map<string, any>();
   try {
@@ -411,7 +422,7 @@ export async function resumeSnapshot(userUUID: string, config: any): Promise<Res
   let known = new Map<string, any>();
   try {
     const { getPlaystatesAcross } = require('./aliases');
-    known = await getPlaystatesAcross(userUUID, tracker.map((r) => r.videoId), profile);
+    known = await getPlaystatesAcross(userUUID, tracker.map((r) => r.videoId), profile, config);
   } catch (error: any) {
     logger.debug(`Own playstate rows unavailable: ${error?.message || error}`);
   }
@@ -426,7 +437,7 @@ export async function oneRowPerTitle(candidates: ResumeRow[], config: any): Prom
   const taken = new Set<string>();
   const rows: ResumeRow[] = [];
   for (const row of candidates) {
-    const spellings = [row.videoId, await titleIdentity(row.videoId, config), ...(await videoIdAliases(row.videoId))];
+    const spellings = [row.videoId, await titleIdentity(row.videoId, config), ...(await videoIdAliases(row.videoId, config))];
     if (spellings.some((spelling) => taken.has(spelling))) continue;
     for (const spelling of spellings) taken.add(spelling);
     rows.push(row);
@@ -459,7 +470,7 @@ export async function trackerPositions(userUUID: string, config: any): Promise<M
   const { titleIdentity } = require('./canonicalIds');
   const out = new Map<string, ResumeRow>();
   for (const row of await trackerSnapshot(userUUID, config)) {
-    for (const spelling of [row.videoId, ...(await videoIdAliases(row.videoId)), await titleIdentity(row.videoId, config)]) {
+    for (const spelling of [row.videoId, ...(await videoIdAliases(row.videoId, config)), await titleIdentity(row.videoId, config)]) {
       if (!out.has(spelling)) out.set(spelling, row);
     }
   }
@@ -484,7 +495,7 @@ export async function trackerSnapshot(userUUID: string, config: any): Promise<Re
     if (!held || row.updatedAt > held.updatedAt) merged.set(row.videoId, row);
   }
   const { dedupeByAlias } = require('./aliases');
-  const rows: ResumeRow[] = await dedupeByAlias([...merged.values()].sort((a, b) => b.updatedAt - a.updatedAt));
+  const rows: ResumeRow[] = await dedupeByAlias([...merged.values()].sort((a, b) => b.updatedAt - a.updatedAt), config);
   if (parts.length && parts.every((part) => part.ok)) await followTrackerClears(userUUID, config, rows);
   return rows.filter((row) => !belowTrackerFloor(row.progress));
 }
@@ -530,7 +541,7 @@ async function serviceSnapshot(userUUID: string, config: any, service: Capable):
 // rewatch is, so Played comes from the watch history rather than being assumed
 // false because the row is resumable.
 /** Dropped when this server is itself the thing that changed the state. */
-const clearsFollowed = new LRUCache<string, string>({ max: envInt('JELLYFIN_RESUME_CACHE_MAX', 500, 1) });
+const clearsFollowed = new LRUCache<string, string>({ max: Math.max(5000, envInt('JELLYFIN_RESUME_CACHE_MAX', 500, 1)) });
 const clearsInFlight = new Map<string, Promise<void>>();
 
 async function followTrackerClears(userUUID: string, config: any, rows: ResumeRow[]): Promise<void> {
@@ -590,7 +601,7 @@ async function clearDropped(userUUID: string, profile: string, config: any, befo
   for (const id of gone) {
     const parsed = parseStremioId(id);
     const isEpisode = Boolean(parsed && parsed.episode !== null && parsed.episode !== undefined);
-    const spellings = [id, ...(isEpisode ? await videoIdAliases(id) : await movieSpellings(id, config))];
+    const spellings = [id, ...(isEpisode ? await videoIdAliases(id, config) : await movieSpellings(id, config))];
     if (spellings.some((spelling) => current.has(spelling))) continue;
 
     const rows = [...(await database.getPlaystates(userUUID, spellings, profile)).values()].filter((row: any) => Number(row.position_ms) > 0);
@@ -621,7 +632,7 @@ export function invalidateResume(userUUID: string): void {
 
 /** A watch this server recorded: what is built from its table is rebuilt, the tracker reads are kept. */
 export function forgetOwnWatches(userUUID: string): void {
-  generations.set(userUUID, generationOf(userUUID) + 1);
+  generations.set(userUUID, ++lastGeneration);
   for (const cache of [nextUpPages, lastNextUp]) {
     for (const key of [...cache.keys()]) {
       if (String(key).startsWith(`${userUUID}:`)) cache.delete(key);

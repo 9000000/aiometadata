@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import diagnostics from 'node:diagnostics_channel';
 import dns from 'node:dns';
 import consola from 'consola';
@@ -21,9 +23,16 @@ function threshold(): number {
 }
 
 function describe(request: any): string {
+  const method = request?.method ?? 'GET';
   const origin = String(request?.origin ?? '').replace(/^https?:\/\//, '');
   const path = String(request?.path ?? '').split('?')[0];
-  return `${request?.method ?? 'GET'} ${origin}${path}`;
+  if (path && !path.startsWith('/')) {
+    if (method === 'CONNECT' || /^https?:\/\//i.test(path) || path.includes(':')) {
+      return `${method} ${origin ? `${origin} -> ${path}` : path}`;
+    }
+    return `${method} ${origin ? `${origin}/${path}` : path}`;
+  }
+  return `${method} ${origin}${path}`;
 }
 
 function probeDns(request: any, timing: Timing): void {

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import consola from 'consola';
 import { createHash } from 'crypto';
 import { accountOwner, credentialOf, trackerConfig } from './accounts';
@@ -17,7 +19,7 @@ import type { WatchTrackingService } from './watchTracking';
 const logger = consola.withTag('TrackerOutbox');
 const database: any = require('./database');
 
-export type OutboxOp = 'scrobble' | 'credit' | 'unwatch' | 'clearResume' | 'anime' | 'episodes' | 'dropped' | 'watchlist' | 'rate';
+export type OutboxOp = 'scrobble' | 'credit' | 'unwatch' | 'redate' | 'catchUp' | 'catchUps' | 'clearResume' | 'anime' | 'episodes' | 'dropped' | 'watchlist' | 'rate';
 
 export interface OutboxJob {
   service: WatchTrackingService;
@@ -37,18 +39,23 @@ const executors: Record<OutboxOp, Executor> = {
   scrobble: (service, p, config, userUUID) => require('./playbackHandler').deliverScrobble(service, p, config, userUUID),
   credit: (service, p, config) => require('./playbackHandler').deliverCredit(service, p, config),
   unwatch: (service, p, config) => require('./playbackHandler').deliverUnwatch(service, p, config),
+  redate: (service, p, config) => require('./playbackHandler').deliverWatchDate(service, p, config),
+  catchUp: (service, p, config, userUUID) => require('./playbackHandler').deliverCatchUp(service, p, config, userUUID),
+  catchUps: (service, p, config, userUUID) => require('./playbackHandler').deliverCatchUps(service, p, config, userUUID),
   clearResume: (service, p, config) => require('./playbackHandler').deliverClearResume(service, p, config),
   anime: (service, p, config, userUUID) => require('./playbackHandler').deliverAnime(service, p, config, userUUID),
-  episodes: (service, p, config) => require('./subtitleHandler').markEpisodes(p.videos, config, p.method, p.scope, service),
+  episodes: (service, p, config) => require('./subtitleHandler').markEpisodes(p.videos, config, p.method, p.scope, service, p.at),
   dropped: (service, p, config) => require('./jellyfin/dropped').writeDropped(config, p.ids, p.dropped, service),
   watchlist: (service, p, config, userUUID) => require('./jellyfin/watchlistSources').writeWatchlist(config, userUUID, p.ids, p.kind, p.listed, service),
   rate: (service, p, config, userUUID) => require('./jellyfin/ratings').writeRating(config, p, service, userUUID),
 };
 
 // Writes that change what the trackers report as watched, rather than only where playback stands.
-const CHANGES_WATCHED = new Set<OutboxOp>(['scrobble', 'credit', 'unwatch', 'episodes', 'dropped', 'anime']);
+const CHANGES_WATCHED = new Set<OutboxOp>(['scrobble', 'credit', 'unwatch', 'redate', 'catchUp', 'catchUps', 'episodes', 'dropped', 'anime']);
 const CHANGES_RESUME = new Set<OutboxOp>(['scrobble', 'credit', 'unwatch', 'clearResume', 'episodes']);
 const CHANGES_UPCOMING = new Set<OutboxOp>(['watchlist']);
+
+const WATCH_OPS: OutboxOp[] = ['scrobble', 'credit', 'unwatch', 'catchUp', 'catchUps', 'episodes', 'anime'];
 
 const LEASE_MS = 5 * 60 * 1000;
 const HEARTBEAT_MS = 60 * 1000;
@@ -97,17 +104,18 @@ export async function pendingWatches(service: WatchTrackingService, credential: 
     const kind = parsed.episode !== null && parsed.episode !== undefined ? 'episode' : 'movie';
     out.set(videoId, { videoId, kind, metaId: kind === 'episode' ? parsed.base : videoId, played, at });
   };
-  for (const row of await database.listTrackerOutboxLane(laneKey(service, credential))) {
+  for (const row of await database.listTrackerOutboxLane(laneKey(service, credential), WATCH_OPS)) {
     let p: any;
     try {
       p = JSON.parse(row.payload);
     } catch {
       continue;
     }
-    if (row.op === 'credit') note(p.id, true, row.created_at);
+    if (row.op === 'credit' || row.op === 'catchUp') note(p.id, true, row.created_at);
     else if (row.op === 'unwatch') note(p.id, false, row.created_at);
     else if (row.op === 'scrobble' && p.report?.event === 'stop' && p.report?.played === true) note(p.id, true, row.created_at);
     else if (row.op === 'episodes') for (const video of p.videos ?? []) note(video, p.method === 'addToHistory', row.created_at);
+    else if (row.op === 'catchUps') for (const item of p.items ?? []) for (const video of item?.ids ?? []) note(video, true, row.created_at);
     else if (row.op === 'anime') note(p.id, true, row.created_at);
   }
   return [...out.values()];
@@ -141,7 +149,7 @@ export async function enqueueTrackerWrites(userUUID: string | undefined, config:
         payload: job.payload,
         expiresAt: now + (job.within ? job.within * 1000 : maxAgeMs()),
       })));
-      kick();
+      if (active.size < concurrency() && rows.some(({ lane }) => !active.has(lane))) kick();
       return;
     } catch (error: any) {
       logger.warn(`Could not queue ${rows.length} tracker write(s), sending them now: ${error?.message || error}`);
@@ -160,6 +168,7 @@ export async function enqueueTrackerWrites(userUUID: string | undefined, config:
 
 const active = new Set<string>();
 let again = false;
+let kickScheduled = false;
 let passId = 0;
 let passStartedAt = 0;
 let lastPurgeAt = 0;
@@ -176,8 +185,13 @@ function kick(): void {
     heartbeat = setInterval(kick, HEARTBEAT_MS);
     heartbeat.unref?.();
   }
+  if (kickScheduled) return;
+  kickScheduled = true;
   // A fresh, empty scope: the pump must not inherit whichever request's viewer queued the write.
-  setImmediate(() => { runInViewerScope(false, () => pump()).catch((error: any) => logger.warn(`Outbox pass failed: ${error?.message || error}`)); });
+  setImmediate(() => {
+    kickScheduled = false;
+    runInViewerScope(false, () => pump()).catch((error: any) => logger.warn(`Outbox pass failed: ${error?.message || error}`));
+  });
 }
 
 function wakeBy(at: number | null): void {
@@ -192,6 +206,34 @@ function wakeBy(at: number | null): void {
   wakeTimer.unref?.();
 }
 
+/**
+ * The ready writes to start now, one per lane. Each tracker with work gets an
+ * even share of the slots first; one may then take what the others leave, short
+ * of the last slot while another tracker has a write ready or in flight.
+ */
+export function pickWrites<R extends { service: string; lane: string }>(rows: R[], active: Set<string>, total: number): R[] {
+  const slots = total - active.size;
+  const running = new Map<string, number>();
+  for (const lane of active) {
+    const service = lane.split(':')[0];
+    running.set(service, (running.get(service) ?? 0) + 1);
+  }
+  const busy = new Set<string>([...running.keys(), ...rows.map((row) => row.service)]);
+  const share = Math.max(1, Math.ceil(total / Math.max(1, busy.size)));
+  const taking: R[] = [];
+  for (const round of [0, 1]) {
+    for (const row of rows) {
+      if (taking.length >= slots) break;
+      const most = round === 0 ? share : [...busy].some((service) => service !== row.service) ? Math.max(1, total - 1) : total;
+      const held = running.get(row.service) ?? 0;
+      if (held >= most || active.has(row.lane) || taking.includes(row)) continue;
+      running.set(row.service, held + 1);
+      taking.push(row);
+    }
+  }
+  return taking;
+}
+
 async function pump(): Promise<void> {
   if (passStartedAt) {
     if (Date.now() - passStartedAt < PASS_STUCK_MS) {
@@ -202,6 +244,7 @@ async function pump(): Promise<void> {
   }
   const pass = ++passId;
   passStartedAt = Date.now();
+  let reclaims = 0;
   try {
     do {
       again = false;
@@ -209,21 +252,30 @@ async function pump(): Promise<void> {
       if (now - lastPurgeAt >= HEARTBEAT_MS) {
         lastPurgeAt = now;
         const purged = await database.purgeTrackerOutbox(now);
-        if (purged) logger.info(`Dropped ${purged} tracker write(s) too late to send`);
+        if (purged.length) {
+          logger.info(`Dropped ${purged.length} tracker write(s) too late to send`);
+          const seen = new Set<string>();
+          for (const row of purged) {
+            const owner = `${row.user_uuid}|${row.profile ?? ''}|${row.service}`;
+            if (!CHANGES_WATCHED.has(row.op as OutboxOp) || seen.has(owner)) continue;
+            seen.add(owner);
+            await unlayerStored(row);
+          }
+        }
       }
 
-      const slots = concurrency() - active.size;
+      const total = concurrency();
+      const slots = total - active.size;
       if (slots > 0) {
-        const rows: any[] = await database.readyTrackerOutbox(now, slots + active.size);
-        let free = slots;
-        for (const row of rows) {
-          if (pass !== passId) return;
-          if (free <= 0) break;
-          if (active.has(row.lane)) continue;
-          if (!(await database.claimTrackerOutbox(row.id, Date.now() + leaseMs()))) continue;
-          free--;
-          send(row);
+        const rows: any[] = await database.readyTrackerOutbox(now, total);
+        if (pass !== passId) return;
+        const taking = pickWrites(rows, active, total);
+        const claimed = new Set<number>(await database.claimTrackerOutbox(taking.map((row) => row.id), Date.now() + leaseMs()));
+        for (const row of taking) {
+          if (claimed.has(row.id)) send(row);
         }
+        // Another instance took some of them; the other ready writes get those slots now.
+        if (claimed.size < taking.length && reclaims++ < 3) again = true;
       }
       if (pass !== passId) return;
       wakeBy(await database.trackerOutboxWakeAt(Date.now()));
@@ -268,7 +320,7 @@ type Outcome = { kind: 'done' } | { kind: 'retry'; at?: number; reason: string }
 /** Judged by the last answer: a lookup that failed before a fallback that worked is not a failure. */
 function judge(calls: TrackerCall[], error: any): Outcome {
   const last = calls[calls.length - 1];
-  if (!last) return error ? { kind: 'drop', reason: String(error?.message || error) } : { kind: 'done' };
+  if (!last) return error ? { kind: 'drop', reason: String(error?.message || error), ...(Number.isFinite(error?.status) ? { status: error.status } : {}) } : { kind: 'done' };
   const { status, body } = last;
   if ((status >= 200 && status < 300) || status === 409) return { kind: 'done' };
   // Simkl's write lock clears once the write holding it finishes.
@@ -279,7 +331,7 @@ function judge(calls: TrackerCall[], error: any): Outcome {
     return { kind: 'retry', at: last.retryAt, reason: 'AniList API disabled' };
   }
   if (status === 0 || status === 408 || status === 429 || status >= 500) {
-    return { kind: 'retry', at: last.retryAt, reason: status === 0 ? `${last.host} did not answer` : `${last.host} answered ${status}` };
+    return { kind: 'retry', at: last.retryAt, reason: status === 0 ? `${last.host} did not answer` : `${last.host} answered ${status}${body ? `: ${body.slice(0, 120)}` : ''}` };
   }
   return { kind: 'drop', status, reason: `${last.host} answered ${status}${body ? `: ${body.slice(0, 120)}` : ''}` };
 }
@@ -294,6 +346,7 @@ async function deliver(row: any): Promise<void> {
   if (row.expires_at <= Date.now()) {
     logger.debug(`Dropping ${label}: too late to send`);
     await database.deleteTrackerOutbox(row.id);
+    await unlayerStored(row);
     return;
   }
 
@@ -329,15 +382,23 @@ async function deliver(row: any): Promise<void> {
 
   if (outcome.kind === 'done') {
     await database.deleteTrackerOutbox(row.id);
+    if (calls.length) noteDelivery(row, config, payload, 'sent', { status: calls[calls.length - 1]?.status ?? null, attempts: row.attempts + 1, ...(calls.some((call) => call.rewatch) ? { rewatch: true } : {}) });
     if (row.attempts > 0) logger.info(`Sent ${label} after ${row.attempts + 1} attempts`);
     settle(row.user_uuid, config, [row.op]);
+    require('./jellyfin/trackerDrift').recoverWhenAnswering(row.service, config);
     return;
   }
   if (outcome.kind === 'drop') {
     await database.deleteTrackerOutbox(row.id);
     // Nothing to clear or remove is the outcome those writes wanted.
-    if (outcome.status === 404 && (row.op === 'clearResume' || row.op === 'unwatch')) logger.debug(`Nothing to change for ${label}: ${outcome.reason}`);
-    else logger.warn(`Gave up on ${label}: ${outcome.reason}`);
+    if (outcome.status === 404 && (row.op === 'clearResume' || row.op === 'unwatch')) {
+      noteDelivery(row, config, payload, 'sent', { status: 404, attempts: row.attempts + 1 });
+      logger.debug(`Nothing to change for ${label}: ${outcome.reason}`);
+    } else {
+      noteDelivery(row, config, payload, 'failed', { status: outcome.status ?? null, reason: outcome.reason, attempts: row.attempts + 1 });
+      await unlayer(row, config);
+      logger.warn(`Gave up on ${label}: ${outcome.reason}`);
+    }
     return;
   }
 
@@ -345,11 +406,56 @@ async function deliver(row: any): Promise<void> {
   const nextAt = Math.max(outcome.at ?? 0, Date.now() + (outcome.reason === 'Simkl write lock' ? 0 : backoffMs(attempts)));
   if (nextAt >= row.expires_at) {
     await database.deleteTrackerOutbox(row.id);
+    noteDelivery(row, config, payload, 'failed', { reason: outcome.reason, attempts });
+    await unlayer(row, config);
     logger.warn(`Gave up on ${label} after ${attempts} attempts: ${outcome.reason}`);
     return;
   }
   await database.retryTrackerOutbox(row.id, attempts, nextAt, outcome.reason);
+  noteDelivery(row, config, payload, 'retry', { reason: outcome.reason, attempts, nextAt });
   logger.debug(`Will retry ${label} at ${new Date(nextAt).toISOString()}: ${outcome.reason}`);
+}
+
+export async function unlayer(row: { op: string; service: string }, config: any): Promise<void> {
+  if (!CHANGES_WATCHED.has(row.op as OutboxOp)) return;
+  const credential = credentialOf(config, row.service as WatchTrackingService);
+  if (!credential) return;
+  const { sourceKeyFor } = require('./jellyfin/trackerMirror');
+  await database.bumpTrackerSyncVersion(sourceKeyFor(row.service, credential)).catch(() => undefined);
+}
+
+// A write that leaves unsent without its configuration at hand.
+async function unlayerStored(row: { user_uuid: string; profile?: string | null; service: string; op: string }): Promise<void> {
+  if (!CHANGES_WATCHED.has(row.op as OutboxOp)) return;
+  try {
+    const stored = await require('./configApi').loadSharedConfig(row.user_uuid);
+    const { scopeConfigToProfile } = require('./jellyfin/profiles');
+    await unlayer(row, scopeConfigToProfile(stored, row.user_uuid, row.profile || null));
+  } catch (error: any) {
+    logger.debug(`Could not rebuild ${row.service} watched state for ${row.user_uuid}: ${error?.message || error}`);
+  }
+}
+
+function noteDelivery(row: any, config: any, payload: any, kind: 'sent' | 'retry' | 'failed', detail: Record<string, unknown>): void {
+  const credential = credentialOf(config, row.service);
+  if (!credential) return;
+  const { sourceKeyFor } = require('./jellyfin/trackerMirror');
+  const { noteActivity, summariseJob } = require('./trackerActivity');
+  const job = summariseJob(row.op, payload, row.item_key);
+  void noteActivity({
+    sourceKey: sourceKeyFor(row.service, credential),
+    service: row.service,
+    kind,
+    userUUID: row.user_uuid,
+    profile: row.profile ?? '',
+    op: row.op,
+    video: job.video,
+    detail: { verb: job.verb, count: job.count, ...(job.videos ? { videos: job.videos } : {}), ...detail },
+  });
+}
+
+export function wakeTrackerOutbox(): void {
+  kick();
 }
 
 // --- After a write lands ------------------------------------------------------------

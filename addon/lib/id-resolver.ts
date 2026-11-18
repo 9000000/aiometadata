@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 
 const idMapper: any = require('./id-mapper');
 const tvdb: any = require('./tvdb');
@@ -49,15 +51,34 @@ let performanceStats: PerformanceStats = {
   animeResolutions: 0
 };
 
+const NUMERIC_PREFIXES = new Set(['tmdb', 'tvdb', 'tvmaze', 'mal', 'kitsu', 'anidb', 'anilist']);
+const NUMERIC_ID_REGEX = /^\d+$/;
+const IMDB_ID_REGEX = /^tt\d+$/;
+
 function _parseStremioId(stremioId: string): AllIds {
   const ids: AllIds = { tmdbId: null, tvdbId: null, imdbId: null, tvmazeId: null, malId: null, kitsuId: null, anidbId: null, anilistId: null };
+  if (!stremioId || typeof stremioId !== 'string') {
+    return ids;
+  }
   if (stremioId.startsWith('tt')) {
-    ids.imdbId = stremioId;
+    const imdbPart = stremioId.split(':')[0];
+    if (IMDB_ID_REGEX.test(imdbPart)) {
+      ids.imdbId = imdbPart;
+    }
     return ids;
   }
   const [prefix, sourceId] = stremioId.split(':');
+  if (!sourceId) {
+    return ids;
+  }
+  if (prefix === 'imdb') {
+    if (IMDB_ID_REGEX.test(sourceId)) {
+      ids.imdbId = sourceId;
+    }
+    return ids;
+  }
   const key = `${prefix}Id`;
-  if (key in ids) {
+  if (key in ids && (!NUMERIC_PREFIXES.has(prefix) || NUMERIC_ID_REGEX.test(sourceId))) {
     ids[key] = sourceId;
   }
   return ids;
@@ -314,6 +335,10 @@ async function resolveAllIds(stremioId: string, type: string, config: any, prefe
     return allIds;
   }
 
+  // An IMDb id the mappings list only as the other kind most likely names a title of that kind, but the mappings can be
+  // wrong: it is still looked up, by TMDB and TVDB as the asked kind, while mappings cached before lookups kept to
+  // their kind, and Cinemeta, which can answer with an unrelated title, are passed by.
+  let listedAsOtherKind = false;
   if (!isAnime) {
     try {
       let wikiMapping: any = null;
@@ -323,6 +348,10 @@ async function resolveAllIds(stremioId: string, type: string, config: any, prefe
         wikiMapping = mappings.getByTvdbId(allIds.tvdbId.toString(), type);
       } else if (allIds.imdbId && (type === 'movie' || type === 'series')) {
         wikiMapping = mappings.getByImdbId(allIds.imdbId, type);
+        if (!wikiMapping && mappings.getByImdbId(allIds.imdbId, type === 'movie' ? 'series' : 'movie')) {
+          listedAsOtherKind = true;
+          logger.debug(`[Wiki] ${allIds.imdbId} is listed only as ${type === 'movie' ? 'a series' : 'a movie'}; looked up as ${type} by TMDB and TVDB alone`);
+        }
       } else if (allIds.tvmazeId && type === 'series') {
         wikiMapping = mappings.getSeriesByTvmaze(allIds.tvmazeId.toString());
       }
@@ -365,7 +394,7 @@ async function resolveAllIds(stremioId: string, type: string, config: any, prefe
     }
 
 
-    let cachedMapping = await redisIdCache.getCachedIdMapping(type, allIds.tmdbId, allIds.tvdbId, allIds.imdbId, allIds.tvmazeId);
+    let cachedMapping = listedAsOtherKind ? null : await redisIdCache.getCachedIdMapping(type, allIds.tmdbId, allIds.tvdbId, allIds.imdbId, allIds.tvmazeId);
     if (cachedMapping && !allIds.tmdbId && await cachedTmdbGone(type, cachedMapping, config)) {
       await redisIdCache.forgetIdMapping(type, cachedMapping);
       cachedMapping = null;
@@ -419,8 +448,14 @@ async function resolveAllIds(stremioId: string, type: string, config: any, prefe
   performanceStats.apiCallsRequired++;
   const apiStartTime = Date.now();
   try {
-    if (allIds.imdbId && !allIds.tmdbId && !allIds.tvdbId) {
-      const cinemetaIds = await getExternalIdsFromImdb(allIds.imdbId, type);
+    if (allIds.imdbId && !allIds.tmdbId && !allIds.tvdbId && !listedAsOtherKind) {
+      let cinemetaIds = await getExternalIdsFromImdb(allIds.imdbId, type);
+      // Cinemeta can answer an IMDb id of the other kind with an unrelated title's ids; TMDB naming another IMDb id for
+      // its TMDB id rules out the whole answer, its TVDB id with it.
+      if (cinemetaIds?.tmdbId && (type === 'movie' || type === 'series')) {
+        const named = (await _fetchFromTmdb(cinemetaIds.tmdbId, type, config)).imdbId;
+        if (named && named !== allIds.imdbId) cinemetaIds = undefined;
+      }
       if (cinemetaIds) {
         allIds.tmdbId = allIds.tmdbId || cinemetaIds.tmdbId;
         allIds.tvdbId = allIds.tvdbId || cinemetaIds.tvdbId;
@@ -471,7 +506,9 @@ async function resolveAllIds(stremioId: string, type: string, config: any, prefe
             moviedb.find({ id: allIds.imdbId, external_source: 'imdb_id' }, config)
                 .then((res: any) => {
                     const duration = Date.now() - tmdbFindStartTime;
-                    const tmdbId = res.movie_results?.[0]?.id || res.tv_results?.[0]?.id || null;
+                    const tmdbId = (type === 'movie' ? res.movie_results?.[0]?.id
+                      : type === 'series' ? res.tv_results?.[0]?.id
+                      : res.movie_results?.[0]?.id || res.tv_results?.[0]?.id) || null;
                     secondaryTimings.push({
                         operation: 'tmdb_find_by_imdb',
                         duration,

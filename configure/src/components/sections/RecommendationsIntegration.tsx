@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import { useEffect, useState } from 'react';
 import { Check, Clapperboard, Clock, Plus, Sparkles, Tv, TriangleAlert, Wand2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -10,6 +12,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch';
 import { Callout } from '@/components/settings/Callout';
 import { SettingRow } from '@/components/settings/SettingRow';
+import { EngineOnlySearch, WebSearchEngineSelect } from '@/components/settings/WebSearchEngine';
+import { useWebSearch } from '@/hooks/useWebSearch';
 import { useConfig } from '@/contexts/ConfigContext';
 import type { AppConfig, CatalogConfig } from '@/contexts/config';
 import { GEMINI_MODELS, isPresetModel, resolveCatalogModel, resolveGeminiModel } from '@/data/ai-models';
@@ -65,9 +69,13 @@ interface Status {
   connected: { simkl: boolean; mdblist: boolean; local?: boolean };
   available?: { simkl: boolean; mdblist: boolean };
   provider: { provider: string; model: string } | null;
+  /** The instance supplies a Gemini key of its own. */
+  instanceGemini?: boolean;
   counts: { total: number; movies: number; series: number; anime: number; rated: number; meanRating?: number };
   profile: { summary: string; builtAt: string; builtFrom: number } | null;
   profiles?: Array<{ id: string; name: string; avatar?: string; linked: string[] }>;
+  /** The last web search for these rows that failed, while an engine here is chosen. */
+  webSearchFailure?: { failure: string; at: number } | null;
 }
 
 interface Viewer {
@@ -99,9 +107,9 @@ function Avatar({ viewer, index }: { viewer: Viewer; index: number }) {
 }
 
 export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-  const { config, setConfig, auth } = useConfig();
+  const { config, setConfig, auth, hasBuiltInGemini, aiCustomEndpoint } = useConfig();
   const { models: openRouterModels, loading: openRouterModelsLoading } =
-    useOpenRouterModels(config.apiKeys?.openrouter);
+    useOpenRouterModels(config.apiKeys?.openrouter, aiCustomEndpoint);
 
   const [status, setStatus] = useState<Status | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
@@ -137,6 +145,7 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
   const hasHistory = hasSimkl || hasMdblist || hasPlays;
   const hasGemini = !!config.apiKeys?.gemini;
   const hasOpenRouter = !!config.apiKeys?.openrouter;
+  const geminiAvailable = hasGemini || (status?.instanceGemini ?? hasBuiltInGemini);
   const hasModel = hasGemini || hasOpenRouter;
   const ready = hasHistory && hasModel;
 
@@ -155,15 +164,18 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
   const source: Source = isMain ? mainSource : draft.profiles?.[viewerKey]?.sources || 'same';
   const preferred = draft.provider;
   const webSearch = draft.web_search === true;
+  const webVia = draft.web_search_via;
+  const web = useWebSearch();
   const thinking = draft.reasoning_effort || 'low';
   const stalled = draft.stalled_weight || 'note';
   const staleDays = draft.stale_after_days || 180;
   const refreshHours = draft.refresh_hours || 24;
   const refreshCustom = ![6, 12, 24].includes(refreshHours);
   const order = draft.order || 'balanced';
-  const usingOpenRouter = preferred === 'openrouter'
-    ? hasOpenRouter
-    : preferred === 'gemini' ? false : !hasGemini && hasOpenRouter;
+  // The server's order: the provider chosen, then the configuration's own keys, then the instance's.
+  const usingOpenRouter = preferred === 'openrouter' && hasOpenRouter
+    ? true
+    : preferred === 'gemini' && geminiAvailable ? false : !hasGemini && hasOpenRouter;
 
   // Reads what is already known; never triggers a build, so opening this panel
   // cannot spend a model call.
@@ -310,7 +322,9 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
   const currentModel = usingOpenRouter
     ? draft.openrouter_model || ''
     : draft.gemini_model || '';
-  const presetModel = usingOpenRouter && isPresetModel(currentModel || resolveCatalogModel(config, 'openrouter'));
+  const presetModel = usingOpenRouter && isPresetModel(currentModel || resolveCatalogModel(config, 'openrouter', !!aiCustomEndpoint));
+  // Another OpenAI-compatible endpoint has neither OpenRouter's search nor its thinking control.
+  const customEndpoint = usingOpenRouter && !!aiCustomEndpoint;
   const thinkingValue = draft.reasoning_effort || (presetModel ? 'preset' : thinking);
 
   const possessive = isMain ? 'your' : `${viewer.name}'s`;
@@ -335,7 +349,7 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
       id: 'simkl',
       title: 'Simkl',
       description: hasSimkl ? 'Ratings and finished shows from the Simkl account.'
-        : isMain ? 'Connect Simkl in Integrations to read it here.' : `Link a Simkl account to ${viewer.name} in Jellyfin profiles.`,
+        : isMain ? 'Connect Simkl in Integrations to read it here.' : `Link a Simkl account to ${viewer.name} in People.`,
       available: hasSimkl,
       tag: hasSimkl ? 'Connected' : 'Not connected',
     },
@@ -343,7 +357,7 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
       id: 'mdblist',
       title: 'MDBList',
       description: hasMdblist ? 'Watch history from the MDBList key.'
-        : isMain ? 'Add an MDBList key in Integrations to read it here.' : `Link an MDBList key to ${viewer.name} in Jellyfin profiles.`,
+        : isMain ? 'Add an MDBList key in Integrations to read it here.' : `Link an MDBList key to ${viewer.name} in People.`,
       available: hasMdblist,
       tag: hasMdblist ? 'Connected' : 'Not connected',
     },
@@ -488,7 +502,7 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {selected?.description}
-                  {missing.length > 0 && !isMain ? ` ${missing.join(' and ')} can be linked to ${viewer.name} in Jellyfin profiles.` : ''}
+                  {missing.length > 0 && !isMain ? ` ${missing.join(' and ')} can be linked to ${viewer.name} in People.` : ''}
                 </p>
               </section>
 
@@ -501,7 +515,7 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
                   </p>
                 </div>
                 <div className="max-w-3xl space-y-4">
-                    {hasGemini && hasOpenRouter && (
+                    {geminiAvailable && hasOpenRouter && (
                       <div className="space-y-2">
                         <Label className="text-sm font-medium">Provider</Label>
                         <div className={TRAY}>
@@ -513,6 +527,7 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
                             </button>
                           ))}
                         </div>
+                        {!hasGemini && <p className="text-xs text-muted-foreground">Gemini uses the key this instance provides.</p>}
                       </div>
                     )}
 
@@ -558,12 +573,24 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
                       )}
                     </div>
 
-                    <SettingRow
+                    {customEndpoint && web.offered(webVia) && (
+                      <EngineOnlySearch
+                        id="recommendation-web-search"
+                        label="Web search"
+                        on={webSearch && Boolean(webVia)}
+                        via={webVia}
+                        onChange={next => patch(next ? { web_search: true, web_search_via: next } : { web_search_via: undefined })}
+                      />
+                    )}
+
+                    {!customEndpoint && <SettingRow
                       htmlFor="recommendation-web-search"
                       label="Web search"
                       description={presetModel
                         ? 'A preset takes web search from its own settings on OpenRouter.'
-                        : usingOpenRouter
+                        : webSearch && webVia
+                          ? 'Lets the model look up what has come out lately.'
+                          : usingOpenRouter
                           ? 'Adds :online so the model sees live results. Billed by OpenRouter at roughly $0.005 per search, on top of the model.'
                           : 'Lets the model look up what has come out lately. Requires a paid Gemini API key; free keys will get 429 errors.'}
                       control={
@@ -581,9 +608,25 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
                           recommended, however recent the rest of your library is.
                         </Callout>
                       ) : undefined}
-                    />
+                    />}
 
-                    {usingOpenRouter && (
+                    {!customEndpoint && webSearch && !presetModel && web.offered(webVia) && (
+                      <WebSearchEngineSelect
+                        id="recommendation-web-search-engine"
+                        own={usingOpenRouter ? 'OpenRouter' : 'Google'}
+                        via={webVia}
+                        onChange={via => patch({ web_search_via: via })}
+                      />
+                    )}
+
+                    {webSearch && webVia && status?.webSearchFailure && (
+                      <Callout variant="warn" className="text-xs">
+                        The web search failed on {new Date(status.webSearchFailure.at).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}: {status.webSearchFailure.failure} Rows
+                        built since then had no web results, so recent releases may be missing.
+                      </Callout>
+                    )}
+
+                    {usingOpenRouter && !customEndpoint && (
                       <SettingRow
                         htmlFor="recommendation-thinking"
                         label="Thinking"

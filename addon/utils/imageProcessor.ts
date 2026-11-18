@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 const sharp: any = require('sharp');
 const axios: any = require('axios');
 const { Transform }: any = require('stream');
@@ -27,6 +29,30 @@ const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
 const MAX_FILE_SIZE = 15 * 1024 * 1024;
 const MAX_INPUT_PIXELS = 10000 * 10000;
 const REQUEST_TIMEOUT_MS = 10000;
+const MAX_CONCURRENT_SHARP_JOBS = 4;
+
+let activeSharpJobs = 0;
+const sharpWaitQueue: Array<() => void> = [];
+
+async function withSharpSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (activeSharpJobs < MAX_CONCURRENT_SHARP_JOBS && sharpWaitQueue.length === 0) {
+    activeSharpJobs += 1;
+  } else {
+    await new Promise<void>((resolve) => {
+      sharpWaitQueue.push(resolve);
+    });
+  }
+  try {
+    return await fn();
+  } finally {
+    const next = sharpWaitQueue.shift();
+    if (next) {
+      next();
+    } else {
+      activeSharpJobs -= 1;
+    }
+  }
+}
 
 interface BannerOptions {
   width?: number;
@@ -82,15 +108,41 @@ async function blurImage(imageUrl: string, outputStream: any): Promise<StreamRes
   return streamProcessedImage(imageUrl, outputStream, (transformer: any) => transformer.blur(80));
 }
 
+const BANNER_POSITIONS = new Set([
+  'center', 'centre', 'top', 'right top', 'right', 'right bottom', 'bottom', 'left bottom', 'left', 'left top',
+  'north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest', 'entropy', 'attention',
+]);
+
+function bounded(value: unknown, fallback: number, min: number, max: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+}
+
+/** No background needs more pixels than 4K. */
+const MAX_BANNER_PIXELS = 3840 * 2160;
+
+/** Banner options held to what a background needs, so no request can ask for an output or a blur that holds a core. */
+function normaliseBannerOptions(raw: Record<string, unknown> = {}): Required<BannerOptions> {
+  const blur = bounded(raw.blur, 0, 0, 50);
+  const position = String(raw.position ?? 'center').toLowerCase();
+  let width = bounded(raw.width || undefined, 1920, 1, 3840);
+  let height = bounded(raw.height || undefined, 1080, 1, 3840);
+  const shrink = Math.min(1, Math.sqrt(MAX_BANNER_PIXELS / (width * height)));
+  width = Math.max(1, Math.round(width * shrink));
+  height = Math.max(1, Math.round(height * shrink));
+  return {
+    width,
+    height,
+    // sharp takes a blur of 0.3 or more; anything below it but above none is the lightest it does.
+    blur: blur > 0 ? Math.max(0.3, blur) : 0,
+    brightness: bounded(raw.brightness || undefined, 1, 0.1, 10),
+    contrast: bounded(raw.contrast || undefined, 1, 0, 10),
+    position: BANNER_POSITIONS.has(position) ? position : 'center',
+  };
+}
+
 async function convertBannerToBackground(bannerUrl: string, options: BannerOptions = {}, outputStream: any): Promise<StreamResult> {
-  const {
-    width = 1920,
-    height = 1080,
-    blur = 0,
-    brightness = 1,
-    contrast = 1,
-    position = 'center'
-  } = options;
+  const { width, height, blur, brightness, contrast, position } = normaliseBannerOptions(options as Record<string, unknown>);
 
   return streamProcessedImage(bannerUrl, outputStream, (transformer: any) => {
     let sharpInstance = transformer.resize(width, height, {
@@ -189,34 +241,36 @@ function createSharpStream(): any {
 async function streamProcessedImage(imageUrl: string, outputStream: any, configureTransformer: (transformer: any) => any): Promise<StreamResult> {
   ensureOutputStream(outputStream);
 
-  const response = await fetchImageStream(imageUrl);
-  const inputLimiter = createInputSizeLimiter(MAX_FILE_SIZE);
-  const outputCounter = createOutputCounter();
-  const transformer = configureTransformer(createSharpStream()).jpeg();
-  let outputInfo: any = null;
+  return withSharpSlot(async () => {
+    const response = await fetchImageStream(imageUrl);
+    const inputLimiter = createInputSizeLimiter(MAX_FILE_SIZE);
+    const outputCounter = createOutputCounter();
+    const transformer = configureTransformer(createSharpStream()).jpeg();
+    let outputInfo: any = null;
 
-  transformer.once('info', (info: any) => {
-    outputInfo = info;
+    transformer.once('info', (info: any) => {
+      outputInfo = info;
+    });
+
+    try {
+      await pipeline(
+        response.data,
+        inputLimiter,
+        transformer,
+        outputCounter.stream,
+        outputStream
+      );
+
+      return {
+        bytesWritten: outputCounter.bytes(),
+        info: outputInfo
+      };
+    } catch (error: any) {
+      response.data.destroy(error);
+      throw error;
+    }
   });
-
-  try {
-    await pipeline(
-      response.data,
-      inputLimiter,
-      transformer,
-      outputCounter.stream,
-      outputStream
-    );
-
-    return {
-      bytesWritten: outputCounter.bytes(),
-      info: outputInfo
-    };
-  } catch (error: any) {
-    response.data.destroy(error);
-    throw error;
-  }
 }
 
-export { blurImage, convertBannerToBackground, validateImageUrl };
-module.exports = { blurImage, convertBannerToBackground, validateImageUrl };
+export { blurImage, convertBannerToBackground, normaliseBannerOptions, validateImageUrl };
+module.exports = { blurImage, convertBannerToBackground, normaliseBannerOptions, validateImageUrl };

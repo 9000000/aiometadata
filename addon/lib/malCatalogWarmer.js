@@ -1,5 +1,7 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 const jikan = require('./mal');
-const { cacheWrapJikanApi, cacheWrapCatalog } = require('./getCache');
+const { cacheWrapJikanApi, cacheWrapCatalog, stableStringify } = require('./getCache');
 const { sleep } = require('../utils/concurrency');
 const { parseAnimeCatalogMetaBatch } = require('../utils/parseProps');
 const { envInt } = require('../utils/envNumber');
@@ -380,17 +382,16 @@ class MALCatalogWarmer {
         try {
           this.log('debug', `Warming ${catalog.name} page ${page}...`);
           
-          // Build catalog key EXACTLY like the route does:
-          // For MAL catalogs: pageSize = 25
-          // Page 1: skip=0 (no skip in extraArgs) → {}
-          // Page 2: skip=25 → {"skip":"25"}
-          const pageSize = 25;
-          const skip = page > 1 ? (page - 1) * pageSize : 0;
-          const extraArgs = skip > 0 ? { skip: skip.toString() } : {};
-          const catalogKey = `${catalog.catalogId}:anime:${JSON.stringify(extraArgs || {})}`;
+          // Build catalog key EXACTLY like catalogRoute does:
+          // Page 1: {}
+          // Page >= 2: {"page":2}
+          const catalogConfig = findCatalogConfig(catalog.catalogId);
+          const actualType = catalogConfig?.type || 'anime';
+          const extraArgs = page > 1 ? { page } : {};
+          const catalogKey = `${catalog.catalogId}:${actualType}:${stableStringify(extraArgs)}`;
           
           // Set current catalog config for per-catalog settings (like enableRatingPosters)
-          warmingConfig._currentCatalogConfig = findCatalogConfig(catalog.catalogId);
+          warmingConfig._currentCatalogConfig = catalogConfig;
           
           // Wrap in cacheWrapCatalog just like the catalog route
           const result = await cacheWrapCatalog(systemUUID, catalogKey, async () => {
@@ -476,7 +477,7 @@ class MALCatalogWarmer {
         // Capitalize day name to match route (Monday, not monday)
         const dayCapitalized = day.charAt(0).toUpperCase() + day.slice(1);
         const extraArgs = { genre: dayCapitalized };
-        const catalogKey = `mal.schedule:anime:${JSON.stringify(extraArgs || {})}`;
+        const catalogKey = `mal.schedule:anime:${stableStringify(extraArgs)}`;
         
         const result = await cacheWrapCatalog(systemUUID, catalogKey, async () => {
           // getAiringSchedule(day, page, config)

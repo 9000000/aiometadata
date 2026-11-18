@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import { AsyncLocalStorage } from 'node:async_hooks';
 import consola from 'consola';
 
@@ -67,20 +69,49 @@ const subscribers = new Set<LogSubscriber>();
 
 // ---- redaction (strip secrets before anything is stored or streamed) ----
 const SECRET_ENV_KEYS = [
-  'ADMIN_KEY', 'TMDB_API', 'BUILT_IN_TMDB_API_KEY', 'MDBLIST_API_KEY',
-  'BUILT_IN_MDBLIST_API_KEY', 'GEMINI_API_KEY', 'BUILT_IN_GEMINI_API_KEY',
-  'RPDB_API_KEY', 'SIMKL_CLIENT_ID', 'SIMKL_CLIENT_SECRET', 'SIMKL_V2_CLIENT_SECRET',
-  'TRAKT_CLIENT_ID', 'TRAKT_CLIENT_SECRET', 'ANILIST_CLIENT_SECRET',
+  'ADMIN_KEY', 'ADDON_PASSWORD', 'IMAGE_PROXY_SIGNING_SECRET',
+  'DATABASE_URI', 'DATABASE_READ_URI', 'REDIS_URL',
+  'TMDB_API_KEY', 'TMDB_API', 'BUILT_IN_TMDB_API_KEY',
+  'TVDB_API_KEY', 'BUILT_IN_TVDB_API_KEY',
+  'FANART_API_KEY', 'BUILT_IN_FANART_API_KEY', 'FANART_API_PROJECT_KEY',
+  'RPDB_API_KEY', 'BUILT_IN_RPDB_API_KEY',
+  'MDBLIST_API_KEY', 'BUILT_IN_MDBLIST_API_KEY',
+  'GEMINI_API_KEY', 'BUILT_IN_GEMINI_API_KEY', 'OPENROUTER_API_KEY',
+  'SIMKL_CLIENT_ID', 'SIMKL_CLIENT_SECRET', 'SIMKL_V2_CLIENT_ID', 'SIMKL_V2_CLIENT_SECRET',
+  'TRAKT_CLIENT_ID', 'TRAKT_CLIENT_SECRET',
+  'ANILIST_CLIENT_ID', 'ANILIST_CLIENT_SECRET',
+  'MAL_CLIENT_ID', 'MAL_CLIENT_SECRET',
+  'OIDC_CLIENT_SECRET', 'MOVIELENS_CRED_KEY',
   'GITHUB_PAT', 'GITHUB_TOKEN',
 ];
 let secretValues: string[] = [];
-function refreshSecrets(): void {
-  const found: string[] = [];
-  for (const k of SECRET_ENV_KEYS) {
-    const v = process.env[k];
-    if (v && v.length >= 6) found.push(v);
+export function refreshSecrets(): void {
+  const found = new Set<string>();
+  let readSetting: ((key: string) => string) | null = null;
+  try {
+    const resolvedPath = require.resolve('./settingsService');
+    if (require.cache[resolvedPath]?.loaded === true) {
+      const mod = require('./settingsService');
+      if (typeof mod?.getSetting === 'function') {
+        readSetting = mod.getSetting;
+      }
+    }
+  } catch {
+    // settingsService is not loaded yet during early bootstrap
   }
-  secretValues = found;
+  for (const k of SECRET_ENV_KEYS) {
+    const envVal = process.env[k];
+    if (envVal && envVal.length >= 6) found.add(envVal);
+    if (readSetting) {
+      try {
+        const settingVal = readSetting(k);
+        if (settingVal && settingVal.length >= 6) found.add(settingVal);
+      } catch {
+        // Ignore transient lookup errors during partial initialization
+      }
+    }
+  }
+  secretValues = Array.from(found).sort((a, b) => b.length - a.length);
 }
 refreshSecrets();
 

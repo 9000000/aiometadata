@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
 import consola from 'consola';
 import { readTokenSession, revokeToken } from './tokens';
 import { listProfiles, profileKey, scopeConfigToProfile } from './profiles';
@@ -100,10 +102,19 @@ export function parseMediaBrowserHeader(value: string | undefined): Record<strin
   return out;
 }
 
+const authHeaders = new WeakMap<object, Record<string, string>>();
+
+function authHeaderOf(req: any): Record<string, string> {
+  let held = authHeaders.get(req);
+  if (!held) {
+    held = parseMediaBrowserHeader(req.get('authorization') || req.get('x-emby-authorization'));
+    authHeaders.set(req, held);
+  }
+  return held;
+}
+
 export function extractToken(req: any): string | undefined {
-  const header = parseMediaBrowserHeader(
-    req.get('authorization') || req.get('x-emby-authorization')
-  );
+  const header = authHeaderOf(req);
   return (
     header.token ||
     req.get('x-emby-token') ||
@@ -123,9 +134,20 @@ const EXTENSION_CLIENT = /^(aiostreams|pelagica)\b/i;
 export function runWithClient<T>(req: any, fn: () => T): T {
   const { client } = clientInfo(req);
   return runInViewerScope(OWN_WATCHLIST_CLIENT.test(client), () => {
-    noteWantsPeople(requestsField(req, 'people'));
+    noteWantsPeople(requestsField(req, 'people') || clientListed(req, 'JELLYFIN_CAST_IN_LISTS_CLIENTS'));
     return fn();
   }, EXTENSION_CLIENT.test(client));
+}
+
+/** Whether a setting's comma-separated client names match this client, by its client name or user agent. */
+export function clientListed(req: any, key: string): boolean {
+  const names = String(require('../settingsService').getSetting(key) || '')
+    .split(',')
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean);
+  if (!names.length) return false;
+  const seen = `${clientInfo(req).client} ${req.get?.('user-agent') || ''}`.toLowerCase();
+  return names.some((name) => seen.includes(name));
 }
 
 /** Whether Fields names a field, however a client spells or repeats the parameter. */
@@ -140,15 +162,21 @@ export function clientHasOwnWatchlist(): boolean {
 }
 
 export function clientInfo(req: any): { client: string; device: string; deviceId: string; version: string } {
-  const header = parseMediaBrowserHeader(
-    req.get('authorization') || req.get('x-emby-authorization')
-  );
+  const header = authHeaderOf(req);
   return {
     client: header.client || 'Unknown',
     device: header.device || 'Unknown',
     deviceId: header.deviceid || 'unknown',
     version: header.version || '0.0.0',
   };
+}
+
+/** The request a Jellyfin client would have made, for work that reaches the server another way. */
+export function clientRequest(userUUID: string, profileId: string | null, client?: { name: string; deviceId: string }): any {
+  const headers: Record<string, string> = client
+    ? { 'x-emby-authorization': `MediaBrowser Client="${client.name}", Device="${client.name}", DeviceId="${client.deviceId}", Version=""`, 'user-agent': client.name }
+    : {};
+  return { params: { userUUID }, jellyfin: { userUUID, profileId }, query: {}, headers, get: (name: string) => headers[name.toLowerCase()] };
 }
 
 export function serverIdFor(userUUID: string): string {
@@ -164,8 +192,17 @@ async function profileExists(userUUID: string, profileId: string): Promise<boole
     if (error?.code === 'CONFIG_NOT_FOUND') return false;
     throw error;
   }
-  return Boolean(stored) && listProfiles(stored, userUUID).some((profile) => profile.id === profileId);
+  if (!stored) return false;
+  let ids = profileIds.get(stored);
+  if (!ids) {
+    ids = new Set(listProfiles(stored, userUUID).map((profile) => profile.id));
+    profileIds.set(stored, ids);
+  }
+  return ids.has(profileId);
 }
+
+const profileIds = new WeakMap<object, Set<string | null>>();
+const scopedConfigs = new WeakMap<object, Map<string, any>>();
 
 export async function attachJellyfinContext(req: any, _res: any, next: any): Promise<void> {
   const userUUID = req.params?.userUUID;
@@ -213,7 +250,18 @@ export async function loadConfig(req: any): Promise<any> {
 
   // The cached copy is every reader's, so a request changes only its own top level.
   require('./items').noteArtScope(serverIdFor(req.jellyfin.userUUID), stored);
-  const config = scopeConfigToProfile({ ...stored }, req.jellyfin.userUUID, req.jellyfin.profileId ?? null);
+  let scoped = scopedConfigs.get(stored);
+  if (!scoped) {
+    scoped = new Map();
+    scopedConfigs.set(stored, scoped);
+  }
+  const profileId = req.jellyfin.profileId ?? '';
+  let held = scoped.get(profileId);
+  if (!held) {
+    held = scopeConfigToProfile(stored, req.jellyfin.userUUID, req.jellyfin.profileId ?? null);
+    scoped.set(profileId, held);
+  }
+  const config = { ...held };
   config.userUUID = req.jellyfin.userUUID;
   req.jellyfin.config = config;
   noteAccountOwner(accountOwner(config));

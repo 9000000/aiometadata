@@ -1,5 +1,8 @@
-import { historyPayload, type EpisodeRef } from './historyPayload';
-import { httpGet, httpPost } from "./httpClient.js";
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
+import { historyBatchPayload, historyPayload, type EpisodeRef, type HistoryWrite } from './historyPayload';
+import { httpGet, httpPost, KEEP_ALIVE } from "./httpClient.js";
+import { LRUCache } from 'lru-cache';
 import { resolveAllIds } from "../lib/id-resolver.js";
 const buildInfo = require('../lib/buildInfo');
 import { getMeta } from "../lib/getMeta.js";
@@ -61,14 +64,14 @@ if (!mdblistDispatcher) {
     try {
       // ProxyAgent may need to be imported if not already
       const { ProxyAgent } = require('undici');
-      mdblistDispatcher = new ProxyAgent({ uri: new URL(HTTP_PROXY_URL).toString(), allowH2: false });
+      mdblistDispatcher = new ProxyAgent({ uri: new URL(HTTP_PROXY_URL).toString(), allowH2: false, connections: 25, ...KEEP_ALIVE });
       logger.info('[MDBList] Using global HTTP proxy.');
     } catch (error: any) {
       logger.error(`[MDBList] Invalid HTTP_PROXY URL. Using direct connection. Error: ${error.message}`);
-      mdblistDispatcher = new Agent({ allowH2: false, connect: { timeout: 30000 } });
+      mdblistDispatcher = new Agent({ allowH2: false, connect: { timeout: 30000 }, ...KEEP_ALIVE });
     }
   } else {
-    mdblistDispatcher = new Agent({ allowH2: false, connect: { timeout: 30000 } });
+    mdblistDispatcher = new Agent({ allowH2: false, connect: { timeout: 30000 }, ...KEEP_ALIVE });
     logger.debug('[MDBList] undici agent is enabled for direct connections.');
   }
 }
@@ -108,7 +111,7 @@ interface RateLimitState {
   lastReset?: number;
 }
 
-const rateLimitStates = new Map<string, RateLimitState>();
+const rateLimitStates = new LRUCache<string, RateLimitState>({ max: 5000, ttl: 60 * 60 * 1000 });
 
 let globalLastRequestTime = 0;
 let globalRequestPromise = Promise.resolve();
@@ -139,9 +142,25 @@ async function globalThrottle(): Promise<void> {
 }
 // ---------------------------------------
 
+let statesSweptAt = 0;
+
+// Only a state with nothing left to remember goes: no cooldown, no quota window open, no limit hit in the last hour.
+function sweepRateLimitStates(): void {
+  const now = Date.now();
+  if (rateLimitStates.size < 1000 || now - statesSweptAt < 60_000) return;
+  statesSweptAt = now;
+  for (const [key, state] of rateLimitStates) {
+    const cooling = state.isRateLimited && state.rateLimitResetTime > now;
+    const windowOpen = Boolean(state.lastReset && state.lastReset * 1000 > now);
+    if (!cooling && !windowOpen && now - state.lastRateLimitTime > 60 * 60 * 1000) rateLimitStates.delete(key);
+  }
+}
+
 function getRateLimitState(apiKey: string = 'global'): RateLimitState {
-  if (!rateLimitStates.has(apiKey)) {
-    rateLimitStates.set(apiKey, {
+  let state = rateLimitStates.get(apiKey);
+  if (!state) {
+    sweepRateLimitStates();
+    state = {
       recentRateLimitHits: 0,
       lastRateLimitTime: 0,
       isRateLimited: false,
@@ -149,9 +168,10 @@ function getRateLimitState(apiKey: string = 'global'): RateLimitState {
       lastLimit: undefined,
       lastRemaining: undefined,
       lastReset: undefined
-    });
+    };
+    rateLimitStates.set(apiKey, state);
   }
-  return rateLimitStates.get(apiKey)!;
+  return state;
 }
 
 function mdblistCallsLeft(apiKey: string): { remaining: number | null; limit: number | null; resetAt: number } {
@@ -403,7 +423,10 @@ async function fetchMDBListItems(listId: string, apiKey: string, language: strin
     : 'shared';
 
   const ttlSegment = cacheTTL !== undefined ? `:ttl:${cacheTTL}` : '';
-  const cacheKey = `mdblist-api:items:${keyScope}:${listId}:${page}:${sort || ''}:${order || ''}:${genre || ''}:${unified !== false}:${catalogType || ''}:${filterScoreMin ?? ''}:${filterScoreMax ?? ''}:${mediaTypeFilter || ''}:${pageSize}${ttlSegment}`;
+  // A watchlist is read again once MDBList reports it changed, rather than held for the whole TTL.
+  const watchlistedAt = listId === 'watchlist' ? await watchlistActivityStamp(apiKey) : undefined;
+  const activitySegment = watchlistedAt ? `:act:${watchlistedAt}` : '';
+  const cacheKey = `mdblist-api:items:${keyScope}:${listId}:${page}:${sort || ''}:${order || ''}:${genre || ''}:${unified !== false}:${catalogType || ''}:${filterScoreMin ?? ''}:${filterScoreMax ?? ''}:${mediaTypeFilter || ''}:${pageSize}${ttlSegment}${activitySegment}`;
 
   const ttl = cacheTTL !== undefined ? cacheTTL : parseInt(process.env.CATALOG_TTL || String(1 * 24 * 60 * 60), 10);
 
@@ -427,7 +450,7 @@ async function fetchMDBListItems(listId: string, apiKey: string, language: strin
         const block = await fetchListBlock({
           listId, apiKey, keyScope, blockOffset, blockSize,
           sort, order, genre, filterScoreMin, filterScoreMax, mediaTypeFilter,
-          ttl, ttlSegment,
+          ttl, ttlSegment: `${ttlSegment}${activitySegment}`,
         });
         const within = offset - blockOffset;
         const window = block.rows.slice(within, within + pageSize);
@@ -1118,11 +1141,12 @@ async function tmdbEpisodeFromTvdb(tmdbId: number, season: number, episode: numb
   return hit ? { season: hit.tmdbSeason, episode: hit.tmdbEpisode, ...(hit.showTmdb ? { showTmdb: hit.showTmdb } : {}) } : null;
 }
 
-async function makeRateLimitedMDBListRequest(url: string, apiKey: string, context: string = 'MDBList Proxy'): Promise<any> {
+async function makeRateLimitedMDBListRequest(url: string, apiKey: string, context: string = 'MDBList Proxy', retries?: number): Promise<any> {
   return await makeRateLimitedRequest(
     () => httpGet(url, { dispatcher: mdblistDispatcher }),
     apiKey,
-    context
+    context,
+    retries
   );
 }
 
@@ -1422,9 +1446,10 @@ async function historySync(
   apiKey: string,
   season?: number,
   episode?: number,
-  episodes?: EpisodeRef[]
+  episodes?: EpisodeRef[],
+  watchedAt?: string
 ): Promise<boolean> {
-  const payload = historyPayload(idInput, season, episode, episodes);
+  const payload = historyPayload(idInput, season, episode, episodes, watchedAt);
 
   try {
     const response: any = await makeRateLimitedRequest(
@@ -1440,6 +1465,7 @@ async function historySync(
     const missed = response?.data?.not_found;
     const missing = ['movies', 'shows', 'episodes'].reduce((n, key) => n + (Array.isArray(missed?.[key]) ? missed[key].length : 0), 0);
     if (missing > 0) {
+      noteTrackerCall(`https://api.mdblist.com/sync/${path}`, 404, 'not found on MDBList');
       logger.warn(`[MDBList] /sync/${path} did not find the title`, { ids: idInput, season, episode, not_found: missed });
       return false;
     }
@@ -1451,14 +1477,29 @@ async function historySync(
   }
 }
 
+async function addHistoryBatch(writes: HistoryWrite[], apiKey: string): Promise<{ notFound: number; missed: any }> {
+  const response: any = await makeRateLimitedRequest(
+    () => httpPost(`https://api.mdblist.com/sync/watched?apikey=${apiKey}`, historyBatchPayload(writes), {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 60000,
+      dispatcher: mdblistDispatcher,
+    }),
+    apiKey,
+    `MDBList /sync/watched batch of ${writes.length}`
+  );
+  const missed = response?.data?.not_found;
+  return { notFound: ['movies', 'shows', 'seasons', 'episodes'].reduce((n, key) => n + (Array.isArray(missed?.[key]) ? missed[key].length : 0), 0), missed: missed ?? {} };
+}
+
 async function addToHistory(
   idInput: Record<string, string | number>,
   apiKey: string,
   season?: number,
   episode?: number,
-  episodes?: EpisodeRef[]
+  episodes?: EpisodeRef[],
+  watchedAt?: string
 ): Promise<boolean> {
-  return historySync('watched', idInput, apiKey, season, episode, episodes);
+  return historySync('watched', idInput, apiKey, season, episode, episodes, watchedAt);
 }
 
 export interface MdblistPlay {
@@ -1766,12 +1807,13 @@ async function fetchMDBListCatalog(
  * key's library moved: the watch mirror, the paused-titles gate and the hide-watched
  * filter. A watch recorded here clears it.
  */
-async function fetchMdblistLastActivities(apiKey: string): Promise<any> {
+async function fetchMdblistLastActivities(apiKey: string, fresh = false, attempts?: number): Promise<any> {
   const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex').substring(0, 16);
+  if (fresh) await require('../lib/getCache').redis?.del(`global:mdblist_last_activities:${keyHash}`).catch(() => undefined);
   return cacheWrapGlobal(
     `mdblist_last_activities:${keyHash}`,
     async () => {
-      const response = await makeRateLimitedMDBListRequest(`https://api.mdblist.com/sync/last_activities?apikey=${apiKey}`, apiKey, 'MDBList activities');
+      const response = await makeRateLimitedMDBListRequest(`https://api.mdblist.com/sync/last_activities?apikey=${apiKey}`, apiKey, 'MDBList activities', attempts);
       return response?.data ?? {};
     },
     envInt('MDBLIST_ACTIVITIES_TTL', 300, 30),
@@ -1779,8 +1821,59 @@ async function fetchMdblistLastActivities(apiKey: string): Promise<any> {
   );
 }
 
+interface ActivityStamp { value?: string; checkedAt: number; failedAt?: number; inFlight?: Promise<void>; askedAt?: number }
+const activityStamps = new Map<string, ActivityStamp>();
+const ACTIVITY_STAMPS_MAX = 5000;
+
+/**
+ * When the key's watchlist last changed, which a watchlist read is keyed by so a change is read again. It never holds
+ * a read up for long: the last stamp is kept while a newer one is asked for in one attempt, a first one is waited on
+ * only briefly, and a failed ask is not repeated for a while. Unknown, the read keeps its plain key.
+ */
+async function watchlistActivityStamp(apiKey: string): Promise<string | undefined> {
+  const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex').substring(0, 16);
+  let entry = activityStamps.get(keyHash);
+  if (!entry) {
+    if (activityStamps.size >= ACTIVITY_STAMPS_MAX) activityStamps.clear();
+    entry = { checkedAt: 0 };
+    activityStamps.set(keyHash, entry);
+  }
+  const now = Date.now();
+  // An ask with no answer after a while is given up on, so one that hangs does not stop the stamp being asked for again.
+  if (entry.inFlight && now - (entry.askedAt ?? now) > envInt('MDBLIST_ACTIVITY_STAMP_GIVE_UP', 30, 1) * 1000) {
+    entry.inFlight = undefined;
+    entry.failedAt = now;
+  }
+  const stale = now - entry.checkedAt >= envInt('MDBLIST_ACTIVITY_STAMP_TTL', 30, 1) * 1000;
+  const resting = entry.failedAt !== undefined && now - entry.failedAt < envInt('MDBLIST_ACTIVITY_STAMP_BACKOFF', 60, 1) * 1000;
+  if (stale && !resting && !entry.inFlight) {
+    const held = entry;
+    held.askedAt = now;
+    const asked: Promise<void> = fetchMdblistLastActivities(apiKey, false, 1)
+      .then((activities) => {
+        held.value = activities?.watchlisted_at ? String(activities.watchlisted_at) : undefined;
+        held.checkedAt = Date.now();
+        held.failedAt = undefined;
+      })
+      .catch((error: any) => {
+        held.failedAt = Date.now();
+        logger.debug(`[MDBList] Watchlist activity stamp unavailable: ${error?.message || error}`);
+      })
+      .finally(() => { if (held.inFlight === asked) held.inFlight = undefined; });
+    held.inFlight = asked;
+  }
+  if (entry.inFlight && entry.value === undefined) {
+    let timer: NodeJS.Timeout | undefined;
+    const wait = new Promise<void>((resolve) => { timer = setTimeout(resolve, envInt('MDBLIST_ACTIVITY_STAMP_WAIT_MS', 1500, 0)); });
+    await Promise.race([entry.inFlight, wait]);
+    clearTimeout(timer);
+  }
+  return entry.value;
+}
+
 export {
   fetchMdblistLastActivities,
+  watchlistActivityStamp,
   fetchMDBListItems,
   fetchMDBListExternalItems,
   usesMdblistExternalItemsEndpoint,
@@ -1808,7 +1901,10 @@ export {
   checkinMovie,
   checkinEpisode,
   addToHistory,
+  addHistoryBatch,
   removeFromHistory,
+  historyPlays,
+  removePlays,
   clearScrobbleSession,
   clearScrobbleSession as clearPlayback,
   fetchMDBListCatalog

@@ -1,6 +1,10 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
 import consola from 'consola';
 import { LRUCache } from 'lru-cache';
 import { envInt } from '../../utils/envNumber';
+import { resolveLanguage } from './languageTags';
+import { addonFetch, addonFetchMaxBytes, readCappedResponse } from '../../utils/outboundGuard';
 
 const logger = consola.withTag('Jellyfin');
 
@@ -11,7 +15,72 @@ export interface SubtitleTrack {
   id: string;
   url: string;
   lang: string;
+  /** A finer code some addons send beside `lang`, such as `zh-tw`. */
+  langCode?: string;
   source: 'stream' | 'addon';
+  /** The release the file was timed for, when the addon names one. */
+  title?: string;
+  forced?: boolean;
+  hearingImpaired?: boolean;
+  machineTranslated?: boolean;
+}
+
+const SUBTITLE_FILE_EXTENSION = /(\.(srt|vtt|ass|ssa|sub|smi|txt))+$/i;
+const VIDEO_FILE_EXTENSION = /\.(mkv|mp4|avi|m4v|mov|wmv)$/i;
+const LOOKS_LIKE_RELEASE = /\b(19|20)\d{2}\b|\bS\d{1,2}E\d{1,3}\b|\b\d{3,4}p\b/i;
+const HEARING_IMPAIRED = [/\bsdh\b/i, /hearing[\s._-]?impaired/i, /\[(hi|cc)\]/i];
+// A bare HI is also how releases tag Hindi.
+const HEARING_IMPAIRED_TAG = /(^|[\s._(-])(HI|CC)($|[\s._)-])/;
+const HINDI = /^(hi|hin|hindi)$/i;
+// A forced tag, not a title that starts with the word: clients play forced tracks unasked.
+const FORCED_TAG = /[[(]forced[\])]|[\s._-]forced$/i;
+
+function text(value: unknown): string | undefined {
+  if (typeof value !== 'string' && typeof value !== 'number') return undefined;
+  const trimmed = String(value).trim();
+  return trimmed || undefined;
+}
+
+const withoutSubtitleExtension = (value: unknown): string | undefined => text(text(value)?.replace(SUBTITLE_FILE_EXTENSION, ''));
+
+// Ids like `[Group]Show.S01E02.1080p_3` carry the release before the counter.
+function releaseInId(id: string): string | undefined {
+  const match = /^((?:\[[^\]]*\])*)(.+)_\d+$/.exec(id);
+  if (!match || !(match[1] || /[.\s-]/.test(match[2]))) return undefined;
+  return text(match[1] ? `${match[1]} ${match[2]}` : match[2]);
+}
+
+function releaseInUrl(url: string): string | undefined {
+  try {
+    const file = decodeURIComponent(new URL(url).pathname.split('/').pop() ?? '');
+    const name = withoutSubtitleExtension(file);
+    return name && name !== file && LOOKS_LIKE_RELEASE.test(name) ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** What an addon's subtitle says about itself beyond its language. */
+export function subtitleDetails(s: any, id: string, url: string): Pick<SubtitleTrack, 'langCode' | 'title' | 'forced' | 'hearingImpaired' | 'machineTranslated'> {
+  const langCode = text(s?.lang_code);
+  const named = text(s?.label) ?? text(s?.title) ?? withoutSubtitleExtension(s?.subtitleFileName)
+    ?? text(s?.movieReleaseName) ?? releaseInId(id) ?? releaseInUrl(url);
+  const title = text(named?.replace(VIDEO_FILE_EXTENSION, ''));
+  const machineTranslated = s?.ai_translated === true || s?.machine_translated === true;
+  const lang = text(s?.lang) ?? '';
+  const forced = typeof s?.forced === 'boolean' ? s.forced : /\bforced\b/i.test(lang) || FORCED_TAG.test(title ?? '');
+  const cues = `${title ?? ''} ${lang}`;
+  const hindi = HINDI.test(lang) || HINDI.test(langCode ?? '');
+  const hearingImpaired = typeof s?.hearingImpaired === 'boolean'
+    ? s.hearingImpaired
+    : HEARING_IMPAIRED.some((cue) => cue.test(cues)) || (!hindi && HEARING_IMPAIRED_TAG.test(cues));
+  return {
+    ...(langCode ? { langCode } : {}),
+    ...(title ? { title } : {}),
+    ...(forced ? { forced } : {}),
+    ...(hearingImpaired ? { hearingImpaired } : {}),
+    ...(machineTranslated ? { machineTranslated } : {}),
+  };
 }
 
 interface Cue {
@@ -24,38 +93,69 @@ const VTT_TYPE = 'text/vtt; charset=utf-8';
 const SRT_TYPE = 'application/x-subrip; charset=utf-8';
 const ASS_TYPE = 'text/x-ssa; charset=utf-8';
 
-const TWO_LETTER: Record<string, string> = {
-  en: 'eng', ja: 'jpn', fr: 'fre', de: 'ger', es: 'spa', it: 'ita', pt: 'por', ru: 'rus', ko: 'kor', zh: 'chi',
-  hi: 'hin', ar: 'ara', nl: 'dut', pl: 'pol', sv: 'swe', da: 'dan', fi: 'fin', no: 'nor', tr: 'tur', cs: 'cze',
-  hu: 'hun', el: 'gre', he: 'heb', th: 'tha', vi: 'vie', id: 'ind', uk: 'ukr', ro: 'rum', bg: 'bul', hr: 'hrv',
-  sr: 'srp', sk: 'slo', sl: 'slv', ms: 'may', fa: 'per', ta: 'tam', te: 'tel', bn: 'ben', ca: 'cat', eu: 'baq',
-  gl: 'glg', et: 'est', lv: 'lav', lt: 'lit', is: 'ice', ga: 'gle', mk: 'mac', sq: 'alb', bs: 'bos', tl: 'tgl',
-};
-
-/** ISO 639-2/T spellings and addon dialect codes, to the bibliographic code a client matches on. */
-const TO_BIBLIOGRAPHIC: Record<string, string> = {
-  deu: 'ger', fra: 'fre', nld: 'dut', ell: 'gre', ron: 'rum', ces: 'cze', slk: 'slo', zho: 'chi', fas: 'per',
-  msa: 'may', mya: 'bur', isl: 'ice', eus: 'baq', sqi: 'alb', hye: 'arm', kat: 'geo', mkd: 'mac', bod: 'tib',
-  cym: 'wel', pob: 'por', pb: 'por',
-};
-
-/** ISO 639-2, which is what a client matches its preferred language against. */
-export function subtitleLanguage(lang: string, byName: (name: unknown) => string | undefined): string {
+/** ISO 639-2/B, which is what a client matches its preferred language against. */
+export function subtitleLanguage(lang: string, byName: (name: unknown) => string | undefined, langCode?: string): string {
   const raw = String(lang || '').trim();
-  const key = raw.toLowerCase().replace(/[-_].*$/, '');
-  if (TO_BIBLIOGRAPHIC[key]) return TO_BIBLIOGRAPHIC[key];
-  if (/^[a-z]{3}$/.test(key)) return key;
-  if (TWO_LETTER[key]) return TWO_LETTER[key];
-  return byName(raw) ?? key;
+  return resolveLanguage(raw, langCode)?.code ?? byName(raw) ?? raw.toLowerCase().replace(/[-_].*$/, '');
+}
+
+/** The language as a menu shows it, keeping a variant the addon named. */
+export function subtitleLanguageName(lang: string, name: string | undefined, langCode?: string): string {
+  const raw = String(lang || '').trim();
+  return resolveLanguage(raw, langCode)?.name ?? name ?? raw;
+}
+
+type TitledTrack = Pick<SubtitleTrack, 'title' | 'forced' | 'hearingImpaired' | 'machineTranslated'> & { ordinal: number; language?: string };
+
+/** The release without a closing `.en` or `.zh-TW` that says nothing the track's language label does not. */
+function shownRelease(track: TitledTrack, label: string): string | undefined {
+  const match = track.title ? /^(.+)\.([a-z]{2,3}(?:-[a-z]{2,4})?)$/i.exec(track.title) : null;
+  const tag = match ? resolveLanguage(match[2]) : null;
+  return match && tag && tag.code === track.language && (tag.name === label || !tag.name.includes('(')) ? match[1] : track.title;
+}
+
+/** The release a track was timed for when known, otherwise its language and place among that language's tracks. */
+export function subtitleTitles(track: TitledTrack, language: string, repeat = 1): { title: string; displayTitle: string } {
+  const shown = shownRelease(track, language);
+  const release = shown?.toLowerCase() ?? '';
+  const flags = [
+    track.forced && !release.includes('forced') ? 'Forced' : null,
+    track.hearingImpaired && !/\b(sdh|hi|cc)\b|hearing/.test(release) ? 'SDH' : null,
+    track.machineTranslated ? 'AI translated' : null,
+  ].filter(Boolean);
+  if (!shown) {
+    const title = track.ordinal > 1 ? `${language} ${track.ordinal}` : language;
+    return { title, displayTitle: `${[title, ...flags].join(' - ')} (external)` };
+  }
+  const title = repeat > 1 ? `${shown} (${repeat})` : shown;
+  const lead = language.toLowerCase();
+  const leadsWithLanguage = release.startsWith(lead) && !/[\p{L}\p{M}]/u.test(release.charAt(lead.length));
+  const displayTitle = [leadsWithLanguage ? null : language, title, ...flags].filter(Boolean).join(' - ');
+  return { title, displayTitle };
+}
+
+/** subtitleTitles for each track of a menu, counting a release one language lists more than once. */
+export function subtitleMenuTitles<T extends TitledTrack>(tracks: T[], labelOf: (track: T) => string): Array<{ title: string; displayTitle: string }> {
+  const repeats = new Map<string, number>();
+  return tracks.map((track) => {
+    const label = labelOf(track);
+    const shown = shownRelease(track, label);
+    if (!shown) return subtitleTitles(track, label);
+    const key = `${label}\u0000${shown.toLowerCase()}`;
+    const repeat = (repeats.get(key) ?? 0) + 1;
+    repeats.set(key, repeat);
+    return subtitleTitles(track, label, repeat);
+  });
 }
 
 /** A few of each language, taken a round at a time so a late language is not lost to the cap. */
-export function pickSubtitles<T extends { language: string }>(tracks: T[], perLanguage: number, total: number): Array<T & { ordinal: number }> {
+export function pickSubtitles<T extends { language: string }>(tracks: T[], perLanguage: number, total: number, groupOf: (track: T) => string = (track) => track.language): Array<T & { ordinal: number }> {
   const byLanguage = new Map<string, T[]>();
   for (const track of tracks) {
-    const list = byLanguage.get(track.language) ?? [];
+    const group = groupOf(track);
+    const list = byLanguage.get(group) ?? [];
     if (list.length < perLanguage) list.push(track);
-    byLanguage.set(track.language, list);
+    byLanguage.set(group, list);
   }
   const out: Array<T & { ordinal: number }> = [];
   for (let round = 0; round < perLanguage && out.length < total; round++) {
@@ -146,25 +246,37 @@ export function parseCues(input: string): Cue[] {
   return cues;
 }
 
+function withoutOverrideTags(text: string): string {
+  let out = '';
+  let at = 0;
+  for (;;) {
+    const open = text.indexOf('{', at);
+    const close = open === -1 ? -1 : text.indexOf('}', open);
+    if (close === -1) return out + text.slice(at);
+    out += text.slice(at, open);
+    at = close + 1;
+  }
+}
+
 /** The Dialogue lines of an ASS or SSA script, styling dropped. */
 export function parseAssCues(input: string): Cue[] {
   const cues: Cue[] = [];
   let textIndex = 9;
   for (const line of normaliseText(input).split('\n')) {
-    const format = /^\s*Format:\s*(.+)$/i.exec(line);
+    const format = /^\s*Format:\s*([\s\S]*)/i.exec(line);
     if (format) {
       const at = format[1].split(',').map((f) => f.trim().toLowerCase()).indexOf('text');
       if (at >= 0) textIndex = at;
       continue;
     }
-    const dialogue = /^\s*Dialogue:\s*(.+)$/i.exec(line);
+    const dialogue = /^\s*Dialogue:\s*([\s\S]*)/i.exec(line);
     if (!dialogue) continue;
     const parts = dialogue[1].split(',');
     if (parts.length <= textIndex) continue;
     const startMs = timeToMs(parts[1] ?? '');
     const endMs = timeToMs(parts[2] ?? '');
     if (startMs === null || endMs === null) continue;
-    const text = parts.slice(textIndex).join(',').replace(/\{[^}]*\}/g, '').replace(/\\[Nnh]/g, '\n').trim();
+    const text = withoutOverrideTags(parts.slice(textIndex).join(',')).replace(/\\[Nnh]/g, '\n').trim();
     if (text) cues.push({ startMs, endMs, text });
   }
   return cues.sort((a, b) => a.startMs - b.startMs);
@@ -202,8 +314,15 @@ export function cuesToJellyfinJson(cues: Cue[]): string {
   });
 }
 
+function formatInBody(body: string): string | undefined {
+  const head = normaliseText(body.slice(0, 4096));
+  if (/^\s*\[Script Info\]/i.test(head) || /^\[V4\+? Styles\]/im.test(head)) return 'ass';
+  if (/^\s*WEBVTT\b/.test(head)) return 'vtt';
+  return undefined;
+}
+
 export function convertSubtitle(body: string, fromExtension: string, to: SubtitleFormat): { body: string; contentType: string } {
-  const from = fromExtension.toLowerCase();
+  const from = formatInBody(body) ?? fromExtension.toLowerCase();
   const styled = from === 'ass' || from === 'ssa';
   const textual = from === 'srt' || from === 'vtt' || from === 'sub';
   const cuesOf = () => (styled ? parseAssCues(body) : textual ? parseCues(body) : []);
@@ -233,7 +352,8 @@ export function streamSubtitleTracks(stream: any): SubtitleTrack[] {
     const url = typeof s?.url === 'string' ? s.url : '';
     if (!url || seen.has(url)) continue;
     seen.add(url);
-    out.push({ id: String(s?.id ?? url), url, lang: String(s?.lang ?? 'und'), source: 'stream' });
+    const id = String(s?.id ?? url);
+    out.push({ id, url, lang: String(s?.lang ?? 'und'), source: 'stream', ...subtitleDetails(s, id, url) });
   }
   return out;
 }
@@ -251,9 +371,9 @@ export async function addonServesSubtitles(base: string): Promise<boolean> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), envInt('JELLYFIN_STREAM_TIMEOUT_MS', 20000, 1000));
-    const response = await fetch(`${base}/manifest.json`, { headers: { accept: 'application/json' }, signal: controller.signal });
+    const response = await addonFetch(`${base}/manifest.json`, { headers: { accept: 'application/json' }, signal: controller.signal });
     clearTimeout(timer);
-    const manifest: any = response.ok ? await response.json() : null;
+    const manifest: any = response.ok ? JSON.parse(await readCappedResponse(response, addonFetchMaxBytes())) : null;
     serves = (Array.isArray(manifest?.resources) ? manifest.resources : []).some(
       (r: any) => r === 'subtitles' || r?.name === 'subtitles'
     );
@@ -298,20 +418,21 @@ export async function fetchAddonSubtitles(base: string, type: string, videoId: s
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), envInt('JELLYFIN_SUBTITLE_FETCH_TIMEOUT_MS', 15000, 1000));
   try {
-    const response = await fetch(url, { headers: { accept: 'application/json', 'user-agent': userAgent }, signal: controller.signal });
+    const response = await addonFetch(url, { headers: { accept: 'application/json', 'user-agent': userAgent }, signal: controller.signal });
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
       logger.debug(`Subtitles ${type}/${videoId} returned ${response.status}`);
       return [];
     }
-    const body: any = await response.json();
+    const body: any = JSON.parse(await readCappedResponse(response, addonFetchMaxBytes()));
     const out: SubtitleTrack[] = [];
     const seen = new Set<string>();
     for (const s of Array.isArray(body?.subtitles) ? body.subtitles : []) {
       const track = typeof s?.url === 'string' ? s.url : '';
       if (!track || seen.has(track)) continue;
       seen.add(track);
-      out.push({ id: String(s?.id ?? track), url: track, lang: String(s?.lang ?? 'und'), source: 'addon' });
+      const id = String(s?.id ?? track);
+      out.push({ id, url: track, lang: String(s?.lang ?? 'und'), source: 'addon', ...subtitleDetails(s, id, track) });
     }
     // Read on every write, so a dashboard change applies without a restart.
     addonTracks.set(key, out, { ttl: envInt('JELLYFIN_SUBTITLE_TTL', 60 * 60, 60) * 1000 });
@@ -378,7 +499,7 @@ async function fetchSubtitle(url: string): Promise<{ response: Response; done: (
     };
     const response = await inHostTurn(url, () => {
       timer = setTimeout(() => controller.abort(), envInt('JELLYFIN_SUBTITLE_FETCH_TIMEOUT_MS', 15000, 1000));
-      return fetch(url, { signal: controller.signal, redirect: 'follow' });
+      return addonFetch(url, { signal: controller.signal, redirect: 'follow' });
     });
     if (response.ok || !RETRY_STATUSES.has(response.status) || attempt >= retries) return { response, done };
     done();
@@ -402,11 +523,8 @@ export async function subtitleBody(url: string, to: SubtitleFormat): Promise<{ b
       logger.debug(`Subtitle fetch got ${response.status} for ${url}`);
       return null;
     }
-    const length = Number(response.headers.get('content-length'));
-    if (Number.isFinite(length) && length > MAX_SUBTITLE_BYTES) return null;
-    const raw = Buffer.from(await response.arrayBuffer());
-    if (raw.length > MAX_SUBTITLE_BYTES) return null;
-    const converted = convertSubtitle(raw.toString('utf8'), subtitleExtensionOf(url), to);
+    const text = await readCappedResponse(response, MAX_SUBTITLE_BYTES);
+    const converted = convertSubtitle(text, subtitleExtensionOf(url), to);
     bodies.set(key, converted);
     return converted;
   } catch (error: any) {
@@ -417,16 +535,16 @@ export async function subtitleBody(url: string, to: SubtitleFormat): Promise<{ b
   }
 }
 
-const offered = new LRUCache<string, SubtitleTrack[]>({
+const offered = new LRUCache<string, { tracks: SubtitleTrack[]; start: number }>({
   max: envInt('JELLYFIN_STREAM_CACHE_MAX', 2000, 1),
   ttl: envInt('JELLYFIN_SUBTITLE_TTL', 60 * 60, 60) * 1000,
 });
 
-/** The external tracks a source was sent with, by index, so the route serves what the client saw. */
-export function rememberOffered(key: string, tracks: SubtitleTrack[]): void {
-  offered.set(key, tracks);
+/** The external tracks a source was sent with, and the stream index the first took, so the route serves what the client saw. */
+export function rememberOffered(key: string, tracks: SubtitleTrack[], start: number): void {
+  offered.set(key, { tracks, start });
 }
 
-export function recallOffered(key: string): SubtitleTrack[] | undefined {
+export function recallOffered(key: string): { tracks: SubtitleTrack[]; start: number } | undefined {
   return offered.get(key);
 }

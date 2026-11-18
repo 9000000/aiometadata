@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 const net = require('node:net');
 const { request, Agent, setGlobalDispatcher, ProxyAgent } = require("undici");
 const buildInfo = require('../lib/buildInfo');
@@ -30,18 +32,19 @@ const proxyUrl = getProxyUrl();
 /** Calls the addon makes to itself, which a proxy can neither see nor reach. */
 export const directDispatcher = new Agent({ allowH2: false, ...KEEP_ALIVE });
 
-if (proxyUrl) {
-  setGlobalDispatcher(new ProxyAgent({ uri: proxyUrl, allowH2: false }));
-} else {
-  setGlobalDispatcher(directDispatcher);
-}
+/** The proxy every outbound request goes through when HTTPS_PROXY or HTTP_PROXY is set. */
+export const proxyDispatcher = proxyUrl
+  ? new ProxyAgent({ uri: proxyUrl, allowH2: false, connections: 32, ...KEEP_ALIVE })
+  : null;
+
+setGlobalDispatcher(proxyDispatcher ?? directDispatcher);
 
 const DEFAULT_RETRY_ATTEMPTS = 1;
 const BOOTSTRAP_CONNECT_TIMEOUT_MS = 3_000;
 
 const bootstrapDispatcher = proxyUrl
-  ? new ProxyAgent({ uri: proxyUrl, allowH2: false, connect: { timeout: BOOTSTRAP_CONNECT_TIMEOUT_MS } })
-  : new Agent({ allowH2: false, connect: { timeout: BOOTSTRAP_CONNECT_TIMEOUT_MS } });
+  ? new ProxyAgent({ uri: proxyUrl, allowH2: false, connections: 32, connect: { timeout: BOOTSTRAP_CONNECT_TIMEOUT_MS }, ...KEEP_ALIVE })
+  : new Agent({ allowH2: false, connect: { timeout: BOOTSTRAP_CONNECT_TIMEOUT_MS }, ...KEEP_ALIVE });
 
 /** Spread into startup downloads that must survive a transient network blip. */
 export const BOOTSTRAP_HTTP_OPTIONS = { retryAttempts: 3, dispatcher: bootstrapDispatcher };
@@ -57,6 +60,10 @@ interface HttpRequestOptions {
   validateStatus?: (status: number) => boolean;
   /** undici closes the socket after every HEAD unless this is false. */
   reset?: boolean;
+  /** Refuses a reply larger than this many bytes instead of reading it all. */
+  maxBytes?: number;
+  /** Ends the request when it fires. */
+  signal?: AbortSignal;
 }
 
 interface HttpResponse {
@@ -73,6 +80,33 @@ interface HttpError extends Error {
   };
 }
 
+export class ResponseTooLarge extends Error {
+  code = 'ERESPONSETOOLARGE';
+  constructor(limit: number) {
+    super(`The reply is larger than ${limit} bytes`);
+  }
+}
+
+/** A body read as text, stopping once it passes `maxBytes`. */
+export async function readCappedBody(body: any, maxBytes: number, headers: Record<string, any> = {}): Promise<string> {
+  const declared = Number(headers['content-length']);
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    body.destroy?.();
+    throw new ResponseTooLarge(maxBytes);
+  }
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of body) {
+    total += chunk.length;
+    if (total > maxBytes) {
+      body.destroy?.();
+      throw new ResponseTooLarge(maxBytes);
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 export async function httpRequest(url: string, options: HttpRequestOptions = {}): Promise<HttpResponse> {
   const {
     method = 'GET',
@@ -82,7 +116,9 @@ export async function httpRequest(url: string, options: HttpRequestOptions = {})
     dispatcher,
     params,
     validateStatus,
-    reset
+    reset,
+    maxBytes,
+    signal
   } = options;
 
   if (params) {
@@ -101,6 +137,7 @@ export async function httpRequest(url: string, options: HttpRequestOptions = {})
     // No connectTimeout here: undici only honours it on the dispatcher.
     dispatcher: dispatcher || undefined,
     ...(reset !== undefined ? { reset } : {}),
+    ...(signal ? { signal } : {}),
   };
 
   if (data) {
@@ -134,7 +171,7 @@ export async function httpRequest(url: string, options: HttpRequestOptions = {})
       };
     }
 
-    const text = await body.text();
+    const text = maxBytes ? await readCappedBody(body, maxBytes, responseHeaders) : await body.text();
     const responseData = contentType.includes('application/json')
       ? (text ? JSON.parse(text) : null)
       : text;
@@ -157,7 +194,7 @@ export async function httpRequest(url: string, options: HttpRequestOptions = {})
     };
     throw error;
   } else {
-    const errorText = await body.text();
+    const errorText = maxBytes ? await readCappedBody(body, maxBytes, responseHeaders) : await body.text();
     noteTrackerCall(url, statusCode, errorText, responseHeaders['retry-after']);
     const error: HttpError = new Error(`Request failed with status code ${statusCode}`);
     error.response = {

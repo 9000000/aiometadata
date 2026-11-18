@@ -1,6 +1,9 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import consola from 'consola';
+import { LRUCache } from 'lru-cache';
 import {
   formatSize,
   getWarmConcurrencyMax,
@@ -91,7 +94,7 @@ const main = new Lane();
 const bulk = new Lane();
 const pending = new Set<string>();
 /** Images already counted this run, so one poster in twenty catalogs counts once. */
-const counted = new Set<string>();
+const counted = new LRUCache<string, true>({ max: 100000 });
 
 let active = 0;
 let desired = 0;
@@ -353,7 +356,7 @@ export function offer(targets: WarmTarget[]): void {
     // deliberately left to run on every offer so a dropped image can still be retried.
     const firstSight = !counted.has(key);
     if (firstSight) {
-      counted.add(key);
+      counted.set(key, true);
       stats.offered += 1;
     }
 

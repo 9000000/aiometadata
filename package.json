@@ -1,6 +1,6 @@
 {
   "name": "aio-metadata",
-  "version": "3.8.3",
+  "version": "4.1.0",
   "description": "Metadata provider for Stremio",
   "main": "dist/server/server.js",
   "scripts": {
@@ -10,7 +10,7 @@
     "dev:server": "nodemon addon/server.js",
     "predev:server:ts": "npm run generate:build-info",
     "dev:server:ts": "nodemon --exec ts-node addon/server.ts",
-    "prebuild": "npm run generate:build-info",
+    "prebuild": "npm run generate:build-info && npm run notices",
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "prebuild:backend": "npm run generate:build-info",
@@ -23,6 +23,8 @@
     "lint:backend": "eslint addon scripts",
     "lint:frontend": "eslint configure/src",
     "lint:repo": "eslint eslint.config.js tailwind.config.mts vite.config.mts",
+    "check:licenses": "node scripts/check-licenses.mjs",
+    "notices": "node scripts/generate-third-party-notices.mjs",
     "check:env": "ts-node --skip-project --transpile-only --compiler-options \"{\\\"module\\\":\\\"commonjs\\\",\\\"target\\\":\\\"es2020\\\",\\\"esModuleInterop\\\":true,\\\"ignoreDeprecations\\\":\\\"6.0\\\"}\" scripts/check-env-registry.ts",
     "preview": "vite preview",
     "start": "npm run start:backend"
@@ -40,7 +42,7 @@
     "MyAnimeList"
   ],
   "author": "cedya",
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSING.md",
   "engines": {
     "node": ">=24.0.0 <25"
   },
@@ -51,7 +53,7 @@
   "dependencies": {
     "@cospired/i18n-iso-languages": "^4.2.0",
     "@fanart-tv/api": "^1.0.2",
-    "axios": "^1.20.0",
+    "axios": "^1.21.1",
     "bcrypt": "^6.0.0",
     "better-sqlite3": "^12.11.1",
     "cheerio": "^1.2.0",
@@ -71,7 +73,7 @@
     "pg": "^8.20.0",
     "serve-favicon": "^2.5.0",
     "sharp": "^0.35.5",
-    "undici": "^8.11.2",
+    "undici": "^8.12.4",
     "xml2js": "^0.6.2"
   },
   "devDependencies": {
@@ -93,13 +95,16 @@
     "@tailwindcss/vite": "^4.2.2",
     "@tanstack/react-query": "^5.99.0",
     "@tanstack/react-virtual": "^3.13.25",
+    "@types/d3-geo": "3.1.1",
     "@types/express": "^5.0.6",
     "@types/node": "^24.19.2",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "@types/topojson-client": "3.1.5",
     "@vitejs/plugin-react": "^6.0.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "d3-geo": "3.1.1",
     "eslint": "^10.2.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
@@ -115,6 +120,8 @@
     "recharts": "^3.8.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0",
+    "topojson-client": "3.1.0",
+    "world-atlas": "2.0.2",
     "tailwindcss": "^4.2.2",
     "tailwindcss-animate": "^1.0.7",
     "ts-node": "^10.9.2",

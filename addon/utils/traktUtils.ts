@@ -1,4 +1,7 @@
-import { httpGet, httpPost, httpRequest } from "./httpClient.js";
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
+import { httpGet, httpPost, httpRequest, KEEP_ALIVE } from "./httpClient.js";
+import { LRUCache } from 'lru-cache';
 import { getMeta } from "../lib/getMeta.js";
 import { mapWithLimit } from "./concurrency.js";
 import { cacheWrapMetaSmart, cacheWrapGlobal, classifyResultAllowEmpty, readGlobalCache, writeGlobalCache } from "../lib/getCache.js";
@@ -32,8 +35,8 @@ function sanitizeUrlForLogging(url: string): string {
 
 const TRAKT_PROXY_URL = process.env.TRAKT_PROXY_URL;
 const traktDispatcher = TRAKT_PROXY_URL 
-  ? new ProxyAgent({ uri: TRAKT_PROXY_URL, allowH2: false, requestTls: { timeout: 30000 } })
-  : new Agent({ allowH2: false, connect: { timeout: 30000 } });
+  ? new ProxyAgent({ uri: TRAKT_PROXY_URL, allowH2: false, connections: 25, requestTls: { timeout: 30000 }, ...KEEP_ALIVE })
+  : new Agent({ allowH2: false, connect: { timeout: 30000 }, ...KEEP_ALIVE });
 
 
 /**
@@ -266,7 +269,7 @@ class QueueManager {
 const queueManager = new QueueManager();
 const AUTHED_API_WRITE_INTERVAL_MS = parseInt(process.env.TRAKT_AUTHED_API_WRITE_INTERVAL_MS || '1000', 10);
 const writeChains = new Map<string, Promise<void>>();
-const lastWriteAtByToken = new Map<string, number>();
+const lastWriteAtByToken = new LRUCache<string, number>({ max: 5000, ttl: 24 * 60 * 60 * 1000 });
 
 async function runSerializedWrite<T>(tokenKey: string, task: () => Promise<T>): Promise<T> {
   const key = tokenKey || 'global';
@@ -2868,8 +2871,8 @@ async function fetchTraktAnticipatedItems(
 }
 
 const refreshLocks = new Map<string, Promise<string | null>>();
-const refreshCooldowns = new Map<string, number>();
-const invalidatedTokens = new Set<string>();
+const refreshCooldowns = new LRUCache<string, number>({ max: 5000, ttl: 60 * 60 * 1000 });
+const invalidatedTokens = new LRUCache<string, true>({ max: 5000, ttl: 24 * 60 * 60 * 1000 });
 const DEFAULT_REFRESH_COOLDOWN_MS = 60 * 1000;
 /**
  * Get Trakt access token from database with automatic refresh
@@ -2979,7 +2982,7 @@ async function getTraktAccessToken(config: any, forceRefresh: boolean = false): 
         logger.error(`Stack trace:`, error.stack);
         if (error.response?.status === 400) {
           logger.error(`Trakt refresh token is invalid for ${tokenId}. User must reconnect their Trakt account.`);
-          invalidatedTokens.add(tokenId);
+          invalidatedTokens.set(tokenId, true);
         } else if (error.response?.status === 429) {
           const retryAfter = parseInt(error.response.headers?.['retry-after'], 10);
           const cooldownMs = (Number.isFinite(retryAfter) && retryAfter > 0)

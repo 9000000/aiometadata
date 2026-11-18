@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 const fs = require('fs').promises;
 const path = require('path');
 const { httpGet, httpHead } = require('../utils/httpClient');
@@ -6,6 +8,7 @@ const kitsu = require('./kitsu');
 const { LRUCache } = require('lru-cache');
 const consola = require('consola');
 const { resolveOneToOneSeasonEpisodeFallback } = require('./oneToOneSeasonEpisodeFallback');
+const { writeFileAtomic } = require('../utils/atomicWrite');
 
 
 const logger = consola.withTag('ID-Mapper');
@@ -53,6 +56,17 @@ const TMDB_SEASON_CACHE_MAX_SIZE = parsePositiveIntEnv(
   15000,
   100
 );
+const TMDB_EPISODE_NUMBERS_CACHE_MAX_SIZE = parsePositiveIntEnv(
+  process.env.ID_MAPPER_TMDB_EPISODE_NUMBERS_CACHE_MAX_SIZE,
+  5000,
+  100
+);
+const TMDB_EPISODE_NUMBERS_TTL_SECONDS = parsePositiveIntEnv(
+  process.env.ID_MAPPER_TMDB_EPISODE_NUMBERS_TTL_SECONDS,
+  6 * 60 * 60,
+  60,
+  7 * 24 * 60 * 60
+);
 const KITSU_TO_IMDB_CACHE_MAX_SIZE = parsePositiveIntEnv(
   process.env.ID_MAPPER_KITSU_TO_IMDB_CACHE_MAX_SIZE,
   20000,
@@ -64,6 +78,10 @@ let animeApiRows = null;
 let animeApiRowCount = 0;
 let lastOverlayStats = null;
 let untypedTmdbUnchecked = false;
+let uncheckedUntypedTmdbProbes = [];
+let initPromise = null;
+let reindexPromise = null;
+let reindexQueued = false;
 let animeIdMap = new Map();
 let tvdbIdToAnimeListMap = new Map();
 let tmdbIdToAnimeListMap = new Map();
@@ -72,6 +90,7 @@ let tvdbIdMap = new Map();
 const franchiseMapCache = new LRUCache({ max: FRANCHISE_MAP_CACHE_MAX_SIZE });
 const tmdbFranchiseInfoCache = new LRUCache({ max: TMDB_FRANCHISE_INFO_CACHE_MAX_SIZE });
 const tmdbSeasonCache = new LRUCache({ max: TMDB_SEASON_CACHE_MAX_SIZE });
+const tmdbEpisodeNumbersCache = new LRUCache({ max: TMDB_EPISODE_NUMBERS_CACHE_MAX_SIZE, ttl: TMDB_EPISODE_NUMBERS_TTL_SECONDS * 1000 });
 
 // Auxiliary index maps for O(1) lookups (instead of O(N) Array.from().find())
 let kitsuIdMap = new Map();
@@ -112,7 +131,6 @@ let updateInterval = null;
 let kitsuToImdbMapping = null;
 let kitsuToImdbMappingCount = 0; // Pre-computed count for O(1) stats access
 let isKitsuToImdbInitialized = false;
-let traktAnimeMovies = null;
 let isTraktAnimeMoviesInitialized = false;
 let malIdToTraktMovieMap = new Map();
 let tmdbIdToTraktMovieMap = new Map();
@@ -235,17 +253,22 @@ function tmdbNamespaceOf(value) {
   return null;
 }
 
+function isKnownTmdbMismatch(imdb, tvdb, themoviedb) {
+  const idMappings = require('./id-mappings');
+  const series = (tvdb != null && idMappings.getSeriesByTvdb(String(tvdb))) || (imdb ? idMappings.getSeriesByImdb(String(imdb)) : undefined);
+  const movie = imdb ? idMappings.getMovieByImdb(String(imdb)) : undefined;
+  const known = [series?.tmdbId, movie?.tmdbId].filter(id => id != null).map(String);
+  return known.length > 0 && !known.includes(String(themoviedb));
+}
+
 function untypedTmdbContradicted(item, row) {
   const imdb = toIdList(item.imdb_id)[0] ?? row.imdb;
   const tvdb = item.tvdb_id ?? row.thetvdb;
   try {
-    const idMappings = require('./id-mappings');
-    const series = (tvdb != null && idMappings.getSeriesByTvdb(String(tvdb))) || (imdb ? idMappings.getSeriesByImdb(String(imdb)) : undefined);
-    const movie = imdb ? idMappings.getMovieByImdb(String(imdb)) : undefined;
-    const known = [series?.tmdbId, movie?.tmdbId].filter(id => id != null).map(String);
-    return known.length > 0 && !known.includes(String(row.themoviedb));
+    return isKnownTmdbMismatch(imdb, tvdb, row.themoviedb);
   } catch {
     untypedTmdbUnchecked = true;
+    uncheckedUntypedTmdbProbes.push({ imdb, tvdb, themoviedb: row.themoviedb });
     return false;
   }
 }
@@ -290,12 +313,13 @@ function mergeEntryInto(primary, other) {
 }
 
 function enrichWithAnimeApi(animeList) {
+  untypedTmdbUnchecked = false;
+  uncheckedUntypedTmdbProbes = [];
   if (!animeApiIndex) {
     lastOverlayStats = null;
     return animeList;
   }
 
-  untypedTmdbUnchecked = false;
   const stats = { rows: 0, merged: 0, added: 0, conflicts: 0, rejected: 0 };
   const fields = Object.entries(ANIME_API_FIELDS);
   for (const [fribbKey] of fields) stats[fribbKey] = 0;
@@ -503,7 +527,7 @@ function placeSplitSeasonParts(animeList) {
   return placed;
 }
 
-function processAndIndexData(data) {
+function parseAnimeListData(data) {
   let animeList;
   
   if (Array.isArray(data)) {
@@ -535,6 +559,12 @@ function processAndIndexData(data) {
   if (!animeList || !Array.isArray(animeList)) {
     throw new Error(`Anime list expected to be an array, got ${typeof animeList}`);
   }
+
+  return animeList;
+}
+
+function processAndIndexData(data) {
+  let animeList = parseAnimeListData(data);
 
   animeList = enrichWithAnimeApi(animeList);
   const overlayStats = lastOverlayStats;
@@ -636,7 +666,7 @@ function processAndIndexData(data) {
  * avoiding a full download if the local cache is up-to-date.
  * @param {boolean} force - If true, bypass ETag check and force re-download
  */
-async function downloadAndProcessAnimeList(force = false, skipReloadOnUnchangedEtag = false) {
+async function downloadAndProcessAnimeList(force = false, skipReloadOnUnchangedEtag = false, deferIndexing = false) {
   const useRedisCache = redis; 
 
   try {
@@ -653,18 +683,27 @@ async function downloadAndProcessAnimeList(force = false, skipReloadOnUnchangedE
           if (useRedisCache) {
             await redis.set('maintenance:last_id_mapper_update', Date.now().toString());
           }
-          return { success: true, message: 'Unchanged (scheduled no-op)', count: animeIdMap.size };
+          return { success: true, message: 'Unchanged (scheduled no-op)', count: animeIdMap.size, updated: false, parsedData: null };
         }
 
         try {
           logger.debug("[ID Mapper] [Fribb's Anime-List] No changes detected. Loading from local disk cache...");
           const fileContent = await fs.readFile(LOCAL_CACHE_PATH, 'utf-8');
-          processAndIndexData(fileContent);
+          const parsedData = parseAnimeListData(fileContent);
+          if (!deferIndexing) {
+            processAndIndexData(parsedData);
+          }
           // Update last check timestamp even when using cache
           if (useRedisCache) {
             await redis.set('maintenance:last_id_mapper_update', Date.now().toString());
           }
-          return { success: true, message: 'Loaded from cache (no changes)', count: animeIdMap.size };
+          return {
+            success: true,
+            message: 'Loaded from cache (no changes)',
+            count: animeIdMap.size,
+            updated: true,
+            parsedData: deferIndexing ? parsedData : null,
+          };
         } catch (e) {
           logger.warn("[ID Mapper] [Fribb's Anime-List] ETag matched, but local cache was unreadable. Forcing re-download.");
         }
@@ -685,19 +724,18 @@ async function downloadAndProcessAnimeList(force = false, skipReloadOnUnchangedE
         dataToCache = response.data;
         // Verify it's valid JSON before caching
         try {
-             dataForProcessing = JSON.parse(response.data);
+             dataForProcessing = parseAnimeListData(response.data);
         } catch (e) {
              throw new Error("Invalid JSON received from remote", { cause: e });
         }
     } else {
         // It came back as an object/array (application/json header)
-        dataForProcessing = response.data;
+        dataForProcessing = parseAnimeListData(response.data);
         dataToCache = JSON.stringify(response.data);
     }
 
-    
-    await fs.mkdir(path.dirname(LOCAL_CACHE_PATH), { recursive: true });
-    await fs.writeFile(LOCAL_CACHE_PATH, dataToCache, 'utf-8');
+    await writeFileAtomic(LOCAL_CACHE_PATH, dataToCache, 'utf-8');
+    dataToCache = null;
     
     if (useRedisCache) {
       await redis.set(REDIS_ETAG_KEY, response.headers.etag);
@@ -705,8 +743,16 @@ async function downloadAndProcessAnimeList(force = false, skipReloadOnUnchangedE
       await redis.set('maintenance:last_id_mapper_update', Date.now().toString());
     }
     
-    processAndIndexData(dataForProcessing);
-    return { success: true, message: 'Downloaded and updated', count: animeIdMap.size };
+    if (!deferIndexing) {
+      processAndIndexData(dataForProcessing);
+    }
+    return {
+      success: true,
+      message: 'Downloaded and updated',
+      count: animeIdMap.size,
+      updated: true,
+      parsedData: deferIndexing ? dataForProcessing : null,
+    };
 
   } catch (error) {
     logger.error(`[ID Mapper] [Fribb's Anime-List] An error occurred during remote download: ${error.message}`);
@@ -714,27 +760,61 @@ async function downloadAndProcessAnimeList(force = false, skipReloadOnUnchangedE
     
     try {
       const fileContent = await fs.readFile(LOCAL_CACHE_PATH, 'utf-8');
+      const parsedData = parseAnimeListData(fileContent);
       logger.debug("[ID Mapper] [Fribb's Anime-List] Successfully loaded data from local cache on fallback.");
-      processAndIndexData(fileContent); 
-      return { success: true, message: 'Loaded from local cache (fallback)', count: animeIdMap.size };
+      if (!deferIndexing) {
+        processAndIndexData(parsedData);
+      }
+      return {
+        success: true,
+        message: 'Loaded from local cache (fallback)',
+        count: animeIdMap.size,
+        updated: true,
+        parsedData: deferIndexing ? parsedData : null,
+      };
     } catch (fallbackError) {
       logger.error("[ID Mapper] [Fribb's Anime-List] CRITICAL: Fallback to local cache also failed. Mapper will be empty.");
-      return { success: false, message: `Failed to update: ${error.message}`, count: 0 };
+      return { success: false, message: `Failed to update: ${error.message}`, count: 0, updated: false, parsedData: null };
     }
   }
 }
 
 async function reindexAnimeListWithOverlay() {
   if (!isInitialized) return;
-  try {
-    processAndIndexData(await fs.readFile(LOCAL_CACHE_PATH, 'utf-8'));
-  } catch (error) {
-    logger.warn(`[ID Mapper] [animeApi] Could not re-index the anime list with the overlay: ${error.message}`);
+  if (reindexPromise) {
+    reindexQueued = true;
+    return reindexPromise;
   }
+  reindexPromise = (async () => {
+    do {
+      reindexQueued = false;
+      try {
+        await Promise.resolve();
+        processAndIndexData(await fs.readFile(LOCAL_CACHE_PATH, 'utf-8'));
+      } catch (error) {
+        logger.warn(`[ID Mapper] [animeApi] Could not re-index the anime list with the overlay: ${error.message}`);
+      }
+    } while (reindexQueued);
+  })().finally(() => {
+    reindexPromise = null;
+  });
+  return reindexPromise;
 }
 
 async function recheckUntypedTmdb() {
-  if (untypedTmdbUnchecked) await reindexAnimeListWithOverlay();
+  if (!untypedTmdbUnchecked) return;
+  const probes = uncheckedUntypedTmdbProbes;
+  try {
+    const anyContradicted = probes.some(p => isKnownTmdbMismatch(p.imdb, p.tvdb, p.themoviedb));
+    if (!anyContradicted) {
+      untypedTmdbUnchecked = false;
+      uncheckedUntypedTmdbProbes = [];
+      return;
+    }
+  } catch {
+    return;
+  }
+  await reindexAnimeListWithOverlay();
 }
 
 async function downloadAndProcessAnimeApi(force = false, skipReloadOnUnchangedEtag = false, reindexAnimeList = true) {
@@ -742,7 +822,7 @@ async function downloadAndProcessAnimeApi(force = false, skipReloadOnUnchangedEt
 
   if (!ANIME_API_OVERLAY_ENABLED) {
     logger.debug('[ID Mapper] [animeApi] Overlay disabled via ANIME_API_OVERLAY_ENABLED.');
-    return { success: true, message: 'Disabled', count: 0 };
+    return { success: true, message: 'Disabled', count: 0, updated: false };
   }
 
   const useRedisCache = redis;
@@ -758,7 +838,7 @@ async function downloadAndProcessAnimeApi(force = false, skipReloadOnUnchangedEt
         if (skipReloadOnUnchangedEtag && animeApiIndex) {
           logger.debug('[ID Mapper] [animeApi] No changes detected during scheduled refresh. Keeping existing in-memory data.');
           await redis.set('maintenance:last_anime_api_update', Date.now().toString());
-          return { success: true, message: 'Unchanged (scheduled no-op)', count: animeApiRowCount };
+          return { success: true, message: 'Unchanged (scheduled no-op)', count: animeApiRowCount, updated: false };
         }
 
         try {
@@ -766,7 +846,7 @@ async function downloadAndProcessAnimeApi(force = false, skipReloadOnUnchangedEt
           processAndIndexAnimeApi(await fs.readFile(LOCAL_ANIME_API_PATH, 'utf-8'));
           await redis.set('maintenance:last_anime_api_update', Date.now().toString());
           await reindex();
-          return { success: true, message: 'Loaded from cache (no changes)', count: animeApiRowCount };
+          return { success: true, message: 'Loaded from cache (no changes)', count: animeApiRowCount, updated: true };
         } catch (e) {
           logger.warn('[ID Mapper] [animeApi] ETag matched, but local cache was unreadable. Forcing re-download.');
         }
@@ -778,15 +858,14 @@ async function downloadAndProcessAnimeApi(force = false, skipReloadOnUnchangedEt
     const text = typeof response.data === 'string' ? response.data : String(response.data);
     processAndIndexAnimeApi(text);
 
-    await fs.mkdir(path.dirname(LOCAL_ANIME_API_PATH), { recursive: true });
-    await fs.writeFile(LOCAL_ANIME_API_PATH, text, 'utf-8');
+    await writeFileAtomic(LOCAL_ANIME_API_PATH, text, 'utf-8');
     if (useRedisCache) {
       if (response.headers.etag) await redis.set(REDIS_ANIME_API_ETAG_KEY, response.headers.etag);
       await redis.set('maintenance:last_anime_api_update', Date.now().toString());
     }
 
     await reindex();
-    return { success: true, message: 'Downloaded and updated', count: animeApiRowCount };
+    return { success: true, message: 'Downloaded and updated', count: animeApiRowCount, updated: true };
 
   } catch (error) {
     logger.error(`[ID Mapper] [animeApi] An error occurred during remote download: ${error.message}`);
@@ -795,10 +874,10 @@ async function downloadAndProcessAnimeApi(force = false, skipReloadOnUnchangedEt
       processAndIndexAnimeApi(await fs.readFile(LOCAL_ANIME_API_PATH, 'utf-8'));
       logger.debug('[ID Mapper] [animeApi] Successfully loaded data from local cache on fallback.');
       await reindex();
-      return { success: true, message: 'Loaded from local cache (fallback)', count: animeApiRowCount };
+      return { success: true, message: 'Loaded from local cache (fallback)', count: animeApiRowCount, updated: true };
     } catch (fallbackError) {
       logger.warn('[ID Mapper] [animeApi] Fallback to local cache also failed. Continuing without the overlay.');
-      return { success: false, message: `Failed to update: ${error.message}`, count: 0 };
+      return { success: false, message: `Failed to update: ${error.message}`, count: 0, updated: false };
     }
   }
 }
@@ -828,12 +907,12 @@ async function downloadAndProcessTraktAnimeMovies(skipReloadOnUnchangedEtag = fa
         try {
           logger.debug('[ID Mapper] [Trakt-Anime-Movies] No changes detected. Loading from local disk cache...');
           const fileContent = await fs.readFile(LOCAL_TRAKT_ANIME_MOVIES_PATH, 'utf-8');
-          let parsed = JSON.parse(fileContent);
+          const parsed = JSON.parse(fileContent);
           // Handle double-encoded JSON (backwards compatibility with existing cache files)
-          traktAnimeMovies = typeof parsed === 'string' ? JSON.parse(parsed) : parsed;
-          processAndIndexTraktAnimeMovies(traktAnimeMovies);
+          const moviesArray = typeof parsed === 'string' ? JSON.parse(parsed) : parsed;
+          processAndIndexTraktAnimeMovies(moviesArray);
           isTraktAnimeMoviesInitialized = true;
-          logger.debug(`[ID Mapper] [Trakt-Anime-Movies] Successfully loaded ${traktAnimeMovies.length} mappings from local cache.`);
+          logger.debug(`[ID Mapper] [Trakt-Anime-Movies] Successfully loaded ${moviesArray.length} mappings from local cache.`);
           return;
         } catch (e) {
           logger.warn('[ID Mapper] [Trakt-Anime-Movies] ETag matched, but local cache was unreadable. Forcing re-download.');
@@ -846,19 +925,18 @@ async function downloadAndProcessTraktAnimeMovies(skipReloadOnUnchangedEtag = fa
     logger.debug('[ID Mapper] [Trakt-Anime-Movies] Downloading Trakt anime movies mapping...');
     const response = await httpGet(REMOTE_TRAKT_ANIME_MOVIES_URL, BOOTSTRAP_RETRY);
     // GitHub raw returns text/plain, so response.data may be a string; parse if needed
-    traktAnimeMovies = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
-    const jsonData = JSON.stringify(traktAnimeMovies);
+    const moviesArray = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+    const jsonData = JSON.stringify(moviesArray);
 
-    await fs.mkdir(path.dirname(LOCAL_TRAKT_ANIME_MOVIES_PATH), { recursive: true });
-    await fs.writeFile(LOCAL_TRAKT_ANIME_MOVIES_PATH, jsonData, 'utf-8');
+    await writeFileAtomic(LOCAL_TRAKT_ANIME_MOVIES_PATH, jsonData, 'utf-8');
     
     if (useRedisCache) {
       await redis.set(REDIS_TRAKT_ANIME_MOVIES_ETAG_KEY, response.headers.etag);
     }
     
-    processAndIndexTraktAnimeMovies(traktAnimeMovies);
+    processAndIndexTraktAnimeMovies(moviesArray);
     isTraktAnimeMoviesInitialized = true;
-    logger.debug(`[ID Mapper] [Trakt-Anime-Movies] Successfully loaded ${traktAnimeMovies.length} mappings.`);
+    logger.debug(`[ID Mapper] [Trakt-Anime-Movies] Successfully loaded ${moviesArray.length} mappings.`);
 
   } catch (error) {
     logger.error(`[ID Mapper] [Trakt-Anime-Movies] An error occurred during remote download: ${error.message}`);
@@ -866,15 +944,15 @@ async function downloadAndProcessTraktAnimeMovies(skipReloadOnUnchangedEtag = fa
     
     try {
       const fileContent = await fs.readFile(LOCAL_TRAKT_ANIME_MOVIES_PATH, 'utf-8');
-      let parsed = JSON.parse(fileContent);
+      const parsed = JSON.parse(fileContent);
       // Handle double-encoded JSON (backwards compatibility with existing cache files)
-      traktAnimeMovies = typeof parsed === 'string' ? JSON.parse(parsed) : parsed;
-      processAndIndexTraktAnimeMovies(traktAnimeMovies);
+      const moviesArray = typeof parsed === 'string' ? JSON.parse(parsed) : parsed;
+      processAndIndexTraktAnimeMovies(moviesArray);
       isTraktAnimeMoviesInitialized = true;
       logger.debug('[ID Mapper] [Trakt-Anime-Movies] Successfully loaded data from local cache on fallback.');
     } catch (fallbackError) {
       logger.error('[ID Mapper] [Trakt-Anime-Movies] CRITICAL: Fallback to local cache also failed. Trakt anime movies mapping will be empty.');
-      traktAnimeMovies = [];
+      processAndIndexTraktAnimeMovies([]);
       isTraktAnimeMoviesInitialized = true;
     }
   }
@@ -951,7 +1029,8 @@ function parseKitsuToImdbMapping(value, source) {
   return mapping;
 }
 
-async function downloadAndProcessKitsuToImdbMapping(force = false, skipReloadOnUnchangedEtag = false) {
+async function downloadAndProcessKitsuToImdbMapping(force = false, skipReloadOnUnchangedEtag = false, reindexAnimeList = true) {
+  const reindex = () => (reindexAnimeList ? reindexAnimeListWithOverlay() : Promise.resolve());
   const useRedisCache = redis;
 
   try {
@@ -968,7 +1047,7 @@ async function downloadAndProcessKitsuToImdbMapping(force = false, skipReloadOnU
           if (useRedisCache) {
             await redis.set('maintenance:last_kitsu_imdb_update', Date.now().toString());
           }
-          return { success: true, message: 'Unchanged (scheduled no-op)', count: kitsuToImdbMappingCount };
+          return { success: true, message: 'Unchanged (scheduled no-op)', count: kitsuToImdbMappingCount, updated: false };
         }
 
         try {
@@ -982,8 +1061,8 @@ async function downloadAndProcessKitsuToImdbMapping(force = false, skipReloadOnU
             await redis.set('maintenance:last_kitsu_imdb_update', Date.now().toString());
           }
           logger.debug(`[ID Mapper] [Kitsu-IMDB] Successfully loaded ${kitsuToImdbMappingCount} mappings from local cache.`);
-          await reindexAnimeListWithOverlay();
-          return { success: true, message: 'Loaded from cache (no changes)', count: kitsuToImdbMappingCount };
+          await reindex();
+          return { success: true, message: 'Loaded from cache (no changes)', count: kitsuToImdbMappingCount, updated: true };
         } catch (e) {
           logger.warn(`[ID Mapper] [Kitsu-IMDB] ETag matched, but local cache was unusable (${e.message}). Forcing re-download.`);
         }
@@ -1000,8 +1079,7 @@ async function downloadAndProcessKitsuToImdbMapping(force = false, skipReloadOnU
     kitsuToImdbMappingCount = Object.keys(kitsuToImdbMapping).length;
     const jsonData = JSON.stringify(kitsuToImdbMapping);
 
-    await fs.mkdir(path.dirname(LOCAL_KITSU_TO_IMDB_MAPPING_PATH), { recursive: true });
-    await fs.writeFile(LOCAL_KITSU_TO_IMDB_MAPPING_PATH, jsonData, 'utf-8');
+    await writeFileAtomic(LOCAL_KITSU_TO_IMDB_MAPPING_PATH, jsonData, 'utf-8');
     
     if (useRedisCache) {
       await redis.set(REDIS_KITSU_TO_IMDB_ETAG_KEY, response.headers.etag);
@@ -1011,8 +1089,8 @@ async function downloadAndProcessKitsuToImdbMapping(force = false, skipReloadOnU
     
     isKitsuToImdbInitialized = true;
     logger.debug(`[ID Mapper] [Kitsu-IMDB] Successfully loaded ${kitsuToImdbMappingCount} mappings.`);
-    await reindexAnimeListWithOverlay();
-    return { success: true, message: 'Downloaded and updated', count: kitsuToImdbMappingCount };
+    await reindex();
+    return { success: true, message: 'Downloaded and updated', count: kitsuToImdbMappingCount, updated: true };
 
   } catch (error) {
     logger.error(`[ID Mapper] [Kitsu-IMDB] An error occurred during remote download: ${error.message}`);
@@ -1024,15 +1102,32 @@ async function downloadAndProcessKitsuToImdbMapping(force = false, skipReloadOnU
       kitsuToImdbMappingCount = Object.keys(kitsuToImdbMapping).length;
       isKitsuToImdbInitialized = true;
       logger.debug('[ID Mapper] [Kitsu-IMDB] Successfully loaded data from local cache on fallback.');
-      await reindexAnimeListWithOverlay();
-      return { success: true, message: 'Loaded from local cache (fallback)', count: kitsuToImdbMappingCount };
+      await reindex();
+      return { success: true, message: 'Loaded from local cache (fallback)', count: kitsuToImdbMappingCount, updated: true };
     } catch (fallbackError) {
       logger.error('[ID Mapper] [Kitsu-IMDB] CRITICAL: Fallback to local cache also failed. Kitsu-IMDB mapping will be empty.');
       kitsuToImdbMapping = {};
       kitsuToImdbMappingCount = 0;
       isKitsuToImdbInitialized = true;
-      return { success: false, message: `Failed to update: ${error.message}`, count: 0 };
+      return { success: false, message: `Failed to update: ${error.message}`, count: 0, updated: false };
     }
+  }
+}
+
+async function refreshAllMapperSources(skipReloadOnUnchangedEtag = false) {
+  const [animeListRes, kitsuImdbRes, , animeApiRes] = await Promise.all([
+    downloadAndProcessAnimeList(false, skipReloadOnUnchangedEtag, true),
+    downloadAndProcessKitsuToImdbMapping(false, skipReloadOnUnchangedEtag, false),
+    downloadAndProcessTraktAnimeMovies(skipReloadOnUnchangedEtag),
+    downloadAndProcessAnimeApi(false, skipReloadOnUnchangedEtag, false),
+  ]);
+
+  if (animeListRes?.parsedData) {
+    const parsedData = animeListRes.parsedData;
+    animeListRes.parsedData = null;
+    processAndIndexData(parsedData);
+  } else if (kitsuImdbRes?.updated || animeApiRes?.updated) {
+    await reindexAnimeListWithOverlay();
   }
 }
 
@@ -1044,12 +1139,12 @@ async function downloadAndProcessKitsuToImdbMapping(force = false, skipReloadOnU
 async function initializeMapper() {
   if (isInitialized && isKitsuToImdbInitialized && isTraktAnimeMoviesInitialized) return;
 
-  await Promise.all([
-    downloadAndProcessAnimeList(),
-    downloadAndProcessKitsuToImdbMapping(),
-    downloadAndProcessTraktAnimeMovies(),
-    downloadAndProcessAnimeApi()
-  ]);
+  if (!initPromise) {
+    initPromise = refreshAllMapperSources(false).finally(() => {
+      initPromise = null;
+    });
+  }
+  await initPromise;
   
   // Schedule periodic updates
   if (!updateInterval) {
@@ -1057,17 +1152,13 @@ async function initializeMapper() {
     updateInterval = setInterval(async () => {
       logger.debug(`[ID Mapper] Running scheduled update (every ${UPDATE_INTERVAL_HOURS} hours)...`);
       try {
-        await Promise.all([
-          downloadAndProcessAnimeList(false, true),
-          downloadAndProcessKitsuToImdbMapping(false, true),
-          downloadAndProcessTraktAnimeMovies(true),
-          downloadAndProcessAnimeApi(false, true)
-        ]);
+        await refreshAllMapperSources(true);
         logger.debug('[ID Mapper] Scheduled update completed successfully.');
       } catch (error) {
         logger.error('[ID Mapper] Scheduled update failed:', error.message);
       }
     }, intervalMs);
+    updateInterval.unref?.();
     
     logger.debug(`[ID Mapper] Scheduled periodic updates every ${UPDATE_INTERVAL_HOURS} hours.`);
   }
@@ -2390,16 +2481,33 @@ async function resolveKitsuIdForEpisodeByTmdb(tmdbId, seasonNumber, episodeNumbe
 }
 
 // TMDB numbers a few long-running shows on a running count, so a season's first episode is not 1.
+function tmdbSeasonEpisodeNumbers(tmdbId, seasonNumber, config = {}) {
+  const key = `${tmdbId}:${seasonNumber}`;
+  const held = tmdbEpisodeNumbersCache.get(key);
+  if (held) return held;
+  const read = (async () => {
+    const { seasonInfo } = require('./getTmdb.js');
+    const season = await seasonInfo({ id: tmdbId, season_number: seasonNumber, language: 'en-US' }, config);
+    return Array.isArray(season?.episodes) ? season.episodes.map((episode) => episode?.episode_number) : [];
+  })();
+  tmdbEpisodeNumbersCache.set(key, read);
+  const forget = () => {
+    if (tmdbEpisodeNumbersCache.get(key) === read) tmdbEpisodeNumbersCache.delete(key);
+  };
+  read.then((numbers) => {
+    if (!numbers.length) forget();
+  }, forget);
+  return read;
+}
+
 async function tmdbEpisodeNumberAt(tmdbId, seasonNumber, position, config = {}) {
   if (!Number.isInteger(position) || position < 1) return position;
   try {
-    const { seasonInfo } = require('./getTmdb.js');
-    const season = await seasonInfo({ id: tmdbId, season_number: seasonNumber, language: 'en-US' }, config);
-    const episodes = Array.isArray(season?.episodes) ? season.episodes : [];
-    const first = episodes[0]?.episode_number;
+    const numbers = await tmdbSeasonEpisodeNumbers(tmdbId, seasonNumber, config);
+    const first = numbers[0];
     if (!Number.isInteger(first) || first === 1) return position;
-    const episode = episodes[position - 1];
-    return Number.isInteger(episode?.episode_number) ? episode.episode_number : first + position - 1;
+    const number = numbers[position - 1];
+    return Number.isInteger(number) ? number : first + position - 1;
   } catch (error) {
     logger.debug(`[ID Mapper] Season details unavailable for TMDB ${tmdbId} S${seasonNumber}: ${error?.message || error}`);
     return position;
@@ -2417,12 +2525,10 @@ async function applyTmdbEpisodeNumbers(map, config = {}) {
 // A failed read is thrown, not answered with the episode number: that answer reads as
 // "numbered the same", and the caller would keep it.
 async function tmdbEpisodePosition(tmdbId, seasonNumber, episodeNumber, config = {}) {
-  const { seasonInfo } = require('./getTmdb.js');
-  const season = await seasonInfo({ id: tmdbId, season_number: seasonNumber, language: 'en-US' }, config);
-  const episodes = Array.isArray(season?.episodes) ? season.episodes : [];
-  const index = episodes.findIndex((episode) => episode?.episode_number === episodeNumber);
+  const numbers = await tmdbSeasonEpisodeNumbers(tmdbId, seasonNumber, config);
+  const index = numbers.indexOf(episodeNumber);
   if (index >= 0) return index + 1;
-  const first = episodes[0]?.episode_number;
+  const first = numbers[0];
   return Number.isInteger(first) && first > 1 ? episodeNumber - first + 1 : episodeNumber;
 }
 
@@ -2654,7 +2760,8 @@ async function resolveTmdbEpisodesFromKitsu(kitsuId, kitsuEpisodeNumbers, config
     await applyTmdbEpisodeNumbers(map, config);
     return map;
   } catch (error) {
-    logger.error(`[ID Mapper] Error resolving TMDB episodes from Kitsu ID ${kitsuId}:`, error);
+    if (error?.code === 'TMDB_KEY_MISSING') logger.debug(`[ID Mapper] Error resolving TMDB episodes from Kitsu ID ${kitsuId}: ${error.message}`);
+    else logger.error(`[ID Mapper] Error resolving TMDB episodes from Kitsu ID ${kitsuId}:`, error);
     return new Map();
   }
 }
@@ -2678,7 +2785,8 @@ async function resolveTmdbEpisodeFromKitsu(kitsuId, kitsuEpisodeNumber, config =
     await applyTmdbEpisodeNumbers(tmdbEpisodeMap, config);
     return tmdbEpisodeMap.get(kitsuEpisodeNumber) || null;
   } catch (error) {
-    logger.error(`[ID Mapper] Error resolving TMDB episode from Kitsu ID ${kitsuId} episode ${kitsuEpisodeNumber}:`, error);
+    if (error?.code === 'TMDB_KEY_MISSING') logger.debug(`[ID Mapper] Error resolving TMDB episode from Kitsu ID ${kitsuId} episode ${kitsuEpisodeNumber}: ${error.message}`);
+    else logger.error(`[ID Mapper] Error resolving TMDB episode from Kitsu ID ${kitsuId} episode ${kitsuEpisodeNumber}:`, error);
     return null;
   }
 }

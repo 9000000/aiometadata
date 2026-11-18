@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 const { decompressFromEncodedURIComponent } = require('lz-string');
 const axios = require('axios');
 const fanart = require('./fanart');
@@ -71,8 +73,10 @@ function isPosterRatingEnabled(config) {
  *   {rating_id}      — resolves to the matching ID in the format the service expects:
  *                       imdb: 'tt1234567', tmdb/tvdb: 'movie-12345' or 'series-12345'
  *
+ * {id} resolves to the meta's raw id exactly as served (e.g. 'mal:16498', 'tt0111161').
+ *
  * @param {string} pattern - URL pattern with placeholders
- * @param {object} ids - Object with id, tmdbId, imdbId, tvdbId, malId, kitsuId, anilistId, anidbId properties
+ * @param {object} ids - Object with id (raw meta id), tmdbId, imdbId, tvdbId, malId, kitsuId, anilistId, anidbId properties
  * @param {string} type - Content type (movie, series)
  * @param {object} [config] - User config (for API key and language placeholders)
  * @returns {string|null} Resolved URL or null
@@ -381,7 +385,7 @@ function buildPosterProxyUrl(host, type, proxyId, fallback, language, config) {
   }
   
   // RPDB needs proxy endpoint for fallback handling
-  return `${host}/poster/${type}/${proxyId}?fallback=${encodeURIComponent(fallback)}&lang=${language}&key=${apiKey}`;
+  return `${host}/poster/${type}/${proxyId}?${require('../lib/posterCache/proxyArt').fallbackQuery(fallback)}&lang=${language}&key=${apiKey}`;
 }
 
 
@@ -878,13 +882,14 @@ function sortTvdbSearchResults(results, query) {
 }
 
 function processOverviewTranslations(translations, language, overview) {
-  // Try the other Portuguese variant before falling back to English.
   if(language === 'pt-PT' || language === 'pt-BR'){
+    // Portuguese variants fall back to each other before English
+    const otherPortuguese = language === 'pt-PT' ? 'pt-BR' : 'pt-PT';
     let translation = tmdb.getTranslations(translations, language);
       if(translation && translation.data.overview && translation.data.overview.trim() !== ''){
         overview = translation.data.overview;
       } else {
-        translation = tmdb.getTranslations(translations, language === 'pt-BR' ? 'pt-PT' : 'pt-BR');
+        translation = tmdb.getTranslations(translations, otherPortuguese);
         if(translation && translation.data.overview && translation.data.overview.trim() !== ''){
           overview = translation.data.overview;
         } else{
@@ -1956,10 +1961,16 @@ function getKitsuGenresForItem(item, included = [], allowIncludedFallback = fals
     .filter(Boolean);
 }
 
-/** Where the catalog layer reads it from. Merged: releaseDates shares the object. */
+/**
+ * The catalog layer reads a row's rating from app_extras.certification, as the meta
+ * builders write it. Anime rows only carry the top-level field, so copy a rated
+ * value across, keeping whatever app_extras already holds.
+ */
 function withCatalogCertification(meta) {
-  if (!meta || isUnratedCertification(meta.certification)) return meta;
-  meta.app_extras = { ...(meta.app_extras || {}), certification: meta.certification };
+  if (!meta || typeof meta !== 'object') return meta;
+  const certification = meta.certification;
+  if (isUnratedCertification(certification)) return meta;
+  meta.app_extras = { ...(meta.app_extras || {}), certification };
   return meta;
 }
 
@@ -2537,7 +2548,9 @@ function getYouTubeIdFromUrl(url) {
  * Parses the trailers array from the TVDB API into Stremio-compatible formats.
  * @param {Array} tvdbTrailers - The `trailers` array from the TVDB API response.
  * @param {string} defaultTitle - A fallback title to use for the trailer.
- * @returns {{trailers: Array}} The parsed trailers.
+ * Only YouTube entries with a readable video id are kept. Each trailer keeps its
+ * own name and the language code exactly as TVDB reported it.
+ * @returns {{trailers: Array<{source: string, type: string, name: string, lang: string|null}>}}
  */
 function parseTvdbTrailers(tvdbTrailers, defaultTitle = 'Official Trailer') {
   const trailers = [];
@@ -2546,18 +2559,19 @@ function parseTvdbTrailers(tvdbTrailers, defaultTitle = 'Official Trailer') {
     return { trailers };
   }
 
-  for (const trailer of tvdbTrailers) {
-    if (!trailer?.url) continue;
-    if (!(trailer.url.includes('youtube.com') || trailer.url.includes('youtu.be'))) continue;
+  for (const entry of tvdbTrailers) {
+    const url = typeof entry?.url === 'string' ? entry.url : '';
+    if (!url) continue;
+    if (!url.includes('youtube.com') && !url.includes('youtu.be')) continue;
 
-    const ytId = getYouTubeIdFromUrl(trailer.url);
+    const ytId = getYouTubeIdFromUrl(url);
     if (!ytId) continue;
 
     trailers.push({
       source: ytId,
       type: 'Trailer',
-      name: trailer.name || defaultTitle,
-      lang: trailer.language
+      name: entry.name || defaultTitle,
+      lang: entry.language || null
     });
   }
 
@@ -2565,17 +2579,33 @@ function parseTvdbTrailers(tvdbTrailers, defaultTitle = 'Official Trailer') {
 }
 
 /**
- * Narrows trailers to the user's language, falling back to English, then to all.
- * @param {Array} trailers - Parsed trailers carrying a `lang`.
- * @param {string} langCode3 - The user's language in TVDB's own coding.
- * @returns {Array} The first non-empty tier.
+ * Chooses which TVDB trailers to show for the user's language.
+ * TVDB tags trailers with either three-letter (`por`) or two-letter (`pt`) codes,
+ * so the user's language is matched against both forms.
+ * Order of preference: user's language -> English -> every trailer.
+ * @param {Array} trailers - Parsed trailers (from parseTvdbTrailers), each with a `lang`.
+ * @param {string|null} langCode3 - The user's three-letter TVDB language code (e.g. 'por').
+ * @param {string|null} language - The configured language (e.g. 'pt-BR').
+ * @returns {Array} The chosen trailers.
  */
-function pickTrailersByLanguage(trailers, langCode3) {
+function selectTvdbTrailersByLanguage(trailers, langCode3, language) {
   if (!Array.isArray(trailers) || trailers.length === 0) return [];
-  const wanted = trailers.filter((trailer) => trailer?.lang === langCode3);
-  if (wanted.length > 0) return wanted;
-  const english = trailers.filter((trailer) => trailer?.lang === 'eng');
-  return english.length > 0 ? english : trailers;
+
+  const normalize = (code) => (typeof code === 'string' ? code.trim().toLowerCase() : '');
+  const userCodes = new Set(
+    [normalize(langCode3), normalize(typeof language === 'string' ? language.split('-')[0] : '')]
+      .filter(Boolean)
+  );
+
+  const matchesAny = (trailer, codes) => codes.has(normalize(trailer?.lang));
+
+  const userLangTrailers = trailers.filter(t => matchesAny(t, userCodes));
+  if (userLangTrailers.length > 0) return userLangTrailers;
+
+  const englishTrailers = trailers.filter(t => matchesAny(t, new Set(['eng', 'en'])));
+  if (englishTrailers.length > 0) return englishTrailers;
+
+  return trailers;
 }
 
 // In-flight request cache for TMDB movie images to deduplicate concurrent requests
@@ -3298,8 +3328,14 @@ async function getSeriesLogo({ tmdbId, tvdbId, imdbId, metaProvider, fallbackLog
 
 
 
+/** The countries a TMDB record says the title comes from. */
+function tmdbOriginCountries(details) {
+  if (details?.origin_country?.length) return details.origin_country;
+  return (details?.production_countries || []).map(country => country.iso_3166_1).filter(Boolean);
+}
+
 // Helper for language fallback selection from TMDB images
-function selectTmdbImageByLang(images, config, key = 'iso_639_1', originalLanguage = null) {
+function selectTmdbImageByLang(images, config, key = 'iso_639_1', originalLanguage = null, originCountries = []) {
   if (!Array.isArray(images) || images.length === 0) return undefined;
 
   const targetLang = config.artProviders?.englishArtOnly ? 'en' : (config.language?.split('-')[0]?.toLowerCase() || 'en');
@@ -3310,6 +3346,11 @@ function selectTmdbImageByLang(images, config, key = 'iso_639_1', originalLangua
   if (targetExact) return targetExact;
 
   if (preferOrigLang) {
+    // A title in the user's language keeps the art of its own country, whichever region the user reads it from.
+    const ownArt = targetLang !== 'en' && originalLanguage === targetLang
+      && images.find(img => img[key] === targetLang && originCountries.includes(img.iso_3166_1));
+    if (ownArt) return ownArt;
+
     return images.find(img => img[key] === 'en')
       || (originalLanguage && images.find(img => img[key] === originalLanguage))
       || images.find(img => img[key] != null && img[key] !== 'xx')
@@ -3486,7 +3527,7 @@ module.exports = {
   parseAnimeCatalogMetaBatch,
   malRatingToCertification,
   parseTvdbTrailers,
-  pickTrailersByLanguage,
+  selectTvdbTrailersByLanguage,
   parseAnimeRelationsLink,
   parseAnimeGenreLink,
   getAnimePoster,
@@ -3501,6 +3542,7 @@ module.exports = {
   getSeriesLogo,
   getTmdbSeriesArtBatch,
   selectTmdbImageByLang,
+  tmdbOriginCountries,
   mergeTmdbOriginalLanguageImages,
   getTmdbMovieCertificationForCountry,
   getTmdbTvCertificationForCountry,

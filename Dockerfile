@@ -14,6 +14,7 @@ RUN find dist/server -type f \( -name "*.map" -o -name "*.d.ts" \) -delete && \
 # Stage 2: Runtime image for target platform
 FROM alpine:3.24 AS runner
 WORKDIR /app
+LABEL org.opencontainers.image.licenses="AGPL-3.0-or-later AND FSL-1.1-ALv2"
 RUN apk add --no-cache ca-certificates nodejs
 COPY package*.json package-lock.json* ./
 # Install production dependencies only (frontend-only UI libs were moved to devDependencies)
@@ -26,6 +27,8 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked apk add --no-cache npm &
 COPY --from=builder /app/addon ./addon
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/public ./public
+COPY --from=builder /app/LICENSE /app/LICENSE-FSL.md /app/LICENSING.md /app/NOTICE /app/TRADEMARKS.md /app/THIRD_PARTY_NOTICES.txt ./
+COPY --from=builder /app/LICENSES ./LICENSES
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh && \
     chmod +x /usr/local/bin/entrypoint.sh

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 const database: any = require('./database');
 const movielens: any = require('./movielens');
 const imp: any = require('./movielensImport');
@@ -168,7 +170,7 @@ async function bootstrapMovieLensAccount(config: any): Promise<any> {
 }
 
 async function syncAllMovieLensAccounts(): Promise<{ processed: number; synced: number }> {
-  const uuids: string[] = await database.getAllUserUUIDs();
+  const uuids: string[] = await database.configsHoldingField('movieLensCredId');
   let processed = 0;
   let synced = 0;
   for (const uuid of uuids) {

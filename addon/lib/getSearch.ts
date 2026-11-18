@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 const { tvdbLanguageChain, pickTranslation, pickArtwork }: any = require('../utils/tvdbLanguage');
 require("dotenv").config();
 const { getGenreList }: any = require("./getGenreList");
@@ -22,6 +24,7 @@ import { hasAgeRatingCap } from '../utils/ageRating';
 import { buildCertificationMap } from '../utils/contentRating';
 const { cacheWrapMetaSmart, cacheWrapGlobal }: any = require('./getCache');
 const { getSetting }: any = require('./settingsService');
+const { resolveSeriesRuntime }: any = require('./tmdbSeriesRuntime');
 import { fetchImdbSuggestions, type ImdbSuggestion } from '../utils/imdbSuggestions.js';
 import { fetchLumiereSearch, fetchLumierePeopleSearch, type LumiereResult } from '../utils/lumiereSearch.js';
 import { lumiereApiBase } from '../utils/lumiereLists.js';
@@ -138,6 +141,8 @@ async function parseTvdbSearchResult(type: string, extendedRecord: any, language
   let certification: string | null = null;
   let certifications: Record<string, string> | null = null;
   let movieReleaseDates: any = null;
+  // The age gate at the end of TVDB search drops anything with no known certification,
+  // so a cap needs the lookup even when the rating itself is not displayed.
   if (config.displayAgeRating || hasAgeRatingCap(config)) {
     try {
       let tmdbRatings: any = null;
@@ -705,7 +710,7 @@ async function performTmdbSearch(type: string, query: string, language: string, 
         if(allIds.tvdbId) parsed._tvdbId = String(allIds.tvdbId);
         parsed.keywords = moviedb.keywordNamesOf(details) ?? [];
         parsed.runtime = type === 'movie' ? Utils.parseRunTime(details.runtime) : null;
-        if(type === 'series') parsed.runtime  = Utils.parseRunTime(details.episode_run_time?.[0] ?? details.last_episode_to_air?.runtime ?? details.next_episode_to_air?.runtime ?? null);
+        if(type === 'series') parsed.runtime  = Utils.parseRunTime(await resolveSeriesRuntime(details));
         parsed.app_extras = { releaseDates: details.release_dates, certification, certifications };
         return { parsed, details };
     } catch (error: any) {
@@ -1480,12 +1485,7 @@ async function matchAndEnrichFromTMDB(suggestion: { title: string; year: string 
     parsed.keywords = moviedb.keywordNamesOf(details) ?? [];
     parsed.runtime = type === 'movie' ? Utils.parseRunTime(details.runtime) : null;
     if (type === 'series') {
-      parsed.runtime = Utils.parseRunTime(
-        details.episode_run_time?.[0] ??
-        details.last_episode_to_air?.runtime ??
-        details.next_episode_to_air?.runtime ??
-        null
-      );
+      parsed.runtime = Utils.parseRunTime(await resolveSeriesRuntime(details));
     }
 
     parsed.app_extras = { releaseDates: details.release_dates, certification, certifications };
@@ -1499,7 +1499,7 @@ async function matchAndEnrichFromTMDB(suggestion: { title: string; year: string 
 }
 
 
-async function performAiSearch(query: string, language: string, config: any): Promise<{ metas: any[]; error?: string }> {
+async function performAiSearch(query: string, language: string, config: any): Promise<{ metas: any[]; error?: string; webSearchFailed?: string }> {
   const effectiveQuery = (query || '').trim();
   if (isShortAiQuery(effectiveQuery)) {
     logger.debug(`Skipping AI search for short query: "${effectiveQuery}"`);
@@ -1511,27 +1511,36 @@ async function performAiSearch(query: string, language: string, config: any): Pr
   const aiModel = aiProvider === 'openrouter'
     ? (config.search?.ai_model || 'google/gemini-2.5-flash')
     : resolveGeminiModel(config.search?.ai_model);
-  const aiWebSearch = aiProvider === 'openrouter'
+  const wantsWebSearch = aiProvider === 'openrouter'
     ? config.search?.ai_openrouter_web_search !== false
     : config.search?.ai_web_search === true;
+  // An engine here searches and hands the model its results, so it serves any model; otherwise the provider's own search.
+  const webSearch = require('../utils/webSearch');
+  const chosen = webSearch.chosenWebSearch(config, config.search?.ai_web_search_via);
+  const webSource = wantsWebSearch ? chosen.source : null;
+  const aiWebSearch = chosen.provider && wantsWebSearch && (aiProvider !== 'openrouter' || !require('../utils/ai-endpoint').isCustomAiEndpoint());
 
-  logger.info(`Starting AI search for query: "${effectiveQuery}" (provider: ${aiProvider}, model: ${aiModel}, webSearch: ${aiWebSearch})`);
+  logger.info(`Starting AI search for query: "${effectiveQuery}" (provider: ${aiProvider}, model: ${aiModel}, webSearch: ${webSource ? webSource.engine.id : aiWebSearch})`);
 
   try {
     let suggestions: any[];
+    const web = webSource ? await webSearch.webContext(webSource, `${effectiveQuery} movies and TV series`, { limit: 10 }) : null;
+    const webResults = web?.text || '';
+    // A search that ran without the web still answers; the reason goes with it for the catalog to show.
+    const degraded = web?.failure ? { webSearchFailed: web.failure } : {};
 
     if (aiProvider === 'openrouter') {
       const openrouterKey = config.apiKeys?.openrouter;
       const effectiveModel = withWebSearch(aiModel, aiWebSearch);
-      suggestions = await performOpenRouterSearch(openrouterKey, effectiveQuery, 'mixed', language, effectiveModel);
+      suggestions = await performOpenRouterSearch(openrouterKey, effectiveQuery, 'mixed', language, effectiveModel, webResults);
     } else {
       const geminiKey = config.apiKeys?.gemini || process.env.BUILT_IN_GEMINI_API_KEY;
-      suggestions = await performGeminiSearch(geminiKey, effectiveQuery, 'mixed', language, aiModel, aiWebSearch);
+      suggestions = await performGeminiSearch(geminiKey, effectiveQuery, 'mixed', language, aiModel, aiWebSearch, webResults);
     }
 
     if (!suggestions || suggestions.length === 0) {
       logger.info('AI search returned no suggestions.');
-      return { metas: [] };
+      return { metas: [], ...degraded };
     }
 
     logger.debug(`AI search returned ${suggestions.length} suggestions`);
@@ -1565,7 +1574,7 @@ async function performAiSearch(query: string, language: string, config: any): Pr
     const totalTime = Date.now() - startTime;
     logger.success(`AI search completed in ${totalTime}ms. Returning ${filteredResults.length} results.`);
 
-    return { metas: filteredResults };
+    return { metas: filteredResults, ...degraded };
 
   } catch (error: any) {
     const totalTime = Date.now() - startTime;
@@ -2553,7 +2562,7 @@ function getProviderFromSearchId(searchId: string): string {
   }
 }
 
-async function getSearch(id: string, type: string, language: string, extra: any, config: any): Promise<{ metas: any[]; error?: string }> {
+async function getSearch(id: string, type: string, language: string, extra: any, config: any): Promise<{ metas: any[]; error?: string; webSearchFailed?: string }> {
   const searchStartTime = Date.now();
 
   const rawSearch = typeof extra?.search === 'string' ? extra.search : undefined;
@@ -2579,6 +2588,7 @@ async function getSearch(id: string, type: string, language: string, extra: any,
     }
 
     let metas: any[] = [];
+    let webSearchFailed: string | undefined;
     const page = extra.page ? parseInt(extra.page) : 1;
     switch (id) {
       case 'mal.genre_search':
@@ -2615,6 +2625,7 @@ async function getSearch(id: string, type: string, language: string, extra: any,
           const aiResult = await performAiSearch(trimmedSearch, language, config);
           if (aiResult.error) return { metas: [], error: aiResult.error };
           metas = aiResult.metas;
+          webSearchFailed = aiResult.webSearchFailed;
         }
         break;
 
@@ -2827,7 +2838,7 @@ async function getSearch(id: string, type: string, language: string, extra: any,
       logger.info(`Filtered out ${beforeFilterCount - afterFilterCount} malformed search results`);
     }
 
-    return { metas };
+    return { metas, ...(webSearchFailed ? { webSearchFailed } : {}) };
   } catch (error: any) {
     const searchDuration = Date.now() - searchStartTime;
     logger.error(`Search failed after ${searchDuration}ms for "${queryText}" (${id}):`, error);

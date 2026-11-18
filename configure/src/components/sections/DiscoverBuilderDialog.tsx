@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useConfig, CatalogConfig } from '@/contexts/ConfigContext';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -718,6 +720,115 @@ function DatePresetPicker({ value, onPick }: { value: DatePresetKey; onPick: (pr
   );
 }
 
+/** Days from today at each end of a date range, where that end moves with today instead of holding a date. */
+type RelativeEnds = { from: number | null; to: number | null };
+type DateRangeTarget = 'movie' | 'series' | 'airDate';
+const FIXED_ENDS: RelativeEnds = { from: null, to: null };
+
+const hasRelativeEnd = (ends: RelativeEnds): boolean => ends.from !== null || ends.to !== null;
+
+function validDays(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && Math.abs(value) <= MAX_ROLLING_DAYS ? value : null;
+}
+
+function dateInDays(days: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return formatLocalDateForInput(date);
+}
+
+function daysFromToday(value: string): number | null {
+  const [year, month, day] = value.split('-').map(Number);
+  if (!year || !month || !day) return null;
+  const today = new Date();
+  return Math.round((Date.UTC(year, month - 1, day) - Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())) / 86400000);
+}
+
+/** A preset that is a set number of days either side of today, as its two ends. */
+function endsOfPreset(preset: DatePresetKey): RelativeEnds | null {
+  if (preset === 'today') return { from: 0, to: 0 };
+  if (preset === 'last_month') return { from: -30, to: 0 };
+  const rolling = rollingDaysOf(preset);
+  if (!rolling) return null;
+  return rolling.direction === 'last' ? { from: -rolling.days, to: 0 } : { from: 0, to: rolling.days };
+}
+
+/** N days ago is where the last N days start; N days ahead is where the next N days end. */
+function relativeDayToken(days: number, bound: 'from' | 'to'): string {
+  if (days < 0) return buildTmdbDateToken(`last_${-days}_days` as RollingDaysKey, 'from');
+  if (days > 0) return buildTmdbDateToken(`next_${days}_days` as RollingDaysKey, 'to');
+  return buildTmdbDateToken('today', bound);
+}
+
+type EndMode = 'date' | 'ago' | 'ahead';
+
+const modeOfDays = (days: number | null): EndMode => (days === null ? 'date' : days > 0 ? 'ahead' : 'ago');
+
+/** One end of a date range: a date, or a number of days before or after today that moves with it. */
+function DateRangeEnd({ id, label, date, days, onDate, onDays }: {
+  id: string;
+  label: string;
+  date: string;
+  days: number | null;
+  onDate: (date: string) => void;
+  onDays: (days: number | null) => void;
+}) {
+  const [mode, setMode] = useState<EndMode>(modeOfDays(days));
+  const [count, setCount] = useState(days === null ? '' : String(Math.abs(days)));
+  // A change made elsewhere (a preset, a loaded catalog) shows here; zero days keeps the direction picked.
+  useEffect(() => {
+    if (days === null) setMode('date');
+    else if (days !== 0) setMode(modeOfDays(days));
+    if (days !== null) setCount(String(Math.abs(days)));
+  }, [days]);
+  const pickMode = (next: EndMode) => {
+    setMode(next);
+    if (next === 'date') {
+      onDays(null);
+      return;
+    }
+    const offset = date ? daysFromToday(date) ?? 0 : 0;
+    const n = Math.min(MAX_ROLLING_DAYS, Math.max(0, next === 'ago' ? -offset : offset));
+    setCount(String(n));
+    onDays(next === 'ago' ? -n : n);
+  };
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={id}>{label}</Label>
+      <div className="flex gap-2">
+        <Select value={mode} onValueChange={(next) => pickMode(next as EndMode)}>
+          <SelectTrigger className="w-36 shrink-0" aria-label={`${label}: a date or days from today`}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="date">Date</SelectItem>
+            <SelectItem value="ago">Days ago</SelectItem>
+            <SelectItem value="ahead">Days ahead</SelectItem>
+          </SelectContent>
+        </Select>
+        {mode === 'date' ? (
+          <Input id={id} type="date" value={date} onChange={(event) => onDate(event.target.value)} />
+        ) : (
+          <Input
+            id={id}
+            type="number"
+            inputMode="numeric"
+            min={0}
+            max={MAX_ROLLING_DAYS}
+            value={count}
+            onChange={(event) => {
+              setCount(event.target.value);
+              const n = Number(event.target.value);
+              if (event.target.value !== '' && Number.isInteger(n) && n >= 0 && n <= MAX_ROLLING_DAYS) onDays(mode === 'ago' ? -n : n);
+            }}
+          />
+        )}
+      </div>
+      {mode !== 'date' && date && <p className="text-xs text-muted-foreground">{date} today, moving daily</p>}
+    </div>
+  );
+}
+
 function buildTmdbDateToken(preset: RelativeDatePresetKey, bound: 'from' | 'to'): string {
   return `${TMDB_DYNAMIC_DATE_TOKEN_PREFIX}:${preset}:${bound}`;
 }
@@ -729,27 +840,29 @@ function applyDynamicTmdbDateTokens(
   seriesDatePreset: DatePresetKey,
   airDatePreset: DatePresetKey,
   releasedOnly: boolean,
-  movieReleaseTypesSelected: boolean = false
+  movieReleaseTypesSelected: boolean = false,
+  movieDatesSet: boolean = false,
+  relativeEnds: Record<DateRangeTarget, RelativeEnds> = { movie: FIXED_ENDS, series: FIXED_ENDS, airDate: FIXED_ENDS }
 ): Record<string, string | number | boolean> {
   const serializedParams = { ...params };
+  const withEnds = (field: string, ends: RelativeEnds) => {
+    if (ends.from !== null && serializedParams[`${field}.gte`]) serializedParams[`${field}.gte`] = relativeDayToken(ends.from, 'from');
+    if (ends.to !== null && serializedParams[`${field}.lte`]) serializedParams[`${field}.lte`] = relativeDayToken(ends.to, 'to');
+  };
 
-  if (catalogType === 'movie' && releasedOnly && serializedParams['release_date.lte']) {
+  if (catalogType === 'movie' && releasedOnly && !movieReleaseTypesSelected && serializedParams['release_date.lte']) {
     serializedParams['release_date.lte'] = buildTmdbDateToken('today', 'to');
   }
 
   if (catalogType === 'movie' && isRelativeDatePreset(movieDatePreset)) {
-    serializedParams['primary_release_date.gte'] = buildTmdbDateToken(movieDatePreset, 'from');
-    serializedParams['primary_release_date.lte'] = buildTmdbDateToken(movieDatePreset, 'to');
-    if (movieReleaseTypesSelected) {
-      serializedParams['release_date.gte'] = buildTmdbDateToken(movieDatePreset, 'from');
-      serializedParams['release_date.lte'] = buildTmdbDateToken(movieDatePreset, 'to');
-    }
+    const dated = movieReleaseTypesSelected ? 'release_date' : 'primary_release_date';
+    serializedParams[`${dated}.gte`] = buildTmdbDateToken(movieDatePreset, 'from');
+    serializedParams[`${dated}.lte`] = buildTmdbDateToken(movieDatePreset, 'to');
   } else if (
     catalogType === 'movie'
     && movieReleaseTypesSelected
-    && !releasedOnly
+    && !movieDatesSet
     && serializedParams['release_date.lte']
-    && !serializedParams['primary_release_date.lte']
   ) {
     serializedParams['release_date.lte'] = buildTmdbDateToken('today', 'to');
   }
@@ -763,6 +876,12 @@ function applyDynamicTmdbDateTokens(
     serializedParams['air_date.gte'] = buildTmdbDateToken(airDatePreset, 'from');
     serializedParams['air_date.lte'] = buildTmdbDateToken(airDatePreset, 'to');
   }
+
+  if (catalogType === 'movie' && !isRelativeDatePreset(movieDatePreset)) {
+    withEnds(movieReleaseTypesSelected ? 'release_date' : 'primary_release_date', relativeEnds.movie);
+  }
+  if (catalogType === 'series' && !isRelativeDatePreset(seriesDatePreset)) withEnds('first_air_date', relativeEnds.series);
+  if (catalogType === 'series' && !isRelativeDatePreset(airDatePreset)) withEnds('air_date', relativeEnds.airDate);
 
   return serializedParams;
 }
@@ -994,6 +1113,9 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
   const [airDateFrom, setAirDateFrom] = useState('');
   const [airDateTo, setAirDateTo] = useState('');
   const [airDatePreset, setAirDatePreset] = useState<DatePresetKey>('clear');
+  const [movieDateEnds, setMovieDateEnds] = useState<RelativeEnds>(FIXED_ENDS);
+  const [seriesDateEnds, setSeriesDateEnds] = useState<RelativeEnds>(FIXED_ENDS);
+  const [airDateEnds, setAirDateEnds] = useState<RelativeEnds>(FIXED_ENDS);
 
   // AniList-specific state
   const [anilistFormats, setAnilistFormats] = useState<string[]>([]); // multi-select
@@ -1142,6 +1264,14 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     () => (references?.countries || []).slice().sort((a, b) => (a.english_name || a.iso_3166_1).localeCompare(b.english_name || b.iso_3166_1)),
     [references]
   );
+
+  // The picked release types, as the movie date fields name them.
+  const releaseTypeNames = catalogType === 'movie' && tmdbMovieReleaseTypes.length > 0
+    ? TMDB_MOVIE_RELEASE_TYPE_OPTIONS
+      .filter(option => tmdbMovieReleaseTypes.includes(option.value))
+      .map(option => (option.value === '6' ? option.label : option.label.toLowerCase()))
+      .join(' or ')
+    : null;
 
   const sortedRegions = useMemo(
     () => (references?.watchRegions || []).slice().sort((a, b) => (a.english_name || a.iso_3166_1).localeCompare(b.english_name || b.iso_3166_1)),
@@ -1332,6 +1462,8 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     setIncludeAdult(config.includeAdult);
     setReleasedOnly(false);
     setTmdbTvStatuses([]);
+    setTmdbMovieReleaseTypes([]);
+    setTmdbTvTypes([]);
     setCacheTTL(null);
 
     setReferences(null);
@@ -1346,6 +1478,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     setReleaseRegion('');
     setCertificationCountry('');
     setCertificationValue('');
+    setCertificationMode('exact');
 
     setWatchRegion('');
     setWatchProviders([]);
@@ -1390,6 +1523,10 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     setSeriesDatePreset('clear');
     setAirDateFrom('');
     setAirDateTo('');
+    setAirDatePreset('clear');
+    setMovieDateEnds(FIXED_ENDS);
+    setSeriesDateEnds(FIXED_ENDS);
+    setAirDateEnds(FIXED_ENDS);
     setAnilistFormats([]);
     setAnilistStatus('');
     setAnilistSeason('');
@@ -1454,6 +1591,49 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
 
     setIsSaving(false);
     setAiWarnings([]);
+  };
+
+  const dateRanges: Record<DateRangeTarget, {
+    from: string;
+    to: string;
+    preset: DatePresetKey;
+    ends: RelativeEnds;
+    setFrom: (date: string) => void;
+    setTo: (date: string) => void;
+    setPreset: (preset: DatePresetKey) => void;
+    setEnds: (ends: RelativeEnds) => void;
+  }> = {
+    movie: { from: primaryReleaseFrom, to: primaryReleaseTo, preset: movieDatePreset, ends: movieDateEnds, setFrom: setPrimaryReleaseFrom, setTo: setPrimaryReleaseTo, setPreset: setMovieDatePreset, setEnds: setMovieDateEnds },
+    series: { from: firstAirFrom, to: firstAirTo, preset: seriesDatePreset, ends: seriesDateEnds, setFrom: setFirstAirFrom, setTo: setFirstAirTo, setPreset: setSeriesDatePreset, setEnds: setSeriesDateEnds },
+    airDate: { from: airDateFrom, to: airDateTo, preset: airDatePreset, ends: airDateEnds, setFrom: setAirDateFrom, setTo: setAirDateTo, setPreset: setAirDatePreset, setEnds: setAirDateEnds },
+  };
+
+  /** One end set by hand. A preset of days either side of today keeps its other end moving with today. */
+  const setDateEnd = (target: DateRangeTarget, end: 'from' | 'to', change: { date: string } | { days: number | null }) => {
+    const range = dateRanges[target];
+    const ends = { ...(isRelativeDatePreset(range.preset) ? endsOfPreset(range.preset) ?? FIXED_ENDS : range.ends) };
+    if ('date' in change) {
+      ends[end] = null;
+      (end === 'from' ? range.setFrom : range.setTo)(change.date);
+    } else {
+      ends[end] = change.days;
+      if (change.days !== null) (end === 'from' ? range.setFrom : range.setTo)(dateInDays(change.days));
+    }
+    range.setEnds(ends);
+    range.setPreset('custom');
+  };
+
+  const restoreDateEnds = (fs: any) => {
+    const saved: Record<DateRangeTarget, any> = { movie: fs.movieDateEnds, series: fs.seriesDateEnds, airDate: fs.airDateEnds };
+    for (const target of Object.keys(saved) as DateRangeTarget[]) {
+      const ends = { from: validDays(saved[target]?.from), to: validDays(saved[target]?.to) };
+      if (!hasRelativeEnd(ends)) continue;
+      const range = dateRanges[target];
+      range.setEnds(ends);
+      if (ends.from !== null) range.setFrom(dateInDays(ends.from));
+      if (ends.to !== null) range.setTo(dateInDays(ends.to));
+      range.setPreset('custom');
+    }
   };
 
   useEffect(() => {
@@ -1544,6 +1724,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     } else if (fs.airDateFrom || fs.airDateTo) {
       setAirDatePreset('custom');
     }
+    restoreDateEnds(fs);
     if (fs.releaseRegion) setReleaseRegion(fs.releaseRegion);
   
     // TVDB-only
@@ -1640,6 +1821,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     if (fs.airDateFrom) setAirDateFrom(fs.airDateFrom);
     if (fs.airDateTo) setAirDateTo(fs.airDateTo);
     if (fs.airDatePreset) setAirDatePreset(fs.airDatePreset as DatePresetKey);
+    restoreDateEnds(fs);
 
     // TVDB fields
     if (fs.tvdbSortDirection) setTvdbSortDirection(fs.tvdbSortDirection);
@@ -2519,15 +2701,12 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     }
 
     if (catalogType === 'movie') {
-      if (primaryReleaseFrom) params['primary_release_date.gte'] = primaryReleaseFrom;
-      if (primaryReleaseTo) params['primary_release_date.lte'] = primaryReleaseTo;
-      if (tmdbMovieReleaseTypes.length > 0) {
-        if (primaryReleaseFrom || primaryReleaseTo) {
-          if (primaryReleaseFrom) params['release_date.gte'] = primaryReleaseFrom;
-          if (primaryReleaseTo) params['release_date.lte'] = primaryReleaseTo;
-        } else {
-          params['release_date.lte'] = getTodayLocalDateString();
-        }
+      // With release types picked, the dates are those releases' own, whenever the film first came out.
+      const dated = tmdbMovieReleaseTypes.length > 0 ? 'release_date' : 'primary_release_date';
+      if (primaryReleaseFrom) params[`${dated}.gte`] = primaryReleaseFrom;
+      if (primaryReleaseTo) params[`${dated}.lte`] = primaryReleaseTo;
+      if (tmdbMovieReleaseTypes.length > 0 && !primaryReleaseFrom && !primaryReleaseTo) {
+        params['release_date.lte'] = getTodayLocalDateString();
       }
     } else {
       if (firstAirFrom) params['first_air_date.gte'] = firstAirFrom;
@@ -2596,6 +2775,9 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
         airDateFrom,
         airDateTo,
         airDatePreset,
+        ...(hasRelativeEnd(movieDateEnds) ? { movieDateEnds } : {}),
+        ...(hasRelativeEnd(seriesDateEnds) ? { seriesDateEnds } : {}),
+        ...(hasRelativeEnd(airDateEnds) ? { airDateEnds } : {}),
         releaseRegion,
       });
     }
@@ -2703,26 +2885,13 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     setRuntimeRange(([currentMin]) => [currentMin, Math.max(value, currentMin)]);
   };
 
-  const applyDatePreset = (target: 'movie' | 'series' | 'airDate', preset: Exclude<DatePresetKey, 'custom'>) => {
+  const applyDatePreset = (target: DateRangeTarget, preset: Exclude<DatePresetKey, 'custom'>) => {
     const { from, to } = getDateRangeFromPreset(preset);
-
-    if (target === 'movie') {
-      setPrimaryReleaseFrom(from);
-      setPrimaryReleaseTo(to);
-      setMovieDatePreset(preset);
-      return;
-    }
-
-    if (target === 'airDate') {
-      setAirDateFrom(from);
-      setAirDateTo(to);
-      setAirDatePreset(preset);
-      return;
-    }
-
-    setFirstAirFrom(from);
-    setFirstAirTo(to);
-    setSeriesDatePreset(preset);
+    const range = dateRanges[target];
+    range.setFrom(from);
+    range.setTo(to);
+    range.setEnds(FIXED_ENDS);
+    range.setPreset(preset);
   };
 
   const handleAddGenre = (mode: 'include' | 'exclude', selectedGenreId?: string) => {
@@ -2768,7 +2937,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
     try {
       const params = buildDiscoverParams();
       const persistedParams = discoverSource === 'tmdb'
-        ? applyDynamicTmdbDateTokens(params, catalogType, movieDatePreset, seriesDatePreset, airDatePreset, releasedOnly, tmdbMovieReleaseTypes.length > 0)
+        ? applyDynamicTmdbDateTokens(params, catalogType, movieDatePreset, seriesDatePreset, airDatePreset, releasedOnly, tmdbMovieReleaseTypes.length > 0, Boolean(primaryReleaseFrom || primaryReleaseTo), { movie: movieDateEnds, series: seriesDateEnds, airDate: airDateEnds })
         : params;
       const formState = buildFormState();
   
@@ -3904,7 +4073,7 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
                   )}
                   {catalogType === 'movie' && (
                     <div className="space-y-2">
-                      <LabelWithTooltip tooltip="Filter movies by how they were released. Select multiple to include movies matching any of the chosen types. Pair this with a release region to ask about that country's releases.">
+                      <LabelWithTooltip tooltip="Filter movies by how they were released. Select multiple to include movies matching any of the chosen types. Pair this with a release region to ask about that country's releases. The release dates then match these releases.">
                         Release Type
                       </LabelWithTooltip>
                       <div className="flex flex-wrap gap-2">
@@ -5586,34 +5755,29 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
                 {catalogType === 'movie' ? (
                   <div className="space-y-3">
                     <div className="space-y-2">
-                      <Label>Primary Release Presets</Label>
+                      <Label>{releaseTypeNames ? 'Release Presets' : 'Primary Release Presets'}</Label>
+                      {releaseTypeNames && (
+                        <p className="text-xs text-muted-foreground">Dates of each movie's {releaseTypeNames} release, whenever it first came out.</p>
+                      )}
                       <DatePresetPicker value={movieDatePreset} onPick={(preset) => applyDatePreset('movie', preset)} />
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="primary-release-from">Primary Release From</Label>
-                        <Input
-                          id="primary-release-from"
-                          type="date"
-                          value={primaryReleaseFrom}
-                          onChange={(event) => {
-                            setPrimaryReleaseFrom(event.target.value);
-                            setMovieDatePreset('custom');
-                          }}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="primary-release-to">Primary Release To</Label>
-                        <Input
-                          id="primary-release-to"
-                          type="date"
-                          value={primaryReleaseTo}
-                          onChange={(event) => {
-                            setPrimaryReleaseTo(event.target.value);
-                            setMovieDatePreset('custom');
-                          }}
-                        />
-                      </div>
+                      <DateRangeEnd
+                        id="primary-release-from"
+                        label={releaseTypeNames ? 'Release From' : 'Primary Release From'}
+                        date={primaryReleaseFrom}
+                        days={dateRanges.movie.ends.from}
+                        onDate={(date) => setDateEnd('movie', 'from', { date })}
+                        onDays={(days) => setDateEnd('movie', 'from', { days })}
+                      />
+                      <DateRangeEnd
+                        id="primary-release-to"
+                        label={releaseTypeNames ? 'Release To' : 'Primary Release To'}
+                        date={primaryReleaseTo}
+                        days={dateRanges.movie.ends.to}
+                        onDate={(date) => setDateEnd('movie', 'to', { date })}
+                        onDays={(days) => setDateEnd('movie', 'to', { days })}
+                      />
                     </div>
                   </div>
                 ) : (
@@ -5623,30 +5787,22 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
                       <DatePresetPicker value={seriesDatePreset} onPick={(preset) => applyDatePreset('series', preset)} />
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="first-air-from">First Air Date From</Label>
-                        <Input
-                          id="first-air-from"
-                          type="date"
-                          value={firstAirFrom}
-                          onChange={(event) => {
-                            setFirstAirFrom(event.target.value);
-                            setSeriesDatePreset('custom');
-                          }}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="first-air-to">First Air Date To</Label>
-                        <Input
-                          id="first-air-to"
-                          type="date"
-                          value={firstAirTo}
-                          onChange={(event) => {
-                            setFirstAirTo(event.target.value);
-                            setSeriesDatePreset('custom');
-                          }}
-                        />
-                      </div>
+                      <DateRangeEnd
+                        id="first-air-from"
+                        label={'First Air Date From'}
+                        date={firstAirFrom}
+                        days={dateRanges.series.ends.from}
+                        onDate={(date) => setDateEnd('series', 'from', { date })}
+                        onDays={(days) => setDateEnd('series', 'from', { days })}
+                      />
+                      <DateRangeEnd
+                        id="first-air-to"
+                        label={'First Air Date To'}
+                        date={firstAirTo}
+                        days={dateRanges.series.ends.to}
+                        onDate={(date) => setDateEnd('series', 'to', { date })}
+                        onDays={(days) => setDateEnd('series', 'to', { days })}
+                      />
                     </div>
                     <div className="space-y-2">
                       <Label>Episode Air Date Presets</Label>
@@ -5656,30 +5812,22 @@ export function DiscoverBuilderDialog({ isOpen, onClose, editingCatalog, customi
                       <DatePresetPicker value={airDatePreset} onPick={(preset) => applyDatePreset('airDate', preset)} />
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="air-date-from">Episode Air Date From</Label>
-                        <Input
-                          id="air-date-from"
-                          type="date"
-                          value={airDateFrom}
-                          onChange={(event) => {
-                            setAirDateFrom(event.target.value);
-                            setAirDatePreset('custom');
-                          }}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="air-date-to">Episode Air Date To</Label>
-                        <Input
-                          id="air-date-to"
-                          type="date"
-                          value={airDateTo}
-                          onChange={(event) => {
-                            setAirDateTo(event.target.value);
-                            setAirDatePreset('custom');
-                          }}
-                        />
-                      </div>
+                      <DateRangeEnd
+                        id="air-date-from"
+                        label={'Episode Air Date From'}
+                        date={airDateFrom}
+                        days={dateRanges.airDate.ends.from}
+                        onDate={(date) => setDateEnd('airDate', 'from', { date })}
+                        onDays={(days) => setDateEnd('airDate', 'from', { days })}
+                      />
+                      <DateRangeEnd
+                        id="air-date-to"
+                        label={'Episode Air Date To'}
+                        date={airDateTo}
+                        days={dateRanges.airDate.ends.to}
+                        onDate={(date) => setDateEnd('airDate', 'to', { date })}
+                        onDays={(days) => setDateEnd('airDate', 'to', { days })}
+                      />
                     </div>
                   </div>
                 )}

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import { LRUCache } from 'lru-cache';
 import { readsBySeason, seasonNumberingProfile, withEpisodeOrder } from '../utils/episodeOrder';
 import { applyContentRatingProjection, ratingLinkNames, stripRatingLinks } from '../utils/contentRating';
@@ -24,9 +26,9 @@ const {
   applyImdbRatingProjection,
   applyImdbRatingProjectionToList,
 }: any = require('./imdbRatingProjection');
-const { applyTrailerAddonProjection }: any = require('./trailerProjection');
 const { applyAnimeEpisodeDatesProjection }: any = require('./animeEpisodeDates');
 const { applyAnimeFillerProjection }: any = require('./animeFillerProjection');
+const { applyAddonTrailersProjection }: any = require('./trailerProjection');
 const {
   RELEASE_AVAILABILITY_FIELD,
   normalizeMetaReleaseAvailability,
@@ -474,8 +476,8 @@ function classifyResult(result: any, error: any = null, cacheKey: string | null 
     cacheKey.includes('stremthru-') ||
     cacheKey.includes('cinemeta-') ||
     cacheKey.includes('flixpatrol-') ||
-    cacheKey.includes('movielens-') ||
-    cacheKey.includes('lumiere-')
+    cacheKey.includes('lumiere-') ||
+    cacheKey.includes('movielens-')
   );
 
   if (isExternalApi) {
@@ -728,12 +730,12 @@ async function cacheWrapGlobal(key: string, method: () => Promise<any>, ttl: num
   // A refetch must not join a plain read already in flight, or it returns the
   // cached value it was meant to replace.
   const refetch = sourceList && sourceRefetchRequested();
-  const flightKey = refetch ? `refetch:${epochKey}` : epochKey;
+  const flightKey = refetch ? `refetch:${epochKey}` : options.accept ? `accept:${epochKey}` : epochKey;
   return singleFlight(flightKey, () => cacheWrapGlobalInternal(key, method, ttl, options, epochKey, refetch), cloneJsonCompatibleResult);
 }
 
 async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, ttl: number, options: any, versionedKey: string, refetch: boolean = false): Promise<any> {
-  const { enableErrorCaching = false, resultClassifier = classifyResult, maxRetries = SELF_HEALING_CONFIG.maxRetries } = options;
+  const { enableErrorCaching = false, resultClassifier = classifyResult, maxRetries = SELF_HEALING_CONFIG.maxRetries, accept } = options;
 
   let retries = 0;
 
@@ -758,10 +760,12 @@ async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, 
             globalCacheLogger.debug(`[Global-Cache] Cached error returned for ${truncateCacheKey(versionedKey)}`);
             updateCacheHealth(versionedKey, 'cached-error', true);
             return parsed;
-          } else {
+          } else if (!accept || accept(parsed)) {
             globalCacheLogger.debug(`⚡ [Global-Cache] HIT for ${truncateCacheKey(versionedKey)}`);
             updateCacheHealth(versionedKey, 'hit', true);
             return parsed;
+          } else {
+            globalCacheLogger.debug(`[Global-Cache] Refreshing ${truncateCacheKey(versionedKey)} cached in an older shape`);
           }
         } catch (parseError: any) {
           globalCacheLogger.warn(`Corrupted cache entry for ${versionedKey}, attempting self-healing`);
@@ -798,7 +802,8 @@ async function cacheWrapGlobalInternal(key: string, method: () => Promise<any>, 
       }
       return result;
     } catch (error: any) {
-      globalCacheLogger.error(`Method failed for cache key ${versionedKey}:`, error);
+      if (error?.code === 'TMDB_KEY_MISSING') globalCacheLogger.debug(`Method failed for cache key ${versionedKey}: ${error.message}`);
+      else globalCacheLogger.error(`Method failed for cache key ${versionedKey}:`, error);
       updateCacheHealth(versionedKey, 'error', false);
 
       const errStatus = error.status ?? error.statusCode ?? error.response?.status;
@@ -1305,7 +1310,7 @@ async function projectMetaForUser(meta: any, config: any, opts: { addonTrailers?
   if (!meta) return meta;
   normalizeMetaCredits(meta);
   applyTrailerStreamsProjection(meta);
-  if (opts.addonTrailers !== false) await applyTrailerAddonProjection(meta, config);
+  if (opts.addonTrailers !== false) await applyAddonTrailersProjection(meta, config);
   applyCastCountProjection(meta, config);
   applySeasonNumberingProjection(meta, config);
   applyBlurThumbProjection(meta, config);
@@ -1365,6 +1370,9 @@ const CATALOG_META_FIELDS = [
   'behaviorHints',
   'trailers',
   'collection',
+  'studios',
+  'networks',
+  '_studioRefs',
 ];
 
 function projectAppExtrasForCatalogCache(appExtras: any): any {
@@ -1597,6 +1605,7 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
       sources: require('../utils/recommendations/history').resolveSources(config).choice,
       // Every setting that moves the picks has to move the page as well.
       webSearch: config.recommendations?.web_search === true,
+      ...(config.recommendations?.web_search_via ? { webSearchVia: config.recommendations.web_search_via } : {}),
       reasoningEffort: config.recommendations?.reasoning_effort || '',
       stalledWeight: config.recommendations?.stalled_weight || '',
       staleAfterDays: config.recommendations?.stale_after_days || '',
@@ -1738,6 +1747,7 @@ async function cacheWrapCatalog(userUUID: string, catalogKey: string, method: ()
     };
   }
   if (idOnly.startsWith('movielens.')) {
+    // All MovieLens pages (lists included) may be cached empty at the normal TTL.
     options = { ...options, resultClassifier: classifyResultAllowEmpty };
   }
   const existingOnHit = options.onHit;
@@ -1836,6 +1846,8 @@ async function cacheWrapSearch(userUUID: string, searchKey: string, method: () =
     aiModel: config.search?.ai_model || '',
     aiWebSearch: config.search?.ai_web_search || false,
     aiOpenrouterWebSearch: config.search?.ai_openrouter_web_search !== false,
+    // Only a configuration that chose an engine carries it, so every other one keeps the key it had.
+    ...(config.search?.ai_web_search_via ? { aiWebSearchVia: config.search.ai_web_search_via } : {}),
   };
 
   const searchConfigString = JSON.stringify(searchConfig);
@@ -1845,10 +1857,15 @@ async function cacheWrapSearch(userUUID: string, searchKey: string, method: () =
   cacheLogger.debug(`[Search] Key detail [sig:${searchSig}]`);
 
   const SEARCH_TTL = 12 * 60 * 60;
+  // A search that ran without its web search is kept as briefly as a temporary error, so the next one tries the web again.
+  const classify = options.resultClassifier || classifyResult;
+  const resultClassifier = (result: any, error: any, cacheKey: string | null) => (result?.webSearchFailed && !error
+    ? { type: 'WEB_SEARCH_FAILED', ttl: ERROR_TTL_STRATEGIES.TEMPORARY_ERROR }
+    : classify(result, error, cacheKey));
 
   const result = await cacheWrap(key, async () => {
     return normalizeReleaseAvailabilityInPayload(await method());
-  }, SEARCH_TTL, options);
+  }, SEARCH_TTL, { ...options, resultClassifier });
   normalizeReleaseAvailabilityInPayload(result);
   const projected = projectRatingsInPayload(result, config, false);
   await applyImdbRatingProjectionToList(projected?.metas);
@@ -2045,6 +2062,7 @@ async function writeMetaComponentsWithConfig({ config, metaId, result, ttl = MET
     tagline: meta.tagline,
     studios: meta.studios,
     networks: meta.networks,
+    _studioRefs: meta._studioRefs,
     countries: meta.countries,
     airDays: meta.airDays,
     airTime: meta.airTime,
@@ -2551,6 +2569,10 @@ const CATALOG_VIEW_SKIPPED = new Set([
   'addonName',
   'showDisabledCatalogs',
   'playbackReporting',
+  'jellyfinScrobbling',
+  'stremioScrobbling',
+  'stremioLibraryWatchlist',
+  'stremioScrobblingSince',
   'showRateMeButton',
 ]);
 const CATALOG_VIEW_SKIPPED_KEYS = new Set(['malTokenId', 'anilistTokenId', 'simklTokenId', 'traktTokenId', 'movieLensCredId', 'trakt', 'simkl', 'gemini', 'openrouter']);

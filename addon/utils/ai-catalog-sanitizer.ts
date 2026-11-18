@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import consola from 'consola';
 import type { AICatalogOutput, ValidationResult } from './ai-catalog-schema';
 import {
@@ -837,9 +839,11 @@ function applyTmdbReleaseFilters(catalog: AICatalogOutput, options: NormalizeCat
     params.with_release_type = TMDB_RELEASED_MOVIE_TYPES;
     params['release_date.lte'] = tmdbDateToken('today', 'to');
   } else if (params.with_release_type !== undefined) {
+    // The dates are those releases' own, whenever the film first came out.
     for (const suffix of ['.gte', '.lte']) {
       if (params[`release_date${suffix}`] === undefined && params[`primary_release_date${suffix}`] !== undefined) {
         params[`release_date${suffix}`] = params[`primary_release_date${suffix}`];
+        delete params[`primary_release_date${suffix}`];
       }
     }
     if (params['release_date.lte'] === undefined) params['release_date.lte'] = tmdbDateToken('today', 'to');

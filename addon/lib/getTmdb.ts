@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
+import { createHash } from 'crypto';
 import { fetch, Agent, ProxyAgent } from 'undici';
 import { socksDispatcher } from 'fetch-socks';
 import { scrapeSingleImdbResultByTitle, getMetaFromImdbIo } from './imdb';
@@ -426,10 +429,23 @@ async function getAccountDetails(sessionId: string, apiKey: string) {
     accountDetailsInflight.set(cacheKey, request);
     return request;
 }
+function effectiveApiKey(config: UserConfig | null | undefined): string | undefined {
+    return config?.apiKeys?.tmdb || process.env.TMDB_API_KEY || process.env.TMDB_API || process.env.BUILT_IN_TMDB_API_KEY || undefined;
+}
+
 function getApiKey(config: UserConfig = {} as UserConfig): string {
-    const key = config?.apiKeys?.tmdb || process.env.TMDB_API_KEY || process.env.TMDB_API || process.env.BUILT_IN_TMDB_API_KEY;
-    if (!key) throw new Error("TMDB API key not found in config or environment.");
+    const key = effectiveApiKey(config);
+    if (!key) throw Object.assign(new Error("TMDB API key not found in config or environment."), { code: 'TMDB_KEY_MISSING' });
     return key;
+}
+
+export function hasTmdbKey(config: UserConfig = {} as UserConfig): boolean {
+  return !!effectiveApiKey(config);
+}
+
+export function tmdbKeyId(config: UserConfig = {} as UserConfig): string {
+  const key = effectiveApiKey(config);
+  return key ? createHash('sha256').update(key).digest('hex').slice(0, 16) : '';
 }
 
 function normalizeCommaListParam(value: any): string {
@@ -535,6 +551,13 @@ export async function tvContentRatings(id: string, config: UserConfig) {
   return cacheWrapGlobal(`tmdb:tv:content_ratings:${id}`, () =>
     makeTmdbRequest(`/tv/${id}/content_ratings`, getApiKey(config), {}, 'GET', null, config),
     7 * 24 * 60 * 60
+  );
+}
+
+export async function networkInfo(id: string | number, config: UserConfig) {
+  return cacheWrapGlobal(`tmdb:network:${id}`, () =>
+    makeTmdbRequest(`/network/${id}`, getApiKey(config), {}, 'GET', null, config),
+    30 * 24 * 60 * 60
   );
 }
 
@@ -710,6 +733,10 @@ export async function discoverTv(params: any, config: UserConfig) {
     TMDB_LIST_CACHE_TTL_SEC,
     { sourceList: true }
   );
+}
+
+export async function searchCompany(params: any, config: UserConfig) {
+  return makeTmdbRequest('/search/company', getApiKey(config), params, 'GET', null, config);
 }
 
 export async function genreMovieList(params: any, config: UserConfig) {
@@ -1198,7 +1225,9 @@ export async function tvImages(params: any, config: UserConfig) {
 }
 
 module.exports = {
-  makeTmdbRequest, 
+  hasTmdbKey,
+  tmdbKeyId,
+  makeTmdbRequest,
   movieRecommendations,
   tvRecommendations,
   movieInfo,
@@ -1214,6 +1243,7 @@ module.exports = {
   primaryTranslations,
   discoverMovie,
   discoverTv,
+  searchCompany,
   collectionInfo,
   searchCollection,
   seasonInfo,
@@ -1246,6 +1276,7 @@ module.exports = {
   getTranslations,
   movieReleaseDates,
   tvContentRatings,
+  networkInfo,
   movieKeywords,
   tvKeywords,
   keywordNamesOf,

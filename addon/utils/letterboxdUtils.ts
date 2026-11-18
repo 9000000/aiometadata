@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 
 import { httpGet, httpHead } from "./httpClient.js";
 import { cacheWrapMetaSmart } from "../lib/getCache.js";
@@ -342,8 +344,8 @@ export function validateLetterboxdUrl(url: string): {
   try {
     const urlObj = new URL(url);
 
-    // Must be from letterboxd.com
-    if (!urlObj.hostname.includes('letterboxd.com')) {
+    const host = urlObj.hostname.toLowerCase();
+    if (!/^https?:$/.test(urlObj.protocol) || (host !== 'letterboxd.com' && !host.endsWith('.letterboxd.com'))) {
       return { valid: false, isWatchlist: false, error: 'Not a Letterboxd URL' };
     }
 

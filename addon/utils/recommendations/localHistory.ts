@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import consola from 'consola';
 import type { WatchedKind, WatchedRow } from './history';
 
@@ -33,11 +35,7 @@ function mappedIds(parsed: any, series: boolean): { imdb?: string; tmdb?: string
   if (parsed.idType === 'imdb' || parsed.idType === 'tmdb' || parsed.idType === 'tvdb' || parsed.idType === 'tvmaze') {
     let ids: any;
     try {
-      const type = series ? 'series' : 'movie';
-      ids = parsed.idType === 'imdb' ? idMappings.getByImdbId(id, type)
-        : parsed.idType === 'tmdb' ? idMappings.getByTmdbId(id, type)
-        : parsed.idType === 'tvdb' ? idMappings.getByTvdbId(id, type)
-        : idMappings.getSeriesByTvmaze(id);
+      ids = idMappings.getByParsedId(parsed, series ? 'series' : 'movie');
     } catch { /* the mapping file is not loaded yet */ }
     return {
       imdb: parsed.idType === 'imdb' ? id : ids?.imdbId || undefined,
@@ -129,7 +127,7 @@ export async function collectLocalRows(config: any, userUUID: string, profile: s
   type Title = { bases: Set<string>; episode: boolean; episodes: Set<string>; played: boolean; at: number };
   const titles = new Map<string, Title>();
   const titleOf = new Map<string, string>();
-  for (const group of (await groupBySpelling(plays)) as any[][]) {
+  for (const group of (await groupBySpelling(plays, config)) as any[][]) {
     const bases = new Set<string>();
     let number: string | null = null;
     for (const row of group) {

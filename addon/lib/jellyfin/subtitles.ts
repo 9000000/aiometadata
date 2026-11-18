@@ -1,7 +1,10 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
 import consola from 'consola';
 import { LRUCache } from 'lru-cache';
 import { envInt } from '../../utils/envNumber';
 import { resolveLanguage } from './languageTags';
+import { addonFetch, addonFetchMaxBytes, readCappedResponse } from '../../utils/outboundGuard';
 
 const logger = consola.withTag('Jellyfin');
 
@@ -243,25 +246,37 @@ export function parseCues(input: string): Cue[] {
   return cues;
 }
 
+function withoutOverrideTags(text: string): string {
+  let out = '';
+  let at = 0;
+  for (;;) {
+    const open = text.indexOf('{', at);
+    const close = open === -1 ? -1 : text.indexOf('}', open);
+    if (close === -1) return out + text.slice(at);
+    out += text.slice(at, open);
+    at = close + 1;
+  }
+}
+
 /** The Dialogue lines of an ASS or SSA script, styling dropped. */
 export function parseAssCues(input: string): Cue[] {
   const cues: Cue[] = [];
   let textIndex = 9;
   for (const line of normaliseText(input).split('\n')) {
-    const format = /^\s*Format:\s*(.+)$/i.exec(line);
+    const format = /^\s*Format:\s*([\s\S]*)/i.exec(line);
     if (format) {
       const at = format[1].split(',').map((f) => f.trim().toLowerCase()).indexOf('text');
       if (at >= 0) textIndex = at;
       continue;
     }
-    const dialogue = /^\s*Dialogue:\s*(.+)$/i.exec(line);
+    const dialogue = /^\s*Dialogue:\s*([\s\S]*)/i.exec(line);
     if (!dialogue) continue;
     const parts = dialogue[1].split(',');
     if (parts.length <= textIndex) continue;
     const startMs = timeToMs(parts[1] ?? '');
     const endMs = timeToMs(parts[2] ?? '');
     if (startMs === null || endMs === null) continue;
-    const text = parts.slice(textIndex).join(',').replace(/\{[^}]*\}/g, '').replace(/\\[Nnh]/g, '\n').trim();
+    const text = withoutOverrideTags(parts.slice(textIndex).join(',')).replace(/\\[Nnh]/g, '\n').trim();
     if (text) cues.push({ startMs, endMs, text });
   }
   return cues.sort((a, b) => a.startMs - b.startMs);
@@ -299,8 +314,15 @@ export function cuesToJellyfinJson(cues: Cue[]): string {
   });
 }
 
+function formatInBody(body: string): string | undefined {
+  const head = normaliseText(body.slice(0, 4096));
+  if (/^\s*\[Script Info\]/i.test(head) || /^\[V4\+? Styles\]/im.test(head)) return 'ass';
+  if (/^\s*WEBVTT\b/.test(head)) return 'vtt';
+  return undefined;
+}
+
 export function convertSubtitle(body: string, fromExtension: string, to: SubtitleFormat): { body: string; contentType: string } {
-  const from = fromExtension.toLowerCase();
+  const from = formatInBody(body) ?? fromExtension.toLowerCase();
   const styled = from === 'ass' || from === 'ssa';
   const textual = from === 'srt' || from === 'vtt' || from === 'sub';
   const cuesOf = () => (styled ? parseAssCues(body) : textual ? parseCues(body) : []);
@@ -349,9 +371,9 @@ export async function addonServesSubtitles(base: string): Promise<boolean> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), envInt('JELLYFIN_STREAM_TIMEOUT_MS', 20000, 1000));
-    const response = await fetch(`${base}/manifest.json`, { headers: { accept: 'application/json' }, signal: controller.signal });
+    const response = await addonFetch(`${base}/manifest.json`, { headers: { accept: 'application/json' }, signal: controller.signal });
     clearTimeout(timer);
-    const manifest: any = response.ok ? await response.json() : null;
+    const manifest: any = response.ok ? JSON.parse(await readCappedResponse(response, addonFetchMaxBytes())) : null;
     serves = (Array.isArray(manifest?.resources) ? manifest.resources : []).some(
       (r: any) => r === 'subtitles' || r?.name === 'subtitles'
     );
@@ -396,13 +418,13 @@ export async function fetchAddonSubtitles(base: string, type: string, videoId: s
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), envInt('JELLYFIN_SUBTITLE_FETCH_TIMEOUT_MS', 15000, 1000));
   try {
-    const response = await fetch(url, { headers: { accept: 'application/json', 'user-agent': userAgent }, signal: controller.signal });
+    const response = await addonFetch(url, { headers: { accept: 'application/json', 'user-agent': userAgent }, signal: controller.signal });
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
       logger.debug(`Subtitles ${type}/${videoId} returned ${response.status}`);
       return [];
     }
-    const body: any = await response.json();
+    const body: any = JSON.parse(await readCappedResponse(response, addonFetchMaxBytes()));
     const out: SubtitleTrack[] = [];
     const seen = new Set<string>();
     for (const s of Array.isArray(body?.subtitles) ? body.subtitles : []) {
@@ -477,7 +499,7 @@ async function fetchSubtitle(url: string): Promise<{ response: Response; done: (
     };
     const response = await inHostTurn(url, () => {
       timer = setTimeout(() => controller.abort(), envInt('JELLYFIN_SUBTITLE_FETCH_TIMEOUT_MS', 15000, 1000));
-      return fetch(url, { signal: controller.signal, redirect: 'follow' });
+      return addonFetch(url, { signal: controller.signal, redirect: 'follow' });
     });
     if (response.ok || !RETRY_STATUSES.has(response.status) || attempt >= retries) return { response, done };
     done();
@@ -501,11 +523,8 @@ export async function subtitleBody(url: string, to: SubtitleFormat): Promise<{ b
       logger.debug(`Subtitle fetch got ${response.status} for ${url}`);
       return null;
     }
-    const length = Number(response.headers.get('content-length'));
-    if (Number.isFinite(length) && length > MAX_SUBTITLE_BYTES) return null;
-    const raw = Buffer.from(await response.arrayBuffer());
-    if (raw.length > MAX_SUBTITLE_BYTES) return null;
-    const converted = convertSubtitle(raw.toString('utf8'), subtitleExtensionOf(url), to);
+    const text = await readCappedResponse(response, MAX_SUBTITLE_BYTES);
+    const converted = convertSubtitle(text, subtitleExtensionOf(url), to);
     bodies.set(key, converted);
     return converted;
   } catch (error: any) {
@@ -516,16 +535,16 @@ export async function subtitleBody(url: string, to: SubtitleFormat): Promise<{ b
   }
 }
 
-const offered = new LRUCache<string, SubtitleTrack[]>({
+const offered = new LRUCache<string, { tracks: SubtitleTrack[]; start: number }>({
   max: envInt('JELLYFIN_STREAM_CACHE_MAX', 2000, 1),
   ttl: envInt('JELLYFIN_SUBTITLE_TTL', 60 * 60, 60) * 1000,
 });
 
-/** The external tracks a source was sent with, by index, so the route serves what the client saw. */
-export function rememberOffered(key: string, tracks: SubtitleTrack[]): void {
-  offered.set(key, tracks);
+/** The external tracks a source was sent with, and the stream index the first took, so the route serves what the client saw. */
+export function rememberOffered(key: string, tracks: SubtitleTrack[], start: number): void {
+  offered.set(key, { tracks, start });
 }
 
-export function recallOffered(key: string): SubtitleTrack[] | undefined {
+export function recallOffered(key: string): { tracks: SubtitleTrack[]; start: number } | undefined {
   return offered.get(key);
 }

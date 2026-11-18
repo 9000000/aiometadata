@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
 import consola from 'consola';
 import { createHash } from 'crypto';
 import { envInt } from '../../utils/envNumber';
@@ -111,8 +113,9 @@ async function aniSkipQuery(malId: number, episode: number, episodeLength: numbe
     });
     return Array.isArray(response.data?.results) ? response.data.results : [];
   } catch (error: any) {
-    if (error?.response?.status === 404) return [];
-    throw error;
+    // AniSkip answers 404 for an episode it has no markers for.
+    if (error?.response?.status !== 404) throw error;
+    return [];
   }
 }
 
@@ -150,11 +153,11 @@ async function fromAniSkip(lookup: Lookup): Promise<Segment[]> {
 }
 
 /** The MAL entry and episode number an episode id is known under, if any. */
-export async function malEpisodeFor(videoId: string | null): Promise<{ malId: number; malEpisode: number } | null> {
+export async function malEpisodeFor(videoId: string | null, config: any = {}): Promise<{ malId: number; malEpisode: number } | null> {
   if (!videoId) return null;
   const { parseStremioId } = require('./ids');
   const { videoIdAliases } = require('./aliases');
-  const spellings = [videoId, ...(await videoIdAliases(videoId))];
+  const spellings = [videoId, ...(await videoIdAliases(videoId, config))];
   for (const spelling of spellings) {
     const parsed = parseStremioId(spelling);
     if (parsed?.idType !== 'mal' || !parsed.episode) continue;

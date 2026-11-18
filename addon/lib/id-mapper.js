@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 const fs = require('fs').promises;
 const path = require('path');
 const { httpGet, httpHead } = require('../utils/httpClient');
@@ -54,6 +56,17 @@ const TMDB_SEASON_CACHE_MAX_SIZE = parsePositiveIntEnv(
   15000,
   100
 );
+const TMDB_EPISODE_NUMBERS_CACHE_MAX_SIZE = parsePositiveIntEnv(
+  process.env.ID_MAPPER_TMDB_EPISODE_NUMBERS_CACHE_MAX_SIZE,
+  5000,
+  100
+);
+const TMDB_EPISODE_NUMBERS_TTL_SECONDS = parsePositiveIntEnv(
+  process.env.ID_MAPPER_TMDB_EPISODE_NUMBERS_TTL_SECONDS,
+  6 * 60 * 60,
+  60,
+  7 * 24 * 60 * 60
+);
 const KITSU_TO_IMDB_CACHE_MAX_SIZE = parsePositiveIntEnv(
   process.env.ID_MAPPER_KITSU_TO_IMDB_CACHE_MAX_SIZE,
   20000,
@@ -77,6 +90,7 @@ let tvdbIdMap = new Map();
 const franchiseMapCache = new LRUCache({ max: FRANCHISE_MAP_CACHE_MAX_SIZE });
 const tmdbFranchiseInfoCache = new LRUCache({ max: TMDB_FRANCHISE_INFO_CACHE_MAX_SIZE });
 const tmdbSeasonCache = new LRUCache({ max: TMDB_SEASON_CACHE_MAX_SIZE });
+const tmdbEpisodeNumbersCache = new LRUCache({ max: TMDB_EPISODE_NUMBERS_CACHE_MAX_SIZE, ttl: TMDB_EPISODE_NUMBERS_TTL_SECONDS * 1000 });
 
 // Auxiliary index maps for O(1) lookups (instead of O(N) Array.from().find())
 let kitsuIdMap = new Map();
@@ -2467,16 +2481,33 @@ async function resolveKitsuIdForEpisodeByTmdb(tmdbId, seasonNumber, episodeNumbe
 }
 
 // TMDB numbers a few long-running shows on a running count, so a season's first episode is not 1.
+function tmdbSeasonEpisodeNumbers(tmdbId, seasonNumber, config = {}) {
+  const key = `${tmdbId}:${seasonNumber}`;
+  const held = tmdbEpisodeNumbersCache.get(key);
+  if (held) return held;
+  const read = (async () => {
+    const { seasonInfo } = require('./getTmdb.js');
+    const season = await seasonInfo({ id: tmdbId, season_number: seasonNumber, language: 'en-US' }, config);
+    return Array.isArray(season?.episodes) ? season.episodes.map((episode) => episode?.episode_number) : [];
+  })();
+  tmdbEpisodeNumbersCache.set(key, read);
+  const forget = () => {
+    if (tmdbEpisodeNumbersCache.get(key) === read) tmdbEpisodeNumbersCache.delete(key);
+  };
+  read.then((numbers) => {
+    if (!numbers.length) forget();
+  }, forget);
+  return read;
+}
+
 async function tmdbEpisodeNumberAt(tmdbId, seasonNumber, position, config = {}) {
   if (!Number.isInteger(position) || position < 1) return position;
   try {
-    const { seasonInfo } = require('./getTmdb.js');
-    const season = await seasonInfo({ id: tmdbId, season_number: seasonNumber, language: 'en-US' }, config);
-    const episodes = Array.isArray(season?.episodes) ? season.episodes : [];
-    const first = episodes[0]?.episode_number;
+    const numbers = await tmdbSeasonEpisodeNumbers(tmdbId, seasonNumber, config);
+    const first = numbers[0];
     if (!Number.isInteger(first) || first === 1) return position;
-    const episode = episodes[position - 1];
-    return Number.isInteger(episode?.episode_number) ? episode.episode_number : first + position - 1;
+    const number = numbers[position - 1];
+    return Number.isInteger(number) ? number : first + position - 1;
   } catch (error) {
     logger.debug(`[ID Mapper] Season details unavailable for TMDB ${tmdbId} S${seasonNumber}: ${error?.message || error}`);
     return position;
@@ -2494,12 +2525,10 @@ async function applyTmdbEpisodeNumbers(map, config = {}) {
 // A failed read is thrown, not answered with the episode number: that answer reads as
 // "numbered the same", and the caller would keep it.
 async function tmdbEpisodePosition(tmdbId, seasonNumber, episodeNumber, config = {}) {
-  const { seasonInfo } = require('./getTmdb.js');
-  const season = await seasonInfo({ id: tmdbId, season_number: seasonNumber, language: 'en-US' }, config);
-  const episodes = Array.isArray(season?.episodes) ? season.episodes : [];
-  const index = episodes.findIndex((episode) => episode?.episode_number === episodeNumber);
+  const numbers = await tmdbSeasonEpisodeNumbers(tmdbId, seasonNumber, config);
+  const index = numbers.indexOf(episodeNumber);
   if (index >= 0) return index + 1;
-  const first = episodes[0]?.episode_number;
+  const first = numbers[0];
   return Number.isInteger(first) && first > 1 ? episodeNumber - first + 1 : episodeNumber;
 }
 
@@ -2731,7 +2760,8 @@ async function resolveTmdbEpisodesFromKitsu(kitsuId, kitsuEpisodeNumbers, config
     await applyTmdbEpisodeNumbers(map, config);
     return map;
   } catch (error) {
-    logger.error(`[ID Mapper] Error resolving TMDB episodes from Kitsu ID ${kitsuId}:`, error);
+    if (error?.code === 'TMDB_KEY_MISSING') logger.debug(`[ID Mapper] Error resolving TMDB episodes from Kitsu ID ${kitsuId}: ${error.message}`);
+    else logger.error(`[ID Mapper] Error resolving TMDB episodes from Kitsu ID ${kitsuId}:`, error);
     return new Map();
   }
 }
@@ -2755,7 +2785,8 @@ async function resolveTmdbEpisodeFromKitsu(kitsuId, kitsuEpisodeNumber, config =
     await applyTmdbEpisodeNumbers(tmdbEpisodeMap, config);
     return tmdbEpisodeMap.get(kitsuEpisodeNumber) || null;
   } catch (error) {
-    logger.error(`[ID Mapper] Error resolving TMDB episode from Kitsu ID ${kitsuId} episode ${kitsuEpisodeNumber}:`, error);
+    if (error?.code === 'TMDB_KEY_MISSING') logger.debug(`[ID Mapper] Error resolving TMDB episode from Kitsu ID ${kitsuId} episode ${kitsuEpisodeNumber}: ${error.message}`);
+    else logger.error(`[ID Mapper] Error resolving TMDB episode from Kitsu ID ${kitsuId} episode ${kitsuEpisodeNumber}:`, error);
     return null;
   }
 }

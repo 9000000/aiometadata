@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import { Label } from '@/components/ui/label';
 import { TmdbKeywordPicker } from '@/components/settings/TmdbKeywordPicker';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -284,7 +286,7 @@ export function FiltersSettings() {
               onChange={(next) => setConfig(prev => ({ ...prev, exclusionTmdbKeywords: next }))}
             />
             <p className="text-sm text-muted-foreground">
-              Hides any title TMDB tags with one of these keywords.
+              Hides any title TMDB tags with one of these keywords. A pattern such as <code>christmas*</code> or <code>*christmas*</code> hides every keyword that fits it, including ones TMDB adds later.
             </p>
           </div>
 

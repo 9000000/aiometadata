@@ -23,6 +23,7 @@ const { withTagExclusions } = require("./utils/tagExclusions");
 const { getMeta } = require("./lib/getMeta");
 const { cacheWrapMetaSmart, cacheWrapCatalog, cacheWrapSearch, cacheWrapJikanApi, cacheWrapGlobal, classifyResultAllowEmpty, getCacheHealth, clearCacheHealth, logCacheHealth, stableStringify, deleteKeysByPattern, scanKeys } = require("./lib/getCache");
 const { hasPermission } = require("./lib/authSession");
+const { claimSearch, noteSearchArrival, runClaimedSearch } = require("./lib/searchSupersede");
 const { isOidcConfigured } = require("./lib/oidc");
 const { resolveConfigAccess } = require("./lib/configAccess");
 const managerAccounts = require("./lib/managerAccounts");
@@ -649,6 +650,13 @@ const respond = function (req, res, data, opts?) {
     res.setHeader("Cache-Control", cacheControl);
   }
   
+  // If search was superseded, override to prevent caching empty results
+  if (res.locals?.searchSuperseded) {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }
+
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "*");
   res.setHeader("Content-Type", "application/json");
@@ -5082,6 +5090,7 @@ function withCatalogCriticRatings(metas: any[], config: any, req: any): Promise<
 }
 
 const catalogRoute = async function (req, res) {
+  noteSearchArrival(req);
   const { userUUID, type, id, extra } = req.params;
   // Handed over by viewerCatalogRoute for a named household user, never from the request.
   const storedConfig = req.viewerConfig ?? await loadRouteConfig(userUUID);
@@ -5425,15 +5434,25 @@ const catalogRoute = async function (req, res) {
       } else {
         // Use search-specific cache wrapper
         const searchKey = `${cleanId}:${originalSearchId}:${searchType}:${stableStringify(searchExtraArgs)}`;
+        const claim = searchPage === 1 && req.params.forJellyfin !== '1'
+          ? claimSearch(req, id, actualType, String(searchExtraArgs.search ?? ''))
+          : null;
 
-        responseData = await cacheWrapSearch(userUUID, searchKey, async () => {
+        const outcome = await runClaimedSearch(claim, () => cacheWrapSearch(userUUID, searchKey, async () => {
           const searchResult = await getSearch(cleanId, searchType, language, searchExtraArgs, config);
           if (searchResult.error) {
             consola.error(`[SEARCH] ${cleanId} failed: ${searchResult.error}`);
             return { metas: [], error: searchResult.error };
           }
           return { metas: searchResult.metas || [], ...(searchResult.webSearchFailed ? { webSearchFailed: searchResult.webSearchFailed } : {}) };
-        }, searchEngine, cacheOptions);
+        }, searchEngine, cacheOptions));
+        if (outcome.skipped) {
+          consola.debug(`[Search] Stopped "${searchExtraArgs.search}" (${id}), the client typed past it or disconnected`);
+          res.locals.searchSuperseded = true;
+          responseData = { metas: [] };
+        } else {
+          responseData = outcome.value;
+        }
       }
       } else if (cleanId.startsWith('custom.') || cleanId.startsWith('stremthru.')) {
       const { genre: genreName } = extraArgs;
@@ -5787,6 +5806,7 @@ const catalogRoute = async function (req, res) {
 // A read naming a household user is answered as that user: their tags, their
 // history and picks, their own accounts. Only the public route comes through here.
 const viewerCatalogRoute = async function (req, res) {
+  noteSearchArrival(req);
   const { userUUID, id } = req.params;
   const named = req.query.viewer;
   if (named === undefined || named === null || (typeof named === 'string' && !named.trim())) return catalogRoute(req, res);

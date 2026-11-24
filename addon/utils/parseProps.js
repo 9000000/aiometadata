@@ -2618,14 +2618,14 @@ const tmdbMovieImagesInflight = new Map();
  * @param {object} config - User configuration
  * @returns {Promise<{poster: string|null, background: string|null, logo: string|null}>}
  */
-async function getTmdbMovieArtBatch(tmdbId, config, isLandscape = false, originalLanguage = null) {
+async function getTmdbMovieArtBatch(tmdbId, config, isLandscape = false, originalLanguage = null, originCountries = []) {
   if (!tmdbId) return { poster: null, background: null, logo: null };
 
   const langCode = config.language?.split('-')[0] || 'en';
   const englishOnly = config.artProviders?.englishArtOnly ? '1' : '0';
   const origLangFb = config.artProviders?.originalLangFallback ? '1' : '0';
   const landscape = isLandscape ? '1' : '0';
-  const cacheKey = `tmdb-movie-images:${tmdbId}:${langCode}:${englishOnly}:${origLangFb}:${landscape}:${originalLanguage || ''}`;
+  const cacheKey = `tmdb-movie-images:${tmdbId}:${config.language || langCode}:${englishOnly}:${origLangFb}:${landscape}:${originalLanguage || ''}:${originCountries.join(',')}`;
 
   if (tmdbMovieImagesInflight.has(cacheKey)) {
     return tmdbMovieImagesInflight.get(cacheKey);
@@ -2635,7 +2635,7 @@ async function getTmdbMovieArtBatch(tmdbId, config, isLandscape = false, origina
   const fetchPromise = (async () => {
     try {
       const langSet = new Set([langCode, 'en', 'null']);
-      if (originalLanguage) langSet.add(originalLanguage);
+      if (originalLanguage && !config.artProviders?.englishArtOnly) langSet.add(originalLanguage);
       const imageLanguages = Array.from(langSet).join(',');
       const res = await tmdb.movieImages({ id: tmdbId, include_image_language: imageLanguages }, config);
 
@@ -2643,13 +2643,13 @@ async function getTmdbMovieArtBatch(tmdbId, config, isLandscape = false, origina
         return { poster: null, background: null, logo: null };
       }
 
-      const posterImg = selectTmdbImageByLang(res.posters, config, 'iso_639_1', originalLanguage);
+      const posterImg = selectTmdbImageByLang(res.posters, config, 'iso_639_1', originalLanguage, originCountries);
       const poster = posterImg?.file_path
         ? tmdbImageUrl(tmdbPosterSize(), posterImg.file_path)
         : null;
       let backgroundImg;
       if (isLandscape) {
-        backgroundImg = selectTmdbImageByLang(res.backdrops, config, 'iso_639_1', originalLanguage);
+        backgroundImg = selectTmdbImageByLang(res.backdrops, config, 'iso_639_1', originalLanguage, originCountries);
       }
       else {
       backgroundImg = res.backdrops?.find(b => b.iso_639_1 === 'xx')
@@ -2661,7 +2661,7 @@ async function getTmdbMovieArtBatch(tmdbId, config, isLandscape = false, origina
         ? tmdbImageUrl(isLandscape ? tmdbLandscapeSize(backgroundImg.width) : tmdbBackdropSize(backgroundImg.width), backgroundImg.file_path)
         : null;
 
-      const logoImg = selectTmdbImageByLang(res.logos, config, 'iso_639_1', originalLanguage);
+      const logoImg = selectTmdbImageByLang(res.logos, config, 'iso_639_1', originalLanguage, originCountries);
       const logo = logoImg?.file_path
         ? tmdbImageUrl(tmdbLogoSize(logoImg.width), logoImg.file_path)
         : null;
@@ -2997,14 +2997,14 @@ const tmdbTvImagesInflight = new Map();
  * @param {object} config - User configuration
  * @returns {Promise<{poster: string|null, background: string|null, logo: string|null}>}
  */
-async function getTmdbSeriesArtBatch(tmdbId, config, isLandscape = false, originalLanguage = null) {
+async function getTmdbSeriesArtBatch(tmdbId, config, isLandscape = false, originalLanguage = null, originCountries = []) {
   if (!tmdbId) return { poster: null, background: null, logo: null };
 
   const langCode = config.language?.split('-')[0] || 'en';
   const englishOnly = config.artProviders?.englishArtOnly ? '1' : '0';
   const origLangFb = config.artProviders?.originalLangFallback ? '1' : '0';
   const landscape = isLandscape ? '1' : '0';
-  const cacheKey = `tmdb-tv-images:${tmdbId}:${langCode}:${englishOnly}:${origLangFb}:${landscape}:${originalLanguage || ''}`;
+  const cacheKey = `tmdb-tv-images:${tmdbId}:${config.language || langCode}:${englishOnly}:${origLangFb}:${landscape}:${originalLanguage || ''}:${originCountries.join(',')}`;
 
   if (tmdbTvImagesInflight.has(cacheKey)) {
     return tmdbTvImagesInflight.get(cacheKey);
@@ -3014,7 +3014,7 @@ async function getTmdbSeriesArtBatch(tmdbId, config, isLandscape = false, origin
   const fetchPromise = (async () => {
     try {
       const langSet = new Set([langCode, 'en', 'null']);
-      if (originalLanguage) langSet.add(originalLanguage);
+      if (originalLanguage && !config.artProviders?.englishArtOnly) langSet.add(originalLanguage);
       const imageLanguages = Array.from(langSet).join(',');
       const res = await tmdb.tvImages({ id: tmdbId, include_image_language: imageLanguages }, config);
 
@@ -3022,14 +3022,14 @@ async function getTmdbSeriesArtBatch(tmdbId, config, isLandscape = false, origin
         return { poster: null, background: null, logo: null };
       }
 
-      const posterImg = selectTmdbImageByLang(res.posters, config, 'iso_639_1', originalLanguage);
+      const posterImg = selectTmdbImageByLang(res.posters, config, 'iso_639_1', originalLanguage, originCountries);
       const poster = posterImg?.file_path
         ? tmdbImageUrl(tmdbPosterSize(), posterImg.file_path)
         : null;
 
       let backgroundImg;
       if (isLandscape) {
-        backgroundImg = selectTmdbImageByLang(res.backdrops, config, 'iso_639_1', originalLanguage);
+        backgroundImg = selectTmdbImageByLang(res.backdrops, config, 'iso_639_1', originalLanguage, originCountries);
       }
       else {
       backgroundImg = res.backdrops?.find(b => b.iso_639_1 === 'xx')
@@ -3041,7 +3041,7 @@ async function getTmdbSeriesArtBatch(tmdbId, config, isLandscape = false, origin
         ? tmdbImageUrl(isLandscape ? tmdbLandscapeSize(backgroundImg.width) : tmdbBackdropSize(backgroundImg.width), backgroundImg.file_path)
         : null;
 
-      const logoImg = selectTmdbImageByLang(res.logos, config, 'iso_639_1', originalLanguage);
+      const logoImg = selectTmdbImageByLang(res.logos, config, 'iso_639_1', originalLanguage, originCountries);
       const logo = logoImg?.file_path
         ? tmdbImageUrl(tmdbLogoSize(logoImg.width), logoImg.file_path)
         : null;
